@@ -1440,6 +1440,12 @@ void menuTFTPrintFileBrowser(int currentFile, int maxFiles, const cJSON* desc){
     _fg = TFT_WHITE;
     _bg = TFT_BLACK;
     TFT_X = 3;
+    if(desc == NULL){
+        snprintf(buf, 64, "File %d out of %d", currentFile + 1, maxFiles);
+        TFT_print(buf, 3, (TFT_getfontheight() + 3) * _cur_row++);
+        TFT_print("(no info available)", 3, (TFT_getfontheight() + 3) * _cur_row++);
+        return;
+    }
     if(cJSON_IsNumber(cJSON_GetObjectItem(desc, "id")))
         snprintf(buf, 64, "File %d out of %d, id: %d", currentFile + 1, maxFiles, cJSON_GetObjectItem(desc, "id")->valueint);
     else
@@ -1480,6 +1486,7 @@ void menuTFTPrintDecoding(){
 }
 
 void menuTFTAnimateFileBrowser(const cJSON* desc){
+    if(desc == NULL) return;
     char *s;
     _cur_el++;
     _cur_row = 2;

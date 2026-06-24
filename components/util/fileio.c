@@ -204,6 +204,7 @@ cJSON* readJSONFileAsCJSON(const char *fileName){
 }
 
 void parseJSONAudioTags(cJSON* data){
+    if(data == NULL) return;
     // adding string with tags
     cJSON *tags = cJSON_GetObjectItem(data, "tags");
     int n = cJSON_GetArraySize(tags), i, len=0;
@@ -263,7 +264,7 @@ void getFilesInDir(list_t *list, const char *directory, const char *ext){
     {
         //ESP_LOGI("FILEIO", "Dir openend");
         while((dir = readdir(d)) != NULL){
-            if(dir->d_type != DT_REG) break;
+            if(dir->d_type != DT_REG) continue;
             //ESP_LOGI("FILEIO", "Got file %s", dir->d_name);
             int len = strlen(dir->d_name);
             if(strncmp(dir->d_name - 4 + len, ext, 4) == 0){
