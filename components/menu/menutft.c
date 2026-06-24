@@ -1139,14 +1139,15 @@ void menuTFTPrintExtInValues(ext_in_data_t* data, int r){
 }
 //-------------------------------------------------------------------------------------------------------
 
-void menuTFTPrintRecordingState(bool armed){
-    char tmp[8];
+void menuTFTPrintRecordingState(int f0, int f1){
+    static const char* names[] = {"Voice", "Record", "Transport"};
     TFT_setclipwin(0, TFT_getfontheight()+9, _width-1, _height);
     _bg = TFT_BLACK;
     _fg = TFT_LIGHTGREY;
-    sprintf(tmp, armed ? "ON" : "OFF");
     menuTFTFlush(0, &_bg);
-    TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 0);
+    TFT_print(names[f0], _width/2, 3 + (TFT_getfontheight() + 3) * 0);
+    menuTFTFlush(1, &_bg);
+    TFT_print(names[f1], _width/2, 3 + (TFT_getfontheight() + 3) * 1);
 }
 
 //Additional UI

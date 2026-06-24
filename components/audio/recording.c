@@ -19,7 +19,7 @@ typedef struct {
 } rec_chunk_t;
 
 static atomic_bool rec_active = ATOMIC_VAR_INIT(false);
-static atomic_bool rec_armed  = ATOMIC_VAR_INIT(false);
+static trig_func_t trig_func[2] = {TRIG_FUNC_VOICE, TRIG_FUNC_VOICE};
 static QueueHandle_t rec_queue = NULL;
 static TaskHandle_t rec_task_handle = NULL;
 
@@ -98,23 +98,19 @@ bool recording_is_active(void)
     return atomic_load(&rec_active);
 }
 
-void recording_arm(void)
+void recording_set_trig_func(int vid, trig_func_t func)
 {
-    atomic_store(&rec_armed, true);
-    ESP_LOGI(TAG, "Armed: TRIG0 now controls recording");
-}
-
-void recording_disarm(void)
-{
-    atomic_store(&rec_armed, false);
-    if (atomic_load(&rec_active))
+    if (vid < 0 || vid > 1) return;
+    trig_func[vid] = func;
+    if (func == TRIG_FUNC_VOICE && atomic_load(&rec_active))
         recording_stop();
-    ESP_LOGI(TAG, "Disarmed");
+    ESP_LOGI(TAG, "TRIG%d → %d", vid, (int)func);
 }
 
-bool recording_is_armed(void)
+trig_func_t recording_get_trig_func(int vid)
 {
-    return atomic_load(&rec_armed);
+    if (vid < 0 || vid > 1) return TRIG_FUNC_VOICE;
+    return trig_func[vid];
 }
 
 void recording_push(const int32_t *samples)

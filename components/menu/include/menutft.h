@@ -52,7 +52,7 @@ void menuTFTPrintMatrixAmount(matrix_ui_row_t* matrix, int);
 void menuTFTPrintMatrixDestination(matrix_ui_row_t* matrix, int);
 void menuTFTPrintDelayValues(delay_data_t* data, int);
 void menuTFTPrintExtInValues(ext_in_data_t* data, int);
-void menuTFTPrintRecordingState(bool armed);
+void menuTFTPrintRecordingState(int f0, int f1);
 
 
 //Additional UI
