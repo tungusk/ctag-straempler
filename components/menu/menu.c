@@ -32,6 +32,7 @@
 #include "rest-api.h"
 #include "menu_config.h"
 #include "spi_per.h"
+#include "menu_nav.h"
 
 #define N_MAIN_MENUS 5
 
@@ -70,6 +71,11 @@ void *_fb_state = NULL;
 // handler has format caller_id, caller_name, caller_item data, event, event data
 static int timer_handler(int it_id, int event, void* event_data){
     menuTFTPrintTime(&tz_shift);
+    if (it_id == M_MAIN) {
+        audio_status_t st;
+        audio_get_status(&st);
+        menuTFTDrawLiveCVBars(st.cv, 8);
+    }
     return 0; // remain in current menu
 }
 
@@ -79,12 +85,16 @@ static int main_menu_def_handler(int it_id, int event, void* event_data){
     static int menu_state_current = 0;
 
     switch(event){
-        case EV_ENTERED_MENU:
+        case EV_ENTERED_MENU: {
             menuTFTSelectMainMenu(menu_state_current, 0);
             menuTFTUpdatePlayState(0, -1);
             menuTFTUpdatePlayState(1, -1);
             menuTFTPrintCurrentSettings(current_bank, current_preset_name, data);
+            audio_status_t _st;
+            audio_get_status(&_st);
+            menuTFTDrawLiveCVBars(_st.cv, 8);
             break;
+        }
         case EV_FWD:
             menu_state_current++;
             if(menu_state_current >= states) menu_state_current = 0;
@@ -524,240 +534,81 @@ static int voice_def_handler(int it_id, int event, void* event_data){
     return 0; // remain in current menu
 }
 
-static int filter_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_FILTER_ACTIVE, SID_BASE, SID_WIDTH, SID_Q};
-    const int items = sizeof(menu_items)/sizeof(int);
-    static int menu_pos = 0; 
-    static int vid = 0; //pass current voice state to next handler
-    static int selected = 0;
-
-    switch(event){
-        case EV_ENTERED_MENU:
-            vid = (int) _state_voice;
-            menuTFTPrintMenu(filter_menus, &n_filter_menus);
-            menuTFTSelectMenuItem(&menu_pos, selected, filter_menus, &n_filter_menus);
-            menuTFTPrintFilterValues(&data[vid].filter, PRINT_ALL);
-            break;
-        case EV_FWD:
-           if(!selected){
-                menu_pos++;
-                if(menu_pos >= items) menu_pos = 0;
-                menuTFTSelectMenuItem(&menu_pos, selected, filter_menus, &n_filter_menus);
-            }else{
-                //Increment value
-                incFilterValue(&data[vid].filter, menu_items[menu_pos]);
-                //Reprint values
-                menuTFTPrintFilterValues(&data[vid].filter,menu_items[menu_pos]);
-                //Push data into queue
-                if(vid){
-                    xQueueSend(v1_queue, (void*) &data[vid], portMAX_DELAY);
-                }else{
-                    xQueueSend(v0_queue, (void*) &data[vid], portMAX_DELAY);
-                }
-            }
-            break;
-        case EV_BWD:
-            if(!selected){
-                menu_pos--;
-                if(menu_pos < 0) menu_pos = items - 1;
-                menuTFTSelectMenuItem(&menu_pos, selected, filter_menus, &n_filter_menus);
-            }else{
-                //Decrement value
-                decFilterValue(&data[vid].filter, menu_items[menu_pos]);
-                //Reprint values
-                menuTFTPrintFilterValues(&data[vid].filter,menu_items[menu_pos]);
-                //Push data into queue
-                if(vid){
-                    xQueueSend(v1_queue, (void*) &data[vid], portMAX_DELAY);
-                }else{
-                    xQueueSend(v0_queue, (void*) &data[vid], portMAX_DELAY);
-                }
-            }
-            break;
-        case EV_SHORT_PRESS:
-            if(!selected)
-            {
-                selected = 1;
-                menuTFTSelectMenuItem(&menu_pos, selected, filter_menus, &n_filter_menus);
-            }else{
-                selected = 0;
-                menuTFTSelectMenuItem(&menu_pos, selected, filter_menus, &n_filter_menus);
-            }
-            break;
-        case EV_LONG_PRESS:
-            selected = 0;
-            menu_pos = 0;
-            return M_VOICE;
-            break;
-        default:
-            break;
-    }
-
-    return 0;
+static void filter_change(int sid, int vid, int delta, void *ctx) {
+    filter_data_t *f = (filter_data_t *)ctx;
+    if (delta > 0) incFilterValue(f, sid); else decFilterValue(f, sid);
+    menuTFTPrintFilterValues(f, sid);
+    xQueueSend(vid ? v1_queue : v0_queue, &data[vid], portMAX_DELAY);
 }
 
-static int adsr_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_ATTACK, SID_DECAY, SID_SUSTAIN, SID_RELEASE};
-    const int items = sizeof(menu_items)/sizeof(int);
-    static int menu_pos = 0; 
-    static int vid = 0; //pass current voice state to next handler
-    static int selected = 0;
-
-    switch(event){
-        case EV_ENTERED_MENU:
-            vid = (int) _state_voice;
-            menuTFTPrintADSRMenu();
-            menuTFTSelectMenuItem(&menu_pos, selected, adsr_menus, &n_adsr_menus);
-            menuTFTPrintADSRValues(&data[vid].adsr, PRINT_ALL);
-            menuTFTInitAdsrCurve(&data[vid].adsr);
-            menuTFTPrintADSRCurve(&data[vid].adsr);
-            break;
-        case EV_FWD:
-           if(!selected){
-                menu_pos++;
-                if(menu_pos >= items) menu_pos = 0;
-                menuTFTSelectMenuItem(&menu_pos, selected, adsr_menus, &n_adsr_menus);
-            }else{
-                //Increment value
-                incADSRValue(&data[vid].adsr, envelopeIndex[vid],menu_items[menu_pos]);
-                //Reprint values
-                menuTFTPrintADSRValues(&data[vid].adsr, menu_items[menu_pos]);
-                menuTFTPrintADSRCurve(&data[vid].adsr);
-                //Push data into queue
-                if(vid){
-                    xQueueSend(v1_queue, (void*) &data[vid], portMAX_DELAY);
-                }else{
-                    xQueueSend(v0_queue, (void*) &data[vid], portMAX_DELAY);
-                }
-            }
-            break;
-        case EV_BWD:
-            if(!selected){
-                menu_pos--;
-                if(menu_pos < 0) menu_pos = items - 1;
-                menuTFTSelectMenuItem(&menu_pos, selected, adsr_menus, &n_adsr_menus);
-            }else{
-                //Decrement value
-                decADSRValue(&data[vid].adsr, envelopeIndex[vid], menu_items[menu_pos]);
-                //Reprint values
-                menuTFTPrintADSRValues(&data[vid].adsr,menu_items[menu_pos]);
-                menuTFTPrintADSRCurve(&data[vid].adsr);
-                //Push data into queue
-                if(vid){
-                    xQueueSend(v1_queue, (void*) &data[vid], portMAX_DELAY);
-                }else{
-                    xQueueSend(v0_queue, (void*) &data[vid], portMAX_DELAY);
-                }
-
-            }
-            break;
-        case EV_SHORT_PRESS:
-            if(!selected)
-            {
-                selected = 1;
-                menuTFTSelectMenuItem(&menu_pos, selected, adsr_menus, &n_adsr_menus);
-            }else{
-                selected = 0;
-                menuTFTSelectMenuItem(&menu_pos, selected, adsr_menus, &n_adsr_menus);
-            }
-            break;
-        case EV_LONG_PRESS:
-            selected = 0;
-            menu_pos = 0;
-            return M_VOICE;
-            break;
-        default:
-            break;
+static int filter_def_handler(int it_id, int event, void* event_data) {
+    static const int sids[] = {SID_FILTER_ACTIVE, SID_BASE, SID_WIDTH, SID_Q};
+    static int pos = 0, sel = 0, vid = 0;
+    static menu_nav_t nav = {
+        .labels = filter_menus, .sids = sids, .n = 4,
+        .parent = M_VOICE, .change = filter_change,
+    };
+    if (event == EV_ENTERED_MENU) {
+        vid = (int)_state_voice;
+        nav.ctx = &data[vid].filter;
+        menuTFTPrintMenu(filter_menus, &n_filter_menus);
+        menuTFTSelectMenuItem(&pos, sel, filter_menus, &n_filter_menus);
+        menuTFTPrintFilterValues(&data[vid].filter, PRINT_ALL);
     }
-    
-    return 0;
+    return menu_nav_step(&nav, &pos, &sel, vid, event);
 }
 
-static int playmode_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_MODE, SID_START, SID_LSTART, SID_LEND, SID_LPOSITION};
-    const int items = sizeof(menu_items)/sizeof(int);
-    static int menu_pos = 0; 
-    static int vid = 0; //pass current voice state to next handler
-    static int selected = 0;
+static void adsr_change(int sid, int vid, int delta, void *ctx) {
+    if (delta > 0) incADSRValue(&data[vid].adsr, envelopeIndex[vid], sid);
+    else           decADSRValue(&data[vid].adsr, envelopeIndex[vid], sid);
+    menuTFTPrintADSRValues(&data[vid].adsr, sid);
+    menuTFTPrintADSRCurve(&data[vid].adsr);
+    xQueueSend(vid ? v1_queue : v0_queue, &data[vid], portMAX_DELAY);
+}
 
-    switch(event){
-        case EV_ENTERED_MENU:
-            vid = (int) _state_voice;
-            menuTFTPrintPlaymodeMenu();
-            menuTFTSelectMenuItem(&menu_pos, selected, playmode_menus, &n_playmode_menus);
-
-            menuTFTPrintPlaymodeValues(&data[vid].play_state, PRINT_ALL);
-            menuTFTInitPlaymodeIndicators();
-            menuTFTPrintPlaymodeIndicators(&data[vid].play_state, menu_items[menu_pos]);
-            break;
-        case EV_FWD:
-           if(!selected){
-                menu_pos++;
-                if(menu_pos >= items) menu_pos = 0;
-                menuTFTSelectMenuItem(&menu_pos, selected, playmode_menus, &n_playmode_menus);
-            }else{
-                //Increment value
-                if(vid){
-                    incPlaymodeValue(&data[vid].play_state, menu_items[menu_pos], mode_queue_v1);
-                }
-                else
-                    incPlaymodeValue(&data[vid].play_state, menu_items[menu_pos], mode_queue_v0);
-                //Reprint values
-                menuTFTPrintPlaymodeValues(&data[vid].play_state, menu_items[menu_pos]);
-                menuTFTPrintPlaymodeIndicators(&data[vid].play_state, menu_items[menu_pos]);
-                //Push data into queue
-                if(vid){
-                    xQueueSend(mode_queue_v1, &data[vid].play_state, portMAX_DELAY);
-                }else{
-                    xQueueSend(mode_queue_v0, &data[vid].play_state, portMAX_DELAY);
-                }
-            }
-            break;
-        case EV_BWD:
-            if(!selected){
-                menu_pos--;
-                if(menu_pos < 0) menu_pos = items - 1;
-                menuTFTSelectMenuItem(&menu_pos, selected, playmode_menus, &n_playmode_menus);
-            }else{
-                //Decrement value
-                if(vid){
-                    decPlaymodeValue(&data[vid].play_state, menu_items[menu_pos], mode_queue_v1);
-                }
-                else
-                    decPlaymodeValue(&data[vid].play_state, menu_items[menu_pos], mode_queue_v0);
-                //Reprint values
-                menuTFTPrintPlaymodeValues(&data[vid].play_state, menu_items[menu_pos]);
-                menuTFTPrintPlaymodeIndicators(&data[vid].play_state, menu_items[menu_pos]);
-                //Push data into queue
-                
-                if(vid){
-                    xQueueSend(mode_queue_v1, &data[vid].play_state, portMAX_DELAY);
-                }else{
-                    xQueueSend(mode_queue_v0, &data[vid].play_state, portMAX_DELAY);
-                }
-
-            }
-            break;
-        case EV_SHORT_PRESS:
-            if(!selected)
-            {
-                selected = 1;
-                menuTFTSelectMenuItem(&menu_pos, selected, playmode_menus, &n_playmode_menus);
-            }else{
-                selected = 0;
-                menuTFTSelectMenuItem(&menu_pos, selected, playmode_menus, &n_playmode_menus);
-            }
-            break;
-        case EV_LONG_PRESS:
-            selected = 0;
-            menu_pos = 0;
-            return M_VOICE;
-            break;
-        default:
-            break;
+static int adsr_def_handler(int it_id, int event, void* event_data) {
+    static const int sids[] = {SID_ATTACK, SID_DECAY, SID_SUSTAIN, SID_RELEASE};
+    static int pos = 0, sel = 0, vid = 0;
+    static menu_nav_t nav = {
+        .labels = adsr_menus, .sids = sids, .n = 4,
+        .parent = M_VOICE, .change = adsr_change,
+    };
+    if (event == EV_ENTERED_MENU) {
+        vid = (int)_state_voice;
+        menuTFTPrintADSRMenu();
+        menuTFTSelectMenuItem(&pos, sel, adsr_menus, &n_adsr_menus);
+        menuTFTPrintADSRValues(&data[vid].adsr, PRINT_ALL);
+        menuTFTInitAdsrCurve();
+        menuTFTPrintADSRCurve(&data[vid].adsr);
     }
-    
-    return 0;
+    return menu_nav_step(&nav, &pos, &sel, vid, event);
+}
+
+static void playmode_change(int sid, int vid, int delta, void *ctx) {
+    xQueueHandle mq = vid ? mode_queue_v1 : mode_queue_v0;
+    if (delta > 0) incPlaymodeValue(&data[vid].play_state, sid, mq);
+    else           decPlaymodeValue(&data[vid].play_state, sid, mq);
+    menuTFTPrintPlaymodeValues(&data[vid].play_state, sid);
+    menuTFTPrintPlaymodeIndicators(&data[vid].play_state, sid);
+    xQueueSend(mq, &data[vid].play_state, portMAX_DELAY);
+}
+
+static int playmode_def_handler(int it_id, int event, void* event_data) {
+    static const int sids[] = {SID_MODE, SID_START, SID_LSTART, SID_LEND, SID_LPOSITION};
+    static int pos = 0, sel = 0, vid = 0;
+    static menu_nav_t nav = {
+        .labels = playmode_menus, .sids = sids, .n = 5,
+        .parent = M_VOICE, .change = playmode_change,
+    };
+    if (event == EV_ENTERED_MENU) {
+        vid = (int)_state_voice;
+        menuTFTPrintPlaymodeMenu();
+        menuTFTSelectMenuItem(&pos, sel, playmode_menus, &n_playmode_menus);
+        menuTFTPrintPlaymodeValues(&data[vid].play_state, PRINT_ALL);
+        menuTFTInitPlaymodeIndicators();
+        menuTFTPrintPlaymodeIndicators(&data[vid].play_state, sids[pos]);
+    }
+    return menu_nav_step(&nav, &pos, &sel, vid, event);
 }
 
 static int matrix_def_handler(int it_id, int event, void* event_data){
@@ -930,98 +781,52 @@ static int effects_def_handler(int it_id, int event, void* event_data){
     return 0;
 }
 
-static int extin_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_EXTIN_ACTIVE, SID_EXTIN_VOLUME, SID_EXTIN_PAN, SID_EXTIN_DELAY_SEND};
-    const int items = sizeof(menu_items)/sizeof(int);
-    static int menu_pos = 0; 
-    static int selected = 0;
-    ext_in_data_t* extin = &effectData.extInData;
-
-    switch(event){
-        case EV_ENTERED_MENU:
-            menuTFTPrintMenu(externel_in_menus, &n_externel_in_menus);
-            menuTFTSelectMenuItem(&menu_pos, selected, externel_in_menus, &n_externel_in_menus);
-            menuTFTPrintExtInValues(extin, PRINT_ALL);
-            break;
-        case EV_FWD:
-            if(!selected){
-                menu_pos++;
-                if(menu_pos >= items) menu_pos = 0;
-                menuTFTSelectMenuItem(&menu_pos, selected, externel_in_menus, &n_externel_in_menus);
-            }else{
-                incExtInValue(extin, menu_items[menu_pos]);
-                menuTFTPrintExtInValues(extin, menu_items[menu_pos]);
-                xQueueSend(eff_queue, &effectData, portMAX_DELAY);
-                
-            }
-            break;
-        case EV_BWD:
-            if(!selected){
-                menu_pos--;
-                if(menu_pos < 0) menu_pos = items - 1;
-                menuTFTSelectMenuItem(&menu_pos, selected, externel_in_menus, &n_externel_in_menus);
-            }else{
-                decExtInValue(extin, menu_items[menu_pos]);
-                menuTFTPrintExtInValues(extin, menu_items[menu_pos]);
-                xQueueSend(eff_queue, &effectData, portMAX_DELAY);
-            }
-            break;
-        case EV_SHORT_PRESS:
-            if(!selected){
-                selected = 1;
-                menuTFTSelectMenuItem(&menu_pos, selected, externel_in_menus, &n_externel_in_menus);
-            }else{
-                selected = 0;
-                menuTFTSelectMenuItem(&menu_pos, selected, externel_in_menus, &n_externel_in_menus);
-            }
-            
-            break;
-        case EV_LONG_PRESS:
-            selected = 0;
-            menu_pos = 0;
-            return M_EFFECTS;
-            break;
-        default:
-            break;
-    }
-
-    return 0;
-
+static void extin_change(int sid, int vid, int delta, void *ctx) {
+    ext_in_data_t *e = (ext_in_data_t *)ctx;
+    if (delta > 0) incExtInValue(e, sid); else decExtInValue(e, sid);
+    menuTFTPrintExtInValues(e, sid);
+    xQueueSend(eff_queue, &effectData, portMAX_DELAY);
 }
 
-static int input_def_handler(int it_id, int event, void* event_data){
-    static const char* input_menu[] = {"Input"};
-    static const int n_input_menu = 1;
-    static int menu_pos = 0;
-    static int selected = 0;
-    static int use_mic = 0;
-
-    switch(event){
-        case EV_ENTERED_MENU:
-            menuTFTPrintMenu(input_menu, &n_input_menu);
-            menuTFTSelectMenuItem(&menu_pos, selected, input_menu, &n_input_menu);
-            menuTFTPrintInputState(use_mic);
-            break;
-        case EV_FWD:
-        case EV_BWD:
-            if(selected){
-                use_mic = !use_mic;
-                codec_set_input(use_mic);
-                menuTFTPrintInputState(use_mic);
-            }
-            break;
-        case EV_SHORT_PRESS:
-            selected = !selected;
-            menuTFTSelectMenuItem(&menu_pos, selected, input_menu, &n_input_menu);
-            break;
-        case EV_LONG_PRESS:
-            selected = 0;
-            menu_pos = 0;
-            return M_EFFECTS;
-        default:
-            break;
+static int extin_def_handler(int it_id, int event, void* event_data) {
+    static const int sids[] = {SID_EXTIN_ACTIVE, SID_EXTIN_VOLUME, SID_EXTIN_PAN, SID_EXTIN_DELAY_SEND};
+    static int pos = 0, sel = 0;
+    static menu_nav_t nav = {
+        .labels = externel_in_menus, .sids = sids, .n = 4,
+        .parent = M_EFFECTS, .change = extin_change,
+        .ctx = &effectData.extInData,
+    };
+    if (event == EV_ENTERED_MENU) {
+        menuTFTPrintMenu(externel_in_menus, &n_externel_in_menus);
+        menuTFTSelectMenuItem(&pos, sel, externel_in_menus, &n_externel_in_menus);
+        menuTFTPrintExtInValues(&effectData.extInData, PRINT_ALL);
     }
-    return 0;
+    return menu_nav_step(&nav, &pos, &sel, 0, event);
+}
+
+static void input_change(int sid, int vid, int delta, void *ctx) {
+    int *use_mic = (int *)ctx;
+    *use_mic = !*use_mic;
+    codec_set_input(*use_mic);
+    menuTFTPrintInputState(*use_mic);
+}
+
+static int input_def_handler(int it_id, int event, void* event_data) {
+    static const char *input_menu[] = {"Input"};
+    static const int n_input = 1;
+    static const int input_sids[] = {0};
+    static int pos = 0, sel = 0, use_mic = 0;
+    static menu_nav_t nav = {
+        .labels = input_menu, .sids = input_sids, .n = 1,
+        .parent = M_EFFECTS, .change = input_change,
+        .ctx = &use_mic,
+    };
+    if (event == EV_ENTERED_MENU) {
+        menuTFTPrintMenu(input_menu, &n_input);
+        menuTFTSelectMenuItem(&pos, sel, input_menu, &n_input);
+        menuTFTPrintInputState(use_mic);
+    }
+    return menu_nav_step(&nav, &pos, &sel, 0, event);
 }
 
 static int recording_def_handler(int it_id, int event, void* event_data){
@@ -1070,64 +875,27 @@ static int recording_def_handler(int it_id, int event, void* event_data){
     return 0;
 }
 
-static int delay_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_DELAY_ACTIVE, SID_DELAY_MODE, SID_DELAY_TIME, SID_DELAY_PAN, SID_DELAY_FEEDBACK, SID_DELAY_VOLUME};
-    const int items = sizeof(menu_items)/sizeof(int);
-    static int menu_pos = 0; 
-    static int selected = 0;
-    delay_data_t* delay = &effectData.delay;
+static void delay_change(int sid, int vid, int delta, void *ctx) {
+    delay_data_t *d = (delay_data_t *)ctx;
+    if (delta > 0) incDelayValue(d, sid); else decDelayValue(d, sid);
+    menuTFTPrintDelayValues(d, sid);
+    xQueueSend(eff_queue, &effectData, portMAX_DELAY);
+}
 
-    switch(event){
-        case EV_ENTERED_MENU:
-            menuTFTPrintMenu(delay_menus, &n_delay_menus);
-            menuTFTSelectMenuItem(&menu_pos, selected, delay_menus, &n_delay_menus);
-            menuTFTPrintDelayValues(delay, PRINT_ALL);
-            break;
-        case EV_FWD:
-            if(!selected){
-                menu_pos++;
-                if(menu_pos >= items) menu_pos = 0;
-                menuTFTSelectMenuItem(&menu_pos, selected, delay_menus, &n_delay_menus);
-            }else{
-                incDelayValue(delay, menu_items[menu_pos]);
-                menuTFTPrintDelayValues(delay, menu_items[menu_pos]);
-                xQueueSend(eff_queue, &effectData, portMAX_DELAY);
-                
-            }
-
-            break;
-        case EV_BWD:
-            if(!selected){
-                menu_pos--;
-                if(menu_pos < 0) menu_pos = items - 1;
-                menuTFTSelectMenuItem(&menu_pos, selected, delay_menus, &n_delay_menus);
-            }else{
-                decDelayValue(delay, menu_items[menu_pos]);
-                menuTFTPrintDelayValues(delay, menu_items[menu_pos]);
-                xQueueSend(eff_queue, &effectData, portMAX_DELAY);
-            }
-            break;
-        case EV_SHORT_PRESS:
-            if(!selected){
-                selected = 1;
-                menuTFTSelectMenuItem(&menu_pos, selected, delay_menus, &n_delay_menus);
-            }else{
-                selected = 0;
-                menuTFTSelectMenuItem(&menu_pos, selected, delay_menus, &n_delay_menus);
-            }
-            
-            break;
-        case EV_LONG_PRESS:
-            selected = 0;
-            menu_pos = 0;
-            return M_EFFECTS;
-            break;
-        default:
-            break;
+static int delay_def_handler(int it_id, int event, void* event_data) {
+    static const int sids[] = {SID_DELAY_ACTIVE, SID_DELAY_MODE, SID_DELAY_TIME, SID_DELAY_PAN, SID_DELAY_FEEDBACK, SID_DELAY_VOLUME};
+    static int pos = 0, sel = 0;
+    static menu_nav_t nav = {
+        .labels = delay_menus, .sids = sids, .n = 6,
+        .parent = M_EFFECTS, .change = delay_change,
+        .ctx = &effectData.delay,
+    };
+    if (event == EV_ENTERED_MENU) {
+        menuTFTPrintMenu(delay_menus, &n_delay_menus);
+        menuTFTSelectMenuItem(&pos, sel, delay_menus, &n_delay_menus);
+        menuTFTPrintDelayValues(&effectData.delay, PRINT_ALL);
     }
-
-    return 0;
-
+    return menu_nav_step(&nav, &pos, &sel, 0, event);
 }
 
 static int bank_def_handler(int it_id, int event, void* event_data){
