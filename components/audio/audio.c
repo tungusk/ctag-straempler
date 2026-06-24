@@ -1055,13 +1055,13 @@ static void audio_task(void *pvParams)
                 //ESP_LOGI("AUDIO", "Trigger happened vid %d event %d", vid, event);
             }
 
-            // When recording is armed, TRIG0 acts as record gate instead of voice trigger
-            if (vid == 0 && recording_is_armed()) {
-                if (event == EV_TRG_DOWN)
-                    recording_start();
-                else if (event == EV_TRG_UP)
-                    recording_stop();
-                continue;
+            // Route trigger based on configured function
+            trig_func_t trig_fn = recording_get_trig_func(vid);
+            if (trig_fn == TRIG_FUNC_RECORD || trig_fn == TRIG_FUNC_TRANSPORT) {
+                if (event == EV_TRG_DOWN) recording_start();
+                else if (event == EV_TRG_UP) recording_stop();
+                if (trig_fn == TRIG_FUNC_RECORD) continue; // voice suspended
+                // TRANSPORT falls through to also trigger the voice
             }
 
             // action

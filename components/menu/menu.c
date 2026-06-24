@@ -17,7 +17,6 @@
 #include "ui_events.h"
 #include "esp_log.h"
 #include "audio.h"
-#include "recording.h"
 #include "menutft.h"
 #include "menu_utils.h"
 #include "menu_types.h"
@@ -990,24 +989,43 @@ static int extin_def_handler(int it_id, int event, void* event_data){
 }
 
 static int recording_def_handler(int it_id, int event, void* event_data){
-    static const char* rec_menu[] = {"Arm"};
-    static const int n_rec_menu = 1;
+    static const char* rec_menu[] = {"TRIG0", "TRIG1"};
+    static const int n_rec_menu = 2;
     static int menu_pos = 0;
+    static int selected = 0;
 
     switch(event){
         case EV_ENTERED_MENU:
             menuTFTPrintMenu(rec_menu, &n_rec_menu);
-            menuTFTSelectMenuItem(&menu_pos, 0, rec_menu, &n_rec_menu);
-            menuTFTPrintRecordingState(recording_is_armed());
+            menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
+            menuTFTPrintRecordingState(recording_get_trig_func(0), recording_get_trig_func(1));
+            break;
+        case EV_FWD:
+            if(!selected){
+                menu_pos = (menu_pos + 1) % 2;
+                menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
+            }else{
+                trig_func_t cur = recording_get_trig_func(menu_pos);
+                recording_set_trig_func(menu_pos, (trig_func_t)((cur + 1) % 3));
+                menuTFTPrintRecordingState(recording_get_trig_func(0), recording_get_trig_func(1));
+            }
+            break;
+        case EV_BWD:
+            if(!selected){
+                menu_pos = (menu_pos + 1) % 2;
+                menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
+            }else{
+                trig_func_t cur = recording_get_trig_func(menu_pos);
+                recording_set_trig_func(menu_pos, (trig_func_t)((cur + 2) % 3));
+                menuTFTPrintRecordingState(recording_get_trig_func(0), recording_get_trig_func(1));
+            }
             break;
         case EV_SHORT_PRESS:
-            if(recording_is_armed())
-                recording_disarm();
-            else
-                recording_arm();
-            menuTFTPrintRecordingState(recording_is_armed());
+            selected = !selected;
+            menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
             break;
         case EV_LONG_PRESS:
+            selected = 0;
             menu_pos = 0;
             return M_EFFECTS;
         default:
