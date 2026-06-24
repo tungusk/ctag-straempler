@@ -23,6 +23,9 @@ static EventGroupHandle_t wifi_event_group;
    to the AP with an IP? */
 const int CONNECTED_BIT = BIT0;
 static const char *TAG = "WIFI";
+static int wifi_ap_mode = 0;
+
+int isWiFiAPMode(void) { return wifi_ap_mode; }
 
 static struct tm* tm_info;
 static time_t time_now;
@@ -38,7 +41,7 @@ static void initialize_sntp(void)
 static int obtain_time(void)
 {
 	int res = 1;
-    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, pdMS_TO_TICKS(30000));
 
     initialize_sntp();
 
@@ -70,6 +73,8 @@ static int obtain_time(void)
     return res;
 }
 
+#define AP_BIT BIT1
+
 static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
 {
     switch(event->event_id) {
@@ -80,10 +85,13 @@ static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
         xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
         break;
     case SYSTEM_EVENT_STA_DISCONNECTED:
-        /* This is a workaround as ESP32 WiFi libs don't currently
-           auto-reassociate. */
-        esp_wifi_connect();
-        xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
+        if (!wifi_ap_mode) {
+            esp_wifi_connect();
+            xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
+        }
+        break;
+    case SYSTEM_EVENT_AP_START:
+        xEventGroupSetBits(wifi_event_group, AP_BIT);
         break;
     default:
         break;
@@ -92,7 +100,8 @@ static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
 }
 
 void wifiWaitForConnected(){
-    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+    // In AP mode CONNECTED_BIT will never be set; bail after 30s to avoid a hang
+    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, pdMS_TO_TICKS(30000));
 }
 
 // returns true
@@ -143,6 +152,27 @@ static wifi_config_t buildWifiConfig(){
     return wifi_config;
 }
 
+static void start_ap_mode(void)
+{
+    wifi_ap_mode = 1;
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+
+    wifi_config_t ap_config = {
+        .ap = {
+            .ssid = "ctag-straempler",
+            .ssid_len = 0,
+            .channel = 6,
+            .authmode = WIFI_AUTH_OPEN,
+            .max_connection = 2,
+        }
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &ap_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_LOGI(TAG, "AP mode: SSID=ctag-straempler, IP=192.168.4.1");
+}
+
 void initWifi(void)
 {
     ESP_ERROR_CHECK( nvs_flash_init() );
@@ -154,14 +184,22 @@ void initWifi(void)
     ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
 
     wifi_config_t wifi_config = buildWifiConfig();
-    ESP_LOGI(TAG, "Setting WiFi configuration SSID %s", wifi_config.sta.ssid);
+    ESP_LOGI(TAG, "Connecting to SSID: %s", wifi_config.sta.ssid);
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
     ESP_ERROR_CHECK( esp_wifi_start() );
 
-    obtain_time();
-
-    start_mdns_service();
+    // Wait up to 10 seconds for STA connection
+    EventBits_t bits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, pdMS_TO_TICKS(10000));
+    if (bits & CONNECTED_BIT) {
+        ESP_LOGI(TAG, "Connected to AP");
+        obtain_time();
+        start_mdns_service();
+    } else {
+        ESP_LOGW(TAG, "STA connect timeout — falling back to AP mode");
+        start_ap_mode();
+        start_mdns_service();
+    }
 }
 
 void restartWifi(wifi_config_t *cfg){
