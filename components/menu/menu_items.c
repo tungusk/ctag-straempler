@@ -15,7 +15,7 @@ const int n_browse_menus = sizeof(browse_menus)/sizeof(int);
 const char* play_menus[] = {"Voice 0", "Voice 1", "Effects", "CV Matrix"};
 const int n_play_menus = sizeof(play_menus)/sizeof(int);
 
-const char* effect_menus[] = {"Delay", "External In", "Record"};
+const char* effect_menus[] = {"Delay", "External In", "Record", "Input"};
 const int n_effect_menus = sizeof(effect_menus) / sizeof(int);
 
 const char* voice_menus[] = {"Trig Type", "Volume", "Pan", "Pitch", "Pitch CV", "Playback Speed", "Distortion", "Drive", "Delay Send", "Filter", "ADSR", "Playmodes"};
