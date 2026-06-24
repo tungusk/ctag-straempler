@@ -31,6 +31,7 @@
 #include "timer_utils.h"
 #include "rest-api.h"
 #include "menu_config.h"
+#include "spi_per.h"
 
 #define N_MAIN_MENUS 5
 
@@ -896,7 +897,7 @@ static int matrix_def_handler(int it_id, int event, void* event_data){
 }
 
 static int effects_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN, M_RECORDING};
+    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN, M_RECORDING, M_INPUT};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0; 
     
@@ -986,6 +987,41 @@ static int extin_def_handler(int it_id, int event, void* event_data){
 
     return 0;
 
+}
+
+static int input_def_handler(int it_id, int event, void* event_data){
+    static const char* input_menu[] = {"Input"};
+    static const int n_input_menu = 1;
+    static int menu_pos = 0;
+    static int selected = 0;
+    static int use_mic = 0;
+
+    switch(event){
+        case EV_ENTERED_MENU:
+            menuTFTPrintMenu(input_menu, &n_input_menu);
+            menuTFTSelectMenuItem(&menu_pos, selected, input_menu, &n_input_menu);
+            menuTFTPrintInputState(use_mic);
+            break;
+        case EV_FWD:
+        case EV_BWD:
+            if(selected){
+                use_mic = !use_mic;
+                codec_set_input(use_mic);
+                menuTFTPrintInputState(use_mic);
+            }
+            break;
+        case EV_SHORT_PRESS:
+            selected = !selected;
+            menuTFTSelectMenuItem(&menu_pos, selected, input_menu, &n_input_menu);
+            break;
+        case EV_LONG_PRESS:
+            selected = 0;
+            menu_pos = 0;
+            return M_EFFECTS;
+        default:
+            break;
+    }
+    return 0;
 }
 
 static int recording_def_handler(int it_id, int event, void* event_data){
@@ -2551,6 +2587,8 @@ void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle e
             menusys_item_set_default_cb(_ms, M_EXTERNAL_IN, extin_def_handler);
             menusys_new_item(_ms, M_RECORDING);
             menusys_item_set_default_cb(_ms, M_RECORDING, recording_def_handler);
+            menusys_new_item(_ms, M_INPUT);
+            menusys_item_set_default_cb(_ms, M_INPUT, input_def_handler);
 
     menusys_new_item(_ms, M_SLOT);
     menusys_item_set_default_cb(_ms, M_SLOT, bank_def_handler);

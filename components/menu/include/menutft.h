@@ -54,6 +54,7 @@ void menuTFTPrintDelayValues(delay_data_t* data, int);
 void menuTFTPrintExtInValues(ext_in_data_t* data, int);
 void menuTFTPrintRecordingState(int f0, int f1);
 void menuTFTRefreshRecIndicator(void);
+void menuTFTPrintInputState(int use_mic);
 
 
 //Additional UI

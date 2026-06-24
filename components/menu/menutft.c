@@ -1162,6 +1162,14 @@ void menuTFTPrintRecordingState(int f0, int f1){
     TFT_print(names[f1], _width/2, 3 + (TFT_getfontheight() + 3) * 1);
 }
 
+void menuTFTPrintInputState(int use_mic){
+    TFT_setclipwin(0, TFT_getfontheight()+9, _width-1, _height);
+    _bg = TFT_BLACK;
+    _fg = TFT_LIGHTGREY;
+    menuTFTFlush(0, &_bg);
+    TFT_print(use_mic ? "Mic" : "Line", _width/2, 3 + (TFT_getfontheight() + 3) * 0);
+}
+
 //Additional UI
 //-------------------------------------------------------------------------------------------------------
 void menuTFTPrintTime(int *shift){
