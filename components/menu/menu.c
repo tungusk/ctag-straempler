@@ -41,7 +41,7 @@ static param_data_t data [2]; //data that gets displayed
 static effect_data_t effectData;
 static uint16_t envelopeIndex[2][3];
 static bool pbs_state_v0, pbs_state_v1;
-static matrix_ui_row_t matrix[8];
+static matrix_ui_row_t matrix[9];
 static matrix_event_t matrix_event;
 static char current_bank[8] =  {"DEFAULT"};
 static char current_preset_name[13] = {"Init"};
@@ -74,7 +74,7 @@ static int timer_handler(int it_id, int event, void* event_data){
     if (it_id == M_MAIN) {
         audio_status_t st;
         audio_get_status(&st);
-        menuTFTDrawLiveCVBars(st.cv, 8);
+        menuTFTDrawLiveCVBars(st.cv, 9);
     }
     return 0; // remain in current menu
 }
@@ -92,7 +92,7 @@ static int main_menu_def_handler(int it_id, int event, void* event_data){
             menuTFTPrintCurrentSettings(current_bank, current_preset_name, data);
             audio_status_t _st;
             audio_get_status(&_st);
-            menuTFTDrawLiveCVBars(_st.cv, 8);
+            menuTFTDrawLiveCVBars(_st.cv, 9);
             break;
         }
         case EV_FWD:
@@ -594,10 +594,11 @@ static void playmode_change(int sid, int vid, int delta, void *ctx) {
 }
 
 static int playmode_def_handler(int it_id, int event, void* event_data) {
-    static const int sids[] = {SID_MODE, SID_START, SID_LSTART, SID_LEND, SID_LPOSITION};
+    static const int sids[] = {SID_MODE, SID_START, SID_LSTART, SID_LEND, SID_LPOSITION,
+        SID_GRAIN_POS, SID_GRAIN_SPRAY, SID_GRAIN_SIZE, SID_GRAIN_DENSITY, SID_GRAIN_PITCH, SID_GRAIN_PSPRAY};
     static int pos = 0, sel = 0, vid = 0;
     static menu_nav_t nav = {
-        .labels = playmode_menus, .sids = sids, .n = 5,
+        .labels = playmode_menus, .sids = sids, .n = 11,
         .parent = M_VOICE, .change = playmode_change,
     };
     if (event == EV_ENTERED_MENU) {
@@ -614,7 +615,7 @@ static int playmode_def_handler(int it_id, int event, void* event_data) {
 static int matrix_def_handler(int it_id, int event, void* event_data){
     static int matrix_pos_v = 0, matrix_pos_h = 0;  //vertical/horizontal position
     static bool selected_v = 0, selected_h = 0;
-    static int items_v = 8, items_h = 3;            //vertical/horizontal number of items in matrix
+    static int items_v = 9, items_h = 3;            //vertical/horizontal number of items in matrix
     static int dst_changed = 0;
     static int cur_destination = 0;
     switch(event){
@@ -1912,7 +1913,7 @@ void initParams(){
     memset(envelopeIndex,0,sizeof(envelopeIndex));
 
     //Init matrix - every source/amount/destination to 0
-    for(int j = 0; j < 8; j++)
+    for(int j = 0; j < 9; j++)
     {
         if(j != 0 && j != 1){
             matrix[j].dst = MTX_NONE;
@@ -1959,9 +1960,14 @@ void initParams(){
         data[i].play_state.start = 0;       // 0 = 0%, 800 = 100% Q13.3, INCR: 0.125
         data[i].play_state.loop_start = 0;  // 0 = 0%, 800 = 100% Q13.3, INCR: 0.125
         data[i].play_state.loop_end = 800;  // 0 = 0%, 800 = 100% Q13.3, INCR: 0.125
-        data[i].play_state.loop_position = 0;
-        data[i].play_state.loop_length = data[i].play_state.loop_end - data[i].play_state.loop_start;
-
+        data[i].play_state.loop_position     = 0;
+        data[i].play_state.loop_length        = data[i].play_state.loop_end - data[i].play_state.loop_start;
+        data[i].play_state.grain_position     = 50;
+        data[i].play_state.grain_spray        = 10;
+        data[i].play_state.grain_size_ms      = 80;
+        data[i].play_state.grain_density      = 12;
+        data[i].play_state.grain_pitch        = 0;
+        data[i].play_state.grain_pitch_spray  = 0;
     }
 
     effectData.delay.is_active = 0;         //0 = OFF, 1 = ON
@@ -1987,7 +1993,7 @@ void initParams(){
     xQueueSend(mode_queue_v1, (void*)&data[1].play_state, portMAX_DELAY);
 
     //Pass matrix data to audio thread
-    for(int i = 0; i < 8; i++)
+    for(int i = 0; i < 9; i++)
     {
         matrix_event.changed_param = matrix[i].dst;
         matrix_event.source = i;
@@ -2079,6 +2085,18 @@ cJSON* buildPreset(const char* name){
         cJSON_AddItemToObject(paramObject, "play_state_loop_position", val);
         val = cJSON_CreateString (itoa(data[i].play_state.loop_length, buf, 10));
         cJSON_AddItemToObject(paramObject, "play_state_loop_length", val);
+        val = cJSON_CreateString (itoa(data[i].play_state.grain_position, buf, 10));
+        cJSON_AddItemToObject(paramObject, "play_state_grain_position", val);
+        val = cJSON_CreateString (itoa(data[i].play_state.grain_spray, buf, 10));
+        cJSON_AddItemToObject(paramObject, "play_state_grain_spray", val);
+        val = cJSON_CreateString (itoa(data[i].play_state.grain_size_ms, buf, 10));
+        cJSON_AddItemToObject(paramObject, "play_state_grain_size_ms", val);
+        val = cJSON_CreateString (itoa(data[i].play_state.grain_density, buf, 10));
+        cJSON_AddItemToObject(paramObject, "play_state_grain_density", val);
+        val = cJSON_CreateString (itoa(data[i].play_state.grain_pitch, buf, 10));
+        cJSON_AddItemToObject(paramObject, "play_state_grain_pitch", val);
+        val = cJSON_CreateString (itoa(data[i].play_state.grain_pitch_spray, buf, 10));
+        cJSON_AddItemToObject(paramObject, "play_state_grain_pitch_spray", val);
 
         cJSON_AddItemToArray(voiceParamArray, paramObject);
     }
@@ -2112,13 +2130,13 @@ cJSON* buildPreset(const char* name){
 
     cJSON *modMatrixArray = cJSON_CreateArray();
     cJSON_AddItemToObject(paramData, "modMatrixParameters", modMatrixArray);
-    for(int i = 0; i < 8; i++)
+    for(int i = 0; i < 9; i++)
     {
         cJSON* matrixObject = cJSON_CreateObject();
         val = cJSON_CreateString (itoa(matrix[i].amt, buf, 10));
-        cJSON_AddItemToObject(matrixObject, "amount", val);  
+        cJSON_AddItemToObject(matrixObject, "amount", val);
         val = cJSON_CreateString (itoa(matrix[i].dst, buf, 10));
-        cJSON_AddItemToObject(matrixObject, "destination", val);  
+        cJSON_AddItemToObject(matrixObject, "destination", val);
         cJSON_AddItemToArray(modMatrixArray, matrixObject);
     }
     return preset;
@@ -2220,9 +2238,21 @@ void loadParams(cJSON* preset){
         val = cJSON_GetObjectItemCaseSensitive(voiceParams, "play_state_loop_end");
         data[i].play_state.loop_end = atoi(val->valuestring);  
         val = cJSON_GetObjectItemCaseSensitive(voiceParams, "play_state_loop_position");
-        data[i].play_state.loop_position = atoi(val->valuestring);  
+        data[i].play_state.loop_position = atoi(val->valuestring);
         val = cJSON_GetObjectItemCaseSensitive(voiceParams, "play_state_loop_length");
-        data[i].play_state.loop_length = atoi(val->valuestring);  
+        data[i].play_state.loop_length = atoi(val->valuestring);
+        val = cJSON_GetObjectItemCaseSensitive(voiceParams, "play_state_grain_position");
+        data[i].play_state.grain_position = val ? (uint8_t)atoi(val->valuestring) : 50;
+        val = cJSON_GetObjectItemCaseSensitive(voiceParams, "play_state_grain_spray");
+        data[i].play_state.grain_spray = val ? (uint8_t)atoi(val->valuestring) : 10;
+        val = cJSON_GetObjectItemCaseSensitive(voiceParams, "play_state_grain_size_ms");
+        data[i].play_state.grain_size_ms = val ? (uint16_t)atoi(val->valuestring) : 80;
+        val = cJSON_GetObjectItemCaseSensitive(voiceParams, "play_state_grain_density");
+        data[i].play_state.grain_density = val ? (uint8_t)atoi(val->valuestring) : 12;
+        val = cJSON_GetObjectItemCaseSensitive(voiceParams, "play_state_grain_pitch");
+        data[i].play_state.grain_pitch = val ? (int8_t)atoi(val->valuestring) : 0;
+        val = cJSON_GetObjectItemCaseSensitive(voiceParams, "play_state_grain_pitch_spray");
+        data[i].play_state.grain_pitch_spray = val ? (uint8_t)atoi(val->valuestring) : 0;
     }
 
     //delay
@@ -2252,13 +2282,19 @@ void loadParams(cJSON* preset){
 
 
     paramObject = cJSON_GetObjectItemCaseSensitive(paramData,"modMatrixParameters");
-    for(int i = 0; i < 8; i++)
+    for(int i = 0; i < 9; i++)
     {
         cJSON *matrixParams = cJSON_GetArrayItem(paramObject, i);
+        if (!matrixParams) {
+            // old preset with 8 rows — default 9th row to MTX_NONE
+            matrix[i].dst = MTX_NONE;
+            matrix[i].amt = 0;
+            continue;
+        }
         val = cJSON_GetObjectItemCaseSensitive(matrixParams, "amount");
-        matrix[i].amt = atoi(val->valuestring);     
+        matrix[i].amt = atoi(val->valuestring);
         val = cJSON_GetObjectItemCaseSensitive(matrixParams, "destination");
-        matrix[i].dst = atoi(val->valuestring);  
+        matrix[i].dst = atoi(val->valuestring);
     }
 
     //pass param data to audio thread
@@ -2271,7 +2307,7 @@ void loadParams(cJSON* preset){
     xQueueSend(mode_queue_v1, (void*)&data[1].play_state, portMAX_DELAY);
 
     //pass matrix data to audio thread
-    for(int i = 0; i < 8; i++)
+    for(int i = 0; i < 9; i++)
     {
         matrix_event.changed_param = matrix[i].dst;
         matrix_event.source = i;

@@ -351,12 +351,14 @@ void incPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_hand
                     data->mode = PIPO;
                     break;
                 case PIPO:
+                    data->mode = GRAIN;
+                    break;
+                case GRAIN:
                     data->mode = SINGLE;
                     data->loop_start = data->start;
                     data->loop_position = data->start;
                     break;
             }
-            // ESP_LOGI("UI","Changed mode %d", data->mode);
             break;
         case SID_START:
 
@@ -424,6 +426,24 @@ void incPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_hand
                 }
             }
             break;
+        case SID_GRAIN_POS:
+            if (data->grain_position < 100) data->grain_position++;
+            break;
+        case SID_GRAIN_SPRAY:
+            if (data->grain_spray < 100) data->grain_spray++;
+            break;
+        case SID_GRAIN_SIZE:
+            if (data->grain_size_ms < 500) data->grain_size_ms++;
+            break;
+        case SID_GRAIN_DENSITY:
+            if (data->grain_density < 50) data->grain_density++;
+            break;
+        case SID_GRAIN_PITCH:
+            if (data->grain_pitch < 24) data->grain_pitch++;
+            break;
+        case SID_GRAIN_PSPRAY:
+            if (data->grain_pitch_spray < 100) data->grain_pitch_spray++;
+            break;
         default:
             break;
     }
@@ -436,7 +456,7 @@ void decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_hand
         case SID_MODE:
             switch(data->mode){
                 case SINGLE:
-                    data->mode = PIPO;
+                    data->mode = GRAIN;
                     break;
                 case LOOP:
                     data->mode = SINGLE;
@@ -446,9 +466,10 @@ void decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_hand
                 case PIPO:
                     data->mode = LOOP;
                     break;
+                case GRAIN:
+                    data->mode = PIPO;
+                    break;
             }
-            
-            // ESP_LOGI("UI","Changed mode %d", data->mode);
             break;
         case SID_START:
             if((data->start - 1) <= 0){
@@ -510,6 +531,24 @@ void decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_hand
             }
 
             break;
+        case SID_GRAIN_POS:
+            if (data->grain_position > 0) data->grain_position--;
+            break;
+        case SID_GRAIN_SPRAY:
+            if (data->grain_spray > 0) data->grain_spray--;
+            break;
+        case SID_GRAIN_SIZE:
+            if (data->grain_size_ms > 5) data->grain_size_ms--;
+            break;
+        case SID_GRAIN_DENSITY:
+            if (data->grain_density > 1) data->grain_density--;
+            break;
+        case SID_GRAIN_PITCH:
+            if (data->grain_pitch > -24) data->grain_pitch--;
+            break;
+        case SID_GRAIN_PSPRAY:
+            if (data->grain_pitch_spray > 0) data->grain_pitch_spray--;
+            break;
         default:
             break;
     }
@@ -545,18 +584,18 @@ void decItemAmount(matrix_ui_row_t* matrix, int source){
 void incDestination(matrix_ui_row_t* matrix, int source){
     int j = 1;
     if(source == 0 || source == 1){
-        return; 
+        return;
     }
-    
-    for(int i = 0; i < 8; i++){
+
+    for(int i = 0; i < 9; i++){
         if(source == i) continue;
 
         if(matrix[source].dst + j == matrix[i].dst){
             j++;
             i = -1;
-        }  
+        }
     }
-    if(matrix[source].dst + j >= 37) return;
+    if(matrix[source].dst + j >= 51) return;
     matrix[source].dst += j;
     //ESP_LOGI("UI", "Incr - Source: %d, Amount: %d , Dest: %d", source, matrix[source].amt, matrix[source].dst);
 }
@@ -564,19 +603,19 @@ void incDestination(matrix_ui_row_t* matrix, int source){
 void decDestination(matrix_ui_row_t* matrix, int source){
     int j = 1;
     if(source == 0 || source == 1){
-        return; 
+        return;
     }
 
-    for(int i = 0; i < 8; i++){
+    for(int i = 0; i < 9; i++){
         if(source == i) continue;
-        if(matrix[source].dst - j <= 0 || matrix[source].dst - j > 37){
+        if(matrix[source].dst - j <= 0 || matrix[source].dst - j > 50){
             matrix[source].dst = MTX_NONE;
             return;
-        } 
+        }
         if(matrix[source].dst - j == matrix[i].dst){
             j++;
             i = -1;
-        }  
+        }
     }
     matrix[source].dst -= j;
     //ESP_LOGI("UI", "Decr - Source: %d, Amount: %d , Dest: %d", source, matrix[source].amt, matrix[source].dst);

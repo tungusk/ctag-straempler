@@ -10,9 +10,10 @@
 #include "freertos/queue.h"
 #include "freertos/portmacro.h"
 #include "esp_log.h"
-#include "esp_rom_sys.h"
 #include "sdkconfig.h"
 #include <stdbool.h>
+
+extern void ets_delay_us(uint32_t us); // ESP32 ROM function, no header needed
 
 
 extern const uint8_t ulp_drivers_bin_start[] asm("_binary_ulp_drivers_bin_start");
@@ -121,7 +122,7 @@ void codec_set_input(bool use_mic)
     uint16_t data = use_mic ? 0x0Au : 0x10u;
     uint16_t word = (uint16_t)((4u << 9) | data);
     codec_write_reg(word);
-    esp_rom_delay_us(5);
+    ets_delay_us(5);
     codec_write_reg(word);   // write twice — ULP may interfere on first
     ESP_LOGI("CODEC", "Input: %s", use_mic ? "mic" : "line");
 }
