@@ -1395,6 +1395,7 @@ static int decoding_def_handler(int it_id, int event, void* event_data){
             menuTFTUpdateProgress("Decoding", (int) event_data);
             break;
         case EV_DECODING_DONE:
+            freesound_write_usr_jsn(id);
             free(_state_data);
             return M_SLOT;
             break;

@@ -1,132 +1,205 @@
 <!DOCTYPE html>
-<!-- convert to c header file with -->
-<!-- xxd -i -a index.html > ./include/index.html.h -->
-<!-- inspired by https://codepen.io/PerfectIsShit/pen/zogMXP -->
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta HTTP-EQUIV="Pragma" CONTENT="no-cache">
-    <meta HTTP-EQUIV="Expires" CONTENT="-1">
-    <title>CTAG Strämpler Upload</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ctag-straempler</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#111;color:#ccc;font-family:monospace;font-size:13px;padding-bottom:36px}
+header{background:#1e1e1e;border-bottom:1px solid #333;padding:6px 12px;display:flex;align-items:center;gap:10px}
+h1{font-size:13px;color:#888;flex:1;letter-spacing:.05em}
+.tabs{display:flex;gap:4px}
+.tab{cursor:pointer;padding:3px 10px;border:1px solid #444;border-radius:3px;color:#888;font-size:12px}
+.tab.on{background:#0af;color:#000;border-color:#0af}
+.pane{display:none;padding:10px}
+.pane.on{display:block}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;color:#666;padding:4px 6px;border-bottom:1px solid #2a2a2a;font-weight:normal;font-size:11px}
+td{padding:4px 6px;border-bottom:1px solid #1e1e1e;vertical-align:middle}
+tr:hover td{background:#161616}
+.btn{background:#2a2a2a;color:#aaa;border:1px solid #444;padding:3px 8px;cursor:pointer;border-radius:2px;font-size:11px;font-family:monospace}
+.btn:hover{background:#333}
+.del{border-color:#633;color:#f88}
+.del:hover{background:#2a1010}
+label{display:block;color:#666;font-size:11px;margin:8px 0 2px}
+input{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px 8px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
+.row{display:flex;gap:8px;margin-top:8px}
+.row>*{flex:1}
+.dz{border:2px dashed #333;padding:24px;text-align:center;color:#555;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
+.dz.ov{border-color:#0af;color:#0af}
+progress{width:100%;height:6px;margin-top:6px;display:none}
+.msg{color:#666;font-size:11px;margin-top:4px;min-height:16px}
+.ok{color:#4a4}
+.er{color:#a44}
+.sbar{position:fixed;bottom:0;left:0;right:0;background:#161616;border-top:1px solid #2a2a2a;padding:4px 10px;display:flex;align-items:center;gap:6px;font-size:11px;color:#555}
+.cv{display:inline-flex;gap:2px;align-items:flex-end;height:14px}
+.cvb{width:8px;background:#333;border-radius:1px}
+.cvf{background:#0af;width:100%;border-radius:1px;transition:height .1s}
+.ri{padding:2px 5px;border-radius:2px;font-size:10px;color:#444;border:1px solid #2a2a2a}
+.ri.on{background:#a00;color:#fff;border-color:#a00}
+.vl{color:#555;font-size:11px}
+.sep{color:#333}
+</style>
 </head>
 <body>
-    <h2>CTAG Strämpler custom file upload</h2>
-    <p>Note: Only 16 bit 44.1kHz raw stereo audio files work, create them for example with <a href="https://www.audacityteam.org/" target="_blank">Audacity...</a></p>
-    <form id="upload_form" enctype="multipart/form-data" method="put">
-        <table>
-                <tr>
-                    <td>
-                        <label for="filename">Filename (max. 8 chars):</label>
-                    </td>
-                    <td>
-                        <input type="text" name="filename" id="filename" maxlength="8" placeholder="Pad123"/>
-                    </td>
-                </tr>
-                <tr>
-                        <td>
-                            <label for="Description">Description (max. 128 chars):</label>
-                        </td>
-                        <td>
-                            <textarea name="description" id="description" maxlength="128" placeholder="Nice long pad"></textarea>
-                        </td>
-                    </tr>
-                <tr>
-                    <td>
-                            <label for="tags">Tags (max. 32 chars):</label>
-                    </td>
-                    <td>
-                            <input type="text" name="tags" id="tags" maxlength="32" placeholder="Lush, warm, long"/>
-                    </td>
-                </tr>
-                <tr>
-                        <td>
-                            <input type="file" name="file1" id="file1" onchange="setFileName()"/>
-                        </td>
-                </tr>
-                <tr>
-                        <td>
-                            <input type="button" id="upload_btn" onclick="uploadFile()" value="Upload"/>
-                        </td>
-                </tr>
-                <tr>
-                    <td>
-                        <progress id="progressBar" value="0" max="100" style="width:300px;"></progress>
-                    </td>
-                </tr>
-                <tr>
-                    <td>
-                            <h3 id="status"></h3>
-                    </td>
-                </tr>
-                <tr>
-                    <td>
-                            <p id="loaded_n_total"></p>
-                    </td>
-                </tr>
-        </table>
-    </form>
-    <script>
+<header>
+  <h1>ctag-straempler</h1>
+  <div class="tabs">
+    <div class="tab on" id="t0" onclick="tab(0)">Files</div>
+    <div class="tab" id="t1" onclick="tab(1)">Upload</div>
+    <div class="tab" id="t2" onclick="tab(2)">Settings</div>
+  </div>
+</header>
+<div class="pane on" id="p0">
+  <table>
+    <thead><tr><th>Name</th><th>Description</th><th>Tags</th><th>Size</th><th></th></tr></thead>
+    <tbody id="ftb"></tbody>
+  </table>
+</div>
+<div class="pane" id="p1">
+  <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
+    Drop a 16-bit 44.1kHz stereo RAW file here, or click to browse
+  </div>
+  <input type="file" id="fi" accept=".raw,.RAW" style="display:none" onchange="onFile(this.files[0])">
+  <label>Name (max 8 chars)</label><input id="un" maxlength="8" placeholder="Pad123">
+  <label>Description</label><input id="ud" maxlength="128" placeholder="Nice pad">
+  <label>Tags</label><input id="ut" maxlength="32" placeholder="pad, warm">
+  <div class="row" style="margin-top:10px">
+    <button class="btn" onclick="doUpload()">Upload</button>
+  </div>
+  <progress id="pr" value="0" max="100"></progress>
+  <div class="msg" id="um"></div>
+</div>
+<div class="pane" id="p2">
+  <label>WiFi SSID</label><input id="ss">
+  <label>WiFi Password (leave blank to keep current)</label><input id="sp" type="password">
+  <label>Freesound API Key</label><input id="sa">
+  <div class="row" style="margin-top:10px">
+    <button class="btn" onclick="saveSet()">Save</button>
+  </div>
+  <div class="msg" id="sm"></div>
+</div>
+<div class="sbar">
+  <div class="cv" id="cvb"></div>
+  <span class="sep">|</span>
+  <span class="ri" id="ri">REC</span>
+  <span class="sep">|</span>
+  <span class="vl" id="v0">V0: --</span>
+  <span class="vl" id="v1">V1: --</span>
+</div>
+<script>
+var fileToUpload=null,audioCtx=null;
 
-    function _(el) {
-        return document.getElementById(el);
-    }
+function tab(n){
+  for(var i=0;i<3;i++){
+    document.getElementById('t'+i).className='tab'+(i===n?' on':'');
+    document.getElementById('p'+i).className='pane'+(i===n?' on':'');
+  }
+  if(n===0)loadFiles();
+  if(n===2)loadSet();
+}
 
-    function setFileName(){
-        var file = _("file1").files[0].name;
-        console.log(file);
-        file = file.split(".");
-        file = file[0];
-        file = file.replace(" ", "_");
-        file = file.substring(0, 8);
-        _("filename").value = file;
-    }
+function loadFiles(){
+  fetch('/files').then(function(r){return r.json();}).then(function(d){
+    var tb=document.getElementById('ftb'),h='';
+    (d.files||[]).forEach(function(f){
+      h+='<tr><td>'+esc(f.name)+'</td><td>'+esc(f.description||'')+'</td><td>'+esc(f.tags||'')+'</td><td>'+(f.size?(Math.round(f.size/1024))+'KB':'')+'</td><td style="white-space:nowrap">'
+        +'<button class="btn" onclick="preview(\''+esc(f.name)+'\')">&#9654;</button> '
+        +'<button class="btn del" onclick="del(\''+esc(f.name)+'\')">&#10005;</button></td></tr>';
+    });
+    tb.innerHTML=h||'<tr><td colspan="5" style="color:#555;padding:12px">No files yet</td></tr>';
+  }).catch(function(){document.getElementById('ftb').innerHTML='<tr><td colspan="5" class="er">Failed to load</td></tr>';});
+}
 
-    function uploadFile() {
-        var file = _("file1").files[0];
-        console.log(file);
-        if(typeof file === 'undefined'){
-            _("status").innerHTML = "Set file first!";
-            return;
-        } 
-        // alert(file.name+" | "+file.size+" | "+file.type);
-        var formdata = new FormData();
-        formdata.append("file1", file);
-        var ajax = new XMLHttpRequest();
-        ajax.upload.addEventListener("progress", progressHandler, false);
-        ajax.addEventListener("load", completeHandler, false);
-        ajax.addEventListener("error", errorHandler, false);
-        ajax.addEventListener("abort", abortHandler, false);
-        ajax.open("PUT", "/drop_sample"); 
-        ajax.setRequestHeader("Content-Type", "audio/raw");
-        ajax.setRequestHeader("Name", _("filename").value);
-        ajax.setRequestHeader("Description", _("description").value);
-        ajax.setRequestHeader("Tags", _("tags").value);
-        ajax.send(formdata);
-    }
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
-    function progressHandler(event) {
-        _("loaded_n_total").innerHTML = "Uploaded " + event.loaded + " bytes of " + event.total;
-        var percent = (event.loaded / event.total) * 100;
-        _("progressBar").value = Math.round(percent);
-        _("status").innerHTML = Math.round(percent) + "% uploaded... please wait";
+function preview(name){
+  fetch('/files/raw?name='+encodeURIComponent(name)).then(function(r){return r.arrayBuffer();}).then(function(buf){
+    if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+    var dv=new DataView(buf),n=buf.byteLength>>2,ab=audioCtx.createBuffer(2,n,44100);
+    var L=ab.getChannelData(0),R=ab.getChannelData(1);
+    for(var i=0;i<n;i++){
+      var w=dv.getUint32(i*4,true);
+      var lv=w&0xFFFF;if(lv>32767)lv-=65536;L[i]=lv/32768;
+      var rv=w>>>16;if(rv>32767)rv-=65536;R[i]=rv/32768;
     }
+    var src=audioCtx.createBufferSource();src.buffer=ab;src.connect(audioCtx.destination);src.start();
+  }).catch(function(){alert('Preview failed');});
+}
 
-    function completeHandler(event) {
-        _("status").innerHTML = event.target.responseText;
-        _("progressBar").value = 0; //will clear progress bar after successful upload
-        _("filename").value = "";
-        _("description").value = "";
-        _("tags").value = "";
-        _("file1").value = "";
-    }
+function del(name){
+  if(!confirm('Delete '+name+'?'))return;
+  fetch('/files?name='+encodeURIComponent(name),{method:'DELETE'}).then(function(r){
+    if(r.ok)loadFiles();else alert('Delete failed');
+  });
+}
 
-    function errorHandler(event) {
-        _("status").innerHTML = "Upload failed";
-    }
+function onFile(file){
+  fileToUpload=file;
+  if(!file)return;
+  var base=file.name.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_]/g,'').substring(0,8);
+  document.getElementById('un').value=base;
+  document.getElementById('um').textContent=file.name+' ('+Math.round(file.size/1024)+'KB)';
+}
+var dz=document.getElementById('dz');
+dz.ondragover=function(e){e.preventDefault();dz.className='dz ov';};
+dz.ondragleave=function(){dz.className='dz';};
+dz.ondrop=function(e){e.preventDefault();dz.className='dz';onFile(e.dataTransfer.files[0]);};
 
-    function abortHandler(event) {
-        _("status").innerHTML = "Upload aborted";
+function doUpload(){
+  if(!fileToUpload){alert('Select a file first');return;}
+  var name=document.getElementById('un').value.trim();
+  if(!name){alert('Enter a name');return;}
+  var xhr=new XMLHttpRequest(),pr=document.getElementById('pr'),um=document.getElementById('um');
+  xhr.open('PUT','/drop_sample');
+  xhr.setRequestHeader('Name',name);
+  xhr.setRequestHeader('Description',document.getElementById('ud').value);
+  xhr.setRequestHeader('Tags',document.getElementById('ut').value);
+  pr.style.display='block';pr.value=0;
+  xhr.upload.onprogress=function(e){if(e.lengthComputable)pr.value=Math.round(e.loaded/e.total*100);};
+  xhr.onload=function(){
+    pr.style.display='none';
+    um.className='msg '+(xhr.status<300?'ok':'er');
+    um.textContent=xhr.status<300?'Uploaded! '+name:'Error '+xhr.status;
+    if(xhr.status<300){fileToUpload=null;}
+  };
+  xhr.onerror=function(){pr.style.display='none';um.className='msg er';um.textContent='Network error';};
+  xhr.send(fileToUpload);
+}
+
+function loadSet(){
+  fetch('/settings').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('ss').value=d.ssid||'';
+    document.getElementById('sa').value=d.apikey||'';
+  });
+}
+function saveSet(){
+  var body=JSON.stringify({ssid:document.getElementById('ss').value,passwd:document.getElementById('sp').value,apikey:document.getElementById('sa').value});
+  fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(function(r){
+    var m=document.getElementById('sm');
+    m.className='msg '+(r.ok?'ok':'er');
+    m.textContent=r.ok?'Saved! (Reboot to apply WiFi changes)':'Error '+r.status;
+  });
+}
+
+function pollStatus(){
+  fetch('/status').then(function(r){return r.json();}).then(function(d){
+    var cv=d.cv||[],h='';
+    for(var i=0;i<cv.length;i++){
+      var pct=Math.round(cv[i]/4095*100);
+      h+='<div class="cvb" style="height:14px"><div class="cvf" style="height:'+pct+'%"></div></div>';
     }
-    </script>
+    document.getElementById('cvb').innerHTML=h;
+    var ri=document.getElementById('ri');
+    ri.className='ri'+(d.recording?' on':'');
+    document.getElementById('v0').textContent='V0: '+(d.v0||'--');
+    document.getElementById('v1').textContent='V1: '+(d.v1||'--');
+  }).catch(function(){});
+}
+setInterval(pollStatus,500);
+loadFiles();
+pollStatus();
+</script>
 </body>
 </html>

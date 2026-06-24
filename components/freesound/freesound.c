@@ -447,6 +447,60 @@ static void init_token(){
     cJSON_Delete(root);
 }
 
+void freesound_write_usr_jsn(const char *id)
+{
+    char pool_path[64], usr_path[64];
+    snprintf(pool_path, sizeof(pool_path), "/sdcard/pool/%s.jsn", id);
+    snprintf(usr_path,  sizeof(usr_path),  "/sdcard/usr/%s.JSN", id);
+
+    cJSON *src = readJSONFileAsCJSON(pool_path);
+    if (!src) {
+        ESP_LOGW("FREESOUND", "pool JSN not found for %s, writing minimal sidecar", id);
+        src = cJSON_CreateObject();
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "name", id);
+    cJSON_AddStringToObject(root, "id",   id);
+
+    cJSON *item;
+    item = cJSON_GetObjectItem(src, "description");
+    cJSON_AddStringToObject(root, "description", item && item->valuestring ? item->valuestring : "Freesound sample");
+
+    item = cJSON_GetObjectItem(src, "tags");
+    if (item && cJSON_IsArray(item)) {
+        char tags_buf[128] = {0};
+        int first = 1;
+        cJSON *tag;
+        cJSON_ArrayForEach(tag, item) {
+            if (tag->valuestring) {
+                if (!first) strncat(tags_buf, " ", sizeof(tags_buf) - strlen(tags_buf) - 1);
+                strncat(tags_buf, tag->valuestring, sizeof(tags_buf) - strlen(tags_buf) - 1);
+                first = 0;
+            }
+        }
+        cJSON_AddStringToObject(root, "tags_s", tags_buf);
+    } else {
+        cJSON_AddStringToObject(root, "tags_s", "freesound");
+    }
+
+    item = cJSON_GetObjectItem(src, "username");
+    cJSON_AddStringToObject(root, "username", item && item->valuestring ? item->valuestring : "freesound");
+    item = cJSON_GetObjectItem(src, "url");
+    cJSON_AddStringToObject(root, "url",      item && item->valuestring ? item->valuestring : "");
+    item = cJSON_GetObjectItem(src, "license");
+    cJSON_AddStringToObject(root, "license",  item && item->valuestring ? item->valuestring : "");
+
+    char *json_str = cJSON_Print(root);
+    cJSON_Delete(root);
+    cJSON_Delete(src);
+    if (json_str) {
+        writeJSONFile(usr_path, json_str);
+        free(json_str);
+        ESP_LOGI("FREESOUND", "Wrote usr sidecar %s", usr_path);
+    }
+}
+
 void freesoundGetTags(const char *path){
     void *params = (void*) path;
     //xTaskCreatePinnedToCore(&tag_request, "tag_request", 8192, params, 5, NULL, 0);

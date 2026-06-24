@@ -208,16 +208,17 @@ static void decoder_task(void* pvParams){
 void decodeMP3File(const char *id){
     ESP_LOGI("MP3","Decode MP3");
     task_param_t *taskParams = (task_param_t*)calloc(1, sizeof(task_param_t));
-    char s[64]; cJSON *fPars;
+    char s[64];
     snprintf(s, 64, "/pool/%s.MP3", id);
     strcpy(taskParams->fin, s);
-    snprintf(s, 64, "/raw/%s.RAW", id);
+    snprintf(s, 64, "/usr/%s.RAW", id);
     strcpy(taskParams->fout, s);
     snprintf(s, 64, "/sdcard/pool/%s.JSN", id);
-    fPars = readJSONFileAsCJSON(s);
-    taskParams->nChannels = cJSON_GetObjectItem(fPars, "channels")->valueint;
-    ESP_LOGI("MP3", "Infile %s, outfile %s", taskParams->fin, taskParams->fout);
-    ESP_LOGI("MP3", "nChannels %d", taskParams->nChannels);
+    cJSON *fPars = readJSONFileAsCJSON(s);
+    cJSON *ch_item = fPars ? cJSON_GetObjectItem(fPars, "channels") : NULL;
+    taskParams->nChannels = ch_item ? ch_item->valueint : 2;
+    if (fPars) cJSON_Delete(fPars);
+    ESP_LOGI("MP3", "Infile %s, outfile %s, ch %d", taskParams->fin, taskParams->fout, taskParams->nChannels);
     xTaskCreatePinnedToCore(decoder_task, "decoder_task", 8192*2, (void*)taskParams, 10, NULL, 0);
 }
 
