@@ -58,8 +58,10 @@ static void IRAM_ATTR ulp_isr(void* arg)
     gpio_set_level(SPI_TFT_MISO_PIN, 1);
     */
     offs = (uint16_t)*((&ulp_adc_data_offset));
-    data[0] = (uint16_t)*((&ulp_adc_data) + 0 + offs);
-    data[1] = (uint16_t)*((&ulp_adc_data) + 1 + offs);
+    // swap CV1/CV2 due to PCB routing
+    data[1] = (uint16_t)*((&ulp_adc_data) + 0 + offs);
+    data[0] = (uint16_t)*((&ulp_adc_data) + 1 + offs);
+    // end swap
     data[2] = (uint16_t)*((&ulp_adc_data) + 2 + offs);
     data[3] = (uint16_t)*((&ulp_adc_data) + 3 + offs);
     data[4] = (uint16_t)*((&ulp_adc_data) + 4 + offs);
