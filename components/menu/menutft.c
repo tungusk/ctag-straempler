@@ -77,6 +77,17 @@ void menuTFTPrintMenuHSpaced(const char** items, const int* n_items){
     }    
 }
 
+void menuTFTRefreshRecIndicator(void){
+    color_t hdr_bg = {64, 64, 64};
+    int rw = TFT_getStringWidth("REC") + 2;
+    TFT_fillRect(_width - rw - 2, 1, rw + 2, TFT_getfontheight() + 6, hdr_bg);
+    if (recording_is_active()) {
+        _fg = TFT_RED;
+        _bg = hdr_bg;
+        TFT_print("REC", _width - rw - 1, 4);
+    }
+}
+
 void menuTFTPrintMainMenus(){
     int x = 8, w = 0;
     _fg = TFT_WHITE;
@@ -89,6 +100,7 @@ void menuTFTPrintMainMenus(){
         TFT_print((char *)main_menus[i], x, 4);
         x += w + 8;
     }
+    menuTFTRefreshRecIndicator();
 }
 
 void menuTFTPrintAbout(){

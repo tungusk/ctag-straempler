@@ -80,6 +80,7 @@ void recording_init(void)
 void recording_start(void)
 {
     if (atomic_load(&rec_active)) return;
+    if (rec_task_handle != NULL) return; // previous writer still winding down
     if (rec_queue == NULL) return;
     xQueueReset(rec_queue);
     atomic_store(&rec_active, true);
@@ -104,7 +105,7 @@ void recording_set_trig_func(int vid, trig_func_t func)
     trig_func[vid] = func;
     if (func == TRIG_FUNC_VOICE && atomic_load(&rec_active))
         recording_stop();
-    ESP_LOGI(TAG, "TRIG%d → %d", vid, (int)func);
+    ESP_LOGI(TAG, "TRIG%d -> %d", vid, (int)func);
 }
 
 trig_func_t recording_get_trig_func(int vid)
