@@ -1,4 +1,5 @@
 #include "recording.h"
+#include "fileio.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -22,6 +23,41 @@ static atomic_bool rec_active = ATOMIC_VAR_INIT(false);
 static trig_func_t trig_func[2] = {TRIG_FUNC_VOICE, TRIG_FUNC_VOICE};
 static QueueHandle_t rec_queue = NULL;
 static TaskHandle_t rec_task_handle = NULL;
+
+static void write_rec_jsn(const char *raw_path)
+{
+    // raw_path is e.g. /sdcard/usr/REC_0001.RAW
+    // derive base name (strip path prefix and .RAW extension)
+    const char *slash = strrchr(raw_path, '/');
+    const char *base = slash ? slash + 1 : raw_path;
+    char id[48];
+    int baselen = strlen(base);
+    if (baselen >= 4 && strcasecmp(base + baselen - 4, ".RAW") == 0)
+        baselen -= 4;
+    snprintf(id, sizeof(id), "%.*s", baselen, base);
+
+    char jsn_path[64];
+    snprintf(jsn_path, sizeof(jsn_path), "/sdcard/usr/%s.JSN", id);
+
+    cJSON *root = cJSON_CreateObject();
+    char name_field[52];
+    snprintf(name_field, sizeof(name_field), "%s.raw", id);
+    cJSON_AddStringToObject(root, "name", name_field);
+    cJSON_AddStringToObject(root, "id", id);
+    cJSON_AddStringToObject(root, "description", "Recorded audio");
+    cJSON_AddStringToObject(root, "tags_s", "recording");
+    cJSON_AddStringToObject(root, "username", "myself");
+    cJSON_AddStringToObject(root, "url", "local");
+    cJSON_AddStringToObject(root, "license", "own license");
+
+    char *json_str = cJSON_Print(root);
+    cJSON_Delete(root);
+    if (json_str) {
+        writeJSONFile(jsn_path, json_str);
+        free(json_str);
+    }
+    ESP_LOGI(TAG, "Wrote sidecar: %s", jsn_path);
+}
 
 static void find_next_filename(char *buf, int buflen)
 {
@@ -66,6 +102,7 @@ static void rec_writer_task(void *pvParams)
 
     fclose(f);
     ESP_LOGI(TAG, "Recording saved: %s", fname);
+    write_rec_jsn(fname);
     rec_task_handle = NULL;
     vTaskDelete(NULL);
 }
