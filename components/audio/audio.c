@@ -1055,6 +1055,15 @@ static void audio_task(void *pvParams)
                 //ESP_LOGI("AUDIO", "Trigger happened vid %d event %d", vid, event);
             }
 
+            // When recording is armed, TRIG0 acts as record gate instead of voice trigger
+            if (vid == 0 && recording_is_armed()) {
+                if (event == EV_TRG_DOWN)
+                    recording_start();
+                else if (event == EV_TRG_UP)
+                    recording_stop();
+                continue;
+            }
+
             // action
             if(event == EV_TRG_DOWN)
             {

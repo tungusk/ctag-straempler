@@ -42,7 +42,8 @@ typedef enum{
     M_PRESET_DELETE,
     M_PRESET_BANK_LOAD,
     M_PRESET_BANK_NEW,
-    M_PRESET_BANK_DELETE
+    M_PRESET_BANK_DELETE,
+    M_RECORDING
 } menu_ids_t;
 
 typedef enum{

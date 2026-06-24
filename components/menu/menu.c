@@ -17,6 +17,7 @@
 #include "ui_events.h"
 #include "esp_log.h"
 #include "audio.h"
+#include "recording.h"
 #include "menutft.h"
 #include "menu_utils.h"
 #include "menu_types.h"
@@ -896,7 +897,7 @@ static int matrix_def_handler(int it_id, int event, void* event_data){
 }
 
 static int effects_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN};
+    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN, M_RECORDING};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0; 
     
@@ -986,6 +987,33 @@ static int extin_def_handler(int it_id, int event, void* event_data){
 
     return 0;
 
+}
+
+static int recording_def_handler(int it_id, int event, void* event_data){
+    static const char* rec_menu[] = {"Arm"};
+    static const int n_rec_menu = 1;
+    static int menu_pos = 0;
+
+    switch(event){
+        case EV_ENTERED_MENU:
+            menuTFTPrintMenu(rec_menu, &n_rec_menu);
+            menuTFTSelectMenuItem(&menu_pos, 0, rec_menu, &n_rec_menu);
+            menuTFTPrintRecordingState(recording_is_armed());
+            break;
+        case EV_SHORT_PRESS:
+            if(recording_is_armed())
+                recording_disarm();
+            else
+                recording_arm();
+            menuTFTPrintRecordingState(recording_is_armed());
+            break;
+        case EV_LONG_PRESS:
+            menu_pos = 0;
+            return M_EFFECTS;
+        default:
+            break;
+    }
+    return 0;
 }
 
 static int delay_def_handler(int it_id, int event, void* event_data){
@@ -2480,6 +2508,7 @@ void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle e
 
     // using indentation to somewhat indicate levels of menus
     _ms = menusys_create();
+
     menusys_new_item(_ms, M_MAIN);
     menusys_item_set_default_cb(_ms, M_MAIN, main_menu_def_handler);
 
@@ -2501,6 +2530,8 @@ void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle e
                 menusys_item_set_default_cb(_ms, M_DELAY, delay_def_handler);
             menusys_new_item(_ms, M_EXTERNAL_IN);
             menusys_item_set_default_cb(_ms, M_EXTERNAL_IN, extin_def_handler);
+            menusys_new_item(_ms, M_RECORDING);
+            menusys_item_set_default_cb(_ms, M_RECORDING, recording_def_handler);
 
     menusys_new_item(_ms, M_SLOT);
     menusys_item_set_default_cb(_ms, M_SLOT, bank_def_handler);

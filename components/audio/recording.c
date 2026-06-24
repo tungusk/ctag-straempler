@@ -19,6 +19,7 @@ typedef struct {
 } rec_chunk_t;
 
 static atomic_bool rec_active = ATOMIC_VAR_INIT(false);
+static atomic_bool rec_armed  = ATOMIC_VAR_INIT(false);
 static QueueHandle_t rec_queue = NULL;
 static TaskHandle_t rec_task_handle = NULL;
 
@@ -95,6 +96,25 @@ void recording_stop(void)
 bool recording_is_active(void)
 {
     return atomic_load(&rec_active);
+}
+
+void recording_arm(void)
+{
+    atomic_store(&rec_armed, true);
+    ESP_LOGI(TAG, "Armed: TRIG0 now controls recording");
+}
+
+void recording_disarm(void)
+{
+    atomic_store(&rec_armed, false);
+    if (atomic_load(&rec_active))
+        recording_stop();
+    ESP_LOGI(TAG, "Disarmed");
+}
+
+bool recording_is_armed(void)
+{
+    return atomic_load(&rec_armed);
 }
 
 void recording_push(const int32_t *samples)
