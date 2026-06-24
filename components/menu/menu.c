@@ -1012,7 +1012,7 @@ static int recording_def_handler(int it_id, int event, void* event_data){
             break;
         case EV_BWD:
             if(!selected){
-                menu_pos = (menu_pos + 1) % 2;
+                menu_pos = (menu_pos + 1) % 2; // only 2 items — same as FWD, toggles 0<->1
                 menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
             }else{
                 trig_func_t cur = recording_get_trig_func(menu_pos);
@@ -2099,6 +2099,7 @@ static int preset_bank_new_def_handler(int it_id, int event, void* event_data){
 }
 
 void menuProcessEvent(int ev, void * ev_data){
+    menuTFTRefreshRecIndicator();
     menusys_process_ev(_ms, ev, ev_data);
 }
 
