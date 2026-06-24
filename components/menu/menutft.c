@@ -1306,6 +1306,21 @@ void menuTFTPrintCurrentSettings(char* bank, char* preset, param_data_t* data){
 
 }
 
+void menuTFTDrawLiveCVBars(const uint16_t *cv, int n) {
+    // Draw n vertical bars in the bottom 22px strip of the main screen.
+    // Each bar fills its cell proportionally to cv[i]/4095.
+    const int bar_h = 18;
+    const int bar_top = _height - bar_h - 2;
+    const int bar_w = (_width - 2) / (n > 0 ? n : 1);
+    for (int i = 0; i < n; i++) {
+        int x = 1 + i * bar_w;
+        int fill = (int)((uint32_t)cv[i] * bar_h / 4095u);
+        TFT_fillRect(x, bar_top, bar_w - 1, bar_h, TFT_BLACK);
+        if (fill > 0)
+            TFT_fillRect(x, bar_top + (bar_h - fill), bar_w - 1, fill, (color_t){0, 160, 255});
+    }
+}
+
 void menuTFTPrintCurrentPresetSettings(char* title, char* data){
     char buf[32];
     strcpy(buf, title);

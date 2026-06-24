@@ -44,7 +44,8 @@ typedef enum{
     M_PRESET_BANK_NEW,
     M_PRESET_BANK_DELETE,
     M_RECORDING,
-    M_INPUT
+    M_INPUT,
+    M_LIVE_VIEW
 } menu_ids_t;
 
 typedef enum{

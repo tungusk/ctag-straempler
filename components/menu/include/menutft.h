@@ -66,6 +66,7 @@ void menuTFTPrintADSRCurve(adsr_data_t* data);
 void menuTFTPrintMatrixRowIndicator(int select, int row);
 void menuTFTInitAdsrCurve();
 void menuTFTPrintCurrentSettings(char*, char*, param_data_t*);
+void menuTFTDrawLiveCVBars(const uint16_t *cv, int n);
 void menuTFTPrintCurrentPresetSettings(char* title, char* data);
 void menuTFTFeedbackMenuItemHSpaced(int *cnt, int* pos, const char** items, const int* n_items, int state);
 
