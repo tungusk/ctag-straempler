@@ -265,11 +265,11 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     char buf[256];
     int n = snprintf(buf, sizeof(buf),
         "{\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
-        "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u]}",
+        "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u,%u]}",
         rec ? "true" : "false",
         st.v0, st.v1,
         st.cv[0], st.cv[1], st.cv[2], st.cv[3],
-        st.cv[4], st.cv[5], st.cv[6], st.cv[7]);
+        st.cv[4], st.cv[5], st.cv[6], st.cv[7], st.cv[8]);
     (void)n;
     send_json(req, buf);
     return ESP_OK;

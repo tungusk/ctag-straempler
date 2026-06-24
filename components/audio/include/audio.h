@@ -17,6 +17,14 @@ void assignAudioFiles();
 void enableTrigModeLatch(uint8_t vid);
 void disableTrigModeLatch(uint8_t vid);
 
+typedef struct {
+    char v0[32];
+    char v1[32];
+    uint16_t cv[9];
+} audio_status_t;
+
+void audio_get_status(audio_status_t *out);
+
 #include "recording.h"
 
 

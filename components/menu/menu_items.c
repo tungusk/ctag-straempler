@@ -30,8 +30,9 @@ const int n_filter_menus = sizeof(filter_menus)/ sizeof(int);
 const char* adsr_menus[] = {"Attack", "Decay", "Sustain", "Release"};
 const int n_adsr_menus = sizeof(adsr_menus) / sizeof(int);
 
-const char* playmode_menus[] = {"Mode", "Start", "Loop Start", "Loop End", "Loop Position"};
-const char* playmode_modes[] = {"Single Shot", "Loop", "Ping Pong"};
+const char* playmode_menus[] = {"Mode", "Start", "Loop Start", "Loop End", "Loop Position",
+    "Grain Pos", "G. Spray", "G. Size ms", "G. Density", "G. Pitch", "P. Spray"};
+const char* playmode_modes[] = {"Single Shot", "Loop", "Ping Pong", "Grain"};
 const int n_playmode_menus = sizeof(playmode_menus) / sizeof(int);
 const int n_play_modes = sizeof(playmode_modes) / sizeof(int);
 
@@ -44,10 +45,13 @@ const int n_delay_mode_items = sizeof(toggle_items) / sizeof(int);
 const char* cv_matrix_items[] = {"SOURCE", "AMOUNT", "DESTINATION"};
 const int n_cv_matrix_items = sizeof(cv_matrix_items) / sizeof(int);
 
-const char* matrix_parameter_items[] = {"None","V0 Volume", "V0 Pan", "V0 Pitch", "V0 PB Speed", "V0 Dist Drive", "V0 Dly Send", "V0 F. Base", "V0 F. Width", "V0 F. Q", "V0 Attack", 
+const char* matrix_parameter_items[] = {"None","V0 Volume", "V0 Pan", "V0 Pitch", "V0 PB Speed", "V0 Dist Drive", "V0 Dly Send", "V0 F. Base", "V0 F. Width", "V0 F. Q", "V0 Attack",
                                                 "V0 Decay", "V0 Sustain", "V0 Release", "V0 Start", "V0 Loop Start", "V0 Loop End", "V1 Volume", "V1 Pan", "V1 Pitch", "V1 PB Speed",
                                                 "V1 Dist Drive", "V1 Dly Send", "V1 F. Base", "V1 F. Width", "V1 F. Q", "V1 Attack", "V1 Decay", "V1 Sustain", "V1 Release", "V1 Start",
-                                                "V1 Loop Start", "V1 Loop End", "Dly Time", "Dly Pan", "Dly Feedback", "Dly Volume"};
+                                                "V1 Loop Start", "V1 Loop End", "Dly Time", "Dly Pan", "Dly Feedback", "Dly Volume",
+                                                "V0 Position", "V1 Position", "V0 Loop Wdth", "V1 Loop Wdth",
+                                                "V0 Gr. Pos", "V0 Gr. Spry", "V0 Gr. Size", "V0 Gr. Dens", "V0 Gr. Ptch",
+                                                "V1 Gr. Pos", "V1 Gr. Spry", "V1 Gr. Size", "V1 Gr. Dens", "V1 Gr. Ptch"};
 const int n_matrix_parameters = sizeof(matrix_parameter_items) / sizeof(int);
 
 const char* preset_menus[] = {"Presets", "Banks"};

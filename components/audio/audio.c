@@ -1,5 +1,6 @@
 #include "audio.h"
 #include "audio_luts.h"
+#include "granular.h"
 #include <string.h>
 #include <stdatomic.h>
 #include "driver/i2s.h"
@@ -32,6 +33,10 @@
 #define BIT_VOICE0_RETRIG 0x08
 #define BIT_VOICE1_RETRIG 0x10
 #define BIT_CONTROL_DATA 0x04
+#define BIT_VOICE0_SEEK   0x20
+#define BIT_VOICE1_SEEK   0x40
+#define BIT_GRAIN0_LOAD   0x01
+#define BIT_GRAIN1_LOAD   0x02
 #define SAMPLE_RATE 44100
 #define FRACTION_MASK 0x1ff
 #define BUF_SZ 64
@@ -44,11 +49,21 @@
 
 static audio_f_t audio_files[2];
 static audio_b_t audio_buffers[6];
+
+static audio_status_t _audio_status;
+static portMUX_TYPE _status_mux = portMUX_INITIALIZER_UNLOCKED;
+
+void audio_get_status(audio_status_t *out) {
+    portENTER_CRITICAL(&_status_mux);
+    *out = _audio_status;
+    portEXIT_CRITICAL(&_status_mux);
+}
 static voice_t voice[2];
 static fifo_t voice_fifos[2];
-static matrix_row_t matrix[8];
+static matrix_row_t matrix[9];
 static ui_param_holder_t ui_params[2];
 static void (*play_modes[])(void *, void *, void *) = {fill_buffer_one_shot, fill_buffer_loop, fill_buffer_pipo};
+static granular_t gran[2];
 
 int controlData[3][8];
 
@@ -66,6 +81,7 @@ static xQueueHandle ui_ev_queue = NULL;
 // reload task handles
 static TaskHandle_t file_reader_task_1_handle = NULL;
 static TaskHandle_t file_reader_task_2_handle = NULL;
+static TaskHandle_t grain_loader_task_handle  = NULL;
 static TaskHandle_t audio_task_h;
 static SemaphoreHandle_t counter_mutex[2] = {NULL};
 static SemaphoreHandle_t file_mutex[2] = {NULL};
@@ -124,6 +140,21 @@ static void file_reader_task_1(void *pvParams)
             xSemaphoreGive(buffer_mutex[0]);
             jump_to_start(&voice[0].playback_engine, &audio_buffers[0], &audio_buffers[1], &audio_files[0], &file_mutex[0]);
         }
+
+        // seek to position set by audio task (track deck CV scrubbing)
+        if (uxBits & BIT_VOICE0_SEEK)
+        {
+            xSemaphoreTake(counter_mutex[0], portMAX_DELAY);
+            b1 = 0;
+            xSemaphoreGive(counter_mutex[0]);
+            xSemaphoreTake(buffer_mutex[0], portMAX_DELAY);
+            voice[0].voice_buffer = &audio_buffers[0];
+            voice[0].voice_buffer->rpos = 0;
+            xSemaphoreGive(buffer_mutex[0]);
+            // audio_files[0].fpos already set by audio task; fill_audio_buffer uses it via f_lseek
+            fill_audio_buffer(&voice[0].playback_engine, &audio_buffers[0], &audio_files[0], &file_mutex[0]);
+            fill_audio_buffer(&voice[0].playback_engine, &audio_buffers[1], &audio_files[0], &file_mutex[0]);
+        }
     }
 }
 
@@ -167,6 +198,20 @@ static void file_reader_task_2(void *pvParams)
             xSemaphoreGive(buffer_mutex[1]);
             jump_to_start(&voice[1].playback_engine, &audio_buffers[3], &audio_buffers[4], &audio_files[1], &file_mutex[1]);
         }
+
+        // seek to position set by audio task (track deck CV scrubbing)
+        if (uxBits & BIT_VOICE1_SEEK)
+        {
+            xSemaphoreTake(counter_mutex[1], portMAX_DELAY);
+            b2 = 0;
+            xSemaphoreGive(counter_mutex[1]);
+            xSemaphoreTake(buffer_mutex[1], portMAX_DELAY);
+            voice[1].voice_buffer = &audio_buffers[3];
+            voice[1].voice_buffer->rpos = 0;
+            xSemaphoreGive(buffer_mutex[1]);
+            fill_audio_buffer(&voice[1].playback_engine, &audio_buffers[3], &audio_files[1], &file_mutex[1]);
+            fill_audio_buffer(&voice[1].playback_engine, &audio_buffers[4], &audio_files[1], &file_mutex[1]);
+        }
     }
 }
 
@@ -192,6 +237,17 @@ static void file_manipulation_task(void *pvParams)
         {
             refill_first_buf(&voice[1].playback_engine, &audio_buffers[3], &audio_files[1], &file_mutex[1]);
         }
+    }
+}
+
+static void grain_loader_task(void *pvParams) {
+    uint32_t uxBits;
+    for (;;) {
+        xTaskNotifyWait(0, ULONG_MAX, &uxBits, portMAX_DELAY);
+        if (uxBits & BIT_GRAIN0_LOAD)
+            granular_load_buffer(&gran[0], &audio_files[0], &file_mutex[0]);
+        if (uxBits & BIT_GRAIN1_LOAD)
+            granular_load_buffer(&gran[1], &audio_files[1], &file_mutex[1]);
     }
 }
 
@@ -265,7 +321,10 @@ static inline void fill_FiFo(int vid, TaskHandle_t *file_reader_task_handle)
 // CV2 and CV3 have ±5V range via inverting op-amps; invert their raw ADC
 // value so positive voltage produces positive modulation in all functions.
 static const bool cv_bipolar[8] = {false, false, true, true, false, false, false, false};
+static float env_follow = 0.f;
+static uint16_t env_follow_cv = 0;
 static inline uint16_t cv_corrected(int src, const uint16_t *ctrl_data) {
+    if (src == 8) return env_follow_cv;
     if (src >= 0 && src < 8 && cv_bipolar[src])
         return (uint16_t)(4095u - ctrl_data[src]);
     return ctrl_data[src];
@@ -287,7 +346,7 @@ static float modulate_pan(int vid, int index, uint16_t *ctrl_data)
     int src = -1;
     float ui_pan = ui_params[vid].pan;
 
-    for (size_t i = 0; i < 8; i++)
+    for (size_t i = 0; i < 9; i++)
     {
         if (matrix[i].dst == index)
         {
@@ -299,7 +358,7 @@ static float modulate_pan(int vid, int index, uint16_t *ctrl_data)
         }
     }
 
-    if (src >= 0 && src < 8)
+    if (src >= 0 && src < 9)
     {
         input_value = FixedToFloat_8((cv_corrected(src, ctrl_data) >> 3)) - 1.0;
         input_value += ui_pan;
@@ -324,7 +383,7 @@ static float modulate_pitch(int vid, int index, uint16_t *ctrl_data)
     int src = -1;
     float ui_speed = ui_params[vid].playback_speed;
 
-    for (size_t i = 0; i < 8; i++)
+    for (size_t i = 0; i < 9; i++)
     {
         if (matrix[i].dst == index)
         {
@@ -346,7 +405,7 @@ static float modulate_pitch(int vid, int index, uint16_t *ctrl_data)
         }
     }
 
-    if (src >= 0 && src < 8)
+    if (src >= 0 && src < 9)
     {
         input_value = FixedToFloat_8((cv_corrected(src, ctrl_data) >> 3)) - 1.0;
         if (input_value < 0.0 && voice[vid].playback_engine.is_playback_direction_forward)
@@ -479,7 +538,7 @@ float modulateParameter(int index, uint16_t *ctrl_data)
     float input_value = 0.0;
     int src = -1;
 
-    for (size_t i = 0; i < 8; i++)
+    for (size_t i = 0; i < 9; i++)
     {
         if (matrix[i].dst == index)
         {
@@ -491,7 +550,7 @@ float modulateParameter(int index, uint16_t *ctrl_data)
         }
     }
 
-    if (src >= 0 && src < 8)
+    if (src >= 0 && src < 9)
     {
 
         input_value = FixedToFloat_9((cv_corrected(src, ctrl_data) >> 3));
@@ -522,7 +581,7 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
     float resonance = 0.0;
 
     // Parse Base Modulation
-    for (size_t i = 0; i < 8; i++)
+    for (size_t i = 0; i < 9; i++)
     {
         if (matrix[i].dst == base)
         {
@@ -534,7 +593,7 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
         }
     }
 
-    if (src >= 0 && src < 8)
+    if (src >= 0 && src < 9)
     {
         int index = 0;
         int array_amt = amount * 511;
@@ -568,7 +627,7 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
     // Parse Width Modulation
     src = -1;
 
-    for (size_t i = 0; i < 8; i++)
+    for (size_t i = 0; i < 9; i++)
     {
         if (matrix[i].dst == width)
         {
@@ -580,7 +639,7 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
         }
     }
 
-    if (src >= 0 && src < 8)
+    if (src >= 0 && src < 9)
     {
         int index = 0;
         int array_amt = amount * 511;
@@ -624,7 +683,7 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
     }
 
     src = -1;
-    for (size_t i = 0; i < 8; i++)
+    for (size_t i = 0; i < 9; i++)
     {
         if (matrix[i].dst == q_index)
         {
@@ -636,7 +695,7 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
         }
     }
 
-    if (src >= 0 && src < 8)
+    if (src >= 0 && src < 9)
     {
 
         input_value = FixedToFloat_9((cv_corrected(src, ctrl_data) >> 3));
@@ -663,7 +722,7 @@ static float modulateDlySendParameter(int vid, int index, uint16_t *ctrl_data)
     float input_value = 0.0;
     int src = -1;
 
-    for (size_t i = 0; i < 8; i++)
+    for (size_t i = 0; i < 9; i++)
     {
         if (matrix[i].dst == index)
         {
@@ -675,7 +734,7 @@ static float modulateDlySendParameter(int vid, int index, uint16_t *ctrl_data)
         }
     }
 
-    if (src >= 0 && src < 8)
+    if (src >= 0 && src < 9)
     {
 
         input_value = FixedToFloat_9((ctrl_data[src] >> 3));
@@ -700,7 +759,7 @@ static void modulate_adsr_parameter(int vid, uint16_t* ctrl_data)
     voice[vid].adsr.sustain_level = ui_params[vid].sustain_level * 0.01f;
     voice[vid].adsr.release_time = ui_params[vid].release_time * 44.1f;
 
-    for(size_t i = 2; i < 8; i++)
+    for(size_t i = 2; i < 9; i++)
     {
         if((matrix[i].dst == MTX_V0_ADSR_ATTACK && vid == 0) || 
            (matrix[i].dst == MTX_V1_ADSR_ATTACK && vid == 1))
@@ -739,6 +798,8 @@ static void modulate_adsr_parameter(int vid, uint16_t* ctrl_data)
     
 }
 
+static uint32_t last_seek_pos[2] = {0, 0};
+
 static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
 {
     uint32_t *sample_start = &voice[vid].playback_engine.sample_start;
@@ -748,11 +809,37 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
              temp_loop_start = voice[vid].playback_engine.loop_start,
              temp_loop_end = voice[vid].playback_engine.loop_end;
     uint32_t fsize = audio_files[vid].fsize;
+    float temp_grain_pos     = (float)ui_params[vid].grain_position;
+    float temp_grain_spray   = (float)ui_params[vid].grain_spray;
+    float temp_grain_size    = (float)ui_params[vid].grain_size_ms;
+    float temp_grain_density = (float)ui_params[vid].grain_density;
+    float temp_grain_pitch   = (float)ui_params[vid].grain_pitch;
+    float temp_grain_pspray  = (float)ui_params[vid].grain_pitch_spray;
 
-    for (size_t i = 2; i < 8; i++)
+    for (size_t i = 2; i < 9; i++)
     {
-        if ((matrix[i].dst == MTX_V0_MODE_START && vid == 0) ||
-            (matrix[i].dst == MTX_V1_MODE_START && vid == 1))
+        if ((matrix[i].dst == MTX_V0_POSITION && vid == 0) ||
+            (matrix[i].dst == MTX_V1_POSITION && vid == 1))
+        {
+            float cv_val = FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3));
+            uint32_t target = (uint32_t)(cv_val * (float)fsize);
+            target = (target / 4) * 4;
+            if (target < temp_sample_start) target = temp_sample_start;
+            if (target + 4 > temp_loop_end) target = temp_loop_end > 4 ? temp_loop_end - 4 : 0;
+            uint32_t threshold = fsize / 200;
+            if (threshold < 4) threshold = 4;
+            uint32_t delta = target > last_seek_pos[vid] ? target - last_seek_pos[vid] : last_seek_pos[vid] - target;
+            if (delta >= threshold) {
+                last_seek_pos[vid] = target;
+                audio_files[vid].fpos = target;
+                fifo_drop_samples(&voice_fifos[vid], voice_fifos[vid].size - voice_fifos[vid].free_slots);
+                voice[vid].playback_engine.phase = 1.0f;
+                xTaskNotify(vid == 0 ? file_reader_task_1_handle : file_reader_task_2_handle,
+                            vid == 0 ? BIT_VOICE0_SEEK : BIT_VOICE1_SEEK, eSetBits);
+            }
+        }
+        else if ((matrix[i].dst == MTX_V0_MODE_START && vid == 0) ||
+                 (matrix[i].dst == MTX_V1_MODE_START && vid == 1))
         {
             temp_sample_start = (uint32_t)modulate_unipolar(ui_params[vid].sample_start, fsize, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt);
             temp_sample_start /= 4;
@@ -771,6 +858,58 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
             temp_loop_end = (uint32_t)modulate_unipolar(ui_params[vid].loop_end, 0, 1.0f - FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt);
             temp_loop_end /= 4;
             temp_loop_end *= 4;
+        }
+        else if ((matrix[i].dst == MTX_V0_MODE_LWIDTH && vid == 0) ||
+                 (matrix[i].dst == MTX_V1_MODE_LWIDTH && vid == 1))
+        {
+            float cv_val = FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3));
+            uint32_t center = (ui_params[vid].loop_start + ui_params[vid].loop_end) / 2;
+            uint32_t hw = (uint32_t)(cv_val * matrix[i].amt * (float)fsize * 0.5f);
+            hw = (hw / 4) * 4;
+            temp_loop_start = center > hw ? center - hw : 0;
+            temp_loop_end = center + hw < fsize ? center + hw : fsize;
+            temp_loop_start = (temp_loop_start / 4) * 4;
+            temp_loop_end = (temp_loop_end / 4) * 4;
+        }
+        else if ((matrix[i].dst == MTX_V0_GRAIN_POS && vid == 0) ||
+                 (matrix[i].dst == MTX_V1_GRAIN_POS && vid == 1))
+        {
+            float cv_val = FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3));
+            temp_grain_pos = modulate_unipolar(temp_grain_pos, 100.0f, cv_val, matrix[i].amt);
+            if (temp_grain_pos < 0.0f) temp_grain_pos = 0.0f;
+            if (temp_grain_pos > 100.0f) temp_grain_pos = 100.0f;
+        }
+        else if ((matrix[i].dst == MTX_V0_GRAIN_SPRAY && vid == 0) ||
+                 (matrix[i].dst == MTX_V1_GRAIN_SPRAY && vid == 1))
+        {
+            float cv_val = FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3));
+            temp_grain_spray = modulate_unipolar(temp_grain_spray, 100.0f, cv_val, matrix[i].amt);
+            if (temp_grain_spray < 0.0f) temp_grain_spray = 0.0f;
+            if (temp_grain_spray > 100.0f) temp_grain_spray = 100.0f;
+        }
+        else if ((matrix[i].dst == MTX_V0_GRAIN_SIZE && vid == 0) ||
+                 (matrix[i].dst == MTX_V1_GRAIN_SIZE && vid == 1))
+        {
+            float cv_val = FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3));
+            temp_grain_size = modulate_unipolar(temp_grain_size, 500.0f, cv_val, matrix[i].amt);
+            if (temp_grain_size < 5.0f) temp_grain_size = 5.0f;
+            if (temp_grain_size > 500.0f) temp_grain_size = 500.0f;
+        }
+        else if ((matrix[i].dst == MTX_V0_GRAIN_DENSITY && vid == 0) ||
+                 (matrix[i].dst == MTX_V1_GRAIN_DENSITY && vid == 1))
+        {
+            float cv_val = FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3));
+            temp_grain_density = modulate_unipolar(temp_grain_density, 50.0f, cv_val, matrix[i].amt);
+            if (temp_grain_density < 1.0f) temp_grain_density = 1.0f;
+            if (temp_grain_density > 50.0f) temp_grain_density = 50.0f;
+        }
+        else if ((matrix[i].dst == MTX_V0_GRAIN_PITCH && vid == 0) ||
+                 (matrix[i].dst == MTX_V1_GRAIN_PITCH && vid == 1))
+        {
+            float cv_val = FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3));
+            temp_grain_pitch = modulate_unipolar(temp_grain_pitch, 24.0f, cv_val, matrix[i].amt);
+            if (temp_grain_pitch < -24.0f) temp_grain_pitch = -24.0f;
+            if (temp_grain_pitch > 24.0f) temp_grain_pitch = 24.0f;
         }
 
         if (temp_loop_start >= temp_loop_end)
@@ -805,12 +944,25 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
 
         voice[vid].playback_engine.loop_end = temp_loop_end;
     }
+
+    if (voice[vid].playback_engine.mode == GRAIN) {
+        granular_update_params(&gran[vid],
+            temp_grain_pos / 100.0f,
+            temp_grain_spray / 100.0f,
+            temp_grain_size,
+            temp_grain_density,
+            temp_grain_pitch,
+            temp_grain_pspray / 100.0f);
+        if (granular_load_needed(&gran[vid], fsize))
+            xTaskNotify(grain_loader_task_handle,
+                vid == 0 ? BIT_GRAIN0_LOAD : BIT_GRAIN1_LOAD, eSetBits);
+    }
 }
 
 static void modulateDlyParameters(delay_t *delay, delay_cfg_t cfg, uint16_t *ctrlData)
 {
     bool isModulated = false;
-    for (size_t i = 2; i < 8; i++) // first two are for pitch cv
+    for (size_t i = 2; i < 9; i++) // first two are for pitch cv
     {
         switch (matrix[i].dst)
         {
@@ -900,9 +1052,14 @@ static void process_next_audio_block(float *buffer, float *dly_send, int32_t buf
     modulateDist[0] = modulateParameter(MTX_V0_DIST_DRIVE, ctrl_data);
     modulateDist[1] = modulateParameter(MTX_V1_DIST_DRIVE, ctrl_data);
 
+    bool grain_mode = (voice[vid].playback_engine.mode == GRAIN);
+
     for (int sample = 0; sample < buffer_len / 2; sample++)
     {
-        interpolate_buffer(vid, &left_sample, &right_sample, ctrl_data); // get the next samples for processing
+        if (grain_mode)
+            granular_process_sample(&gran[vid], &left_sample, &right_sample);
+        else
+            interpolate_buffer(vid, &left_sample, &right_sample, ctrl_data);
         get_next_eg_val(&voice[vid].adsr, &left_sample, &right_sample);  // calculate envelope value for sample
 
         left_sample *= ui_params[vid].volume * modulateVolume[vid];
@@ -931,7 +1088,8 @@ static void process_next_audio_block(float *buffer, float *dly_send, int32_t buf
 
         if (voice[vid].fade[0].state == OFF)
         {
-            resetBufferToStart(vid, file_reader_task_handle); // Reset Buffer Pointer to Start
+            if (!grain_mode)
+                resetBufferToStart(vid, file_reader_task_handle);
 
             pitch_init(vid);
             reset_filter(voice[vid].highpass_filter);
@@ -965,14 +1123,15 @@ static void audio_task(void *pvParams)
     int32_t out[BUF_SZ], in[BUF_SZ];
     float float_sum[BUF_SZ], fx_buf[BUF_SZ], dly_send[BUF_SZ];
     size_t nb;
-    // control data
-    uint16_t ctrlData[8];
+    // control data (9 = 8 hardware CVs + env follower at index 8)
+    uint16_t ctrlData[9];
     // matrix data
     matrix_event_t m_ev;
     // create file interaction tasks
     xTaskCreate(file_reader_task_1, "file_reader_task", 4096, NULL, 22, &file_reader_task_1_handle);
     xTaskCreate(file_reader_task_2, "file_reader_task", 4096, NULL, 22, &file_reader_task_2_handle);
     xTaskCreate(file_manipulation_task, "file_manipulation_task", 4096, NULL, 22, &file_manipulation_task_handle);
+    xTaskCreate(grain_loader_task, "grain_loader", 4096, NULL, 18, &grain_loader_task_handle);
     // mode control data
     play_state_data_t play_state_data;
     param_data_t param_data[2];
@@ -1004,17 +1163,33 @@ static void audio_task(void *pvParams)
         // get control data
         xQueueReceive(control_queue, &ctrlData, 0);
 
+        // always read I2S ADC: compute envelope follower + feed ext-in/recording
+        i2s_read(I2S_NUM_0, in, BUF_SZ * 4, &nb, portMAX_DELAY);
+        {
+            float env_in = 0.f;
+            for (int _i = 0; _i < BUF_SZ; _i++) {
+                float s = (float)in[_i] * DIVISOR;
+                env_in += s * s;
+            }
+            env_in = sqrtf(env_in / BUF_SZ);
+            env_follow = env_follow * 0.9f + env_in * 0.1f;
+            env_follow_cv = (uint16_t)(env_follow * 4095.f);
+        }
+        ctrlData[8] = env_follow_cv;
+
+        if (recording_is_active())
+            recording_push(in);
+
+        // update shared status for REST /status endpoint (non-critical, best effort)
+        portENTER_CRITICAL(&_status_mux);
+        memcpy(_audio_status.cv, ctrlData, sizeof(ctrlData));
+        strncpy(_audio_status.v0, audio_files[0].fname, 31); _audio_status.v0[31] = 0;
+        strncpy(_audio_status.v1, audio_files[1].fname, 31); _audio_status.v1[31] = 0;
+        portEXIT_CRITICAL(&_status_mux);
+
         // init buf
         memset(out, 0, 64 * 2);
         memset(fx_buf, 0, sizeof(float) * BUF_SZ);
-
-        // read from I2S when monitoring ext in or recording
-        if (effectData.extInData.is_active || recording_is_active())
-        {
-            i2s_read(I2S_NUM_0, in, 256, &nb, portMAX_DELAY);
-            if (recording_is_active())
-                recording_push(in);
-        }
 
         if (effectData.extInData.is_active)
         {
@@ -1078,10 +1253,12 @@ static void audio_task(void *pvParams)
             {
                 if (voice[vid].adsr.adsr_state == OFF)
                 {
-                    if (vid)
-                        resetBufferToStart(vid, &file_reader_task_2_handle); // Reset Buffer Pointer to Start
-                    else
-                        resetBufferToStart(vid, &file_reader_task_1_handle); // Reset Buffer Pointer to Start
+                    if (voice[vid].playback_engine.mode != GRAIN) {
+                        if (vid)
+                            resetBufferToStart(vid, &file_reader_task_2_handle);
+                        else
+                            resetBufferToStart(vid, &file_reader_task_1_handle);
+                    }
 
                     pitch_init(vid);
                     reset_filter(voice[vid].highpass_filter);
@@ -1110,7 +1287,7 @@ static void audio_task(void *pvParams)
         //Fetch and store matrix events/data
         parse_matrix_params(m_event_queue, &m_ev);
 
-        //Modulate sample start, loop start, loop end
+        //Modulate sample start, loop start, loop end, grain params
         modulatePlaymodeParameters(1, ctrlData);
         modulatePlaymodeParameters(0, ctrlData);
 
@@ -1124,13 +1301,15 @@ static void audio_task(void *pvParams)
 
             if (i)
             {
-                fill_FiFo(i, &file_reader_task_2_handle); // FiFo is refilled every run
+                if (voice[i].playback_engine.mode != GRAIN)
+                    fill_FiFo(i, &file_reader_task_2_handle);
                 process_next_audio_block(float_sum, dly_send, BUF_SZ, i, ui_parameter_queue_v1, ctrlData, &param_data[1], &file_reader_task_2_handle);
             }
 
             else
             {
-                fill_FiFo(i, &file_reader_task_1_handle); // FiFo is refilled every run
+                if (voice[i].playback_engine.mode != GRAIN)
+                    fill_FiFo(i, &file_reader_task_1_handle);
                 process_next_audio_block(float_sum, dly_send, BUF_SZ, i, ui_parameter_queue_v0, ctrlData, &param_data[0], &file_reader_task_1_handle);
             }
         }
@@ -1277,7 +1456,7 @@ static void initAudioStructs()
     }
 
     //Init matrix - every source/amount/destination to 0
-    for (int j = 0; j < 8; j++)
+    for (int j = 0; j < 9; j++)
     {
         if (j != 0 && j != 1)
         {
@@ -1305,6 +1484,7 @@ static void initAudioStructs()
         init_filter(voice[i].highpass_filter, highpass);
         init_fade(&voice[i]);
         fifo_init(&voice_fifos[i], (int32_t *)heap_caps_calloc(BUF_SZ + 1, sizeof(int32_t), MALLOC_CAP_INTERNAL), BUF_SZ + 1);
+        granular_init(&gran[i]);
     }
 
     bzero(controlData, sizeof(unsigned int) * 8);

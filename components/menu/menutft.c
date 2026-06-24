@@ -200,19 +200,20 @@ void menuTFTPrintMatrixMenu(){
     //Draw horizontal lines
     TFT_setclipwin(0, TFT_getfontheight()* 2 + 18, _width - 1, _height);
     int y_l = TFT_getfontheight() + 6;
-    for(int k = 0; k < 8; k++)
+    for(int k = 0; k < 9; k++)
     {
         TFT_drawFastHLine(0, y_l, _width, TFT_WHITE);
         y_l += TFT_getfontheight() + 8;
     }
-    
+
     TFT_restoreClipWin();
     TFT_setclipwin(0, TFT_getfontheight()* 2 + 18, x_inc, _height);
     int y = 4;
-    
-    for( int j = 1; j < 9; j++)
+
+    for( int j = 1; j <= 9; j++)
     {
-        sprintf(tmp, "CV %d", j);
+        if (j == 9) sprintf(tmp, "Env");
+        else sprintf(tmp, "CV %d", j);
         TFT_print(tmp, CENTER, y);
         y += TFT_getfontheight() + 8;
     }
@@ -516,14 +517,14 @@ void menuTFTSelectMatrixItem(int active, int select, int column){
         x_offset = x_incr * k;
         if(k == 2) x_mod = 2;
         y = 0;
-        for(int i=0;i<8;i++){
+        for(int i=0;i<9;i++){
             _bg = TFT_BLACK;
             if(i==active && k == column){
                 if(select == 1){
                     _bg = TFT_RED;
                 }else{
                     _bg = TFT_CYAN;
-                }  
+                }
             }
             TFT_drawRect(x_offset + 2, y, x_incr - x_mod, h + 5 , _bg);
             y += TFT_getfontheight() + 8;
@@ -909,10 +910,41 @@ void menuTFTPrintPlaymodeValues(play_state_data_t *data, int r){
             }   
             break;
 
+        case SID_GRAIN_POS:
+            sprintf(tmp, "%d %%", data->grain_position);
+            menuTFTFlush(5, &_bg);
+            TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 5);
+            break;
+        case SID_GRAIN_SPRAY:
+            sprintf(tmp, "%d %%", data->grain_spray);
+            menuTFTFlush(6, &_bg);
+            TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 6);
+            break;
+        case SID_GRAIN_SIZE:
+            sprintf(tmp, "%d ms", data->grain_size_ms);
+            menuTFTFlush(7, &_bg);
+            TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 7);
+            break;
+        case SID_GRAIN_DENSITY:
+            sprintf(tmp, "%d", data->grain_density);
+            menuTFTFlush(8, &_bg);
+            TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 8);
+            break;
+        case SID_GRAIN_PITCH:
+            sprintf(tmp, "%d st", data->grain_pitch);
+            menuTFTFlush(9, &_bg);
+            TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 9);
+            break;
+        case SID_GRAIN_PSPRAY:
+            sprintf(tmp, "%d %%", data->grain_pitch_spray);
+            menuTFTFlush(10, &_bg);
+            TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 10);
+            break;
+
         case PRINT_ALL:
 
             sprintf(tmp, playmode_modes[data->mode]);
-            TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y); 
+            TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y);
             y++;
 
             sprintf(tmp,"%d %%", scaledStart);
@@ -926,14 +958,29 @@ void menuTFTPrintPlaymodeValues(play_state_data_t *data, int r){
             sprintf(tmp,"%d %%", scaledLEnd);
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y);
             y++;
-   
+
             sprintf(tmp,"%d %%", scaledLPos);
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y);
             y++;
 
+            if (data->mode == GRAIN) {
+                sprintf(tmp, "%d %%", data->grain_position);
+                TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y); y++;
+                sprintf(tmp, "%d %%", data->grain_spray);
+                TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y); y++;
+                sprintf(tmp, "%d ms", data->grain_size_ms);
+                TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y); y++;
+                sprintf(tmp, "%d", data->grain_density);
+                TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y); y++;
+                sprintf(tmp, "%d st", data->grain_pitch);
+                TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y); y++;
+                sprintf(tmp, "%d %%", data->grain_pitch_spray);
+                TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y); y++;
+            }
+
         default:
             break;
-    }    
+    }
 }
 
 void menuTFTPrintMatrixAmount(matrix_ui_row_t* matrix, int r){
@@ -944,14 +991,14 @@ void menuTFTPrintMatrixAmount(matrix_ui_row_t* matrix, int r){
     int y = 4;
     int amt = 0;
     char tmp[10];
-    static matrix_param_t prevParam [8];
+    static matrix_param_t prevParam [9];
     _fg = TFT_WHITE;
-    
+
     _bg = TFT_BLACK;
 
     switch(r){
         case PRINT_ALL:
-            for(int i = 0; i < 8; i++)
+            for(int i = 0; i < 9; i++)
             {
                 if(matrix[i].dst == MTX_NONE){
                     sprintf(tmp, "---");
@@ -995,9 +1042,9 @@ void menuTFTPrintMatrixDestination(matrix_ui_row_t* matrix, int row){
 
     switch(row){
         case PRINT_ALL:
-            for(int i = 0; i < 8; i++)
+            for(int i = 0; i < 9; i++)
             {
-                sprintf(tmp, matrix_parameter_items[matrix[i].dst]); 
+                sprintf(tmp, matrix_parameter_items[matrix[i].dst]);
                 TFT_print(tmp, CENTER, y);
                 y += TFT_getfontheight() + 8;
             }

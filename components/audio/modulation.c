@@ -20,6 +20,12 @@ void init_ui_params(ui_param_holder_t* params){
     params->loop_start = 0;
     params->loop_end = 0;
     params->mode = SINGLE;
+    params->grain_position    = 50;
+    params->grain_spray       = 10;
+    params->grain_size_ms     = 80;
+    params->grain_density     = 12;
+    params->grain_pitch       = 0;
+    params->grain_pitch_spray = 0;
 }
 
 void parse_play_direction(xQueueHandle* queue, TaskHandle_t* task_handle, voice_t* voice, int vid){
@@ -113,14 +119,23 @@ void parse_play_state_data(xQueueHandle* queue, play_state_data_t* play_state_da
             voice->playback_engine.loop_end = temp_comp;
         }
 
-        if((play_state_data->mode >= 0) && (play_state_data->mode < 3)){
-            voice->playback_engine.play_mode = play_modes[play_state_data->mode];
+        if((play_state_data->mode >= 0) && (play_state_data->mode < 4)){
+            if (play_state_data->mode < 3)
+                voice->playback_engine.play_mode = play_modes[play_state_data->mode];
             ui_params->mode = play_state_data->mode;
             voice->playback_engine.mode = play_state_data->mode;
+            if (play_state_data->mode == GRAIN) {
+                ui_params->grain_position    = play_state_data->grain_position;
+                ui_params->grain_spray       = play_state_data->grain_spray;
+                ui_params->grain_size_ms     = play_state_data->grain_size_ms;
+                ui_params->grain_density     = play_state_data->grain_density;
+                ui_params->grain_pitch       = play_state_data->grain_pitch;
+                ui_params->grain_pitch_spray = play_state_data->grain_pitch_spray;
+            }
         }
         else
         {
-            ESP_LOGE("Parse Playback Data", "Error, index of playmode data must be between 0 and 2");
+            ESP_LOGE("Parse Playback Data", "Error, index of playmode data must be between 0 and 3");
         }
 
     }

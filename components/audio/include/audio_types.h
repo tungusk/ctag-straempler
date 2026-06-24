@@ -30,6 +30,7 @@ typedef enum{
     SINGLE = 0x00,
     LOOP = 0x01,
     PIPO = 0x02,
+    GRAIN = 0x03,
 } voice_play_state_t;
 
 typedef enum{
@@ -69,7 +70,21 @@ typedef enum{
     MTX_DELAY_TIME,
     MTX_DELAY_PAN,
     MTX_DELAY_FB,
-    MTX_DELAY_VOL
+    MTX_DELAY_VOL,
+    MTX_V0_POSITION,
+    MTX_V1_POSITION,
+    MTX_V0_MODE_LWIDTH,
+    MTX_V1_MODE_LWIDTH,
+    MTX_V0_GRAIN_POS,
+    MTX_V0_GRAIN_SPRAY,
+    MTX_V0_GRAIN_SIZE,
+    MTX_V0_GRAIN_DENSITY,
+    MTX_V0_GRAIN_PITCH,
+    MTX_V1_GRAIN_POS,
+    MTX_V1_GRAIN_SPRAY,
+    MTX_V1_GRAIN_SIZE,
+    MTX_V1_GRAIN_DENSITY,
+    MTX_V1_GRAIN_PITCH,
 } matrix_param_t;
 
 typedef struct{
@@ -178,6 +193,12 @@ typedef struct{
     int8_t pitch;
     float attack_time, decay_time, sustain_level, release_time;
     uint32_t sample_start, loop_start, loop_end, mode;
+    uint8_t  grain_position;
+    uint8_t  grain_spray;
+    uint16_t grain_size_ms;
+    uint8_t  grain_density;
+    int8_t   grain_pitch;
+    uint8_t  grain_pitch_spray;
 } ui_param_holder_t;
 
 typedef struct
@@ -192,7 +213,7 @@ typedef struct
     uint32_t release;
 } adsr_data_t;
 
-typedef struct 
+typedef struct
 {
     voice_play_state_t mode;
     uint16_t start;         //Q13.3 - 0.00 - 100.00
@@ -200,6 +221,12 @@ typedef struct
     uint16_t loop_end;      //Q13.3 - 0.00 - 100.00
     uint16_t loop_position; //Q13.3 - 0.00 - 100.00
     uint16_t loop_length;   //Q13.3 - 0.00 - 100.00
+    uint8_t  grain_position;   // 0-100 %
+    uint8_t  grain_spray;      // 0-100 %
+    uint16_t grain_size_ms;    // 5-500 ms
+    uint8_t  grain_density;    // 1-50 grains/sec
+    int8_t   grain_pitch;      // -24..+24 semitones
+    uint8_t  grain_pitch_spray;// 0-100 %
 } play_state_data_t;
 
 typedef struct
