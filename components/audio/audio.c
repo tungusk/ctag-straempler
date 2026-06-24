@@ -21,6 +21,7 @@
 #include "menu_items.h"
 #include "adsr.h"
 #include "modulation.h"
+#include "recording.h"
 
 #define DIR_FWD 0
 #define DIR_BWD 1
@@ -998,10 +999,16 @@ static void audio_task(void *pvParams)
         memset(out, 0, 64 * 2);
         memset(fx_buf, 0, sizeof(float) * BUF_SZ);
 
-        // read from external audio in if enabled
-        if (effectData.extInData.is_active)
+        // read from I2S when monitoring ext in or recording
+        if (effectData.extInData.is_active || recording_is_active())
         {
             i2s_read(I2S_NUM_0, in, 256, &nb, portMAX_DELAY);
+            if (recording_is_active())
+                recording_push(in);
+        }
+
+        if (effectData.extInData.is_active)
+        {
             float bl = extInCfg.pan < 0.0f ? 1.0f : 1.0f - extInCfg.pan;
             float br = extInCfg.pan < 0.0f ? 1.0f + extInCfg.pan : 1.0f;
             //ESP_LOGE("EXT", "bl %.2f, br %.2f, pan %.2f", bl, br, extInCfg.pan);
@@ -1324,6 +1331,7 @@ void initAudio(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle 
     initSpiPer(control_queue);
     init_i2s();
 
+    recording_init();
     initAudioStructs();
     assignAudioFiles();
 
