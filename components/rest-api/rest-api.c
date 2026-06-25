@@ -85,14 +85,14 @@ static esp_err_t files_get_handler(httpd_req_t *req)
         // only list .JSN sidecars — each represents a complete sample
         if (strcasecmp(ent->d_name + len - 4, ".JSN") != 0) continue;
 
-        char jsn_path[72];
+        char jsn_path[280];
         snprintf(jsn_path, sizeof(jsn_path), "/sdcard/usr/%s", ent->d_name);
         cJSON *meta = readJSONFileAsCJSON(jsn_path);
         if (!meta) continue;
 
         // derive RAW path and size
-        char raw_path[72];
-        char id[32] = {0};
+        char raw_path[280];
+        char id[260] = {0};
         strncpy(id, ent->d_name, len - 4);  // strip .JSN
         snprintf(raw_path, sizeof(raw_path), "/sdcard/usr/%s.RAW", id);
         struct stat st;
