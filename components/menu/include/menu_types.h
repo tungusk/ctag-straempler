@@ -28,6 +28,7 @@ typedef enum{
     M_EFFECTS,
     M_CV_MATRIX,
     M_DELAY,
+    M_RECORDING,
     M_REVERB,
     M_FILTER,
     M_ADSR,
