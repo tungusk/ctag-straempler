@@ -18,6 +18,7 @@
 #include "esp_log.h"
 #include "audio.h"
 #include "menutft.h"
+#include "recording.h"
 #include "menu_utils.h"
 #include "menu_types.h"
 #include "audio_luts.h"
@@ -68,7 +69,9 @@ void *_fb_state = NULL;
 
 // handler has format caller_id, caller_name, caller_item data, event, event data
 static int timer_handler(int it_id, int event, void* event_data){
-    menuTFTPrintTime(&tz_shift);
+    menuTFTPrintRecordIndicator();
+    menuTFTUpdatePlayState(0, -1);
+    menuTFTUpdatePlayState(1, -1);
     return 0; // remain in current menu
 }
 
@@ -94,6 +97,22 @@ static int main_menu_def_handler(int it_id, int event, void* event_data){
             if(menu_state_current < 0) menu_state_current = states - 1;
             menuTFTSelectMainMenu(menu_state_current, 0);
             break;
+        case EV_SHORT_PRESS: {
+            // Cycle arm state: none → T0 armed → T1 armed → none
+            trig_func_t f0 = recording_get_trig_func(0);
+            trig_func_t f1 = recording_get_trig_func(1);
+            if (f0 == TRIG_FUNC_VOICE && f1 == TRIG_FUNC_VOICE) {
+                recording_set_trig_func(0, TRIG_FUNC_RECORD);
+            } else if (f0 == TRIG_FUNC_RECORD) {
+                recording_set_trig_func(0, TRIG_FUNC_VOICE);
+                recording_set_trig_func(1, TRIG_FUNC_RECORD);
+            } else {
+                recording_set_trig_func(0, TRIG_FUNC_VOICE);
+                recording_set_trig_func(1, TRIG_FUNC_VOICE);
+            }
+            menuTFTPrintRecordIndicator();
+            break;
+        }
         case EV_LONG_PRESS:
             menuTFTSelectMainMenu(menu_state_current, 1);
             return menu_states[menu_state_current];
@@ -896,7 +915,7 @@ static int matrix_def_handler(int it_id, int event, void* event_data){
 }
 
 static int effects_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN};
+    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN, M_RECORDING};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0; 
     
@@ -986,6 +1005,52 @@ static int extin_def_handler(int it_id, int event, void* event_data){
 
     return 0;
 
+}
+
+static int recording_def_handler(int it_id, int event, void* event_data){
+    static const char* rec_menu[] = {"TRIG0", "TRIG1"};
+    static const int n_rec_menu = 2;
+    static int menu_pos = 0;
+    static int selected = 0;
+
+    switch(event){
+        case EV_ENTERED_MENU:
+            menuTFTPrintMenu(rec_menu, &n_rec_menu);
+            menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
+            menuTFTPrintRecordingState(recording_get_trig_func(0), recording_get_trig_func(1));
+            break;
+        case EV_FWD:
+            if(!selected){
+                menu_pos = (menu_pos + 1) % 2;
+                menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
+            }else{
+                trig_func_t cur = recording_get_trig_func(menu_pos);
+                recording_set_trig_func(menu_pos, (trig_func_t)((cur + 1) % 2));
+                menuTFTPrintRecordingState(recording_get_trig_func(0), recording_get_trig_func(1));
+            }
+            break;
+        case EV_BWD:
+            if(!selected){
+                menu_pos = (menu_pos + 1) % 2;
+                menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
+            }else{
+                trig_func_t cur = recording_get_trig_func(menu_pos);
+                recording_set_trig_func(menu_pos, (trig_func_t)((cur + 1) % 2));
+                menuTFTPrintRecordingState(recording_get_trig_func(0), recording_get_trig_func(1));
+            }
+            break;
+        case EV_SHORT_PRESS:
+            selected = !selected;
+            menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
+            break;
+        case EV_LONG_PRESS:
+            selected = 0;
+            menu_pos = 0;
+            return M_EFFECTS;
+        default:
+            break;
+    }
+    return 0;
 }
 
 static int delay_def_handler(int it_id, int event, void* event_data){
@@ -2501,6 +2566,8 @@ void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle e
                 menusys_item_set_default_cb(_ms, M_DELAY, delay_def_handler);
             menusys_new_item(_ms, M_EXTERNAL_IN);
             menusys_item_set_default_cb(_ms, M_EXTERNAL_IN, extin_def_handler);
+            menusys_new_item(_ms, M_RECORDING);
+            menusys_item_set_default_cb(_ms, M_RECORDING, recording_def_handler);
 
     menusys_new_item(_ms, M_SLOT);
     menusys_item_set_default_cb(_ms, M_SLOT, bank_def_handler);

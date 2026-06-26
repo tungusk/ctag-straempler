@@ -16,6 +16,8 @@ void initAudio(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle 
 void assignAudioFiles();
 void enableTrigModeLatch(uint8_t vid);
 void disableTrigModeLatch(uint8_t vid);
+void getAudioBasename(int vid, char *out, int len);
+bool isVoicePlaying(int vid);
 
 
 

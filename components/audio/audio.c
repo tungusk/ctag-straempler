@@ -21,6 +21,7 @@
 #include "menu_items.h"
 #include "adsr.h"
 #include "modulation.h"
+#include "recording.h"
 
 #define DIR_FWD 0
 #define DIR_BWD 1
@@ -998,15 +999,18 @@ static void audio_task(void *pvParams)
         memset(out, 0, 64 * 2);
         memset(fx_buf, 0, sizeof(float) * BUF_SZ);
 
-        // read from external audio in if enabled
-        if (effectData.extInData.is_active)
+        // always read I2S to drain the RX buffer; route to extIn or recording as needed
+        i2s_read(I2S_NUM_0, in, 256, &nb, portMAX_DELAY);
+        if (recording_is_active())
+            recording_push(in);
+
+        if (effectData.extInData.is_active || recording_is_active())
         {
-            i2s_read(I2S_NUM_0, in, 256, &nb, portMAX_DELAY);
+            float mon_vol = (recording_is_active() && extInCfg.volume == 0.0f) ? 1.0f : extInCfg.volume;
             float bl = extInCfg.pan < 0.0f ? 1.0f : 1.0f - extInCfg.pan;
             float br = extInCfg.pan < 0.0f ? 1.0f + extInCfg.pan : 1.0f;
-            //ESP_LOGE("EXT", "bl %.2f, br %.2f, pan %.2f", bl, br, extInCfg.pan);
-            bl *= extInCfg.volume * DIVISOR;
-            br *= extInCfg.volume * DIVISOR;
+            bl *= mon_vol * DIVISOR;
+            br *= mon_vol * DIVISOR;
             for (int i = 0; i < BUF_SZ / 2; i++)
             {
                 float_sum[i * 2] = (float)in[i * 2] * bl;
@@ -1048,6 +1052,20 @@ static void audio_task(void *pvParams)
                 //ESP_LOGI("AUDIO", "Trigger happened vid %d event %d", vid, event);
             }
 
+            // if this trigger is routed to recording, toggle on each TRG_DOWN and skip voice
+            if (recording_get_trig_func(vid) == TRIG_FUNC_RECORD) {
+                if (event == EV_TRG_DOWN) {
+                    if (recording_is_active()) {
+                        recording_stop();
+                        // auto-switch back to voice; file will load when writer finishes
+                        recording_set_trig_func(vid, TRIG_FUNC_VOICE);
+                    } else {
+                        recording_start(vid);
+                    }
+                }
+                continue;
+            }
+
             // action
             if(event == EV_TRG_DOWN)
             {
@@ -1074,6 +1092,37 @@ static void audio_task(void *pvParams)
             }
         }
 
+        // auto-load completed recording into the voice slot
+        {
+            int load_vid; char load_fname[48];
+            if (recording_poll_load(&load_vid, load_fname)) {
+                ESP_LOGI("REC", "Auto-loading %s into voice %d", load_fname, load_vid);
+                cJSON *cfg = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+                if (cfg) {
+                    cJSON *slots = cJSON_GetObjectItem(cfg, "slots");
+                    cJSON *slot = slots ? cJSON_GetArrayItem(slots, load_vid) : NULL;
+                    if (slot) {
+                        // derive FatFS path: strip "/sdcard" VFS prefix
+                        const char *fatfs_path = load_fname;
+                        if (strncmp(load_fname, "/sdcard", 7) == 0) fatfs_path = load_fname + 7;
+                        // derive display name: basename without .RAW
+                        const char *slash = strrchr(fatfs_path, '/');
+                        const char *base = slash ? slash + 1 : fatfs_path;
+                        char id[48];
+                        int blen = strlen(base);
+                        if (blen >= 4 && strcasecmp(base + blen - 4, ".RAW") == 0) blen -= 4;
+                        snprintf(id, sizeof(id), "%.*s", blen, base);
+                        cJSON_ReplaceItemInObjectCaseSensitive(slot, "name", cJSON_CreateString(id));
+                        cJSON_ReplaceItemInObjectCaseSensitive(slot, "file", cJSON_CreateString(fatfs_path));
+                        char *cfg_str = cJSON_Print(cfg);
+                        if (cfg_str) { writeJSONFile("/sdcard/CONFIG.JSN", cfg_str); free(cfg_str); }
+                    }
+                    cJSON_Delete(cfg);
+                }
+                assignAudioFiles();
+            }
+        }
+
         parse_play_state_data(&mode_handle_v1, &play_state_data, &ui_params[1], &file_manipulation_task_handle, &voice[1], &audio_files[1], play_modes, 1);
         parse_play_state_data(&mode_handle_v0, &play_state_data, &ui_params[0], &file_manipulation_task_handle, &voice[0], &audio_files[0], play_modes, 0);
         parse_voice_param_data(&ui_parameter_queue_v1, &voice[1], &ui_params[1], &param_data[1]);
@@ -1097,16 +1146,20 @@ static void audio_task(void *pvParams)
                 continue;
             }
 
+            bool mute_voice = recording_is_active() && (recording_get_target_vid() == i);
+
             if (i)
             {
-                fill_FiFo(i, &file_reader_task_2_handle); // FiFo is refilled every run
-                process_next_audio_block(float_sum, dly_send, BUF_SZ, i, ui_parameter_queue_v1, ctrlData, &param_data[1], &file_reader_task_2_handle);
+                fill_FiFo(i, &file_reader_task_2_handle);
+                if (!mute_voice)
+                    process_next_audio_block(float_sum, dly_send, BUF_SZ, i, ui_parameter_queue_v1, ctrlData, &param_data[1], &file_reader_task_2_handle);
             }
 
             else
             {
-                fill_FiFo(i, &file_reader_task_1_handle); // FiFo is refilled every run
-                process_next_audio_block(float_sum, dly_send, BUF_SZ, i, ui_parameter_queue_v0, ctrlData, &param_data[0], &file_reader_task_1_handle);
+                fill_FiFo(i, &file_reader_task_1_handle);
+                if (!mute_voice)
+                    process_next_audio_block(float_sum, dly_send, BUF_SZ, i, ui_parameter_queue_v0, ctrlData, &param_data[0], &file_reader_task_1_handle);
             }
         }
 
@@ -1326,7 +1379,24 @@ void initAudio(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle 
 
     initAudioStructs();
     assignAudioFiles();
+    recording_init();
 
     xTaskCreatePinnedToCore(audio_task, "audio_task", 4096, NULL, 23, &audio_task_h, 1);
 
+}
+
+bool isVoicePlaying(int vid) {
+    if (vid < 0 || vid > 1) return false;
+    return voice[vid].adsr.adsr_state != OFF;
+}
+
+void getAudioBasename(int vid, char *out, int len) {
+    if (vid < 0 || vid > 1 || len < 1) { if (len > 0) out[0] = '\0'; return; }
+    const char *p = audio_files[vid].fname;
+    if (!p || p[0] == '\0') { snprintf(out, len, "---"); return; }
+    const char *slash = strrchr(p, '/');
+    const char *base = slash ? slash + 1 : p;
+    int blen = strlen(base);
+    if (blen >= 4 && strcasecmp(base + blen - 4, ".RAW") == 0) blen -= 4;
+    snprintf(out, len, "%.*s", blen, base);
 }

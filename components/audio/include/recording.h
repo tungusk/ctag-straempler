@@ -1,0 +1,22 @@
+#pragma once
+#include <stdbool.h>
+#include <stdint.h>
+
+typedef enum {
+    TRIG_FUNC_VOICE = 0,
+    TRIG_FUNC_RECORD,
+} trig_func_t;
+
+void recording_init(void);
+void recording_start(int vid);  // vid: which voice slot to auto-load into after stop
+void recording_stop(void);
+bool recording_is_active(void);
+void recording_push(const int32_t *samples);
+
+// Returns true once (clears flag) when a recording has been saved and is ready to load.
+// Fills vid_out and fname_out (must be at least 48 bytes).
+bool recording_poll_load(int *vid_out, char *fname_out);
+
+void recording_set_trig_func(int vid, trig_func_t func);
+trig_func_t recording_get_trig_func(int vid);
+int recording_get_target_vid(void);

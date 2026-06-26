@@ -14,6 +14,7 @@
 #include "list.h"
 #include "freertos/timers.h"
 #include "strampler_version.h"
+#include "recording.h"
 
 //definitions for element highlighting and selection
 int _cur_row = 0, _cur_el = -1;
@@ -1162,6 +1163,38 @@ void menuTFTPrintTime(int *shift){
     TFT_restoreClipWin();
 }
 
+void menuTFTPrintRecordIndicator(void) {
+    trig_func_t f0 = recording_get_trig_func(0);
+    trig_func_t f1 = recording_get_trig_func(1);
+    bool active = recording_is_active();
+
+    TFT_saveClipWin();
+    TFT_resetclipwin();
+
+    // Clear the right side of the nav bar (where clock was)
+    int iw = 64;
+    TFT_fillRect(_width - iw - 2, 1, iw, TFT_getfontheight() + 6, (color_t){64, 64, 64});
+
+    char label[10] = "";
+    if (active) {
+        snprintf(label, sizeof(label), "REC");
+        _fg = TFT_RED;
+    } else if (f0 == TRIG_FUNC_RECORD) {
+        snprintf(label, sizeof(label), "T0 ARM");
+        _fg = (color_t){255, 140, 0};
+    } else if (f1 == TRIG_FUNC_RECORD) {
+        snprintf(label, sizeof(label), "T1 ARM");
+        _fg = (color_t){255, 140, 0};
+    }
+    _bg = (color_t){64, 64, 64};
+
+    if (label[0]) {
+        TFT_print(label, _width - TFT_getStringWidth(label) - 4, 4);
+    }
+
+    TFT_restoreClipWin();
+}
+
 void menuTFTPrintTimezone(const char** items, const int* n_items, int *shift){
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height); 
     _bg = TFT_BLACK;
@@ -1253,29 +1286,42 @@ void menuTFTInitAdsrCurve(){
 
 void menuTFTPrintCurrentSettings(char* bank, char* preset, param_data_t* data){
     TFT_saveClipWin();
+    TFT_resetclipwin();
     _bg = TFT_BLACK;
     _fg = TFT_WHITE;
-    int x = 4, x_incr = _width/2, y = 8, y_incr = TFT_getfontheight() + 24;
+    int fh = TFT_getfontheight();
+    int y0 = fh + 9;   // absolute top of content area
     char buf[64];
 
-    TFT_setclipwin(0, TFT_getfontheight()+9 + y, x_incr, 80);
-    TFT_print("Current bank:", CENTER, 8);
-    TFT_print(bank, (x_incr/2) - TFT_getStringWidth(bank) / 2, TFT_getfontheight() + 8 + 4);
+    // Clear top info line and both voice label rows (bars redrawn separately)
+    TFT_fillRect(0, y0, _width, 100 - y0, TFT_BLACK);
+    TFT_fillRect(0, 100, _width, 20, TFT_BLACK);
+    TFT_fillRect(0, 155, _width, 20, TFT_BLACK);
+
+    // Bank and preset, compact single line
+    snprintf(buf, sizeof(buf), "BNK: %-8s  PRE: %s", bank, preset);
+    TFT_print(buf, 4, y0 + 5);
+
+    // Filenames sit just above each transport bar
+    char f0[22], f1[22];
+    getAudioBasename(0, f0, sizeof(f0));
+    getAudioBasename(1, f1, sizeof(f1));
+
+    _fg = TFT_WHITE;
+    snprintf(buf, sizeof(buf), "%s", playmode_modes[data[0].play_state.mode]);
+    TFT_print(buf, 4, 104);
+    _fg = TFT_LIGHTGREY;
+    snprintf(buf, sizeof(buf), "  T0: %s", f0);
+    TFT_print(buf, TFT_getStringWidth((char*)playmode_modes[data[0].play_state.mode]) + 4, 104);
+
+    _fg = TFT_WHITE;
+    snprintf(buf, sizeof(buf), "%s", playmode_modes[data[1].play_state.mode]);
+    TFT_print(buf, 4, 159);
+    _fg = TFT_LIGHTGREY;
+    snprintf(buf, sizeof(buf), "  T1: %s", f1);
+    TFT_print(buf, TFT_getStringWidth((char*)playmode_modes[data[1].play_state.mode]) + 4, 159);
 
     TFT_restoreClipWin();
-    TFT_setclipwin(x_incr, TFT_getfontheight()+9 + y, _width, 80);
-    TFT_print("Current preset:", CENTER, 8);
-    TFT_print(preset, (x_incr/2) - TFT_getStringWidth(preset) / 2, TFT_getfontheight() + 8 + 4);
-
-    TFT_restoreClipWin();
-    TFT_print("Voice: 0", 10, 104);
-    sprintf(buf, "Mode: %s", playmode_modes[data[0].play_state.mode]);
-    TFT_print(buf, TFT_getStringWidth("Voice: 0") + 40, 104);    
-
-    TFT_print("Voice: 1", 10, 159);
-    sprintf(buf, "Mode: %s", playmode_modes[data[1].play_state.mode]);
-    TFT_print(buf, TFT_getStringWidth("Voice: 1") + 40, 159);    
-
 }
 
 void menuTFTPrintCurrentPresetSettings(char* title, char* data){
@@ -1538,11 +1584,46 @@ int printTags(list_item_t* it){
 
 void menuTFTUpdatePlayState(int vid, int state){
     static int p_state[2] = {0, 0};
-    if(p_state[vid] == state && state != -1) return; // -1 for re-drawing last position
+    static int p_color[2] = {-1, -1};
+
+    bool is_rec     = recording_is_active() && (recording_get_target_vid() == vid);
+    bool is_armed   = !is_rec && (recording_get_trig_func(vid) == TRIG_FUNC_RECORD);
+    bool is_playing = !is_rec && !is_armed && isVoicePlaying(vid);
+    int color = is_rec ? 3 : (is_armed ? 2 : (is_playing ? 1 : 0));
+
+    if(p_state[vid] == state && state != -1 && p_color[vid] == color) return;
     if(state == -1) state = p_state[vid];
-    TFT_fillRect(10, 120 + 55 * vid, 301, 20, (color_t){32, 32, 48});
-    TFT_drawFastVLine(10 + state, 120 + 55 * vid, 20, TFT_WHITE);
+
+    color_t bar_bg, bar_line;
+    if (is_rec) {
+        bar_bg   = (color_t){48,  8,  8};
+        bar_line = TFT_RED;
+    } else if (is_armed) {
+        bar_bg   = (color_t){48, 40,  0};
+        bar_line = TFT_YELLOW;
+    } else if (is_playing) {
+        bar_bg   = (color_t){ 8, 40,  8};
+        bar_line = TFT_GREEN;
+    } else {
+        bar_bg   = (color_t){ 8, 16, 48};
+        bar_line = (color_t){80, 120, 255};
+    }
+
+    TFT_fillRect(10, 120 + 55 * vid, 301, 20, bar_bg);
+    TFT_drawFastVLine(10 + state, 120 + 55 * vid, 20, bar_line);
     p_state[vid] = state;
+    p_color[vid] = color;
+}
+
+void menuTFTPrintRecordingState(int f0, int f1){
+    static const char* names[] = {"Voice", "Record"};
+    TFT_setclipwin(0, TFT_getfontheight()+9, _width-1, _height);
+    _bg = TFT_BLACK;
+    _fg = TFT_LIGHTGREY;
+    menuTFTFlush(0, &_bg);
+    TFT_print(names[f0 < 2 ? f0 : 0], _width/2, 3 + (TFT_getfontheight() + 3) * 0);
+    menuTFTFlush(1, &_bg);
+    TFT_print(names[f1 < 2 ? f1 : 0], _width/2, 3 + (TFT_getfontheight() + 3) * 1);
 }
 
 void menuTFTPrintInputError(char* s){
