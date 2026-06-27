@@ -69,7 +69,9 @@ typedef enum{
     MTX_DELAY_TIME,
     MTX_DELAY_PAN,
     MTX_DELAY_FB,
-    MTX_DELAY_VOL
+    MTX_DELAY_VOL,
+    MTX_V0_REC_ARM,
+    MTX_V1_REC_ARM
 } matrix_param_t;
 
 typedef struct{

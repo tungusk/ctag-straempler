@@ -862,6 +862,21 @@ static void modulateDlyParameters(delay_t *delay, delay_cfg_t cfg, uint16_t *ctr
     }
 }
 
+static void processRecArmCV(uint16_t *ctrlData)
+{
+    static bool prev_arm[2] = {false, false};
+    for (int i = 0; i < 8; i++) {
+        int vid = -1;
+        if (matrix[i].dst == MTX_V0_REC_ARM) vid = 0;
+        else if (matrix[i].dst == MTX_V1_REC_ARM) vid = 1;
+        if (vid < 0) continue;
+        bool gate_high = ctrlData[i] > 2048;
+        if (gate_high == prev_arm[vid]) continue;
+        prev_arm[vid] = gate_high;
+        recording_set_trig_func(vid, gate_high ? TRIG_FUNC_RECORD : TRIG_FUNC_VOICE);
+    }
+}
+
 static void process_next_audio_block(float *buffer, float *dly_send, int32_t buffer_len, int8_t vid, QueueHandle_t param_queue, uint16_t *ctrl_data, param_data_t *params, TaskHandle_t *file_reader_task_handle)
 {
     float left_sample, right_sample;
@@ -1183,6 +1198,7 @@ static void audio_task(void *pvParams)
 
         // process delay modulation from matrix
         modulateDlyParameters(&delay, delayCfg, ctrlData);
+        processRecArmCV(ctrlData);
 
         // process delay
         if (effectData.delay.is_active)
