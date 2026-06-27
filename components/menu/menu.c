@@ -70,8 +70,10 @@ void *_fb_state = NULL;
 // handler has format caller_id, caller_name, caller_item data, event, event data
 static int timer_handler(int it_id, int event, void* event_data){
     menuTFTPrintRecordIndicator();
-    menuTFTUpdatePlayState(0, -1);
-    menuTFTUpdatePlayState(1, -1);
+    if (it_id == M_MAIN) {
+        menuTFTUpdatePlayState(0, -1);
+        menuTFTUpdatePlayState(1, -1);
+    }
     return 0; // remain in current menu
 }
 

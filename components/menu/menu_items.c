@@ -47,7 +47,8 @@ const int n_cv_matrix_items = sizeof(cv_matrix_items) / sizeof(int);
 const char* matrix_parameter_items[] = {"None","V0 Volume", "V0 Pan", "V0 Pitch", "V0 PB Speed", "V0 Dist Drive", "V0 Dly Send", "V0 F. Base", "V0 F. Width", "V0 F. Q", "V0 Attack", 
                                                 "V0 Decay", "V0 Sustain", "V0 Release", "V0 Start", "V0 Loop Start", "V0 Loop End", "V1 Volume", "V1 Pan", "V1 Pitch", "V1 PB Speed",
                                                 "V1 Dist Drive", "V1 Dly Send", "V1 F. Base", "V1 F. Width", "V1 F. Q", "V1 Attack", "V1 Decay", "V1 Sustain", "V1 Release", "V1 Start",
-                                                "V1 Loop Start", "V1 Loop End", "Dly Time", "Dly Pan", "Dly Feedback", "Dly Volume"};
+                                                "V1 Loop Start", "V1 Loop End", "Dly Time", "Dly Pan", "Dly Feedback", "Dly Volume",
+                                                "T0 Rec Arm", "T1 Rec Arm"};
 const int n_matrix_parameters = sizeof(matrix_parameter_items) / sizeof(int);
 
 const char* preset_menus[] = {"Presets", "Banks"};
