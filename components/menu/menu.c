@@ -399,7 +399,7 @@ static int browse_def_handler(int it_id, int event, void* event_data){
 }
 
 static int play_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_VOICE0, M_VOICE1, M_EFFECTS, M_CV_MATRIX};
+    const int menu_states[] = {M_VOICE0, M_VOICE1, M_RECORDING, M_EFFECTS, M_CV_MATRIX};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0;
 
@@ -917,7 +917,7 @@ static int matrix_def_handler(int it_id, int event, void* event_data){
 }
 
 static int effects_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN, M_RECORDING};
+    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0; 
     
@@ -1010,8 +1010,8 @@ static int extin_def_handler(int it_id, int event, void* event_data){
 }
 
 static int recording_def_handler(int it_id, int event, void* event_data){
-    static const char* rec_menu[] = {"TRIG0", "TRIG1"};
-    static const int n_rec_menu = 2;
+    static const char* rec_menu[] = {"Enabled", "TRIG0", "TRIG1"};
+    static const int n_rec_menu = 3;
     static int menu_pos = 0;
     static int selected = 0;
 
@@ -1023,21 +1023,31 @@ static int recording_def_handler(int it_id, int event, void* event_data){
             break;
         case EV_FWD:
             if(!selected){
-                menu_pos = (menu_pos + 1) % 2;
+                menu_pos = (menu_pos + 1) % n_rec_menu;
                 menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
-            }else{
-                trig_func_t cur = recording_get_trig_func(menu_pos);
-                recording_set_trig_func(menu_pos, (trig_func_t)((cur + 1) % 2));
+            } else {
+                if(menu_pos == 0){
+                    recording_set_enabled(!recording_get_enabled());
+                } else {
+                    int vid = menu_pos - 1;
+                    trig_func_t cur = recording_get_trig_func(vid);
+                    recording_set_trig_func(vid, (trig_func_t)((cur + 1) % 2));
+                }
                 menuTFTPrintRecordingState(recording_get_trig_func(0), recording_get_trig_func(1));
             }
             break;
         case EV_BWD:
             if(!selected){
-                menu_pos = (menu_pos + 1) % 2;
+                menu_pos = (menu_pos - 1 + n_rec_menu) % n_rec_menu;
                 menuTFTSelectMenuItem(&menu_pos, selected, rec_menu, &n_rec_menu);
-            }else{
-                trig_func_t cur = recording_get_trig_func(menu_pos);
-                recording_set_trig_func(menu_pos, (trig_func_t)((cur + 1) % 2));
+            } else {
+                if(menu_pos == 0){
+                    recording_set_enabled(!recording_get_enabled());
+                } else {
+                    int vid = menu_pos - 1;
+                    trig_func_t cur = recording_get_trig_func(vid);
+                    recording_set_trig_func(vid, (trig_func_t)((cur + 1) % 2));
+                }
                 menuTFTPrintRecordingState(recording_get_trig_func(0), recording_get_trig_func(1));
             }
             break;
@@ -1048,7 +1058,7 @@ static int recording_def_handler(int it_id, int event, void* event_data){
         case EV_LONG_PRESS:
             selected = 0;
             menu_pos = 0;
-            return M_EFFECTS;
+            return M_PLAY;
         default:
             break;
     }
