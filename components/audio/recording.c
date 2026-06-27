@@ -20,6 +20,7 @@ typedef struct {
 
 static atomic_bool rec_active = ATOMIC_VAR_INIT(false);
 static atomic_bool rec_load_pending = ATOMIC_VAR_INIT(false);
+static bool rec_enabled = true;
 static trig_func_t trig_func[2] = {TRIG_FUNC_VOICE, TRIG_FUNC_VOICE};
 static QueueHandle_t rec_queue = NULL;
 static TaskHandle_t rec_task_handle = NULL;
@@ -119,8 +120,12 @@ void recording_init(void)
         ESP_LOGE(TAG, "Failed to create recording queue");
 }
 
+void recording_set_enabled(bool en) { rec_enabled = en; }
+bool recording_get_enabled(void)    { return rec_enabled; }
+
 void recording_start(int vid)
 {
+    if (!rec_enabled) return;
     if (atomic_load(&rec_active)) return;
     if (rec_task_handle != NULL) return;
     if (rec_queue == NULL) return;

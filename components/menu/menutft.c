@@ -1616,14 +1616,26 @@ void menuTFTUpdatePlayState(int vid, int state){
 }
 
 void menuTFTPrintRecordingState(int f0, int f1){
-    static const char* names[] = {"Voice", "Record"};
-    TFT_setclipwin(0, TFT_getfontheight()+9, _width-1, _height);
+    static const char* trig_names[] = {"Voice", "Record"};
+    int fh = TFT_getfontheight();
+    TFT_setclipwin(0, fh + 9, _width - 1, _height);
     _bg = TFT_BLACK;
     _fg = TFT_LIGHTGREY;
+
+    // Row 0: Enabled
+    bool en = recording_get_enabled();
     menuTFTFlush(0, &_bg);
-    TFT_print(names[f0 < 2 ? f0 : 0], _width/2, 3 + (TFT_getfontheight() + 3) * 0);
+    _fg = en ? TFT_GREEN : TFT_RED;
+    TFT_print(en ? "ON" : "OFF", _width / 2, 3 + (fh + 3) * 0);
+
+    // Row 1: TRIG0
+    _fg = TFT_LIGHTGREY;
     menuTFTFlush(1, &_bg);
-    TFT_print(names[f1 < 2 ? f1 : 0], _width/2, 3 + (TFT_getfontheight() + 3) * 1);
+    TFT_print(trig_names[f0 < 2 ? f0 : 0], _width / 2, 3 + (fh + 3) * 1);
+
+    // Row 2: TRIG1
+    menuTFTFlush(2, &_bg);
+    TFT_print(trig_names[f1 < 2 ? f1 : 0], _width / 2, 3 + (fh + 3) * 2);
 }
 
 void menuTFTPrintInputError(char* s){

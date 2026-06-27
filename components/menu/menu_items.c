@@ -12,10 +12,10 @@ const int n_main_menus = sizeof(main_menus)/sizeof(int);
 const char* browse_menus[] = {"Tag", "ID", "Text", "User"};
 const int n_browse_menus = sizeof(browse_menus)/sizeof(int);
 
-const char* play_menus[] = {"Voice 0", "Voice 1", "Effects", "CV Matrix"};
+const char* play_menus[] = {"Voice 0", "Voice 1", "Recording", "Effects", "CV Matrix"};
 const int n_play_menus = sizeof(play_menus)/sizeof(int);
 
-const char* effect_menus[] = {"Delay", "External In", "Recording"};
+const char* effect_menus[] = {"Delay", "External In"};
 const int n_effect_menus = sizeof(effect_menus) / sizeof(int);
 
 const char* voice_menus[] = {"Trig Type", "Volume", "Pan", "Pitch", "Pitch CV", "Playback Speed", "Distortion", "Drive", "Delay Send", "Filter", "ADSR", "Playmodes"};
