@@ -69,6 +69,11 @@ static TaskHandle_t file_reader_task_2_handle = NULL;
 static TaskHandle_t audio_task_h;
 static bool arm_monitor[2] = {false, false};
 static uint16_t s_last_cv[8] = {0};
+// CV channels 2 and 3 go through inverting op-amps (±5V range), so invert their raw ADC reading.
+static const bool cv_bipolar[8] = {false, false, true, true, false, false, false, false};
+static inline uint16_t cv_corrected(int src, const uint16_t *d) {
+    return cv_bipolar[src] ? (uint16_t)(4095u - d[src]) : d[src];
+}
 static SemaphoreHandle_t counter_mutex[2] = {NULL};
 static SemaphoreHandle_t file_mutex[2] = {NULL};
 static SemaphoreHandle_t buffer_mutex[2] = {NULL};
@@ -294,7 +299,7 @@ static float modulate_pan(int vid, int index, uint16_t *ctrl_data)
 
     if (src >= 0 && src < 8)
     {
-        input_value = FixedToFloat_8((ctrl_data[src] >> 3)) - 1.0;
+        input_value = FixedToFloat_8((cv_corrected(src, ctrl_data) >> 3)) - 1.0;
         input_value += ui_pan;
         if (input_value >= amount)
         {
@@ -341,7 +346,7 @@ static float modulate_pitch(int vid, int index, uint16_t *ctrl_data)
 
     if (src >= 0 && src < 8)
     {
-        input_value = FixedToFloat_8((ctrl_data[src] >> 3)) - 1.0;
+        input_value = FixedToFloat_8((cv_corrected(src, ctrl_data) >> 3)) - 1.0;
         if (input_value < 0.0 && voice[vid].playback_engine.is_playback_direction_forward)
         {
             voice[vid].playback_engine.is_playback_direction_forward = 0;
@@ -487,7 +492,7 @@ float modulateParameter(int index, uint16_t *ctrl_data)
     if (src >= 0 && src < 8)
     {
 
-        input_value = FixedToFloat_9((ctrl_data[src] >> 3));
+        input_value = FixedToFloat_9((cv_corrected(src, ctrl_data) >> 3));
 
         if (input_value >= amount)
         {
@@ -531,7 +536,7 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
     {
         int index = 0;
         int array_amt = amount * 511;
-        input_value = FixedToFloat_8((ctrl_data[src] >> 3)) - 1.0;
+        input_value = FixedToFloat_8((cv_corrected(src, ctrl_data) >> 3)) - 1.0;
         input_value *= 255;
         if (input_value + ui_base_id <= -1 * (ui_base_id + array_amt))
         {
@@ -577,7 +582,7 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
     {
         int index = 0;
         int array_amt = amount * 511;
-        input_value = FixedToFloat_9((ctrl_data[src] >> 3));
+        input_value = FixedToFloat_9((cv_corrected(src, ctrl_data) >> 3));
         input_value *= 511;
 
         if (input_value + ui_width_id >= array_amt)
@@ -632,7 +637,7 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
     if (src >= 0 && src < 8)
     {
 
-        input_value = FixedToFloat_9((ctrl_data[src] >> 3));
+        input_value = FixedToFloat_9((cv_corrected(src, ctrl_data) >> 3));
         input_value *= 5.0f;
         resonance = ui_resonance + input_value;
         amount *= 5.0f;
@@ -671,7 +676,7 @@ static float modulateDlySendParameter(int vid, int index, uint16_t *ctrl_data)
     if (src >= 0 && src < 8)
     {
 
-        input_value = FixedToFloat_9((ctrl_data[src] >> 3));
+        input_value = FixedToFloat_9((cv_corrected(src, ctrl_data) >> 3));
 
         if (input_value >= amount)
         {
@@ -698,27 +703,27 @@ static void modulate_adsr_parameter(int vid, uint16_t* ctrl_data)
         if((matrix[i].dst == MTX_V0_ADSR_ATTACK && vid == 0) || 
            (matrix[i].dst == MTX_V1_ADSR_ATTACK && vid == 1))
         {
-            voice[vid].adsr.attack_time = modulate_unipolar(ui_params[vid].attack_time, 10000, FixedToFloat_9((ctrl_data[i] >> 3)), matrix[i].amt) * 44.1f;
+            voice[vid].adsr.attack_time = modulate_unipolar(ui_params[vid].attack_time, 10000, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt) * 44.1f;
             time_value_modulated = true;
         }
 
         if((matrix[i].dst == MTX_V0_ADSR_DECAY && vid == 0) || 
            (matrix[i].dst == MTX_V1_ADSR_DECAY && vid == 1))
         {
-            voice[vid].adsr.decay_time = modulate_unipolar(ui_params[vid].decay_time, 10000, FixedToFloat_9((ctrl_data[i] >> 3)), matrix[i].amt) * 44.1f;
+            voice[vid].adsr.decay_time = modulate_unipolar(ui_params[vid].decay_time, 10000, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt) * 44.1f;
             time_value_modulated = true;
         }
 
         if((matrix[i].dst == MTX_V0_ADSR_SUSTAIN && vid == 0) || 
            (matrix[i].dst == MTX_V1_ADSR_SUSTAIN && vid == 1))
         {
-            voice[vid].adsr.sustain_level = modulate_unipolar(ui_params[vid].sustain_level, 100, FixedToFloat_9((ctrl_data[i] >> 3)), matrix[i].amt) * 0.01f;
+            voice[vid].adsr.sustain_level = modulate_unipolar(ui_params[vid].sustain_level, 100, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt) * 0.01f;
         }
 
         if((matrix[i].dst == MTX_V0_ADSR_RELEASE && vid == 0) || 
            (matrix[i].dst == MTX_V1_ADSR_RELEASE && vid == 1))
         {
-            voice[vid].adsr.release_time = modulate_unipolar(ui_params[vid].release_time, 10000, FixedToFloat_9((ctrl_data[i] >> 3)), matrix[i].amt) * 44.1f;
+            voice[vid].adsr.release_time = modulate_unipolar(ui_params[vid].release_time, 10000, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt) * 44.1f;
             time_value_modulated = true;
         }
 
@@ -747,21 +752,21 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
         if ((matrix[i].dst == MTX_V0_MODE_START && vid == 0) ||
             (matrix[i].dst == MTX_V1_MODE_START && vid == 1))
         {
-            temp_sample_start = (uint32_t)modulate_unipolar(ui_params[vid].sample_start, fsize, FixedToFloat_9((ctrl_data[i] >> 3)), matrix[i].amt);
+            temp_sample_start = (uint32_t)modulate_unipolar(ui_params[vid].sample_start, fsize, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt);
             temp_sample_start /= 4;
             temp_sample_start *= 4;
         }
         else if ((matrix[i].dst == MTX_V0_MODE_LSTART && vid == 0) ||
                  (matrix[i].dst == MTX_V1_MODE_LSTART && vid == 1))
         {
-            temp_loop_start = (uint32_t)modulate_unipolar(ui_params[vid].loop_start, fsize, FixedToFloat_9((ctrl_data[i] >> 3)), matrix[i].amt);
+            temp_loop_start = (uint32_t)modulate_unipolar(ui_params[vid].loop_start, fsize, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt);
             temp_loop_start /= 4;
             temp_loop_start *= 4;
         }
         else if ((matrix[i].dst == MTX_V0_MODE_LEND && vid == 0) ||
                  (matrix[i].dst == MTX_V1_MODE_LEND && vid == 1))
         {
-            temp_loop_end = (uint32_t)modulate_unipolar(ui_params[vid].loop_end, 0, 1.0f - FixedToFloat_9((ctrl_data[i] >> 3)), matrix[i].amt);
+            temp_loop_end = (uint32_t)modulate_unipolar(ui_params[vid].loop_end, 0, 1.0f - FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt);
             temp_loop_end /= 4;
             temp_loop_end *= 4;
         }
@@ -809,7 +814,7 @@ static void modulateDlyParameters(delay_t *delay, delay_cfg_t cfg, uint16_t *ctr
         {
         case MTX_DELAY_TIME:
             isModulated = true;
-            cfg.msLength += ((float)ctrlData[i] - 2048.0) * 0.00048828125f * matrix[i].amt * DELAY_MAX_LENGTH_MS;
+            cfg.msLength += ((float)cv_corrected(i, ctrlData) - 2048.0) * 0.00048828125f * matrix[i].amt * DELAY_MAX_LENGTH_MS;
             if (cfg.msLength < 2.0)
             {
                 cfg.msLength = 2.0;
@@ -820,7 +825,7 @@ static void modulateDlyParameters(delay_t *delay, delay_cfg_t cfg, uint16_t *ctr
             break;
         case MTX_DELAY_PAN:
             isModulated = true;
-            cfg.pan += ((float)ctrlData[i] - 2048.0) * 0.00048828125f * matrix[i].amt;
+            cfg.pan += ((float)cv_corrected(i, ctrlData) - 2048.0) * 0.00048828125f * matrix[i].amt;
             if (cfg.pan < 0.0)
             {
                 cfg.pan = 0.0;
@@ -831,7 +836,7 @@ static void modulateDlyParameters(delay_t *delay, delay_cfg_t cfg, uint16_t *ctr
             break;
         case MTX_DELAY_FB:
             isModulated = true;
-            cfg.feedback += ((float)ctrlData[i] - 2048.0) * 0.00048828125f * matrix[i].amt;
+            cfg.feedback += ((float)cv_corrected(i, ctrlData) - 2048.0) * 0.00048828125f * matrix[i].amt;
             if (cfg.feedback < 0.0)
             {
                 cfg.feedback = 0.0;
@@ -842,7 +847,7 @@ static void modulateDlyParameters(delay_t *delay, delay_cfg_t cfg, uint16_t *ctr
             break;
         case MTX_DELAY_VOL:
             isModulated = true;
-            cfg.volume += ((float)ctrlData[i] - 2048.0) * 0.00048828125f * matrix[i].amt;
+            cfg.volume += ((float)cv_corrected(i, ctrlData) - 2048.0) * 0.00048828125f * matrix[i].amt;
             if (cfg.volume < 0.0)
             {
                 cfg.volume = 0.0;
@@ -886,7 +891,7 @@ static void processRecArmCV(uint16_t *ctrlData)
         if (matrix[i].dst == MTX_V0_REC_ARM) vid = 0;
         else if (matrix[i].dst == MTX_V1_REC_ARM) vid = 1;
         if (vid < 0) continue;
-        bool gate_high = ctrlData[i] > 2048;
+        bool gate_high = cv_corrected(i, ctrlData) > 2048;
         if (gate_high == prev_arm[vid]) continue;
         prev_arm[vid] = gate_high;
         recording_set_trig_func(vid, gate_high ? TRIG_FUNC_RECORD : TRIG_FUNC_VOICE);
