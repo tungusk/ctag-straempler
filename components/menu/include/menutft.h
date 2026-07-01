@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include "cJSON.h"
 #include "audio.h"
 #include "menu_types.h"
@@ -82,6 +83,7 @@ int printTags(list_item_t* it);
 void menuTFTUpdatePlayState();
 void menuTFTDrawLiveCVBars(void);
 void menuTFTPrintRecordingState(int f0, int f1);
+void menuTFTPrintInputState(bool use_mic);
 void menuTFTPrintRecordIndicator(void);
 void menuTFTPrintInputError(char*);
 void menuTFTClearListItem(int* activeSlot);
