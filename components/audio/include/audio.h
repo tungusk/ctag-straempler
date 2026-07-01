@@ -18,6 +18,8 @@ void enableTrigModeLatch(uint8_t vid);
 void disableTrigModeLatch(uint8_t vid);
 void getAudioBasename(int vid, char *out, int len);
 bool isVoicePlaying(int vid);
+void audio_get_cv(uint16_t out[8]);
+void audio_get_playpos(int vid, uint32_t *sample_start, uint32_t *loop_start, uint32_t *loop_end, uint32_t *fsize);
 
 
 

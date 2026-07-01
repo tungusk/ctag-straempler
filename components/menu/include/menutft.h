@@ -80,6 +80,7 @@ void menuTFTAnimateFileBrowser(const cJSON* desc);
 int printSubStringIfTooWide(char *s, int x, int y, int pos);
 int printTags(list_item_t* it);
 void menuTFTUpdatePlayState();
+void menuTFTDrawLiveCVBars(void);
 void menuTFTPrintRecordingState(int f0, int f1);
 void menuTFTPrintRecordIndicator(void);
 void menuTFTPrintInputError(char*);

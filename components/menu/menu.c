@@ -30,6 +30,7 @@
 #include "wifi.h"
 #include "esp_wifi.h"
 #include "timer_utils.h"
+#include "esp_timer.h"
 #include "rest-api.h"
 #include "menu_config.h"
 
@@ -44,6 +45,7 @@ static matrix_ui_row_t matrix[8];
 static matrix_event_t matrix_event;
 static char current_bank[8] =  {"DEFAULT"};
 static char current_preset_name[13] = {"Init"};
+static void autosave_kick(void);
 static int current_fb_pos = 0;
 static int tz_shift = 0;
 static menu_fb_state_t fb_state;
@@ -73,6 +75,7 @@ static int timer_handler(int it_id, int event, void* event_data){
     if (it_id == M_MAIN) {
         menuTFTUpdatePlayState(0, -1);
         menuTFTUpdatePlayState(1, -1);
+        menuTFTDrawLiveCVBars();
     }
     return 0; // remain in current menu
 }
@@ -88,6 +91,8 @@ static int main_menu_def_handler(int it_id, int event, void* event_data){
             menuTFTUpdatePlayState(0, -1);
             menuTFTUpdatePlayState(1, -1);
             menuTFTPrintCurrentSettings(current_bank, current_preset_name, data);
+            menuTFTDrawLiveCVBars();
+            autosave_kick();
             break;
         case EV_FWD:
             menu_state_current++;
@@ -2173,13 +2178,13 @@ void initParams(){
         data[i].filter.base = 255;          //DUMMY 0 - 511
         data[i].filter.width = 255;         //DUMMY 0 - 511
         data[i].filter.q = 0;              //Q10.6; 16 = 0.25; 320 = 5.0; INCR: 0.015625
-        data[i].adsr.attack = msLut[112];
-        data[i].adsr.decay = msLut[138];
+        data[i].adsr.attack = msLut[2];
+        data[i].adsr.decay = msLut[4];
         data[i].adsr.sustain = 100;         //Q1.7; 0 = 0; 128 = 1.0; INCR: 0.0078125
-        data[i].adsr.release = msLut[192];
-        envelopeIndex[i][0] = 112;
-        envelopeIndex[i][1] = 138;
-        envelopeIndex[i][2] = 192;
+        data[i].adsr.release = msLut[4];
+        envelopeIndex[i][0] = 2;
+        envelopeIndex[i][1] = 4;
+        envelopeIndex[i][2] = 4;
         data[i].play_state.mode = SINGLE;     // 0 = SINGLE, 1 = LOOP, 2 = PIPO
         data[i].play_state.start = 0;       // 0 = 0%, 800 = 100% Q13.3, INCR: 0.125
         data[i].play_state.loop_start = 0;  // 0 = 0%, 800 = 100% Q13.3, INCR: 0.125
@@ -2507,9 +2512,44 @@ void loadParams(cJSON* preset){
     //ESP_LOGI("UI", "Successfully loaded preset data");
 }
 
+static esp_timer_handle_t s_autosave_timer = NULL;
+
+static void autosave_cb(void *arg) {
+    cJSON *preset = buildPreset("state");
+    if (!preset) return;
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr  = cJSON_CreateArray();
+    cJSON_AddItemToObject(root, "bank", arr);
+    cJSON_AddItemToArray(arr, preset);
+    saveBank(root, "autosave", DELETE_JSON);
+    savePresetConfig("state", "autosave");
+    ESP_LOGI("AUTOSAVE", "State saved");
+}
+
+static void autosave_kick(void) {
+    if (!s_autosave_timer) return;
+    esp_timer_stop(s_autosave_timer);
+    esp_timer_start_once(s_autosave_timer, 2000000);
+}
+
 static void initParamsFromPreset(char* presetName, char* bankName){
+    // Always try the autosave slot first
+    cJSON *ar = getBankRoot("autosave");
+    if (ar) {
+        cJSON *apreset = getPresetByName("state", ar);
+        if (apreset) {
+            loadParams(apreset);
+            cJSON_Delete(apreset);
+            cJSON_Delete(ar);
+            strcpy(presetName, "state");
+            strcpy(bankName, "autosave");
+            return;
+        }
+        cJSON_Delete(ar);
+    }
+
     cJSON *root = NULL, *bank = NULL, *preset = NULL;
-    if(strcasecmp(bankName, "") == 0){    
+    if(strcasecmp(bankName, "") == 0){
         //bankName is empty, get first available bank and load preset at index 0        
         list_t* file_list = list_create();
         getFilesInDir(file_list, "/sdcard/banks", ".JSN");
@@ -2554,6 +2594,9 @@ void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle e
     TFT_fillScreen(TFT_BLACK);
     TFT_resetclipwin();
     menuTFTPrintMainMenus();
+
+    esp_timer_create_args_t autosave_args = { .callback = autosave_cb, .name = "autosave" };
+    esp_timer_create(&autosave_args, &s_autosave_timer);
 
     // using indentation to somewhat indicate levels of menus
     _ms = menusys_create();
