@@ -25,6 +25,7 @@ typedef enum{
     M_VOICE0,
     M_VOICE1,
     M_EXTERNAL_IN,
+    M_INPUT,
     M_EFFECTS,
     M_CV_MATRIX,
     M_DELAY,
