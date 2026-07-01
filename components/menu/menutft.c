@@ -1293,14 +1293,10 @@ void menuTFTPrintCurrentSettings(char* bank, char* preset, param_data_t* data){
     int y0 = fh + 9;   // absolute top of content area
     char buf[64];
 
-    // Clear top info line and both voice label rows (bars redrawn separately)
+    // Clear info area and both voice label rows (bars redrawn separately)
     TFT_fillRect(0, y0, _width, 100 - y0, TFT_BLACK);
     TFT_fillRect(0, 100, _width, 20, TFT_BLACK);
     TFT_fillRect(0, 155, _width, 20, TFT_BLACK);
-
-    // Bank and preset, compact single line
-    snprintf(buf, sizeof(buf), "BNK: %-8s  PRE: %s", bank, preset);
-    TFT_print(buf, 4, y0 + 5);
 
     // Filenames sit just above each transport bar
     char f0[22], f1[22];
@@ -1582,6 +1578,34 @@ int printTags(list_item_t* it){
     return 0;
 }
 
+void menuTFTDrawLiveCVBars(void) {
+    uint16_t cv[8];
+    audio_get_cv(cv);
+
+    int fh     = TFT_getfontheight();
+    int y_top  = fh + 11;   // just below nav bar
+    int height = 22;
+    int bar_w  = 36;
+    int gap    = 3;
+    int x0     = 10;
+
+    TFT_saveClipWin();
+    TFT_resetclipwin();
+    _bg = TFT_BLACK;
+
+    for (int i = 0; i < 8; i++) {
+        int x = x0 + i * (bar_w + gap);
+        int fill = (int)((float)cv[i] / 4095.0f * height);
+        if (fill < 0) fill = 0;
+        if (fill > height) fill = height;
+        TFT_fillRect(x, y_top, bar_w, height - fill, TFT_BLACK);
+        if (fill > 0)
+            TFT_fillRect(x, y_top + height - fill, bar_w, fill, (color_t){40, 80, 160});
+    }
+
+    TFT_restoreClipWin();
+}
+
 void menuTFTUpdatePlayState(int vid, int state){
     static int p_state[2] = {0, 0};
     static int p_color[2] = {-1, -1};
@@ -1609,8 +1633,26 @@ void menuTFTUpdatePlayState(int vid, int state){
         bar_line = (color_t){80, 120, 255};
     }
 
-    TFT_fillRect(10, 120 + 55 * vid, 301, 20, bar_bg);
-    TFT_drawFastVLine(10 + state, 120 + 55 * vid, 20, bar_line);
+    int bar_x = 10, bar_y = 120 + 55 * vid, bar_w = 301, bar_h = 20;
+    TFT_fillRect(bar_x, bar_y, bar_w, bar_h, bar_bg);
+
+    // start/end point markers
+    uint32_t ss, ls, le, fs;
+    audio_get_playpos(vid, &ss, &ls, &le, &fs);
+    if (fs > 0) {
+        int ss_px = (int)((float)ss / fs * (bar_w - 1));
+        int ls_px = (int)((float)ls / fs * (bar_w - 1));
+        int le_px = (int)((float)le / fs * (bar_w - 1));
+        // loop region highlight
+        if (le_px > ls_px)
+            TFT_fillRect(bar_x + ls_px, bar_y, le_px - ls_px, bar_h, (color_t){bar_bg.r+12, bar_bg.g+12, bar_bg.b+12});
+        // loop start (green tick), loop end (orange tick), sample start (cyan tick)
+        TFT_drawFastVLine(bar_x + ls_px, bar_y, bar_h, (color_t){0, 180, 60});
+        TFT_drawFastVLine(bar_x + le_px, bar_y, bar_h, (color_t){220, 120, 0});
+        TFT_drawFastVLine(bar_x + ss_px, bar_y, bar_h, (color_t){0, 200, 200});
+    }
+
+    TFT_drawFastVLine(bar_x + state, bar_y, bar_h, bar_line);
     p_state[vid] = state;
     p_color[vid] = color;
 }

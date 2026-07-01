@@ -59,22 +59,22 @@ void initBank(char* fileName){
         cJSON_AddItemToObject(paramObject, "filter_width", val);
         val = cJSON_CreateString (itoa(0, buf, 10));
         cJSON_AddItemToObject(paramObject, "filter_q", val);
-        val = cJSON_CreateString (itoa(msLut[112], buf, 10));
+        val = cJSON_CreateString (itoa(msLut[2], buf, 10));
         cJSON_AddItemToObject(paramObject, "adsr_attack", val);
-        val = cJSON_CreateString (itoa(msLut[138], buf, 10));
+        val = cJSON_CreateString (itoa(msLut[4], buf, 10));
         cJSON_AddItemToObject(paramObject, "adsr_decay", val);
         val = cJSON_CreateString (itoa(100, buf, 10));
         cJSON_AddItemToObject(paramObject, "adsr_sustain", val);
-        val = cJSON_CreateString (itoa(msLut[192], buf, 10));
+        val = cJSON_CreateString (itoa(msLut[4], buf, 10));
         cJSON_AddItemToObject(paramObject, "adsr_release", val);
 
         cJSON *arr = cJSON_CreateArray();
         cJSON_AddItemToObject(paramObject, "envelope_indices", arr);
-        val = cJSON_CreateString (itoa(112, buf, 10));
+        val = cJSON_CreateString (itoa(2, buf, 10));
         cJSON_AddItemToArray(arr, val);
-        val = cJSON_CreateString (itoa(138, buf, 10));
+        val = cJSON_CreateString (itoa(4, buf, 10));
         cJSON_AddItemToArray(arr, val);
-        val = cJSON_CreateString (itoa(192, buf, 10));
+        val = cJSON_CreateString (itoa(4, buf, 10));
         cJSON_AddItemToArray(arr, val);
 
         val = cJSON_CreateString (itoa(SINGLE, buf, 10));

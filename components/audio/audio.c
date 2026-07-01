@@ -67,6 +67,8 @@ static xQueueHandle ui_ev_queue = NULL;
 static TaskHandle_t file_reader_task_1_handle = NULL;
 static TaskHandle_t file_reader_task_2_handle = NULL;
 static TaskHandle_t audio_task_h;
+static bool arm_monitor[2] = {false, false};
+static uint16_t s_last_cv[8] = {0};
 static SemaphoreHandle_t counter_mutex[2] = {NULL};
 static SemaphoreHandle_t file_mutex[2] = {NULL};
 static SemaphoreHandle_t buffer_mutex[2] = {NULL};
@@ -862,6 +864,20 @@ static void modulateDlyParameters(delay_t *delay, delay_cfg_t cfg, uint16_t *ctr
     }
 }
 
+static void update_arm_monitor(void)
+{
+    for (int vid = 0; vid < 2; vid++) {
+        bool is_recording = recording_is_active() && (recording_get_target_vid() == vid);
+        bool is_armed     = recording_get_trig_func(vid) == TRIG_FUNC_RECORD;
+        if (is_recording)
+            arm_monitor[vid] = true;
+        else if (is_armed)
+            arm_monitor[vid] = !isVoicePlaying(vid);
+        else
+            arm_monitor[vid] = false;
+    }
+}
+
 static void processRecArmCV(uint16_t *ctrlData)
 {
     static bool prev_arm[2] = {false, false};
@@ -1009,6 +1025,7 @@ static void audio_task(void *pvParams)
     {
         // get control data
         xQueueReceive(control_queue, &ctrlData, 0);
+        memcpy(s_last_cv, ctrlData, sizeof(s_last_cv));
 
         // init buf
         memset(out, 0, 64 * 2);
@@ -1019,9 +1036,10 @@ static void audio_task(void *pvParams)
         if (recording_is_active())
             recording_push(in);
 
-        if (effectData.extInData.is_active || recording_is_active())
+        bool auto_mon = recording_is_active() || arm_monitor[0] || arm_monitor[1];
+        if (effectData.extInData.is_active || auto_mon)
         {
-            float mon_vol = (recording_is_active() && extInCfg.volume == 0.0f) ? 1.0f : extInCfg.volume;
+            float mon_vol = (auto_mon && extInCfg.volume == 0.0f) ? 1.0f : extInCfg.volume;
             float bl = extInCfg.pan < 0.0f ? 1.0f : 1.0f - extInCfg.pan;
             float br = extInCfg.pan < 0.0f ? 1.0f + extInCfg.pan : 1.0f;
             bl *= mon_vol * DIVISOR;
@@ -1199,6 +1217,7 @@ static void audio_task(void *pvParams)
         // process delay modulation from matrix
         modulateDlyParameters(&delay, delayCfg, ctrlData);
         processRecArmCV(ctrlData);
+        update_arm_monitor();
 
         // process delay
         if (effectData.delay.is_active)
@@ -1404,6 +1423,18 @@ void initAudio(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle 
 bool isVoicePlaying(int vid) {
     if (vid < 0 || vid > 1) return false;
     return voice[vid].adsr.adsr_state != OFF;
+}
+
+void audio_get_cv(uint16_t out[8]) {
+    memcpy(out, s_last_cv, sizeof(s_last_cv));
+}
+
+void audio_get_playpos(int vid, uint32_t *sample_start, uint32_t *loop_start, uint32_t *loop_end, uint32_t *fsize) {
+    if (vid < 0 || vid > 1) return;
+    *sample_start = voice[vid].playback_engine.sample_start;
+    *loop_start   = voice[vid].playback_engine.loop_start;
+    *loop_end     = voice[vid].playback_engine.loop_end;
+    *fsize        = audio_files[vid].fsize;
 }
 
 void getAudioBasename(int vid, char *out, int len) {
