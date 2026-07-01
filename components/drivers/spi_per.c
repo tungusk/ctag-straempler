@@ -11,6 +11,8 @@
 #include "freertos/portmacro.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
+#include "esp32/rom/ets_sys.h"
+#include <stdbool.h>
 
 
 extern const uint8_t ulp_drivers_bin_start[] asm("_binary_ulp_drivers_bin_start");
@@ -85,6 +87,42 @@ void blink_task(void *pvParameter)
     }
 }
 
+
+// WM8731 codec bit-bang SPI via RTC GPIO (shared with ULP ADC bus)
+#define WM_CS_RTC   10   // GPIO_NUM_4
+#define WM_MOSI_RTC 14   // GPIO_NUM_13
+#define WM_SCLK_RTC 13
+
+#define _wm_lo(n) REG_WRITE(RTC_GPIO_OUT_W1TC_REG, 1U << (RTC_GPIO_OUT_DATA_W1TC_S + (n)))
+#define _wm_hi(n) REG_WRITE(RTC_GPIO_OUT_W1TS_REG, 1U << (RTC_GPIO_OUT_DATA_W1TS_S + (n)))
+
+static void codec_write_reg(uint16_t word)
+{
+    _wm_lo(WM_SCLK_RTC);
+    _wm_lo(WM_MOSI_RTC);
+    _wm_lo(WM_CS_RTC);
+    for (int i = 15; i >= 0; i--) {
+        _wm_lo(WM_SCLK_RTC);
+        if ((word >> i) & 1) _wm_hi(WM_MOSI_RTC);
+        else                 _wm_lo(WM_MOSI_RTC);
+        _wm_hi(WM_SCLK_RTC);
+    }
+    _wm_lo(WM_SCLK_RTC);
+    _wm_hi(WM_CS_RTC);
+}
+
+void codec_set_input(bool use_mic)
+{
+    // WM8731 R4 Analog Audio Path Control:
+    //   line in: BYPASS=1 (bit4), INSEL=0 (bit3) → data=0x10
+    //   mic in:  INSEL=1 (bit3), MICBOOST=1 (bit1) → data=0x0A
+    uint16_t data = use_mic ? 0x0Au : 0x10u;
+    uint16_t word = (uint16_t)((4u << 9) | data);
+    codec_write_reg(word);
+    ets_delay_us(5);
+    codec_write_reg(word);   // write twice — ULP may interfere on first
+    ESP_LOGI("CODEC", "Input: %s", use_mic ? "mic" : "line");
+}
 
 void initSpiPer(xQueueHandle queue)
 {
