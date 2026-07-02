@@ -21,6 +21,14 @@ bool isVoicePlaying(int vid);
 void audio_get_cv(uint16_t out[8]);
 void audio_get_playpos(int vid, uint32_t *sample_start, uint32_t *loop_start, uint32_t *loop_end, uint32_t *fsize);
 
+typedef struct {
+    char v0[32];
+    char v1[32];
+    uint16_t cv[8];
+} audio_status_t;
+
+void audio_get_status(audio_status_t *out);
+
 
 
 
