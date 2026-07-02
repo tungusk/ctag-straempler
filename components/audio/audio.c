@@ -69,6 +69,14 @@ static TaskHandle_t file_reader_task_2_handle = NULL;
 static TaskHandle_t audio_task_h;
 static bool arm_monitor[2] = {false, false};
 static uint16_t s_last_cv[8] = {0};
+static audio_status_t _audio_status;
+static portMUX_TYPE _status_mux = portMUX_INITIALIZER_UNLOCKED;
+
+void audio_get_status(audio_status_t *out) {
+    portENTER_CRITICAL(&_status_mux);
+    *out = _audio_status;
+    portEXIT_CRITICAL(&_status_mux);
+}
 // CV channels 2 and 3 go through inverting op-amps (±5V range), so invert their raw ADC reading.
 static const bool cv_bipolar[8] = {false, false, true, true, false, false, false, false};
 static inline uint16_t cv_corrected(int src, const uint16_t *d) {
@@ -1031,6 +1039,11 @@ static void audio_task(void *pvParams)
         // get control data
         xQueueReceive(control_queue, &ctrlData, 0);
         memcpy(s_last_cv, ctrlData, sizeof(s_last_cv));
+        portENTER_CRITICAL(&_status_mux);
+        memcpy(_audio_status.cv, ctrlData, sizeof(_audio_status.cv));
+        strncpy(_audio_status.v0, audio_files[0].fname, 31); _audio_status.v0[31] = 0;
+        strncpy(_audio_status.v1, audio_files[1].fname, 31); _audio_status.v1[31] = 0;
+        portEXIT_CRITICAL(&_status_mux);
 
         // init buf
         memset(out, 0, 64 * 2);
