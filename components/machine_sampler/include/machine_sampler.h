@@ -16,6 +16,10 @@ void sampler_bind_queues(xQueueHandle v0, xQueueHandle v1, xQueueHandle eff,
                          xQueueHandle mode0, xQueueHandle mode1,
                          xQueueHandle matrix_ev, xQueueHandle ui_ev);
 void sampler_boot_init(void);
+void sampler_menu_bind_queues(xQueueHandle v0, xQueueHandle v1, xQueueHandle eff,
+                              xQueueHandle pbs0, xQueueHandle pbs1,
+                              xQueueHandle mode0, xQueueHandle mode1,
+                              xQueueHandle matrix_ev, xQueueHandle ui_ev);
 
 // menu/UI-facing sampler API (the menus themselves move here in M0c)
 void assignAudioFiles();
