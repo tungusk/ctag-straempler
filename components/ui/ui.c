@@ -9,6 +9,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include "ui.h"
+#include "machine_sampler.h"
 #include "ui_events.h"
 #include "storage.h"
 #include "gpio.h"
@@ -201,9 +202,13 @@ void initUI(){
     configDisplay();
     initGPIO(ui_ev_queue);
     
-    initAudio(ui_param_queue_v0, ui_param_queue_v1, effect_param_queue, 
-        pbs_state_queue_v0, pbs_state_queue_v1, mode_queue_v0, mode_queue_v1, 
+    // TEMPORARY (until M0c): the sampler's queue wiring + boot init live here;
+    // they move into the machine's own start() when its menus move in.
+    sampler_bind_queues(ui_param_queue_v0, ui_param_queue_v1, effect_param_queue,
+        pbs_state_queue_v0, pbs_state_queue_v1, mode_queue_v0, mode_queue_v1,
         matrix_event_queue, ui_ev_queue);
+    sampler_boot_init();
+    initAudio();
 
     initMenu(ui_param_queue_v0, ui_param_queue_v1, effect_param_queue, pbs_state_queue_v0, pbs_state_queue_v1, mode_queue_v0, mode_queue_v1, matrix_event_queue, ui_ev_queue);
 

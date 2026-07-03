@@ -1,4 +1,5 @@
 #pragma once
+#include "audio_types.h"
 #include "audio.h"
 #include "audio_luts.h"
 #include "audio_utils.h"

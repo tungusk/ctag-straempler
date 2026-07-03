@@ -17,6 +17,7 @@
 #include "ui_events.h"
 #include "esp_log.h"
 #include "audio.h"
+#include "machine_sampler.h"
 #include "menutft.h"
 #include "recording.h"
 #include "menu_utils.h"
