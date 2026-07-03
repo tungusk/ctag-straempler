@@ -435,10 +435,6 @@ void startRestAPI(xQueueHandle queueui)
     start_webserver();
 }
 
-// These are now no-ops — the full API is always registered at startup.
-void setRestAPIUserReceiveOn(void)  {}
-void setRestAPIUserReceiveOff(void) {}
-
 void stopRestAPI(void)
 {
     httpd_stop(server);

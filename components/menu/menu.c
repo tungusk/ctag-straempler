@@ -89,11 +89,11 @@ static int main_menu_def_handler(int it_id, int event, void* event_data){
     switch(event){
         case EV_ENTERED_MENU:
             menuTFTSelectMainMenu(menu_state_current, 0);
+            menuTFTInvalidatePlayArea();   // screen was repainted underneath the live displays
             menuTFTUpdatePlayState(0, -1);
             menuTFTUpdatePlayState(1, -1);
-            menuTFTPrintCurrentSettings(current_bank, current_preset_name, data);
+            menuTFTPrintCurrentSettings(data);
             menuTFTDrawLiveCVBars();
-            autosave_kick();
             break;
         case EV_FWD:
             menu_state_current++;
@@ -561,7 +561,7 @@ static int filter_def_handler(int it_id, int event, void* event_data) {
     static const int sids[] = {SID_FILTER_ACTIVE, SID_BASE, SID_WIDTH, SID_Q};
     static int pos = 0, sel = 0, vid = 0;
     static menu_nav_t nav = {
-        .labels = filter_menus, .sids = sids, .n = 4,
+        .labels = filter_menus, .sids = sids, .n = sizeof(sids)/sizeof(sids[0]),
         .parent = M_VOICE, .change = filter_change,
     };
     if (event == EV_ENTERED_MENU) {
@@ -586,7 +586,7 @@ static int adsr_def_handler(int it_id, int event, void* event_data) {
     static const int sids[] = {SID_ATTACK, SID_DECAY, SID_SUSTAIN, SID_RELEASE};
     static int pos = 0, sel = 0, vid = 0;
     static menu_nav_t nav = {
-        .labels = adsr_menus, .sids = sids, .n = 4,
+        .labels = adsr_menus, .sids = sids, .n = sizeof(sids)/sizeof(sids[0]),
         .parent = M_VOICE, .change = adsr_change,
     };
     if (event == EV_ENTERED_MENU) {
@@ -613,7 +613,7 @@ static int playmode_def_handler(int it_id, int event, void* event_data) {
     static const int sids[] = {SID_MODE, SID_START, SID_LSTART, SID_LEND, SID_LPOSITION};
     static int pos = 0, sel = 0, vid = 0;
     static menu_nav_t nav = {
-        .labels = playmode_menus, .sids = sids, .n = 5,
+        .labels = playmode_menus, .sids = sids, .n = sizeof(sids)/sizeof(sids[0]),
         .parent = M_VOICE, .change = playmode_change,
     };
     if (event == EV_ENTERED_MENU) {
@@ -808,7 +808,7 @@ static int extin_def_handler(int it_id, int event, void* event_data) {
     static const int sids[] = {SID_EXTIN_ACTIVE, SID_EXTIN_VOLUME, SID_EXTIN_PAN, SID_EXTIN_DELAY_SEND};
     static int pos = 0, sel = 0;
     static menu_nav_t nav = {
-        .labels = externel_in_menus, .sids = sids, .n = 4,
+        .labels = externel_in_menus, .sids = sids, .n = sizeof(sids)/sizeof(sids[0]),
         .parent = M_EFFECTS, .change = extin_change,
         .ctx = &effectData.extInData,
     };
@@ -887,7 +887,7 @@ static int delay_def_handler(int it_id, int event, void* event_data) {
     static const int sids[] = {SID_DELAY_ACTIVE, SID_DELAY_MODE, SID_DELAY_TIME, SID_DELAY_PAN, SID_DELAY_FEEDBACK, SID_DELAY_VOLUME};
     static int pos = 0, sel = 0;
     static menu_nav_t nav = {
-        .labels = delay_menus, .sids = sids, .n = 6,
+        .labels = delay_menus, .sids = sids, .n = sizeof(sids)/sizeof(sids[0]),
         .parent = M_EFFECTS, .change = delay_change,
         .ctx = &effectData.delay,
     };
@@ -1178,13 +1178,11 @@ static int browse_user_def_handler(int it_id, int event, void* event_data){
     switch(event){
         case EV_ENTERED_MENU:
             menuTFTPrintUserFileMenu();
-            setRestAPIUserReceiveOn();
             break;
         case EV_DECODING_PROGRESS:
             menuTFTUpdateProgress("User upload", (int)event_data);
             break;
         case EV_LONG_PRESS:
-            setRestAPIUserReceiveOff();
             menuTFTFlushMenuDataRect();
             return M_MAIN;
         case EV_DECODING_DONE:
@@ -1911,6 +1909,10 @@ void menuProcessEvent(int ev, void * ev_data){
         autosave_now();
         return;
     }
+    // any user input may change a parameter — (re)arm the debounced state save,
+    // so edits are captured even if power is cut while still inside a submenu
+    if(ev == EV_FWD || ev == EV_BWD || ev == EV_SHORT_PRESS || ev == EV_LONG_PRESS)
+        autosave_kick();
     menusys_process_ev(_ms, ev, ev_data);
 }
 

@@ -68,7 +68,6 @@ static TaskHandle_t file_reader_task_1_handle = NULL;
 static TaskHandle_t file_reader_task_2_handle = NULL;
 static TaskHandle_t audio_task_h;
 static bool arm_monitor[2] = {false, false};
-static uint16_t s_last_cv[8] = {0};
 static audio_status_t _audio_status;
 static portMUX_TYPE _status_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -1038,11 +1037,9 @@ static void audio_task(void *pvParams)
     {
         // get control data
         xQueueReceive(control_queue, &ctrlData, 0);
-        for (int i = 0; i < 8; i++) s_last_cv[i] = cv_corrected(i, ctrlData);
+        // v0/v1 filenames are updated in assignAudioFiles(); only CV changes per block
         portENTER_CRITICAL(&_status_mux);
-        memcpy(_audio_status.cv, s_last_cv, sizeof(_audio_status.cv));
-        strncpy(_audio_status.v0, audio_files[0].fname, 31); _audio_status.v0[31] = 0;
-        strncpy(_audio_status.v1, audio_files[1].fname, 31); _audio_status.v1[31] = 0;
+        for (int i = 0; i < 8; i++) _audio_status.cv[i] = cv_corrected(i, ctrlData);
         portEXIT_CRITICAL(&_status_mux);
 
         // init buf
@@ -1339,6 +1336,12 @@ void assignAudioFiles()
         }else ESP_LOGE("AUDIO", "Couldn't fetch slots from config");
     }else ESP_LOGE("AUDIO", "Couldn't open config.jsn");
     cJSON_Delete(cfgData);
+
+    // mirror the (possibly changed) filenames into the status snapshot
+    portENTER_CRITICAL(&_status_mux);
+    strncpy(_audio_status.v0, audio_files[0].fname, 31); _audio_status.v0[31] = 0;
+    strncpy(_audio_status.v1, audio_files[1].fname, 31); _audio_status.v1[31] = 0;
+    portEXIT_CRITICAL(&_status_mux);
 }
 
 static void initAudioStructs()
@@ -1444,7 +1447,9 @@ bool isVoicePlaying(int vid) {
 }
 
 void audio_get_cv(uint16_t out[8]) {
-    memcpy(out, s_last_cv, sizeof(s_last_cv));
+    portENTER_CRITICAL(&_status_mux);
+    memcpy(out, _audio_status.cv, sizeof(_audio_status.cv));
+    portEXIT_CRITICAL(&_status_mux);
 }
 
 void audio_get_playpos(int vid, uint32_t *sample_start, uint32_t *loop_start, uint32_t *loop_end, uint32_t *fsize) {
