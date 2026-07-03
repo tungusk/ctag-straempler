@@ -197,6 +197,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     if ((j = cJSON_GetObjectItem(settings, "ssid")))    cJSON_AddStringToObject(out, "ssid", j->valuestring);
     if ((j = cJSON_GetObjectItem(settings, "apikey")))  cJSON_AddStringToObject(out, "apikey", j->valuestring);
     if ((j = cJSON_GetObjectItem(settings, "tz_shift"))) cJSON_AddNumberToObject(out, "tz_shift", j->valuedouble);
+    if ((j = cJSON_GetObjectItem(settings, "txpwr")))   cJSON_AddNumberToObject(out, "txpwr", j->valuedouble);
     // NOTE: password intentionally omitted
 
     char *s = cJSON_PrintUnformatted(out);
@@ -247,6 +248,15 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if ((j = cJSON_GetObjectItem(in, "apikey")) && j->valuestring) {
         cJSON_ReplaceItemInObject(settings, "apikey", cJSON_CreateString(j->valuestring));
         freesoundSetToken(j->valuestring);
+    }
+    // optional WiFi TX power cap in quarter-dBm (8..84) — antenna-less units
+    // brown out on full-power TX bursts; applied live and persisted
+    if ((j = cJSON_GetObjectItem(in, "txpwr")) && cJSON_IsNumber(j) && j->valueint >= 8 && j->valueint <= 84) {
+        if (cJSON_GetObjectItem(settings, "txpwr"))
+            cJSON_ReplaceItemInObject(settings, "txpwr", cJSON_CreateNumber(j->valueint));
+        else
+            cJSON_AddNumberToObject(settings, "txpwr", j->valueint);
+        wifiApplyTxPower(j->valueint);
     }
 
     // capture the final credentials before cfg is freed (same flow as the menu

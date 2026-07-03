@@ -10,6 +10,8 @@
 #include "esp_event.h"
 #include "esp_attr.h"
 #include <unistd.h>
+#include <stdio.h>
+#include "tcpip_adapter.h"
 #include "lwip/apps/sntp.h"
 #include "mdns.h"
 #include "esp_log.h"
@@ -24,6 +26,27 @@ static EventGroupHandle_t wifi_event_group;
 const int CONNECTED_BIT = BIT0;
 static const char *TAG = "WIFI";
 static int wifi_ap_mode = 0;
+// The PHY-level cap (sdkconfig CONFIG_ESP32_PHY_MAX_WIFI_TX_POWER=10) bounds
+// everything including boot-time RF calibration — the burst that collapses the
+// rail with the antenna attached. This runtime value only lowers power further
+// (CONFIG.JSN "txpwr", 8..84 quarter-dBm, or POST /settings); 0 = PHY cap only.
+static int s_txpwr = 0;
+static SemaphoreHandle_t s_wifi_mutex = NULL; // serializes restartWifi callers
+
+// Some units run without the WiFi antenna attached; TX bursts at full power can
+// brown out the supply. Optional CONFIG.JSN settings field "txpwr" caps it.
+static void apply_tx_power(void);
+
+void wifiApplyTxPower(int quarter_dbm){
+    if (quarter_dbm < 8 || quarter_dbm > 84) return;
+    s_txpwr = quarter_dbm;
+    esp_wifi_set_max_tx_power((int8_t)s_txpwr);
+    ESP_LOGI(TAG, "TX power capped at %.2f dBm", s_txpwr * 0.25);
+}
+
+static void apply_tx_power(void){
+    if (s_txpwr) esp_wifi_set_max_tx_power((int8_t)s_txpwr);
+}
 
 static struct tm* tm_info;
 static time_t time_now;
@@ -75,6 +98,7 @@ static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
 {
     switch(event->event_id) {
     case SYSTEM_EVENT_STA_START:
+        apply_tx_power();   // cap before the first auth/assoc TX burst
         esp_wifi_connect();
         break;
     case SYSTEM_EVENT_STA_GOT_IP:
@@ -95,6 +119,15 @@ static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
 void wifiWaitForConnected(){
     // In AP mode CONNECTED_BIT will never be set; bail after 30s to avoid a hang
     xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, pdMS_TO_TICKS(30000));
+}
+
+void wifiGetIPString(char *out, int len){
+    tcpip_adapter_ip_info_t ip;
+    tcpip_adapter_if_t ifx = wifi_ap_mode ? TCPIP_ADAPTER_IF_AP : TCPIP_ADAPTER_IF_STA;
+    if (tcpip_adapter_get_ip_info(ifx, &ip) == ESP_OK && ip.ip.addr != 0)
+        snprintf(out, len, IPSTR, IP2STR(&ip.ip));
+    else
+        snprintf(out, len, "no IP");
 }
 
 // returns true
@@ -139,6 +172,9 @@ static wifi_config_t buildWifiConfig(){
             strcpy((char*) wifi_config.sta.ssid, val->valuestring);
             val = cJSON_GetObjectItemCaseSensitive(settings, "passwd");
             strcpy((char*) wifi_config.sta.password, val->valuestring);
+            val = cJSON_GetObjectItemCaseSensitive(settings, "txpwr");
+            if(cJSON_IsNumber(val) && val->valueint >= 8 && val->valueint <= 84)
+                s_txpwr = val->valueint;
         }else ESP_LOGE("FILEIO", "settings == NULL");
     }else ESP_LOGE("FILEIO", "root == NULL");
     cJSON_Delete(root);
@@ -163,7 +199,32 @@ static void start_ap_mode(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &ap_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+    apply_tx_power();
     ESP_LOGI(TAG, "AP mode: SSID=ctag-straempler, IP=192.168.4.1");
+}
+
+static void ap_sta_retry_task(void *arg)
+{
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(60000));
+        if (!wifi_ap_mode) continue;
+        wifi_sta_list_t stas;
+        if (esp_wifi_ap_get_sta_list(&stas) == ESP_OK && stas.num > 0)
+            continue;   // someone is on the AP — don't yank it away
+        wifi_config_t cfg = buildWifiConfig();
+        if (cfg.sta.ssid[0] == 0) continue;
+        ESP_LOGI(TAG, "AP idle — retrying STA connection to %s", cfg.sta.ssid);
+        restartWifi(&cfg);
+        EventBits_t bits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, pdMS_TO_TICKS(15000));
+        if (bits & CONNECTED_BIT) {
+            ESP_LOGI(TAG, "STA reconnected");
+        } else {
+            ESP_LOGW(TAG, "STA retry failed — back to AP mode");
+            xSemaphoreTake(s_wifi_mutex, portMAX_DELAY);
+            start_ap_mode();
+            xSemaphoreGive(s_wifi_mutex);
+        }
+    }
 }
 
 void initWifi(void)
@@ -175,12 +236,14 @@ void initWifi(void)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
     ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
+    s_wifi_mutex = xSemaphoreCreateMutex();
 
     wifi_config_t wifi_config = buildWifiConfig();
     ESP_LOGI(TAG, "Connecting to SSID: %s", wifi_config.sta.ssid);
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
     ESP_ERROR_CHECK( esp_wifi_start() );
+    apply_tx_power();
 
     // Wait up to 10 seconds for STA connection
     EventBits_t bits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, pdMS_TO_TICKS(10000));
@@ -193,9 +256,12 @@ void initWifi(void)
         start_ap_mode();
         start_mdns_service();
     }
+    // reads CONFIG.JSN from SD — leave unpinned (see CLAUDE.md)
+    xTaskCreate(ap_sta_retry_task, "sta_retry", 8192, NULL, 5, NULL);
 }
 
 void restartWifi(wifi_config_t *cfg){
+    if (s_wifi_mutex) xSemaphoreTake(s_wifi_mutex, portMAX_DELAY);
     esp_wifi_disconnect();   // returns an error in AP mode — harmless
     ESP_ERROR_CHECK( esp_wifi_stop() );
     if (wifi_ap_mode) {
@@ -206,4 +272,6 @@ void restartWifi(wifi_config_t *cfg){
     }
     ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, cfg));
     ESP_ERROR_CHECK( esp_wifi_start());
+    apply_tx_power();
+    if (s_wifi_mutex) xSemaphoreGive(s_wifi_mutex);
 }
