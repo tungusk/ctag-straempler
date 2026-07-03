@@ -24,7 +24,8 @@ typedef enum{
     EV_DECODING_DONE, 
     EV_UPDATE_V0_POS,
     EV_UPDATE_V1_POS,
-    EV_AUTOSAVE
+    EV_AUTOSAVE,
+    EV_MACHINE_BIND
 } ui_ev_t;
 
 typedef struct{

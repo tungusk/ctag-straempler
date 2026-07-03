@@ -335,11 +335,16 @@ static int settings_input_def_handler(int it_id, int event, void* event_data){
 }
 
 static void autosave_now(void);
+static void menuMachineBindNow(void);
 
 void menuProcessEvent(int ev, void * ev_data){
     // autosave runs here (UI event loop task) rather than in any menu handler
     if(ev == EV_AUTOSAVE){
         autosave_now();
+        return;
+    }
+    if(ev == EV_MACHINE_BIND){
+        menuMachineBindNow();
         return;
     }
     // any user input may change a parameter — (re)arm the debounced state save,
@@ -375,9 +380,16 @@ static void autosave_kick(void) {
     esp_timer_start_once(s_autosave_timer, 2000000);
 }
 
-// called by the app after machine_activate(): registers the machine's pages
-// and rebuilds + redraws the main menu around them
+// called by the app after machine_activate(). The actual bind (page
+// registration, machine preset boot-load, full main-screen draw) runs on the
+// UI event task — app_main's 4KB stack is too small for the cJSON + TFT work
+// (suspected cause of the intermittent boot loop seen on 2026-07-03).
 void menuBindMachineUI(void){
+    ui_ev_ts_t ev = { .event = EV_MACHINE_BIND, .event_data = NULL };
+    xQueueSend(s_ev_queue, &ev, portMAX_DELAY);
+}
+
+static void menuMachineBindNow(void){
     const machine_ui_t *mui = machine_ui();
     int n = 0;
     if (mui) {
