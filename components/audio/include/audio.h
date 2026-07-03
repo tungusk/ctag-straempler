@@ -29,6 +29,11 @@ typedef struct {
 
 void audio_get_status(audio_status_t *out);
 
+// M0a: the sampler machine still lives in this component (moves in M0b).
+// Only main/machine_registry.c may reference this.
+#include "machine.h"
+extern const machine_t machine_sampler;
+
 
 
 
