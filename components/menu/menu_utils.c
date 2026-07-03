@@ -54,8 +54,8 @@ void incParamValue(param_data_t* data, int index, int vid, bool* pbs_state, matr
             //ESP_LOGI("UI","Changed pitch_cv_active %u", data->pitch_cv_active);
             break;
         case SID_PBSPEED:
-            if((data->playback_speed + 16) >= 16384){
-                data->playback_speed = 16384;
+            if((data->playback_speed + 16) >= 32767){
+                data->playback_speed = 32767;   // ~2.0 in Q2.14 — up to double-speed playback
             }else{
                 data->playback_speed += 16;
                 if(data->playback_speed > 1 && ((*pbs_state) == 0)){
@@ -141,8 +141,8 @@ void decParamValue(param_data_t* data, int index, int vid, bool* pbs_state, matr
             //ESP_LOGI("UI","Changed pitch_cv_active %d", data->volume);
             break;
         case SID_PBSPEED:
-            if((data->playback_speed - 16) <= -16384){
-                data->playback_speed = -16384;
+            if((data->playback_speed - 16) <= -32767){
+                data->playback_speed = -32767;
             }else{
                 data->playback_speed -= 16;
                 if(data->playback_speed < 0 && ((*pbs_state) == 1)){
