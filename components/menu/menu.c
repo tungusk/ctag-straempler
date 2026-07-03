@@ -372,24 +372,38 @@ static int browse_def_handler(int it_id, int event, void* event_data){
     const int menu_states[] = {M_BROWSE_TAG, M_BROWSE_ID, M_BROWSE_SEARCH, M_BROWSE_USER};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0;
-    
+    static int no_wifi = 0;
+
     switch(event){
         case EV_ENTERED_MENU:
-            if(!isWiFiConnected()) return M_MAIN;
+            if(!isWiFiConnected()){
+                // freesound browsing needs a connection — say so instead of bouncing
+                no_wifi = 1;
+                menuTFTPrintInputError("No WiFi - can't browse freesound");
+                break;
+            }
+            no_wifi = 0;
             menuTFTPrintMenuH(browse_menus, &n_browse_menus);
             menuTFTSelectMenuItemH(&menu_state_current, 0, browse_menus, &n_browse_menus);
             break;
         case EV_FWD:
+            if(no_wifi) break;
             menu_state_current++;
             if(menu_state_current >= states) menu_state_current = 0;
             menuTFTSelectMenuItemH(&menu_state_current, 0, browse_menus, &n_browse_menus);
             break;
         case EV_BWD:
+            if(no_wifi) break;
             menu_state_current--;
             if(menu_state_current < 0) menu_state_current = states - 1;
             menuTFTSelectMenuItemH(&menu_state_current, 0, browse_menus, &n_browse_menus);
             break;
         case EV_SHORT_PRESS:
+            if(no_wifi){
+                no_wifi = 0;
+                menuTFTFlushMenuDataRect();
+                return M_MAIN;
+            }
             return menu_states[menu_state_current];
             break;
         case EV_LONG_PRESS:
@@ -405,7 +419,7 @@ static int browse_def_handler(int it_id, int event, void* event_data){
 }
 
 static int play_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_VOICE0, M_VOICE1, M_RECORDING, M_EFFECTS, M_CV_MATRIX};
+    const int menu_states[] = {M_VOICE0, M_VOICE1, M_RECORDING, M_EXTERNAL_IN, M_EFFECTS, M_CV_MATRIX};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0;
 
@@ -764,7 +778,7 @@ static int matrix_def_handler(int it_id, int event, void* event_data){
 }
 
 static int effects_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN};
+    const int menu_states[] = {M_DELAY};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0; 
     
@@ -809,7 +823,7 @@ static int extin_def_handler(int it_id, int event, void* event_data) {
     static int pos = 0, sel = 0;
     static menu_nav_t nav = {
         .labels = externel_in_menus, .sids = sids, .n = sizeof(sids)/sizeof(sids[0]),
-        .parent = M_EFFECTS, .change = extin_change,
+        .parent = M_PLAY, .change = extin_change,
         .ctx = &effectData.extInData,
     };
     if (event == EV_ENTERED_MENU) {
@@ -961,7 +975,7 @@ static int filebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            menuTFTPrintFileBrowser(currentFile, file_list->count, info);
+            menuTFTPrintFileBrowser(file_list, currentFile);
             break;
         case EV_FWD:
             currentFile++;
@@ -971,7 +985,7 @@ static int filebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            menuTFTPrintFileBrowser(currentFile, file_list->count, info);
+            menuTFTPrintFileBrowser(file_list, currentFile);
             break;
         case EV_BWD:
             currentFile--;
@@ -981,7 +995,7 @@ static int filebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            menuTFTPrintFileBrowser(currentFile, file_list->count, info);
+            menuTFTPrintFileBrowser(file_list, currentFile);
             break;
         case EV_SHORT_PRESS:
             cJSON_Delete(info);
@@ -1010,7 +1024,7 @@ static int filebrowser_def_handler(int it_id, int event, void* event_data){
             break;
             */
         case EV_TIMER_REPEATING_FAST:
-            if(info)menuTFTAnimateFileBrowser(info);
+            menuTFTAnimateFileBrowser();
             break;
         default:
             break;
@@ -1047,10 +1061,10 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             //ESP_LOGI("Menu", "jsn file %s", buf);
             info = readJSONFileAsCJSON(buf);
             //ESP_LOGI("Menu", "JSON String %s", cJSON_Print(info));
-            menuTFTPrintFileBrowser(currentFile, file_list->count, info);
+            menuTFTPrintFileBrowser(file_list, currentFile);
             break;
         case EV_TIMER_REPEATING_FAST:
-            if(info)menuTFTAnimateFileBrowser(info);
+            menuTFTAnimateFileBrowser();
             break;
         case EV_FWD:
             currentFile++;
@@ -1059,7 +1073,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             name = (char*)list_get_item(file_list, currentFile)->value;
             snprintf(buf, 64, "/sdcard/usr/%s.JSN", name);
             info = readJSONFileAsCJSON(buf);
-            menuTFTPrintFileBrowser(currentFile, file_list->count, info);
+            menuTFTPrintFileBrowser(file_list, currentFile);
             break;
         case EV_BWD:
             currentFile--;
@@ -1068,7 +1082,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             name = (char*)list_get_item(file_list, currentFile)->value;
             snprintf(buf, 64, "/sdcard/usr/%s.JSN", name);
             info = readJSONFileAsCJSON(buf);
-            menuTFTPrintFileBrowser(currentFile, file_list->count, info);
+            menuTFTPrintFileBrowser(file_list, currentFile);
             break;
         case EV_SHORT_PRESS:
             name = (char*)list_get_item(file_list, currentFile)->value;
@@ -1101,7 +1115,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            menuTFTPrintFileBrowser(currentFile, file_list->count, info);
+            menuTFTPrintFileBrowser(file_list, currentFile);
             break;
         case EV_FWD:
             currentFile++;
@@ -1111,7 +1125,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            menuTFTPrintFileBrowser(currentFile, file_list->count, info);
+            menuTFTPrintFileBrowser(file_list, currentFile);
             break;
         case EV_BWD:
             currentFile--;
@@ -1121,7 +1135,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            menuTFTPrintFileBrowser(currentFile, file_list->count, info);
+            menuTFTPrintFileBrowser(file_list, currentFile);
             break;
         case EV_SHORT_PRESS:
             cJSON_Delete(info);
@@ -1407,7 +1421,7 @@ static int preset_def_handler(int it_id, int event, void* event_data){
 }
 
 static int typeselect_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_SLOT_FILEBROWSER, M_SLOT_USER};
+    const int menu_states[] = {M_SLOT_USER, M_SLOT_FILEBROWSER};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0;
     

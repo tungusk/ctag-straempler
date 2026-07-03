@@ -15,6 +15,7 @@
 #include "freertos/timers.h"
 #include "strampler_version.h"
 #include "recording.h"
+#include "wifi.h"
 
 //definitions for element highlighting and selection
 int _cur_row = 0, _cur_el = -1;
@@ -78,10 +79,13 @@ void menuTFTPrintMenuHSpaced(const char** items, const int* n_items){
     }    
 }
 
+// nav bar background (dark blue)
+static const color_t MENUBAR_BG = {10, 18, 56};
+
 void menuTFTPrintMainMenus(){
     int x = 8, w = 0;
     _fg = TFT_WHITE;
-	_bg = (color_t){ 64, 64, 64 };
+	_bg = MENUBAR_BG;
     TFT_setFont(DEFAULT_FONT, NULL);
 	TFT_fillRect(0, 0, _width-1, TFT_getfontheight()+8, _bg);
     TFT_X = 0;
@@ -104,6 +108,10 @@ void menuTFTPrintAbout(){
     TFT_print("Niklas Wantrupp", 4, TFT_Y);
     TFT_print("Phillip Lamp", 4, TFT_Y);
     TFT_print("Robert Manzke", 4, TFT_Y);
+    TFT_Y += TFT_getfontheight();
+    TFT_print("v0.9 contributors: ", 4, TFT_Y);
+    TFT_print("Arlo Fishman", 4, TFT_Y);
+    TFT_print("Claude (Anthropic)", 4, TFT_Y);
 }
 
 void menuTFTPrintVoiceMenu(){
@@ -454,7 +462,7 @@ void menuTFTSelectMainMenu(int active, int select){
     int x = 4, w = 0;
     TFT_resetclipwin();
     for(int i=0;i<n_main_menus;i++){
-        _bg = (color_t){ 64, 64, 64 };
+        _bg = MENUBAR_BG;
         if(i==active){
             if(select == 1){
                 _bg = TFT_RED;
@@ -631,7 +639,7 @@ void menuTFTPrintVoiceValues(param_data_t* data, int r){
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 4); 
             break;
         case SID_PBSPEED: ;
-            int16_t scaledPbspeed = menuTFTScaleToRange(data->playback_speed, 16384, 100);
+            int16_t scaledPbspeed = (int16_t)(((int32_t)data->playback_speed * 100 + (data->playback_speed < 0 ? -8192 : 8192)) / 16384);
             if(scaledPbspeed == 0){
                 sprintf(tmp,"%d %%", scaledPbspeed);
             }else{
@@ -681,7 +689,7 @@ void menuTFTPrintVoiceValues(param_data_t* data, int r){
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y); 
             y++;
 
-            int16_t pbspeed = menuTFTScaleToRange(data->playback_speed, 16384, 100);
+            int16_t pbspeed = (int16_t)(((int32_t)data->playback_speed * 100 + (data->playback_speed < 0 ? -8192 : 8192)) / 16384);
             if(pbspeed == 0){
                 sprintf(tmp,"%d %%", pbspeed);
             }else{
@@ -1157,7 +1165,7 @@ void menuTFTPrintTime(int *shift){
     snprintf(s, 10, "%02d:%02d:%02d", tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
     TFT_saveClipWin();
     TFT_resetclipwin();
-    _bg = (color_t){ 64, 64, 64 };
+    _bg = MENUBAR_BG;
     _fg = TFT_WHITE;
     TFT_print(s, _width - TFT_getStringWidth(s) - 4, 4);
     TFT_restoreClipWin();
@@ -1173,7 +1181,7 @@ void menuTFTPrintRecordIndicator(void) {
 
     // Clear the right side of the nav bar (where clock was)
     int iw = 64;
-    TFT_fillRect(_width - iw - 2, 1, iw, TFT_getfontheight() + 6, (color_t){64, 64, 64});
+    TFT_fillRect(_width - iw - 2, 1, iw, TFT_getfontheight() + 6, MENUBAR_BG);
 
     char label[10] = "";
     if (active) {
@@ -1186,7 +1194,7 @@ void menuTFTPrintRecordIndicator(void) {
         snprintf(label, sizeof(label), "T1 ARM");
         _fg = (color_t){255, 140, 0};
     }
-    _bg = (color_t){64, 64, 64};
+    _bg = MENUBAR_BG;
 
     if (label[0]) {
         TFT_print(label, _width - TFT_getStringWidth(label) - 4, 4);
@@ -1473,43 +1481,60 @@ int menuTFTPrintAllCharSettings(char* str){
     return i;
 }
 
-void menuTFTPrintFileBrowser(int currentFile, int maxFiles, const cJSON* desc){
+// sample browser: scrolling list — neighbors in the default font around the
+// selected name, which is drawn as a big-font headline
+#define BROWSER_NAME_FONT DEJAVU24_FONT
+#define BROWSER_NEIGHBORS 3
+static char *browser_sel_name = NULL;   // points into the caller's file list
+static int browser_name_y = 0;
+
+void menuTFTPrintFileBrowser(list_t* files, int current){
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     TFT_fillWindow(TFT_BLACK);
     char buf[64];
     _cur_el = 0;
-    _cur_row = 0;
-    _fg = TFT_WHITE;
     _bg = TFT_BLACK;
-    TFT_X = 3;
-    if(cJSON_IsNumber(cJSON_GetObjectItem(desc, "id")))
-        snprintf(buf, 64, "File %d out of %d, id: %d", currentFile + 1, maxFiles, cJSON_GetObjectItem(desc, "id")->valueint);
-    else
-        snprintf(buf, 64, "File %d out of %d, id: %s", currentFile + 1, maxFiles, cJSON_GetObjectItem(desc, "id")->valuestring);
-    TFT_print(buf, 3, (TFT_getfontheight() + 3) * _cur_row++);
-    TFT_print("Name:", 3, 3 + (TFT_getfontheight() + 3) * _cur_row++);
-    cleanString(cJSON_GetObjectItem(desc, "name")->valuestring);
-    TFT_print(cJSON_GetObjectItem(desc, "name")->valuestring, 3, (TFT_getfontheight() + 3) * _cur_row++);
+    int fh = TFT_getfontheight();
+    int total = files->count;
+    if (current < 0 || current >= total) return;
 
-    TFT_print("Description:", 3, (TFT_getfontheight() + 3) * _cur_row++);
-    cleanString(cJSON_GetObjectItem(desc, "description")->valuestring);
-    TFT_print(cJSON_GetObjectItem(desc, "description")->valuestring, 3, (TFT_getfontheight() + 3) * _cur_row++);
+    _fg = TFT_LIGHTGREY;
+    snprintf(buf, 64, "File %d out of %d", current + 1, total);
+    TFT_print(buf, 3, 0);
+    wifiGetIPString(buf, 20);
+    TFT_print(buf, _width - TFT_getStringWidth(buf) - 4, 0);
 
-    TFT_print("Tags:", 3, (TFT_getfontheight() + 3) * _cur_row++);
-    cleanString(cJSON_GetObjectItem(desc, "tags_s")->valuestring);
-    TFT_print(cJSON_GetObjectItem(desc, "tags_s")->valuestring, 3, (TFT_getfontheight() + 3) * _cur_row++);
+    // neighbors above (no wraparound, blank rows at the list edges)
+    int y = fh + 6;
+    for (int k = BROWSER_NEIGHBORS; k >= 1; k--) {
+        int idx = current - k;
+        if (idx >= 0) {
+            _fg = TFT_LIGHTGREY;
+            TFT_print((char*)list_get_item(files, idx)->value, 14, y);
+        }
+        y += fh + 3;
+    }
 
-    TFT_print("User:", 3, (TFT_getfontheight() + 3) * _cur_row++);
-    cleanString(cJSON_GetObjectItem(desc, "username")->valuestring);
-    TFT_print(cJSON_GetObjectItem(desc, "username")->valuestring, 3, (TFT_getfontheight() + 3) * _cur_row++);
-    
-    TFT_print("Url:", 3, (TFT_getfontheight() + 3) * _cur_row++);
-    cleanString(cJSON_GetObjectItem(desc, "url")->valuestring);
-    TFT_print(cJSON_GetObjectItem(desc, "url")->valuestring, 3, (TFT_getfontheight() + 3) * _cur_row++);
-    
-    TFT_print("License:", 3, (TFT_getfontheight() + 3) * _cur_row++);
-    cleanString(cJSON_GetObjectItem(desc, "license")->valuestring);
-    TFT_print(cJSON_GetObjectItem(desc, "license")->valuestring, 3, (TFT_getfontheight() + 3) * _cur_row++);
+    // selected item as big headline
+    browser_sel_name = (char*)list_get_item(files, current)->value;
+    browser_name_y = y + 2;
+    Font f = cfont;
+    TFT_setFont(BROWSER_NAME_FONT, NULL);
+    _fg = TFT_WHITE;
+    TFT_print(browser_sel_name, 3, browser_name_y);
+    int name_fh = TFT_getfontheight();
+    cfont = f;
+    y = browser_name_y + name_fh + 5;
+
+    // neighbors below
+    for (int k = 1; k <= BROWSER_NEIGHBORS; k++) {
+        int idx = current + k;
+        if (idx < total) {
+            _fg = TFT_LIGHTGREY;
+            TFT_print((char*)list_get_item(files, idx)->value, 14, y);
+        }
+        y += fh + 3;
+    }
 }
 
 void menuTFTPrintDecoding(){
@@ -1521,38 +1546,24 @@ void menuTFTPrintDecoding(){
     TFT_print("MP3 file to raw samples:", 3, 4);
 }
 
-void menuTFTAnimateFileBrowser(const cJSON* desc){
-    char *s;
+void menuTFTAnimateFileBrowser(void){
+    if (!browser_sel_name) return;
     _cur_el++;
-    _cur_row = 2;
     int tooWide = 0;
     _bg = TFT_BLACK;
     _fg = TFT_WHITE;
-    s = cJSON_GetObjectItem(desc, "name")->valuestring;
-    tooWide |= printSubStringIfTooWide(s, 3, (TFT_getfontheight() + 3) * _cur_row, _cur_el);
-    _cur_row += 2;
-    s = cJSON_GetObjectItem(desc, "description")->valuestring;
-    tooWide |= printSubStringIfTooWide(s, 3, (TFT_getfontheight() + 3) * _cur_row, _cur_el);
-    _cur_row += 2;
-    s = cJSON_GetObjectItem(desc, "tags_s")->valuestring;
-    tooWide |= printSubStringIfTooWide(s, 3, (TFT_getfontheight() + 3) * _cur_row, _cur_el);
-    _cur_row += 2;
-    s = cJSON_GetObjectItem(desc, "username")->valuestring;
-    tooWide |= printSubStringIfTooWide(s, 3, (TFT_getfontheight() + 3) * _cur_row, _cur_el);
-    _cur_row += 2;
-    s = cJSON_GetObjectItem(desc, "url")->valuestring;
-    tooWide |= printSubStringIfTooWide(s, 3, (TFT_getfontheight() + 3) * _cur_row, _cur_el);
-    _cur_row += 2;
-    s = cJSON_GetObjectItem(desc, "license")->valuestring;
-    tooWide |= printSubStringIfTooWide(s, 3, (TFT_getfontheight() + 3) * _cur_row, _cur_el);
+    Font f = cfont;
+    TFT_setFont(BROWSER_NAME_FONT, NULL);
+    tooWide |= printSubStringIfTooWide(browser_sel_name, 3, browser_name_y, _cur_el);
+    cfont = f;
     if(!tooWide) _cur_el = 0;
 }
 
 int printSubStringIfTooWide(char *s, int x, int y, int pos){
     if(strlen(s) > pos){
-        if(TFT_getStringWidth(&s[pos]) + 3 > 317){
-            TFT_fillRect(x, y, 317, (TFT_getfontheight() + 3), _bg);
-            TFT_print(&s[_cur_el], x, y);
+        if(x + TFT_getStringWidth(&s[pos]) > 317){
+            TFT_fillRect(x, y, 317 - x, (TFT_getfontheight() + 3), _bg);
+            TFT_print(&s[pos], x, y);
             return 1;
         }
     }
@@ -1581,12 +1592,14 @@ int printTags(list_item_t* it){
 // caches for the main-screen live displays; reset via menuTFTInvalidatePlayArea()
 // whenever the screen underneath them is repainted
 static int s_cv_last_fill[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+static bool s_cv_labels_drawn = false;
 static int s_ps_state[2] = {0, 0};
 static int s_ps_color[2] = {-1, -1};
 static int s_ps_ss_px[2], s_ps_ls_px[2], s_ps_le_px[2];
 
 void menuTFTInvalidatePlayArea(void) {
     for (int i = 0; i < 8; i++) s_cv_last_fill[i] = -1;
+    s_cv_labels_drawn = false;
     s_ps_color[0] = s_ps_color[1] = -1;
 }
 
@@ -1596,7 +1609,7 @@ void menuTFTDrawLiveCVBars(void) {
 
     int fh     = TFT_getfontheight();
     int y_top  = fh + 11;   // just below nav bar
-    int height = 22;
+    int height = 44;
     int bar_w  = 36;
     int gap    = 3;
     int x0     = 10;
@@ -1604,6 +1617,21 @@ void menuTFTDrawLiveCVBars(void) {
     TFT_saveClipWin();
     TFT_resetclipwin();
     _bg = TFT_BLACK;
+
+    // channel numbers under the meters, matching the matrix "CV 1..8" naming
+    if (!s_cv_labels_drawn) {
+        char num[2] = "0";
+        Font f = cfont;
+        TFT_setFont(DEF_SMALL_FONT, NULL);
+        _fg = TFT_LIGHTGREY;
+        for (int i = 0; i < 8; i++) {
+            num[0] = '1' + i;
+            int x = x0 + i * (bar_w + gap);
+            TFT_print(num, x + bar_w / 2 - TFT_getStringWidth(num) / 2, y_top + height + 2);
+        }
+        cfont = f;
+        s_cv_labels_drawn = true;
+    }
 
     for (int i = 0; i < 8; i++) {
         int x = x0 + i * (bar_w + gap);
@@ -1642,7 +1670,7 @@ void menuTFTUpdatePlayState(int vid, int state){
     }
     color_t region_bg = (color_t){bar_bg.r + 12, bar_bg.g + 12, bar_bg.b + 12};
 
-    int bar_x = 10, bar_y = 120 + 55 * vid, bar_w = 301, bar_h = 20;
+    int bar_x = 10, bar_y = 120 + 55 * vid, bar_w = 301, bar_h = 26;
 
     uint32_t ss, ls, le, fs;
     audio_get_playpos(vid, &ss, &ls, &le, &fs);
