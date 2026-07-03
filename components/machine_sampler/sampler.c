@@ -2,6 +2,9 @@
 // Split out of components/audio in M0b; menus follow in M0c.
 #include "audio.h"
 #include "machine_sampler.h"
+#include "ui.h"
+#include "preset.h"
+#include <sys/stat.h>
 #include "dsp_lib.h"
 #include "fill_buffer.h"
 #include "audio_luts.h"
@@ -1215,6 +1218,26 @@ static void sampler_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
 
 static esp_err_t sampler_start(void)
 {
+    // the machine owns its parameter queues (menu side binds to the same ones)
+    xQueueHandle q_v0   = xQueueCreate(1, sizeof(param_data_t));
+    xQueueHandle q_v1   = xQueueCreate(1, sizeof(param_data_t));
+    xQueueHandle q_eff  = xQueueCreate(1, sizeof(effect_data_t));
+    xQueueHandle q_pbs0 = xQueueCreate(1, sizeof(bool));
+    xQueueHandle q_pbs1 = xQueueCreate(1, sizeof(bool));
+    xQueueHandle q_md0  = xQueueCreate(1, sizeof(play_state_data_t));
+    xQueueHandle q_md1  = xQueueCreate(1, sizeof(play_state_data_t));
+    xQueueHandle q_mtx  = xQueueCreate(10, sizeof(matrix_event_t));
+    xQueueHandle q_ev   = uiGetEventQueue();
+    sampler_bind_queues(q_v0, q_v1, q_eff, q_pbs0, q_pbs1, q_md0, q_md1, q_mtx, q_ev);
+    sampler_menu_bind_queues(q_v0, q_v1, q_eff, q_pbs0, q_pbs1, q_md0, q_md1, q_mtx, q_ev);
+
+    // the sampler bootstraps its own SD artifacts (was core fileio's job)
+    struct stat st;
+    if (stat("/sdcard/banks/default.JSN", &st) == -1)
+        initBank("/sdcard/banks/default.JSN");
+
+    sampler_boot_init();   // mutexes + audio structs + slot file assignment
+
     xTaskCreate(file_reader_task_1, "file_reader_task", 4096, NULL, 22, &file_reader_task_1_handle);
     xTaskCreate(file_reader_task_2, "file_reader_task", 4096, NULL, 22, &file_reader_task_2_handle);
     xTaskCreate(file_manipulation_task, "file_manipulation_task", 4096, NULL, 22, &file_manipulation_task_handle);
@@ -1247,13 +1270,16 @@ static void sampler_stop(void)
 // linker stitches this reference. It moves here physically in M0c-2.
 extern const machine_ui_t sampler_menu_ui;
 
+extern cJSON *sampler_preset_save(void);
+extern void sampler_preset_load(const cJSON *node);
+
 const machine_t machine_sampler = {
     .name = "Sampler",
     .start = sampler_start,
     .stop = sampler_stop,
     .process = sampler_process,
-    .preset_save = NULL,
-    .preset_load = NULL,
+    .preset_save = sampler_preset_save,
+    .preset_load = sampler_preset_load,
     .ui = &sampler_menu_ui,
 };
 

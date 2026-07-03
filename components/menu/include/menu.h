@@ -1,7 +1,9 @@
 #pragma once
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "cJSON.h"
 
-void initMenu();
+void initMenu(xQueueHandle ev_queue);
 void menuProcessEvent(int ev, void * ev_data);
 void menuBindMachineUI(void);
 
@@ -11,7 +13,6 @@ extern void *_state_voice;
 extern void *_state_json;
 extern void *_fb_state;
 void initParams();
-cJSON* buildPreset();
 void loadParams(cJSON *filename);
 
 /*

@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include "preset.h"
 #include "menu_config.h"
 #include "esp_log.h"
 #include "errno.h"
@@ -86,11 +85,7 @@ void checkSDStructure(){
         ESP_LOGE("SD", "Config not found/invalid");
         createConfigFile(); 
     }
-    
-    // check if default preset bank file exists, if not, create
-    if (stat("/sdcard/banks/default.JSN", &st) == -1) {
-        initBank("/sdcard/banks/default.JSN");
-    }
+
 }
 
 void repairAudioFileAssigment(int id){

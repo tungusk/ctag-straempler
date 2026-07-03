@@ -729,26 +729,3 @@ void decExtInValue(ext_in_data_t* extin, int index){
     }
 }
 
-void incSettingsItem(int *tz, int index){
-    switch (index)
-    {
-        case SID_TIMEZONE:
-            if(*tz + 1 >= 12) *tz = 12;
-            else (*tz)++;
-            break;
-        default:
-            break;
-    }
-}
-
-void decSettingsItem(int *tz, int index){
-    switch (index)
-    {
-        case SID_TIMEZONE:
-            if(*tz - 1 <= -12) *tz = -12;
-            else (*tz)--;   
-            break;
-        default:
-            break;
-    }
-}

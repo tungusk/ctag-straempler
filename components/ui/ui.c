@@ -9,7 +9,6 @@
 #include <time.h>
 #include <sys/time.h>
 #include "ui.h"
-#include "machine_sampler.h"
 #include "ui_events.h"
 #include "storage.h"
 #include "gpio.h"
@@ -36,6 +35,8 @@ static xQueueHandle pbs_state_queue_v1 = NULL;
 static xQueueHandle mode_queue_v0 = NULL;
 static xQueueHandle mode_queue_v1 = NULL;
 static xQueueHandle matrix_event_queue = NULL;
+
+xQueueHandle uiGetEventQueue(void){ return ui_ev_queue; }
 
 static void ui_ev_loop(void* pvParams)
 {
@@ -184,15 +185,6 @@ static void timerRepeatFast(){
 }
 
 void initUI(){
-    //Init queue size
-    ui_param_queue_v0 = xQueueCreate(1, sizeof( param_data_t));
-    ui_param_queue_v1 = xQueueCreate(1, sizeof( param_data_t));
-    effect_param_queue = xQueueCreate(1, sizeof(effect_data_t));
-    pbs_state_queue_v0 = xQueueCreate(1, sizeof(bool));
-    pbs_state_queue_v1 = xQueueCreate(1, sizeof(bool));
-    mode_queue_v0 = xQueueCreate(1, sizeof(play_state_data_t));
-    mode_queue_v1 = xQueueCreate(1, sizeof(play_state_data_t));
-    matrix_event_queue = xQueueCreate(10, sizeof(matrix_event_t));
     ui_ev_queue = xQueueCreate(64, sizeof(ui_ev_ts_t));
     ui_handler_param_t *params = calloc(1, sizeof(ui_handler_param_t));
     params->ui_evt_queue = ui_ev_queue;
@@ -201,16 +193,9 @@ void initUI(){
     mountSDStorage();
     configDisplay();
     initGPIO(ui_ev_queue);
-    
-    // TEMPORARY (until M0c): the sampler's queue wiring + boot init live here;
-    // they move into the machine's own start() when its menus move in.
-    sampler_bind_queues(ui_param_queue_v0, ui_param_queue_v1, effect_param_queue,
-        pbs_state_queue_v0, pbs_state_queue_v1, mode_queue_v0, mode_queue_v1,
-        matrix_event_queue, ui_ev_queue);
-    sampler_boot_init();
-    initAudio();
 
-    initMenu(ui_param_queue_v0, ui_param_queue_v1, effect_param_queue, pbs_state_queue_v0, pbs_state_queue_v1, mode_queue_v0, mode_queue_v1, matrix_event_queue, ui_ev_queue);
+    initAudio();
+    initMenu(ui_ev_queue);
 
     //xTaskCreatePinnedToCore(ui_task, "ui_task", usStackDepth, params, 10, gpio_task, 1);
     xTaskCreatePinnedToCore(ui_ev_loop, "ui_ev_loop", 4096*2, params, 11, ui_task, 0);

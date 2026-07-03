@@ -64,11 +64,7 @@ extern const int n_bank_choices;
 extern const char* choices[];
 extern const int n_choices;
 
-extern const char* more_menus[];
-extern const int n_more_menus;
 
 extern const char* slot_menus[];
 extern const int n_slot_menus;
 
-extern const char* settings_menus[];
-extern const int n_settings_menus;

@@ -94,5 +94,3 @@ void decExtInValue(ext_in_data_t* extin, int index);
  * @param tz        pointer to time_shift variable
  * @param index     index of submenu parameter
  */
-void incSettingsItem(int *tz, int index);
-void decSettingsItem(int *tz, int index);
