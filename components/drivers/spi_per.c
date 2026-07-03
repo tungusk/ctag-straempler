@@ -91,7 +91,7 @@ void blink_task(void *pvParameter)
 // WM8731 codec bit-bang SPI via RTC GPIO (shared with ULP ADC bus)
 #define WM_CS_RTC   10   // GPIO_NUM_4
 #define WM_MOSI_RTC 14   // GPIO_NUM_13
-#define WM_SCLK_RTC 13
+#define WM_SCLK_RTC 15   // GPIO_NUM_12 (same pin the ULP SPI loop clocks)
 
 #define _wm_lo(n) REG_WRITE(RTC_GPIO_OUT_W1TC_REG, 1U << (RTC_GPIO_OUT_DATA_W1TC_S + (n)))
 #define _wm_hi(n) REG_WRITE(RTC_GPIO_OUT_W1TS_REG, 1U << (RTC_GPIO_OUT_DATA_W1TS_S + (n)))
@@ -113,10 +113,12 @@ static void codec_write_reg(uint16_t word)
 
 void codec_set_input(bool use_mic)
 {
-    // WM8731 R4 Analog Audio Path Control:
-    //   line in: BYPASS=1 (bit4), INSEL=0 (bit3) → data=0x10
-    //   mic in:  INSEL=1 (bit3), MICBOOST=1 (bit1) → data=0x0A
-    uint16_t data = use_mic ? 0x0Au : 0x10u;
+    // WM8731 R4 Analog Audio Path Control
+    // (bit0 MICBOOST, bit1 MUTEMIC, bit2 INSEL, bit3 BYPASS, bit4 DACSEL).
+    // DACSEL must stay set or both voices go silent; 0x10 matches the ULP boot init.
+    //   line in: DACSEL                    → 0x10
+    //   mic in:  DACSEL|INSEL|MICBOOST     → 0x15
+    uint16_t data = use_mic ? 0x15u : 0x10u;
     uint16_t word = (uint16_t)((4u << 9) | data);
     codec_write_reg(word);
     ets_delay_us(5);

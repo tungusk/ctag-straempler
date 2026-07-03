@@ -23,7 +23,8 @@ typedef enum{
     EV_DECODING_PROGRESS,
     EV_DECODING_DONE, 
     EV_UPDATE_V0_POS,
-    EV_UPDATE_V1_POS
+    EV_UPDATE_V1_POS,
+    EV_AUTOSAVE
 } ui_ev_t;
 
 typedef struct{

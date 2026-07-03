@@ -1680,15 +1680,6 @@ void menuTFTPrintRecordingState(int f0, int f1){
     TFT_print(trig_names[f1 < 2 ? f1 : 0], _width / 2, 3 + (fh + 3) * 2);
 }
 
-void menuTFTPrintInputState(bool use_mic) {
-    int fh = TFT_getfontheight();
-    TFT_setclipwin(0, fh + 9, _width - 1, _height);
-    _bg = TFT_BLACK;
-    menuTFTFlush(0, &_bg);
-    _fg = TFT_LIGHTGREY;
-    TFT_print(use_mic ? "Mic" : "Line", _width / 2, 3 + (fh + 3) * 0);
-}
-
 void menuTFTPrintInputError(char* s){
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     char str[32];
