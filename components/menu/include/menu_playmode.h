@@ -1,4 +1,5 @@
 #pragma once
+#include "audio_types.h"
 #include "menu_shapes.h"
 #include "menutft_utils.h"
 #include "tft.h"

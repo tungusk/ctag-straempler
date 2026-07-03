@@ -1,5 +1,5 @@
 #include "machine.h"
-#include "audio.h"   // machine_sampler lives in components/audio until M0b
+#include "machine_sampler.h"
 
 // Machines shipped in this firmware, in selector order. This file is the ONLY
 // place outside a machine's own component that may name a machine symbol —
