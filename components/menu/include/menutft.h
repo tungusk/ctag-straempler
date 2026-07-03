@@ -14,7 +14,7 @@
 void menuTFTPrintMenu(const char** items, const int* n_items);
 void menuTFTPrintMenuH(const char** items, const int* n_items);
 void menuTFTPrintMenuHSpaced(const char** items, const int* n_items);
-void menuTFTPrintMainMenus();
+void menuTFTPrintMainMenus(const char *const *items, int n);
 void menuTFTPrintAbout();
 void menuTFTPrintVoiceMenu();
 void menuTFTPrintADSRMenu();
@@ -37,7 +37,7 @@ void menuTFTPrintUserFileMenu();
 void menuTFTSelectMenuItem(int* activeSlot, int selected, const char** items, const int* n_items);
 void menuTFTSelectMenuItemH(int* activeSlot, int selected, const char** items, const int* n_items);
 void menuTFTSelectMenuItemHSpaced(int* activeSlot, int selected, const char** items, const int* n_items);
-void menuTFTSelectMainMenu(int, int);
+void menuTFTSelectMainMenu(int active, int select, const char *const *items, int n);
 void menuTFTSelectVoiceMenu(int, int);
 void menuTFTSelectMatrixItem(int active, int select, int column);
 void menuTFTSelectPreset(int* activeSlot, cJSON* rootArray, int selected);
