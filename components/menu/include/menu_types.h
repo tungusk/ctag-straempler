@@ -70,6 +70,7 @@ typedef enum{
     SID_DECAY,
     SID_SUSTAIN,
     SID_RELEASE,
+    SID_ENV_ACTIVE,
     SID_MODE,
     SID_START,
     SID_LSTART,

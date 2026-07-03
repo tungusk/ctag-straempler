@@ -699,7 +699,18 @@ static float modulateDlySendParameter(int vid, int index, uint16_t *ctrl_data)
 static void modulate_adsr_parameter(int vid, uint16_t* ctrl_data)
 {
     bool time_value_modulated = false;
-    
+
+    if (!ui_params[vid].env_on) {
+        // envelope bypassed: transparent gate with 1 ms anti-click edges;
+        // dialed values and matrix ADSR modulation are ignored
+        voice[vid].adsr.attack_time   = 44.1f;
+        voice[vid].adsr.decay_time    = 44.1f;
+        voice[vid].adsr.sustain_level = 1.0f;
+        voice[vid].adsr.release_time  = 44.1f;
+        calculate_adsr_phase_increment(&voice[vid].adsr);
+        return;
+    }
+
     voice[vid].adsr.attack_time = ui_params[vid].attack_time * 44.1f;
     voice[vid].adsr.decay_time = ui_params[vid].decay_time * 44.1f;
     voice[vid].adsr.sustain_level = ui_params[vid].sustain_level * 0.01f;

@@ -12,6 +12,7 @@ void init_ui_params(ui_param_holder_t* params){
     params->resonance = 1.0f;
     params->volume = 1.0f;
     params->pitch = 12;
+    params->env_on = true;
     params->attack_time = 44100.0f;
     params->decay_time = 22050.0f;
     params->release_time = 88200.0f;
@@ -52,6 +53,7 @@ void parse_voice_param_data(xQueueHandle* queue, voice_t* voice, ui_param_holder
             }
             ui_params->delay_send = params->delay_send*0.01;
 
+            ui_params->env_on = params->adsr.env_on;
             ui_params->attack_time = params->adsr.attack;
             ui_params->decay_time = params->adsr.decay;
             ui_params->sustain_level = params->adsr.sustain;

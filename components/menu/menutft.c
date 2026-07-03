@@ -743,6 +743,11 @@ void menuTFTPrintADSRValues(adsr_data_t* data, int r){
             menuTFTFlushValue(data->release, 3, adsr_conditions, &adsr_cond_size, &_bg);
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 3);
             break;
+        case SID_ENV_ACTIVE:
+            menuTFTFlush(4, &_bg);
+            _fg = data->env_on ? TFT_LIGHTGREY : TFT_ORANGE;
+            TFT_print((char*)(data->env_on ? "ON" : "OFF"), _width/2, 3 + (TFT_getfontheight() + 3) * 4);
+            break;
         case PRINT_ALL:
             sprintf(tmp,"%d ms", data->attack);
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y);
@@ -758,6 +763,10 @@ void menuTFTPrintADSRValues(adsr_data_t* data, int r){
 
             sprintf(tmp,"%d ms", data->release);               
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y);            
+            y++;
+
+            _fg = data->env_on ? TFT_LIGHTGREY : TFT_ORANGE;
+            TFT_print((char*)(data->env_on ? "ON" : "OFF"), _width/2, 3 + (TFT_getfontheight() + 3) * y);
         default:
             break;
     }    
