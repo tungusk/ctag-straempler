@@ -1,4 +1,5 @@
 #pragma once
+#include "list.h"
 #include "stdint.h"
 #include "menutft.h"
 #include "tft.h"
@@ -10,6 +11,10 @@ typedef enum{
 
 
 //Flush conditions, for additional conditions expand default_conditions or add new array and size
+// shared draw-cursor state (defined in menutft.c)
+extern int _cur_row, _cur_el;
+extern list_t *_bbox_list;
+
 extern const int default_conditions[9];
 extern const int default_cond_size;
 extern const int adsr_conditions[8];
