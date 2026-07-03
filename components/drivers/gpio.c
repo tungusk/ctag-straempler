@@ -7,7 +7,6 @@
 #include "gpio.h"
 #include "pin_defs.h"
 #include "ui_events.h"
-#include "audio_events.h"
 
 #define ESP_INTR_FLAG_DEFAULT 0
 

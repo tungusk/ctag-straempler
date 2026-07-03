@@ -50,7 +50,7 @@ static void audio_task(void *pvParams)
     {
         // get control data
         xQueueReceive(control_queue, &ctrlData, 0);
-        // v0/v1 filenames are updated in assignAudioFiles(); only CV changes per block
+        // v0/v1 names are pushed by the machine via audio_status_set_voices()
         portENTER_CRITICAL(&_status_mux);
         for (int i = 0; i < 8; i++) _audio_status.cv[i] = cv_corrected(i, ctrlData);
         portEXIT_CRITICAL(&_status_mux);

@@ -17,17 +17,12 @@
 #include "ui_events.h"
 #include "esp_log.h"
 #include "audio.h"
-#include "machine_sampler.h"
 #include "menutft.h"
 #include "recording.h"
-#include "menu_utils.h"
 #include "menu_types.h"
-#include "audio_luts.h"
-#include "menu_items.h"
 #include "menutft_utils.h"
 #include "gpio.h"
 #include "audio.h"
-#include "preset.h"
 #include "wifi.h"
 #include "esp_wifi.h"
 #include "timer_utils.h"
@@ -35,12 +30,26 @@
 #include "rest-api.h"
 #include "menu_config.h"
 #include "menu_nav.h"
+#include "machine.h"
 
 #define N_MAIN_MENUS 5
 
 
 static void autosave_kick(void);
 static xQueueHandle s_ev_queue = NULL;
+
+// core menu labels (machine-independent pages)
+static const char* more_menus[] = {"Settings", "About"};
+static const int n_more_menus = 2;
+static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone"};
+static const int n_settings_menus = 4;
+
+static void incSettingsItem(int *tz, int index){
+    if (index == SID_TIMEZONE) { if(*tz + 1 >= 12) *tz = 12; else (*tz)++; }
+}
+static void decSettingsItem(int *tz, int index){
+    if (index == SID_TIMEZONE) { if(*tz - 1 <= -12) *tz = -12; else (*tz)--; }
+}
 static int tz_shift = 0;
 menusys_t *_ms = NULL;
 // data which needs to be passed from one menu state to another
@@ -363,15 +372,17 @@ static void autosave_cb(void *arg) {
 }
 
 static void autosave_now(void) {
-    cJSON *preset = buildPreset("state");
-    if (!preset) return;
+    const machine_t *m = machine_active();
+    if (!m || !m->preset_save) return;
+    cJSON *node = m->preset_save();
+    if (!node) return;
     cJSON *root = cJSON_CreateObject();
-    cJSON *arr  = cJSON_CreateArray();
-    cJSON_AddItemToObject(root, "bank", arr);
-    cJSON_AddItemToArray(arr, preset);
-    saveBank(root, "autosave", DELETE_JSON);
-    savePresetConfig("state", "autosave");
-    ESP_LOGI("AUTOSAVE", "State saved");
+    cJSON_AddStringToObject(root, "machine", m->name);
+    cJSON_AddItemToObject(root, "state", node);
+    char *out = cJSON_PrintUnformatted(root);
+    if (out) { writeJSONFile("/sdcard/AUTOSAVE.JSN", out); free(out); }
+    cJSON_Delete(root);
+    ESP_LOGI("AUTOSAVE", "State saved (%s)", m->name);
 }
 
 static void autosave_kick(void) {
@@ -403,18 +414,28 @@ static void menuMachineBindNow(void){
     s_main_targets[n] = M_MORE;
     s_n_main = n + 1;
 
+    // machine-agnostic state restore: AUTOSAVE.JSN carries a machine-named
+    // node; a mismatched or missing file means "load your defaults" (NULL)
+    const machine_t *m = machine_active();
+    if (m && m->preset_load) {
+        cJSON *root = readJSONFileAsCJSON("/sdcard/AUTOSAVE.JSN");
+        cJSON *node = NULL;
+        if (root) {
+            cJSON *mn = cJSON_GetObjectItemCaseSensitive(root, "machine");
+            if (mn && mn->valuestring && strcmp(mn->valuestring, m->name) == 0)
+                node = cJSON_GetObjectItemCaseSensitive(root, "state");
+        }
+        m->preset_load(node);
+        cJSON_Delete(root);
+    }
+
     menuTFTPrintMainMenus(s_main_labels, s_n_main);
     menusys_set_active_item(_ms, M_MAIN);
     menuProcessEvent(EV_ENTERED_MENU, NULL);
 }
 
-void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle effect_queue, xQueueHandle cv_queue_v0, xQueueHandle cv_queue_v1, xQueueHandle _mode_queue_v0, xQueueHandle _mode_queue_v1, xQueueHandle matrix_event_queue, xQueueHandle ev_queue){
+void initMenu(xQueueHandle ev_queue){
     s_ev_queue = ev_queue;
-    // TEMPORARY seam (dies in M0d/M1): forward the sampler's menu queues; the
-    // machine's register_pages() also performs its preset boot-load now.
-    sampler_menu_bind_queues(ui_queue_v0, ui_queue_v1, effect_queue,
-        cv_queue_v0, cv_queue_v1, _mode_queue_v0, _mode_queue_v1,
-        matrix_event_queue, ev_queue);
     recording_set_arm_monitor(configGetIntSetting("rec_monitor", 1) != 0);
     initTimeshift(&tz_shift);
     TFT_fillScreen(TFT_BLACK);

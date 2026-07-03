@@ -16,6 +16,8 @@ void sampler_bind_queues(xQueueHandle v0, xQueueHandle v1, xQueueHandle eff,
                          xQueueHandle mode0, xQueueHandle mode1,
                          xQueueHandle matrix_ev, xQueueHandle ui_ev);
 void sampler_boot_init(void);
+cJSON *sampler_preset_save(void);
+void sampler_preset_load(const cJSON *node);
 void sampler_menu_bind_queues(xQueueHandle v0, xQueueHandle v1, xQueueHandle eff,
                               xQueueHandle pbs0, xQueueHandle pbs1,
                               xQueueHandle mode0, xQueueHandle mode1,

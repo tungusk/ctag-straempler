@@ -21,6 +21,7 @@
 #include "machine_sampler.h"
 #include "esp_log.h"
 #include "menutft.h"
+#include "sampler_tft.h"
 #include "recording.h"
 #include "menu_utils.h"
 #include "menu_types.h"
@@ -2155,9 +2156,6 @@ static void sampler_register_pages(void *menusys){
             menusys_item_set_default_cb(_ms, M_PRESET_BANK_NEW, preset_bank_new_def_handler);
 
 
-    // boot-load the machine's persisted state (was initMenu's job)
-    loadPresetConfig(current_preset_name, current_bank);
-    initParamsFromPreset(current_preset_name, current_bank);
 }
 
 static const char *const sampler_main_items[] = {"Play", "Slot", "Sample", "Preset"};
@@ -2171,6 +2169,27 @@ const machine_ui_t sampler_menu_ui = {
     .main_event = sampler_main_event,
 };
 
+
+// machine preset hooks: the core autosave/restore container calls these.
+// save returns a freshly built preset node; load applies a node, or with
+// NULL falls back to the legacy boot path (CONFIG preset pointer + old
+// banks/autosave.JSN format).
+cJSON *sampler_preset_save(void)
+{
+    return buildPreset("state");
+}
+
+void sampler_preset_load(const cJSON *node)
+{
+    if (node) {
+        loadParams((cJSON *)node);
+        strcpy(current_preset_name, "state");
+        strcpy(current_bank, "autosave");
+    } else {
+        loadPresetConfig(current_preset_name, current_bank);
+        initParamsFromPreset(current_preset_name, current_bank);
+    }
+}
 
 void sampler_menu_bind_queues(xQueueHandle v0, xQueueHandle v1, xQueueHandle eff,
                               xQueueHandle pbs0, xQueueHandle pbs1,

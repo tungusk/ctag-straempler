@@ -63,11 +63,6 @@ const int n_bank_choices = sizeof(bank_choices)/sizeof(int);
 const char* choices[] = {"Actually No:(", "Totally Sure!"};
 const int n_choices = sizeof(choices) / sizeof(int);
 
-const char* more_menus[] = {"Settings", "About"};
-const int n_more_menus = sizeof(more_menus) / sizeof(int);
-
 const char* slot_menus[] = {"User", "Freesound"};
 const int n_slot_menus = sizeof(slot_menus)/sizeof(int);
 
-const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone"};
-const int n_settings_menus = sizeof(settings_menus)/sizeof(int);

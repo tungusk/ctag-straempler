@@ -9,6 +9,7 @@
 #include "tft.h"
 #include "string_tools.h"
 #include "menutft.h"
+#include "sampler_tft.h"
 #include "machine_sampler.h"
 #include "menu_items.h"
 #include "fixed.h"

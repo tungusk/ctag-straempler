@@ -97,3 +97,7 @@ cJSON* getBankRoot(char* bank_name);
  * @return int          1 if input valid, 0 if input already used
  */
 int validatePresetNameInput(char* presetName, cJSON* bank);
+
+// defined in sampler_menu.c (the machine preset schema)
+cJSON* buildPreset(const char* presetName);
+void loadParams(cJSON* preset);

@@ -59,10 +59,13 @@ typedef struct machine_s {
                     const int32_t in[MACHINE_BLOCK],
                     const machine_io_t *io);
 
-    // Preset persistence: the core owns the bank/CONFIG containers and calls
-    // these with a machine-private JSON node ({"machine":"<name>", ...}).
-    void (*preset_save)(cJSON *node);
-    void (*preset_load)(const cJSON *node);
+    // Preset persistence: the core owns the autosave container
+    // ({"machine":"<name>","state":{...}} in /sdcard/AUTOSAVE.JSN).
+    // preset_save returns a freshly allocated state node (core frees it);
+    // preset_load applies a node, or loads machine defaults when NULL
+    // (missing file or a different machine's autosave).
+    cJSON *(*preset_save)(void);
+    void   (*preset_load)(const cJSON *node);
 
     const machine_ui_t *ui;   // menu integration, optional
 } machine_t;
