@@ -589,15 +589,16 @@ static int filter_def_handler(int it_id, int event, void* event_data) {
 }
 
 static void adsr_change(int sid, int vid, int delta, void *ctx) {
-    if (delta > 0) incADSRValue(&data[vid].adsr, envelopeIndex[vid], sid);
-    else           decADSRValue(&data[vid].adsr, envelopeIndex[vid], sid);
+    if (sid == SID_ENV_ACTIVE) data[vid].adsr.env_on = !data[vid].adsr.env_on;
+    else if (delta > 0) incADSRValue(&data[vid].adsr, envelopeIndex[vid], sid);
+    else                decADSRValue(&data[vid].adsr, envelopeIndex[vid], sid);
     menuTFTPrintADSRValues(&data[vid].adsr, sid);
     menuTFTPrintADSRCurve(&data[vid].adsr);
     xQueueSend(vid ? v1_queue : v0_queue, &data[vid], portMAX_DELAY);
 }
 
 static int adsr_def_handler(int it_id, int event, void* event_data) {
-    static const int sids[] = {SID_ATTACK, SID_DECAY, SID_SUSTAIN, SID_RELEASE};
+    static const int sids[] = {SID_ATTACK, SID_DECAY, SID_SUSTAIN, SID_RELEASE, SID_ENV_ACTIVE};
     static int pos = 0, sel = 0, vid = 0;
     static menu_nav_t nav = {
         .labels = adsr_menus, .sids = sids, .n = sizeof(sids)/sizeof(sids[0]),
@@ -1974,6 +1975,7 @@ void initParams(){
         data[i].adsr.decay = msLut[4];
         data[i].adsr.sustain = 100;         //Q1.7; 0 = 0; 128 = 1.0; INCR: 0.0078125
         data[i].adsr.release = msLut[4];
+        data[i].adsr.env_on = 1;
         envelopeIndex[i][0] = 2;
         envelopeIndex[i][1] = 4;
         envelopeIndex[i][2] = 4;
@@ -2080,6 +2082,8 @@ cJSON* buildPreset(const char* name){
         cJSON_AddItemToObject(paramObject, "adsr_sustain", val);
         val = cJSON_CreateString (itoa(data[i].adsr.release, buf, 10));
         cJSON_AddItemToObject(paramObject, "adsr_release", val);
+        val = cJSON_CreateString (itoa(data[i].adsr.env_on, buf, 10));
+        cJSON_AddItemToObject(paramObject, "adsr_env_on", val);
         cJSON *arr = cJSON_CreateArray();
         cJSON_AddItemToObject(paramObject, "envelope_indices", arr);
         val = cJSON_CreateString (itoa(envelopeIndex[i][0], buf, 10));
@@ -2224,6 +2228,9 @@ void loadParams(cJSON* preset){
         data[i].adsr.sustain = atoi(val->valuestring);  
         val = cJSON_GetObjectItemCaseSensitive(voiceParams, "adsr_release");
         data[i].adsr.release = atoi(val->valuestring);  
+        // optional — presets predating the Env toggle default to on
+        val = cJSON_GetObjectItemCaseSensitive(voiceParams, "adsr_env_on");
+        data[i].adsr.env_on = (val != NULL && val->valuestring != NULL) ? atoi(val->valuestring) : 1;
     
         val = cJSON_GetObjectItemCaseSensitive(voiceParams, "envelope_indices");
         cJSON *val2 = cJSON_GetArrayItem(val, 0);

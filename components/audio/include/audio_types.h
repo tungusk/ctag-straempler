@@ -179,6 +179,7 @@ typedef struct{
     float volume, pan, dist_amp, resonance;
     int8_t pitch;
     float attack_time, decay_time, sustain_level, release_time;
+    bool env_on;
     uint32_t sample_start, loop_start, loop_end, mode;
 } ui_param_holder_t;
 
@@ -192,6 +193,7 @@ typedef struct
     uint32_t decay;
     uint8_t sustain;        //Q1.7 
     uint32_t release;
+    uint8_t env_on;         // 0 = envelope bypassed (transparent gate)
 } adsr_data_t;
 
 typedef struct 

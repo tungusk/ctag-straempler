@@ -27,7 +27,7 @@ const int n_externel_in_menus = sizeof(externel_in_menus) / sizeof(int);
 const char* filter_menus[] = {"Filter Active", "Base" , "Width", "Q"};
 const int n_filter_menus = sizeof(filter_menus)/ sizeof(int);
 
-const char* adsr_menus[] = {"Attack", "Decay", "Sustain", "Release"};
+const char* adsr_menus[] = {"Attack", "Decay", "Sustain", "Release", "Env"};
 const int n_adsr_menus = sizeof(adsr_menus) / sizeof(int);
 
 const char* playmode_menus[] = {"Mode", "Start", "Loop Start", "Loop End", "Loop Position"};
