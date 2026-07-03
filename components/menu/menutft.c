@@ -83,16 +83,16 @@ void menuTFTPrintMenuHSpaced(const char** items, const int* n_items){
 // nav bar background (dark blue)
 static const color_t MENUBAR_BG = {10, 18, 56};
 
-void menuTFTPrintMainMenus(){
+void menuTFTPrintMainMenus(const char *const *items, int n){
     int x = 8, w = 0;
     _fg = TFT_WHITE;
 	_bg = MENUBAR_BG;
     TFT_setFont(DEFAULT_FONT, NULL);
 	TFT_fillRect(0, 0, _width-1, TFT_getfontheight()+8, _bg);
     TFT_X = 0;
-    for(int i=0; i < n_main_menus; i++){
-        w = TFT_getStringWidth((char*)main_menus[i]);
-        TFT_print((char *)main_menus[i], x, 4);
+    for(int i=0; i < n; i++){
+        w = TFT_getStringWidth((char*)items[i]);
+        TFT_print((char *)items[i], x, 4);
         x += w + 8;
     }
 }
@@ -465,10 +465,10 @@ void menuTFTSelectMenuItemHSpaced(int* activeSlot, int selected, const char** it
     }  
 }
 
-void menuTFTSelectMainMenu(int active, int select){
+void menuTFTSelectMainMenu(int active, int select, const char *const *items, int n){
     int x = 4, w = 0;
     TFT_resetclipwin();
-    for(int i=0;i<n_main_menus;i++){
+    for(int i=0;i<n;i++){
         _bg = MENUBAR_BG;
         if(i==active){
             if(select == 1){
@@ -477,7 +477,7 @@ void menuTFTSelectMainMenu(int active, int select){
                 _bg = TFT_CYAN;
             }
         }
-        w = TFT_getStringWidth((char*)main_menus[i]);
+        w = TFT_getStringWidth((char*)items[i]);
         TFT_drawRect(x, 0, w+8, TFT_getfontheight()+8, _bg);
         x += w + 8;
     }

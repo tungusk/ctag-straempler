@@ -3,6 +3,7 @@
 
 void initMenu();
 void menuProcessEvent(int ev, void * ev_data);
+void menuBindMachineUI(void);
 void initParams();
 cJSON* buildPreset();
 void loadParams(cJSON *filename);

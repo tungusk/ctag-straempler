@@ -75,36 +75,38 @@ void *_fb_state = NULL;
 static int timer_handler(int it_id, int event, void* event_data){
     menuTFTPrintRecordIndicator();
     if (it_id == M_MAIN) {
-        menuTFTUpdatePlayState(0, -1);
-        menuTFTUpdatePlayState(1, -1);
-        menuTFTDrawLiveCVBars();
+        const machine_t *m = machine_active();
+        if (m && m->ui && m->ui->main_event)
+            m->ui->main_event(EV_TIMER_REPEATING_SLOW, event_data);
     }
     return 0; // remain in current menu
 }
 
-static int main_menu_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_PLAY, M_SLOT, M_BROWSE, M_PRESET, M_MORE};
-    const int states = sizeof(menu_states)/sizeof(int);
-    static int menu_state_current = 0;
+// main menu = active machine's entries + core "More". Rebuilt on machine bind.
+static const char *s_main_labels[9] = {"More"};
+static int s_main_targets[9] = {M_MORE};
+static int s_n_main = 1;
 
+static const machine_ui_t *machine_ui(void){
+    const machine_t *m = machine_active();
+    return m ? m->ui : NULL;
+}
+
+// sampler main-screen live area (arm cycling + live displays).
+// M0c-1: still in this file; moves out with the rest of the sampler UI.
+static int sampler_main_event(int event, void *event_data){
     switch(event){
         case EV_ENTERED_MENU:
-            menuTFTSelectMainMenu(menu_state_current, 0);
             menuTFTInvalidatePlayArea();   // screen was repainted underneath the live displays
             menuTFTUpdatePlayState(0, -1);
             menuTFTUpdatePlayState(1, -1);
             menuTFTPrintCurrentSettings(data);
             menuTFTDrawLiveCVBars();
             break;
-        case EV_FWD:
-            menu_state_current++;
-            if(menu_state_current >= states) menu_state_current = 0;
-            menuTFTSelectMainMenu(menu_state_current, 0);
-            break;
-        case EV_BWD:
-            menu_state_current--;
-            if(menu_state_current < 0) menu_state_current = states - 1;
-            menuTFTSelectMainMenu(menu_state_current, 0);
+        case EV_TIMER_REPEATING_SLOW:
+            menuTFTUpdatePlayState(0, -1);
+            menuTFTUpdatePlayState(1, -1);
+            menuTFTDrawLiveCVBars();
             break;
         case EV_SHORT_PRESS: {
             // Cycle arm state: none → T0 armed → T1 armed → none
@@ -122,10 +124,6 @@ static int main_menu_def_handler(int it_id, int event, void* event_data){
             menuTFTPrintRecordIndicator();
             break;
         }
-        case EV_LONG_PRESS:
-            menuTFTSelectMainMenu(menu_state_current, 1);
-            return menu_states[menu_state_current];
-            break;
         case EV_UPDATE_V0_POS:
             menuTFTUpdatePlayState(0, (int) event_data);
             break;
@@ -135,7 +133,37 @@ static int main_menu_def_handler(int it_id, int event, void* event_data){
         default:
             break;
     }
-    
+    return 0;
+}
+
+static int main_menu_def_handler(int it_id, int event, void* event_data){
+    static int menu_state_current = 0;
+    const machine_ui_t *mui = machine_ui();
+
+    switch(event){
+        case EV_ENTERED_MENU:
+            menuTFTSelectMainMenu(menu_state_current, 0, s_main_labels, s_n_main);
+            if (mui && mui->main_event) mui->main_event(event, event_data);
+            break;
+        case EV_FWD:
+            menu_state_current++;
+            if(menu_state_current >= s_n_main) menu_state_current = 0;
+            menuTFTSelectMainMenu(menu_state_current, 0, s_main_labels, s_n_main);
+            break;
+        case EV_BWD:
+            menu_state_current--;
+            if(menu_state_current < 0) menu_state_current = s_n_main - 1;
+            menuTFTSelectMainMenu(menu_state_current, 0, s_main_labels, s_n_main);
+            break;
+        case EV_LONG_PRESS:
+            menuTFTSelectMainMenu(menu_state_current, 1, s_main_labels, s_n_main);
+            return s_main_targets[menu_state_current];
+            break;
+        default:
+            if (mui && mui->main_event) return mui->main_event(event, event_data);
+            break;
+    }
+
     return 0; // remain in current menu
 }
 
@@ -2390,32 +2418,14 @@ static void initParamsFromPreset(char* presetName, char* bankName){
 
 
 
-void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle effect_queue, xQueueHandle cv_queue_v0, xQueueHandle cv_queue_v1, xQueueHandle _mode_queue_v0, xQueueHandle _mode_queue_v1, xQueueHandle matrix_event_queue, xQueueHandle ev_queue){
-    v0_queue = ui_queue_v0;
-    v1_queue = ui_queue_v1;
-    eff_queue = effect_queue;
-    playbackspeed_state_queue_v0 = cv_queue_v0;
-    playbackspeed_state_queue_v1 = cv_queue_v1;
-    mode_queue_v0 = _mode_queue_v0;
-    mode_queue_v1 = _mode_queue_v1;
-    m_event_queue = matrix_event_queue;
-    ui_ev_queue = ev_queue;
-    loadPresetConfig(current_preset_name, current_bank);
-    initParamsFromPreset(current_preset_name, current_bank);
-    recording_set_arm_monitor(configGetIntSetting("rec_monitor", 1) != 0);
-    initTimeshift(&tz_shift);
-    TFT_fillScreen(TFT_BLACK);
-    TFT_resetclipwin();
-    menuTFTPrintMainMenus();
 
-    esp_timer_create_args_t autosave_args = { .callback = autosave_cb, .name = "autosave" };
-    esp_timer_create(&autosave_args, &s_autosave_timer);
+// ─────────────────────────────────────────────────────────────────────────────
+// sampler machine UI — M0c-1: registered through machine_ui_t; the code
+// physically moves to machine_sampler in M0c-2.
+// ─────────────────────────────────────────────────────────────────────────────
 
-    // using indentation to somewhat indicate levels of menus
-    _ms = menusys_create();
-    menusys_new_item(_ms, M_MAIN);
-    menusys_item_set_default_cb(_ms, M_MAIN, main_menu_def_handler);
-
+static void sampler_register_pages(void *menusys){
+    menusys_t *_ms = (menusys_t *)menusys;
     menusys_new_item(_ms, M_PLAY);
     menusys_item_set_default_cb(_ms, M_PLAY, play_def_handler);
             menusys_new_item(_ms, M_VOICE);
@@ -2474,6 +2484,66 @@ void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle e
         menusys_item_set_default_cb(_ms, M_PRESET_B, banks_menu_def_handler); 
             menusys_new_item(_ms, M_PRESET_BANK_NEW);
             menusys_item_set_default_cb(_ms, M_PRESET_BANK_NEW, preset_bank_new_def_handler);
+
+}
+
+static const char *const sampler_main_items[] = {"Play", "Slot", "Sample", "Preset"};
+static const int sampler_main_targets[] = {M_PLAY, M_SLOT, M_BROWSE, M_PRESET};
+
+const machine_ui_t sampler_menu_ui = {
+    .main_items = sampler_main_items,
+    .main_targets = sampler_main_targets,
+    .n_main = 4,
+    .register_pages = sampler_register_pages,
+    .main_event = sampler_main_event,
+};
+
+// called by the app after machine_activate(): registers the machine's pages
+// and rebuilds + redraws the main menu around them
+void menuBindMachineUI(void){
+    const machine_ui_t *mui = machine_ui();
+    int n = 0;
+    if (mui) {
+        if (mui->register_pages) mui->register_pages(_ms);
+        for (; n < mui->n_main && n < 8; n++) {
+            s_main_labels[n] = mui->main_items[n];
+            s_main_targets[n] = mui->main_targets[n];
+        }
+    }
+    s_main_labels[n] = "More";
+    s_main_targets[n] = M_MORE;
+    s_n_main = n + 1;
+
+    menuTFTPrintMainMenus(s_main_labels, s_n_main);
+    menusys_set_active_item(_ms, M_MAIN);
+    menuProcessEvent(EV_ENTERED_MENU, NULL);
+}
+
+void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle effect_queue, xQueueHandle cv_queue_v0, xQueueHandle cv_queue_v1, xQueueHandle _mode_queue_v0, xQueueHandle _mode_queue_v1, xQueueHandle matrix_event_queue, xQueueHandle ev_queue){
+    v0_queue = ui_queue_v0;
+    v1_queue = ui_queue_v1;
+    eff_queue = effect_queue;
+    playbackspeed_state_queue_v0 = cv_queue_v0;
+    playbackspeed_state_queue_v1 = cv_queue_v1;
+    mode_queue_v0 = _mode_queue_v0;
+    mode_queue_v1 = _mode_queue_v1;
+    m_event_queue = matrix_event_queue;
+    ui_ev_queue = ev_queue;
+    loadPresetConfig(current_preset_name, current_bank);
+    initParamsFromPreset(current_preset_name, current_bank);
+    recording_set_arm_monitor(configGetIntSetting("rec_monitor", 1) != 0);
+    initTimeshift(&tz_shift);
+    TFT_fillScreen(TFT_BLACK);
+    TFT_resetclipwin();
+    menuTFTPrintMainMenus(s_main_labels, s_n_main);
+
+    esp_timer_create_args_t autosave_args = { .callback = autosave_cb, .name = "autosave" };
+    esp_timer_create(&autosave_args, &s_autosave_timer);
+
+    // using indentation to somewhat indicate levels of menus
+    _ms = menusys_create();
+    menusys_new_item(_ms, M_MAIN);
+    menusys_item_set_default_cb(_ms, M_MAIN, main_menu_def_handler);
 
     menusys_new_item(_ms, M_MORE);
     menusys_item_set_default_cb(_ms, M_MORE, more_def_handler);

@@ -1243,6 +1243,10 @@ static void sampler_stop(void)
     ESP_LOGW("SAMPLER", "stop(): unload not implemented until M1");
 }
 
+// M0c-1: the sampler's menu UI still compiles inside components/menu; the
+// linker stitches this reference. It moves here physically in M0c-2.
+extern const machine_ui_t sampler_menu_ui;
+
 const machine_t machine_sampler = {
     .name = "Sampler",
     .start = sampler_start,
@@ -1250,6 +1254,7 @@ const machine_t machine_sampler = {
     .process = sampler_process,
     .preset_save = NULL,
     .preset_load = NULL,
+    .ui = &sampler_menu_ui,
 };
 
 void assignAudioFiles()

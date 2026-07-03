@@ -31,6 +31,17 @@ typedef struct {
     uint16_t cv_raw[8];
 } machine_io_t;
 
+// A machine's presence in the menu system. All hooks optional (NULL).
+// For now machine pages use IDs from the app-wide menu enum; a dedicated
+// machine ID space arrives with the physical menu split (M0c-2).
+typedef struct {
+    const char *const *main_items;  // labels for the main-menu entries
+    const int *main_targets;        // menusys item id each entry opens
+    int n_main;
+    void (*register_pages)(void *menusys);       // create the machine's pages
+    int  (*main_event)(int event, void *ev_data); // main-screen live area
+} machine_ui_t;
+
 typedef struct machine_s {
     const char *name;       // shown in the machine selector, <=15 chars
 
@@ -52,6 +63,8 @@ typedef struct machine_s {
     // these with a machine-private JSON node ({"machine":"<name>", ...}).
     void (*preset_save)(cJSON *node);
     void (*preset_load)(const cJSON *node);
+
+    const machine_ui_t *ui;   // menu integration, optional
 } machine_t;
 
 // compile-time registry, terminated by NULL (machine_registry.c)
