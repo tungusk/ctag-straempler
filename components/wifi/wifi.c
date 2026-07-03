@@ -203,8 +203,14 @@ void initWifi(void)
 }
 
 void restartWifi(wifi_config_t *cfg){
-    ESP_ERROR_CHECK( esp_wifi_disconnect() );
+    esp_wifi_disconnect();   // returns an error in AP mode — harmless
     ESP_ERROR_CHECK( esp_wifi_stop() );
+    if (wifi_ap_mode) {
+        // leave AP fallback so set_config(STA) doesn't ESP_ERR_WIFI_IF-abort,
+        // and re-enable the STA reconnect path in wifi_event_handler
+        ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
+        wifi_ap_mode = 0;
+    }
     ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, cfg));
     ESP_ERROR_CHECK( esp_wifi_start());
 }

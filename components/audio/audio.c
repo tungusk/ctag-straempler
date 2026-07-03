@@ -1038,9 +1038,9 @@ static void audio_task(void *pvParams)
     {
         // get control data
         xQueueReceive(control_queue, &ctrlData, 0);
-        memcpy(s_last_cv, ctrlData, sizeof(s_last_cv));
+        for (int i = 0; i < 8; i++) s_last_cv[i] = cv_corrected(i, ctrlData);
         portENTER_CRITICAL(&_status_mux);
-        memcpy(_audio_status.cv, ctrlData, sizeof(_audio_status.cv));
+        memcpy(_audio_status.cv, s_last_cv, sizeof(_audio_status.cv));
         strncpy(_audio_status.v0, audio_files[0].fname, 31); _audio_status.v0[31] = 0;
         strncpy(_audio_status.v1, audio_files[1].fname, 31); _audio_status.v1[31] = 0;
         portEXIT_CRITICAL(&_status_mux);

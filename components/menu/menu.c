@@ -34,7 +34,6 @@
 #include "rest-api.h"
 #include "menu_config.h"
 #include "menu_nav.h"
-#include "spi_per.h"
 
 #define N_MAIN_MENUS 5
 
@@ -45,7 +44,7 @@ static uint16_t envelopeIndex[2][3];
 static bool pbs_state_v0, pbs_state_v1;
 static matrix_ui_row_t matrix[8];
 static matrix_event_t matrix_event;
-static char current_bank[8] =  {"DEFAULT"};
+static char current_bank[16] =  {"DEFAULT"};
 static char current_preset_name[13] = {"Init"};
 static void autosave_kick(void);
 static int current_fb_pos = 0;
@@ -765,7 +764,7 @@ static int matrix_def_handler(int it_id, int event, void* event_data){
 }
 
 static int effects_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN, M_INPUT};
+    const int menu_states[] = {M_DELAY, M_EXTERNAL_IN};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0; 
     
@@ -817,31 +816,6 @@ static int extin_def_handler(int it_id, int event, void* event_data) {
         menuTFTPrintMenu(externel_in_menus, &n_externel_in_menus);
         menuTFTSelectMenuItem(&pos, sel, externel_in_menus, &n_externel_in_menus);
         menuTFTPrintExtInValues(&effectData.extInData, PRINT_ALL);
-    }
-    return menu_nav_step(&nav, &pos, &sel, 0, event);
-}
-
-static void input_change(int sid, int vid, int delta, void *ctx) {
-    int *use_mic = (int *)ctx;
-    *use_mic = !*use_mic;
-    codec_set_input((bool)*use_mic);
-    menuTFTPrintInputState((bool)*use_mic);
-}
-
-static int input_def_handler(int it_id, int event, void* event_data) {
-    static const char *input_menu[] = {"Input"};
-    static const int n_input = 1;
-    static const int input_sids[] = {0};
-    static int pos = 0, sel = 0, use_mic = 0;
-    static menu_nav_t nav = {
-        .labels = input_menu, .sids = input_sids, .n = 1,
-        .parent = M_EFFECTS, .change = input_change,
-        .ctx = &use_mic,
-    };
-    if (event == EV_ENTERED_MENU) {
-        menuTFTPrintMenu(input_menu, &n_input);
-        menuTFTSelectMenuItem(&pos, sel, input_menu, &n_input);
-        menuTFTPrintInputState((bool)use_mic);
     }
     return menu_nav_step(&nav, &pos, &sel, 0, event);
 }
@@ -1929,7 +1903,14 @@ static int preset_bank_new_def_handler(int it_id, int event, void* event_data){
     return 0; // remain in current menu
 }
 
+static void autosave_now(void);
+
 void menuProcessEvent(int ev, void * ev_data){
+    // autosave runs here (UI event loop task) rather than in any menu handler
+    if(ev == EV_AUTOSAVE){
+        autosave_now();
+        return;
+    }
     menusys_process_ev(_ms, ev, ev_data);
 }
 
@@ -2309,7 +2290,13 @@ void loadParams(cJSON* preset){
 
 static esp_timer_handle_t s_autosave_timer = NULL;
 
+// esp_timer task stack (2048) is too small for cJSON + SD writes; defer to the UI event loop
 static void autosave_cb(void *arg) {
+    ui_ev_ts_t ev = { .event = EV_AUTOSAVE, .event_data = NULL };
+    xQueueSend(ui_ev_queue, &ev, 0);
+}
+
+static void autosave_now(void) {
     cJSON *preset = buildPreset("state");
     if (!preset) return;
     cJSON *root = cJSON_CreateObject();
@@ -2416,8 +2403,6 @@ void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle e
                 menusys_item_set_default_cb(_ms, M_DELAY, delay_def_handler);
             menusys_new_item(_ms, M_EXTERNAL_IN);
             menusys_item_set_default_cb(_ms, M_EXTERNAL_IN, extin_def_handler);
-            menusys_new_item(_ms, M_INPUT);
-            menusys_item_set_default_cb(_ms, M_INPUT, input_def_handler);
             menusys_new_item(_ms, M_RECORDING);
             menusys_item_set_default_cb(_ms, M_RECORDING, recording_def_handler);
 

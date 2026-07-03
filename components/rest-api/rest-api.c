@@ -11,6 +11,8 @@
 #include "fileio.h"
 #include "audio.h"
 #include "recording.h"
+#include "wifi.h"
+#include "freesound.h"
 #include <dirent.h>
 #include <sys/stat.h>
 #include <string.h>
@@ -64,69 +66,54 @@ static esp_err_t landing_handler(httpd_req_t *req)
 
 static esp_err_t files_get_handler(httpd_req_t *req)
 {
+    // cJSON handles string escaping — descriptions/tags may contain quotes
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "files");
+
     DIR *d = opendir("/sdcard/usr");
-    if (!d) {
-        send_json(req, "{\"files\":[]}");
-        return ESP_OK;
-    }
+    if (d) {
+        struct dirent *ent;
+        while ((ent = readdir(d)) != NULL) {
+            if (ent->d_type != DT_REG) continue;
+            int len = strlen(ent->d_name);
+            if (len < 5) continue;
+            // only list .JSN sidecars — each represents a complete sample
+            if (strcasecmp(ent->d_name + len - 4, ".JSN") != 0) continue;
 
-    // build JSON array — use heap to avoid stack overflow
-    size_t cap = 4096, used = 0;
-    char *buf = malloc(cap);
-    if (!buf) { closedir(d); send_json(req, "{\"files\":[]}"); return ESP_OK; }
+            char jsn_path[280];
+            snprintf(jsn_path, sizeof(jsn_path), "/sdcard/usr/%s", ent->d_name);
+            cJSON *meta = readJSONFileAsCJSON(jsn_path);
+            if (!meta) continue;
 
-    used += snprintf(buf + used, cap - used, "{\"files\":[");
+            // derive RAW path and size
+            char raw_path[280];
+            char id[260] = {0};
+            strncpy(id, ent->d_name, len - 4);  // strip .JSN
+            snprintf(raw_path, sizeof(raw_path), "/sdcard/usr/%s.RAW", id);
+            struct stat st;
+            long fsize = (stat(raw_path, &st) == 0) ? st.st_size : 0;
 
-    struct dirent *ent;
-    int first = 1;
-    while ((ent = readdir(d)) != NULL) {
-        if (ent->d_type != DT_REG) continue;
-        int len = strlen(ent->d_name);
-        if (len < 5) continue;
-        // only list .JSN sidecars — each represents a complete sample
-        if (strcasecmp(ent->d_name + len - 4, ".JSN") != 0) continue;
+            const char *desc = "";
+            const char *tags = "";
+            cJSON *j;
+            if ((j = cJSON_GetObjectItem(meta, "description")) && j->valuestring) desc = j->valuestring;
+            if ((j = cJSON_GetObjectItem(meta, "tags_s")) && j->valuestring) tags = j->valuestring;
 
-        char jsn_path[280];
-        snprintf(jsn_path, sizeof(jsn_path), "/sdcard/usr/%s", ent->d_name);
-        cJSON *meta = readJSONFileAsCJSON(jsn_path);
-        if (!meta) continue;
-
-        // derive RAW path and size
-        char raw_path[280];
-        char id[260] = {0};
-        strncpy(id, ent->d_name, len - 4);  // strip .JSN
-        snprintf(raw_path, sizeof(raw_path), "/sdcard/usr/%s.RAW", id);
-        struct stat st;
-        long fsize = (stat(raw_path, &st) == 0) ? st.st_size : 0;
-
-        const char *desc = "";
-        const char *tags = "";
-        cJSON *j;
-        if ((j = cJSON_GetObjectItem(meta, "description")) && j->valuestring) desc = j->valuestring;
-        if ((j = cJSON_GetObjectItem(meta, "tags_s")) && j->valuestring) tags = j->valuestring;
-
-        // grow buffer if needed
-        size_t needed = used + strlen(id) + strlen(desc) + strlen(tags) + 128;
-        if (needed >= cap) {
-            cap = needed + 1024;
-            char *nb = realloc(buf, cap);
-            if (!nb) { cJSON_Delete(meta); break; }
-            buf = nb;
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "name", id);
+            cJSON_AddStringToObject(o, "description", desc);
+            cJSON_AddStringToObject(o, "tags", tags);
+            cJSON_AddNumberToObject(o, "size", fsize);
+            cJSON_AddItemToArray(arr, o);
+            cJSON_Delete(meta);
         }
-
-        used += snprintf(buf + used, cap - used,
-            "%s{\"name\":\"%s\",\"description\":\"%s\",\"tags\":\"%s\",\"size\":%ld}",
-            first ? "" : ",", id, desc, tags, fsize);
-        first = 0;
-        cJSON_Delete(meta);
+        closedir(d);
     }
-    closedir(d);
 
-    if (used + 4 < cap) {
-        buf[used++] = ']'; buf[used++] = '}'; buf[used] = 0;
-    }
-    send_json(req, buf);
-    free(buf);
+    char *s = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (s) { send_json(req, s); free(s); }
+    else send_json(req, "{\"files\":[]}");
     return ESP_OK;
 }
 
@@ -184,8 +171,11 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
     if (!buf) { fclose(f); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
 
     int n;
-    while ((n = fread(buf, 1, STREAM_CHUNK, f)) > 0)
+    while ((n = fread(buf, 1, STREAM_CHUNK, f)) > 0) {
         httpd_resp_send_chunk(req, buf, n);
+        // yield the SD bus between chunks so audio file-reader refills aren't starved
+        vTaskDelay(1);
+    }
     httpd_resp_send_chunk(req, NULL, 0);
 
     fclose(f);
@@ -224,7 +214,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if (total < 2 || total > 512) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad body"); return ESP_FAIL; }
     char *body = malloc(total + 1);
     if (!body) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
-    httpd_req_recv(req, body, total);
+    int received = 0;
+    while (received < total) {
+        int r = httpd_req_recv(req, body + received, total - received);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (r <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Recv failed"); return ESP_FAIL; }
+        received += r;
+    }
     body[total] = 0;
 
     cJSON *in = cJSON_Parse(body);
@@ -236,13 +232,33 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     cJSON *settings = cJSON_GetObjectItem(cfg, "settings");
     if (!settings) { cJSON_Delete(in); cJSON_Delete(cfg); send_json(req, "{}"); return ESP_OK; }
 
-    cJSON *j;
-    if ((j = cJSON_GetObjectItem(in, "ssid")) && j->valuestring)
+    bool wifiChanged = false;
+    cJSON *j, *cur;
+    if ((j = cJSON_GetObjectItem(in, "ssid")) && j->valuestring) {
+        cur = cJSON_GetObjectItem(settings, "ssid");
+        if (!cur || !cur->valuestring || strcmp(cur->valuestring, j->valuestring) != 0) wifiChanged = true;
         cJSON_ReplaceItemInObject(settings, "ssid", cJSON_CreateString(j->valuestring));
-    if ((j = cJSON_GetObjectItem(in, "passwd")) && j->valuestring && strlen(j->valuestring) > 0)
+    }
+    if ((j = cJSON_GetObjectItem(in, "passwd")) && j->valuestring && strlen(j->valuestring) > 0) {
+        cur = cJSON_GetObjectItem(settings, "passwd");
+        if (!cur || !cur->valuestring || strcmp(cur->valuestring, j->valuestring) != 0) wifiChanged = true;
         cJSON_ReplaceItemInObject(settings, "passwd", cJSON_CreateString(j->valuestring));
-    if ((j = cJSON_GetObjectItem(in, "apikey")) && j->valuestring)
+    }
+    if ((j = cJSON_GetObjectItem(in, "apikey")) && j->valuestring) {
         cJSON_ReplaceItemInObject(settings, "apikey", cJSON_CreateString(j->valuestring));
+        freesoundSetToken(j->valuestring);
+    }
+
+    // capture the final credentials before cfg is freed (same flow as the menu
+    // settings path: save, then reconnect with the new config)
+    wifi_config_t wifi_config;
+    if (wifiChanged) {
+        memset(&wifi_config, 0, sizeof(wifi_config));
+        if ((cur = cJSON_GetObjectItem(settings, "ssid")) && cur->valuestring)
+            strlcpy((char*)wifi_config.sta.ssid, cur->valuestring, sizeof(wifi_config.sta.ssid));
+        if ((cur = cJSON_GetObjectItem(settings, "passwd")) && cur->valuestring)
+            strlcpy((char*)wifi_config.sta.password, cur->valuestring, sizeof(wifi_config.sta.password));
+    }
 
     char *s = cJSON_Print(cfg);
     cJSON_Delete(in);
@@ -251,6 +267,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_sendstr(req, "{\"ok\":true}");
+
+    if (wifiChanged) {
+        ESP_LOGI(TAG, "WiFi settings changed via web — reconnecting");
+        vTaskDelay(pdMS_TO_TICKS(500));   // let the response reach the client before WiFi drops
+        restartWifi(&wifi_config);
+    }
     return ESP_OK;
 }
 
@@ -327,7 +349,16 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
         free(buf);
     } else { cJSON_AddStringToObject(root, "tags_s", ""); }
 
-    f_open(&raw_file, file_name, FA_CREATE_ALWAYS | FA_WRITE);
+    // FS_LOCK makes this fail with FR_LOCKED if a voice is streaming the file —
+    // refuse rather than truncate a sample that is currently playing
+    FRESULT fr = f_open(&raw_file, file_name, FA_CREATE_ALWAYS | FA_WRITE);
+    if (fr != FR_OK) {
+        ESP_LOGE(TAG, "drop_sample: f_open %s failed (%d)", file_name, fr);
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, fr == FR_LOCKED ? HTTPD_400_BAD_REQUEST : HTTPD_500_INTERNAL_SERVER_ERROR,
+                            fr == FR_LOCKED ? "File in use" : "SD open failed");
+        return ESP_FAIL;
+    }
 
     buf = malloc(4096);
     if (req->content_len % 4 != 0) {
