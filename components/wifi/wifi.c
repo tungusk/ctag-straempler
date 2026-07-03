@@ -25,8 +25,6 @@ const int CONNECTED_BIT = BIT0;
 static const char *TAG = "WIFI";
 static int wifi_ap_mode = 0;
 
-int isWiFiAPMode(void) { return wifi_ap_mode; }
-
 static struct tm* tm_info;
 static time_t time_now;
 
@@ -73,8 +71,6 @@ static int obtain_time(void)
     return res;
 }
 
-#define AP_BIT BIT1
-
 static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
 {
     switch(event->event_id) {
@@ -89,9 +85,6 @@ static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
             esp_wifi_connect();
             xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
         }
-        break;
-    case SYSTEM_EVENT_AP_START:
-        xEventGroupSetBits(wifi_event_group, AP_BIT);
         break;
     default:
         break;

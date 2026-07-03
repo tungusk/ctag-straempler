@@ -1284,7 +1284,7 @@ void menuTFTInitAdsrCurve(){
     resetPrevCurve(prevAdsrPoints);
 }
 
-void menuTFTPrintCurrentSettings(char* bank, char* preset, param_data_t* data){
+void menuTFTPrintCurrentSettings(param_data_t* data){
     TFT_saveClipWin();
     TFT_resetclipwin();
     _bg = TFT_BLACK;
@@ -1578,6 +1578,18 @@ int printTags(list_item_t* it){
     return 0;
 }
 
+// caches for the main-screen live displays; reset via menuTFTInvalidatePlayArea()
+// whenever the screen underneath them is repainted
+static int s_cv_last_fill[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+static int s_ps_state[2] = {0, 0};
+static int s_ps_color[2] = {-1, -1};
+static int s_ps_ss_px[2], s_ps_ls_px[2], s_ps_le_px[2];
+
+void menuTFTInvalidatePlayArea(void) {
+    for (int i = 0; i < 8; i++) s_cv_last_fill[i] = -1;
+    s_ps_color[0] = s_ps_color[1] = -1;
+}
+
 void menuTFTDrawLiveCVBars(void) {
     uint16_t cv[8];
     audio_get_cv(cv);
@@ -1598,25 +1610,21 @@ void menuTFTDrawLiveCVBars(void) {
         int fill = (int)((float)cv[i] / 4095.0f * height);
         if (fill < 0) fill = 0;
         if (fill > height) fill = height;
+        if (fill == s_cv_last_fill[i]) continue;
         TFT_fillRect(x, y_top, bar_w, height - fill, TFT_BLACK);
         if (fill > 0)
             TFT_fillRect(x, y_top + height - fill, bar_w, fill, (color_t){40, 80, 160});
+        s_cv_last_fill[i] = fill;
     }
 
     TFT_restoreClipWin();
 }
 
 void menuTFTUpdatePlayState(int vid, int state){
-    static int p_state[2] = {0, 0};
-    static int p_color[2] = {-1, -1};
-
     bool is_rec     = recording_is_active() && (recording_get_target_vid() == vid);
     bool is_armed   = !is_rec && (recording_get_trig_func(vid) == TRIG_FUNC_RECORD);
     bool is_playing = !is_rec && !is_armed && isVoicePlaying(vid);
     int color = is_rec ? 3 : (is_armed ? 2 : (is_playing ? 1 : 0));
-
-    if(p_state[vid] == state && state != -1 && p_color[vid] == color) return;
-    if(state == -1) state = p_state[vid];
 
     color_t bar_bg, bar_line;
     if (is_rec) {
@@ -1632,20 +1640,36 @@ void menuTFTUpdatePlayState(int vid, int state){
         bar_bg   = (color_t){ 8, 16, 48};
         bar_line = (color_t){80, 120, 255};
     }
+    color_t region_bg = (color_t){bar_bg.r + 12, bar_bg.g + 12, bar_bg.b + 12};
 
     int bar_x = 10, bar_y = 120 + 55 * vid, bar_w = 301, bar_h = 20;
-    TFT_fillRect(bar_x, bar_y, bar_w, bar_h, bar_bg);
 
-    // start/end point markers
     uint32_t ss, ls, le, fs;
     audio_get_playpos(vid, &ss, &ls, &le, &fs);
+    int ss_px = -1, ls_px = -1, le_px = -1;
     if (fs > 0) {
-        int ss_px = (int)((float)ss / fs * (bar_w - 1));
-        int ls_px = (int)((float)ls / fs * (bar_w - 1));
-        int le_px = (int)((float)le / fs * (bar_w - 1));
+        ss_px = (int)((float)ss / fs * (bar_w - 1));
+        ls_px = (int)((float)ls / fs * (bar_w - 1));
+        le_px = (int)((float)le / fs * (bar_w - 1));
+    }
+
+    bool full = (s_ps_color[vid] != color) || (ss_px != s_ps_ss_px[vid]) ||
+                (ls_px != s_ps_ls_px[vid]) || (le_px != s_ps_le_px[vid]);
+    if (state == -1) state = s_ps_state[vid];
+    if (!full && s_ps_state[vid] == state) return;
+
+    if (full) {
+        TFT_fillRect(bar_x, bar_y, bar_w, bar_h, bar_bg);
         // loop region highlight
-        if (le_px > ls_px)
-            TFT_fillRect(bar_x + ls_px, bar_y, le_px - ls_px, bar_h, (color_t){bar_bg.r+12, bar_bg.g+12, bar_bg.b+12});
+        if (fs > 0 && le_px > ls_px)
+            TFT_fillRect(bar_x + ls_px, bar_y, le_px - ls_px, bar_h, region_bg);
+    } else {
+        // only the playhead moved: restore the column it left instead of the whole bar
+        int old = s_ps_state[vid];
+        bool in_region = (fs > 0) && (old >= ls_px) && (old < le_px);
+        TFT_drawFastVLine(bar_x + old, bar_y, bar_h, in_region ? region_bg : bar_bg);
+    }
+    if (fs > 0) {
         // loop start (green tick), loop end (orange tick), sample start (cyan tick)
         TFT_drawFastVLine(bar_x + ls_px, bar_y, bar_h, (color_t){0, 180, 60});
         TFT_drawFastVLine(bar_x + le_px, bar_y, bar_h, (color_t){220, 120, 0});
@@ -1653,8 +1677,11 @@ void menuTFTUpdatePlayState(int vid, int state){
     }
 
     TFT_drawFastVLine(bar_x + state, bar_y, bar_h, bar_line);
-    p_state[vid] = state;
-    p_color[vid] = color;
+    s_ps_state[vid] = state;
+    s_ps_color[vid] = color;
+    s_ps_ss_px[vid] = ss_px;
+    s_ps_ls_px[vid] = ls_px;
+    s_ps_le_px[vid] = le_px;
 }
 
 void menuTFTPrintRecordingState(int f0, int f1){
