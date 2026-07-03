@@ -22,3 +22,5 @@ trig_func_t recording_get_trig_func(int vid);
 int recording_get_target_vid(void);
 void recording_set_enabled(bool en);
 bool recording_get_enabled(void);
+void recording_set_arm_monitor(bool en);
+bool recording_get_arm_monitor(void);

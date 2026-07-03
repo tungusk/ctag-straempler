@@ -836,8 +836,8 @@ static int extin_def_handler(int it_id, int event, void* event_data) {
 }
 
 static int recording_def_handler(int it_id, int event, void* event_data){
-    static const char* rec_menu[] = {"Enabled", "TRIG0", "TRIG1"};
-    static const int n_rec_menu = 3;
+    static const char* rec_menu[] = {"Enabled", "TRIG0", "TRIG1", "Monitor"};
+    static const int n_rec_menu = 4;
     static int menu_pos = 0;
     static int selected = 0;
 
@@ -854,6 +854,9 @@ static int recording_def_handler(int it_id, int event, void* event_data){
             } else {
                 if(menu_pos == 0){
                     recording_set_enabled(!recording_get_enabled());
+                } else if(menu_pos == 3){
+                    recording_set_arm_monitor(!recording_get_arm_monitor());
+                    configSetIntSetting("rec_monitor", recording_get_arm_monitor());
                 } else {
                     int vid = menu_pos - 1;
                     trig_func_t cur = recording_get_trig_func(vid);
@@ -869,6 +872,9 @@ static int recording_def_handler(int it_id, int event, void* event_data){
             } else {
                 if(menu_pos == 0){
                     recording_set_enabled(!recording_get_enabled());
+                } else if(menu_pos == 3){
+                    recording_set_arm_monitor(!recording_get_arm_monitor());
+                    configSetIntSetting("rec_monitor", recording_get_arm_monitor());
                 } else {
                     int vid = menu_pos - 1;
                     trig_func_t cur = recording_get_trig_func(vid);
@@ -2395,6 +2401,7 @@ void initMenu(xQueueHandle ui_queue_v0, xQueueHandle ui_queue_v1, xQueueHandle e
     ui_ev_queue = ev_queue;
     loadPresetConfig(current_preset_name, current_bank);
     initParamsFromPreset(current_preset_name, current_bank);
+    recording_set_arm_monitor(configGetIntSetting("rec_monitor", 1) != 0);
     initTimeshift(&tz_shift);
     TFT_fillScreen(TFT_BLACK);
     TFT_resetclipwin();

@@ -123,6 +123,11 @@ void recording_init(void)
 void recording_set_enabled(bool en) { rec_enabled = en; }
 bool recording_get_enabled(void)    { return rec_enabled; }
 
+// pass line-in through while a stopped voice is armed (pre-record cueing)
+static bool rec_arm_monitor = true;
+void recording_set_arm_monitor(bool en) { rec_arm_monitor = en; }
+bool recording_get_arm_monitor(void)    { return rec_arm_monitor; }
+
 void recording_start(int vid)
 {
     if (!rec_enabled) return;
