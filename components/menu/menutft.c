@@ -286,13 +286,19 @@ void menuTFTPrintLoadingTagMenu(){
 }
 
 void menuTFTPrintUserFileMenu(){
-    int x = 0, w = 0;
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     TFT_fillWindow(TFT_BLACK);
     _fg = TFT_WHITE;
     _bg = TFT_BLACK;
-    TFT_X = 3;
-    TFT_print("Go http://ctag-modular (long press rtrn)", x, 4);
+    int fh = TFT_getfontheight();
+    char ip[24], line[64];
+    TFT_print("Upload samples in your browser:", 3, 4);
+    TFT_print("http://ctag-modular.local", 3, 4 + fh + 3);
+    wifiGetIPString(ip, sizeof(ip));
+    snprintf(line, sizeof(line), "or http://%s", ip);
+    TFT_print(line, 3, 4 + (fh + 3) * 2);
+    _fg = TFT_LIGHTGREY;
+    TFT_print("(long press to return)", 3, 8 + (fh + 3) * 3);
 }
 
 void menuTFTPrintSelectIDMenu(){
@@ -1510,11 +1516,9 @@ void menuTFTPrintFileBrowser(list_t* files, int current){
     _fg = TFT_LIGHTGREY;
     snprintf(buf, 64, "File %d out of %d", current + 1, total);
     TFT_print(buf, 3, 0);
-    wifiGetIPString(buf, 20);
-    TFT_print(buf, _width - TFT_getStringWidth(buf) - 4, 0);
 
-    // neighbors above (no wraparound, blank rows at the list edges)
-    int y = fh + 6;
+    // neighbors above (blank spacer row after the header; no wraparound)
+    int y = fh + 6 + (fh + 3);
     for (int k = BROWSER_NEIGHBORS; k >= 1; k--) {
         int idx = current - k;
         if (idx >= 0) {
@@ -1544,6 +1548,7 @@ void menuTFTPrintFileBrowser(list_t* files, int current){
         }
         y += fh + 3;
     }
+
 }
 
 void menuTFTPrintDecoding(){
@@ -1742,6 +1747,12 @@ void menuTFTPrintRecordingState(int f0, int f1){
     // Row 2: TRIG1
     menuTFTFlush(2, &_bg);
     TFT_print(trig_names[f1 < 2 ? f1 : 0], _width / 2, 3 + (fh + 3) * 2);
+
+    // Row 3: Monitor (line-in passthrough while armed and stopped)
+    bool mon = recording_get_arm_monitor();
+    menuTFTFlush(3, &_bg);
+    _fg = mon ? TFT_GREEN : TFT_RED;
+    TFT_print(mon ? "ON" : "OFF", _width / 2, 3 + (fh + 3) * 3);
 }
 
 void menuTFTPrintInputError(char* s){

@@ -15,6 +15,8 @@ void initTimeshift(int *tz_shift);
  * @return int          1 if changed, 0 otherwise
  */
 int wifiSettingsChanged(cJSON* curSettings);
+int configGetIntSetting(const char* key, int dflt);
+void configSetIntSetting(const char* key, int v);
 
 /**
  * @brief Saves current preset/bank names to config

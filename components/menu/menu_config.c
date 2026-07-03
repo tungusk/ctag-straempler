@@ -3,6 +3,7 @@
 #include "fileio.h"
 #include "esp_log.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 void initTimeshift(int *tz_shift){
     cJSON *root = NULL, *settings = NULL, *val = NULL;
@@ -40,6 +41,34 @@ int wifiSettingsChanged(cJSON* curSettings){
     }
     cJSON_Delete(root);
     return 0;
+}
+
+int configGetIntSetting(const char* key, int dflt){
+    int v = dflt;
+    cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+    if(root != NULL){
+        cJSON *settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
+        cJSON *val = settings ? cJSON_GetObjectItemCaseSensitive(settings, key) : NULL;
+        if(cJSON_IsNumber(val)) v = val->valueint;
+        cJSON_Delete(root);
+    }
+    return v;
+}
+
+void configSetIntSetting(const char* key, int v){
+    cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+    if(root != NULL){
+        cJSON *settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
+        if(settings != NULL){
+            if(cJSON_GetObjectItemCaseSensitive(settings, key))
+                cJSON_ReplaceItemInObjectCaseSensitive(settings, key, cJSON_CreateNumber(v));
+            else
+                cJSON_AddNumberToObject(settings, key, v);
+            char *out = cJSON_Print(root);
+            if(out){ writeJSONFile("/sdcard/CONFIG.JSN", out); free(out); }
+        }
+        cJSON_Delete(root);
+    }
 }
 
 void savePresetConfig(char* preset, char* bank){

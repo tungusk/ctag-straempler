@@ -895,7 +895,7 @@ static void update_arm_monitor(void)
         if (is_recording)
             arm_monitor[vid] = true;
         else if (is_armed)
-            arm_monitor[vid] = !isVoicePlaying(vid);
+            arm_monitor[vid] = recording_get_arm_monitor() && !isVoicePlaying(vid);
         else
             arm_monitor[vid] = false;
     }
