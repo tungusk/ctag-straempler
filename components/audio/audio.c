@@ -22,6 +22,7 @@
 #include "adsr.h"
 #include "modulation.h"
 #include "recording.h"
+#include "machine.h"
 
 #define DIR_FWD 0
 #define DIR_BWD 1
@@ -1004,63 +1005,31 @@ void disableTrigModeLatch(uint8_t vid){
     trigModeLatch[vid] = false;
 }
 
-static void audio_task(void *pvParams)
+// ─────────────────────────────────────────────────────────────────────────────
+// machine_sampler — the original two-voice sampler behind the machine
+// interface. M0a: engine still lives in this file; M0b moves it out.
+// State below was audio_task()'s stack before the split.
+// ─────────────────────────────────────────────────────────────────────────────
+
+static float float_sum[BUF_SZ], fx_buf[BUF_SZ], dly_send[BUF_SZ];
+static play_state_data_t play_state_data;
+static param_data_t param_data[2];
+static effect_data_t effectData;
+static delay_t delay;
+static delay_cfg_t delayCfg;
+static ext_in_cfg_t extInCfg;
+static uint8_t trigPreVal[2], trigVal[2];
+static const uint8_t trigPin[2] = {TRIG0_PIN, TRIG1_PIN};
+
+static void sampler_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE_BLOCK], const machine_io_t *io)
 {
-    // audio buffers
-    int32_t out[BUF_SZ], in[BUF_SZ];
-    float float_sum[BUF_SZ], fx_buf[BUF_SZ], dly_send[BUF_SZ];
-    size_t nb;
-    // control data
-    uint16_t ctrlData[8];
-    // matrix data
+    // legacy: this engine applies cv_corrected() itself at each call site
+    const uint16_t *ctrlData = io->cv_raw;
     matrix_event_t m_ev;
-    // create file interaction tasks
-    xTaskCreate(file_reader_task_1, "file_reader_task", 4096, NULL, 22, &file_reader_task_1_handle);
-    xTaskCreate(file_reader_task_2, "file_reader_task", 4096, NULL, 22, &file_reader_task_2_handle);
-    xTaskCreate(file_manipulation_task, "file_manipulation_task", 4096, NULL, 22, &file_manipulation_task_handle);
-    // mode control data
-    play_state_data_t play_state_data;
-    param_data_t param_data[2];
-    // effects data
-    effect_data_t effectData;
-    effectData.delay.is_active = 0;
-    // delay data
-    delay_t delay;
-    delay_cfg_t delayCfg;
-    delayCfg.msLength = 250.0;
-    delayCfg.feedback = 0.25;
-    delayCfg.pan = 0.5;
-    delayCfg.volume = 1.0;
-    delayCfg.mode = DELAY_STEREO;
-    delay_create(&delay, 44100.0, DELAY_MAX_LENGTH_MS, delayCfg);
-    // external in data
-    ext_in_cfg_t extInCfg;
-    extInCfg.volume = 0.0f;
-    extInCfg.pan = 0.0f;
-    extInCfg.delay_send = 0.0f;
-
-    uint8_t trigPreVal[2], trigVal[2];
-    const uint8_t trigPin[2] = {TRIG0_PIN, TRIG1_PIN};
-    trigPreVal[0] = trigVal[0] = gpio_get_level(trigPin[0]);
-    trigPreVal[1] = trigVal[1] = gpio_get_level(trigPin[1]);
-
-    for (;;)
-    {
-        // get control data
-        xQueueReceive(control_queue, &ctrlData, 0);
-        // v0/v1 filenames are updated in assignAudioFiles(); only CV changes per block
-        portENTER_CRITICAL(&_status_mux);
-        for (int i = 0; i < 8; i++) _audio_status.cv[i] = cv_corrected(i, ctrlData);
-        portEXIT_CRITICAL(&_status_mux);
 
         // init buf
         memset(out, 0, 64 * 2);
         memset(fx_buf, 0, sizeof(float) * BUF_SZ);
-
-        // always read I2S to drain the RX buffer; route to extIn or recording as needed
-        i2s_read(I2S_NUM_0, in, 256, &nb, portMAX_DELAY);
-        if (recording_is_active())
-            recording_push(in);
 
         bool auto_mon = recording_is_active() || arm_monitor[0] || arm_monitor[1];
         if (effectData.extInData.is_active || auto_mon)
@@ -1253,6 +1222,85 @@ static void audio_task(void *pvParams)
 
         // send of to dac
         float_to_int(out, float_sum, BUF_SZ);
+}
+
+static esp_err_t sampler_start(void)
+{
+    xTaskCreate(file_reader_task_1, "file_reader_task", 4096, NULL, 22, &file_reader_task_1_handle);
+    xTaskCreate(file_reader_task_2, "file_reader_task", 4096, NULL, 22, &file_reader_task_2_handle);
+    xTaskCreate(file_manipulation_task, "file_manipulation_task", 4096, NULL, 22, &file_manipulation_task_handle);
+
+    effectData.delay.is_active = 0;
+    delayCfg.msLength = 250.0;
+    delayCfg.feedback = 0.25;
+    delayCfg.pan = 0.5;
+    delayCfg.volume = 1.0;
+    delayCfg.mode = DELAY_STEREO;
+    delay_create(&delay, 44100.0, DELAY_MAX_LENGTH_MS, delayCfg);
+
+    extInCfg.volume = 0.0f;
+    extInCfg.pan = 0.0f;
+    extInCfg.delay_send = 0.0f;
+
+    trigPreVal[0] = trigVal[0] = gpio_get_level(trigPin[0]);
+    trigPreVal[1] = trigVal[1] = gpio_get_level(trigPin[1]);
+    return ESP_OK;
+}
+
+static void sampler_stop(void)
+{
+    // True unload (kill reader tasks, free delay + buffers) lands in M1 when
+    // machine switching becomes reachable; until then this never runs.
+    ESP_LOGW("SAMPLER", "stop(): unload not implemented until M1");
+}
+
+const machine_t machine_sampler = {
+    .name = "Sampler",
+    .start = sampler_start,
+    .stop = sampler_stop,
+    .process = sampler_process,
+    .preset_save = NULL,
+    .preset_load = NULL,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// core audio loop — machine-agnostic: transport in, active machine, transport
+// out. Everything sampler-specific above this line moves out in M0b.
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void audio_task(void *pvParams)
+{
+    int32_t out[BUF_SZ], in[BUF_SZ];
+    size_t nb;
+    uint16_t ctrlData[8];
+    machine_io_t io = {0};
+
+    for (;;)
+    {
+        // get control data
+        xQueueReceive(control_queue, &ctrlData, 0);
+        // v0/v1 filenames are updated in assignAudioFiles(); only CV changes per block
+        portENTER_CRITICAL(&_status_mux);
+        for (int i = 0; i < 8; i++) _audio_status.cv[i] = cv_corrected(i, ctrlData);
+        portEXIT_CRITICAL(&_status_mux);
+
+        // machine I/O snapshot
+        for (int i = 0; i < 8; i++) {
+            io.cv[i] = cv_corrected(i, ctrlData);
+            io.cv_raw[i] = ctrlData[i];
+        }
+        io.trig_level = (gpio_get_level(TRIG0_PIN) ? 1 : 0) | (gpio_get_level(TRIG1_PIN) ? 2 : 0);
+
+        // always read I2S to drain the RX buffer; route to machine or recording
+        i2s_read(I2S_NUM_0, in, 256, &nb, portMAX_DELAY);
+        if (recording_is_active())
+            recording_push(in);
+
+        const machine_t *m = machine_active();
+        if (m)
+            m->process(out, in, &io);
+        else
+            memset(out, 0, sizeof(out));
 
         i2s_write(I2S_NUM_0, out, BUF_SZ * 4, &nb, portMAX_DELAY);
     }
