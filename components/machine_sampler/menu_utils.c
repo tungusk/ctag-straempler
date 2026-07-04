@@ -1,4 +1,18 @@
 #include "menu_utils.h"
+#include "esp_timer.h"
+
+// encoder acceleration for the fine Q13.3 percent params (0..800 = 0..100%,
+// 0.125% per unit): a deliberate click keeps the fine step, quick successive
+// clicks scale up so a full sweep doesn't take 800 detents
+static uint16_t accel_step(void){
+    static int64_t last_us = 0;
+    int64_t now = esp_timer_get_time();
+    int64_t dt = now - last_us;
+    last_us = now;
+    if(dt < 25000) return 16;   // fast spin: 2% per detent
+    if(dt < 60000) return 4;    // brisk turn: 0.5%
+    return 1;                   // slow click: 0.125%
+}
 
 void incParamValue(param_data_t* data, int index, int vid, bool* pbs_state, matrix_ui_row_t* matrix, xQueueHandle handle){
     switch (index)
@@ -359,13 +373,12 @@ void incPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_hand
             // ESP_LOGI("UI","Changed mode %d", data->mode);
             break;
         case SID_START:
-
-            if(data->start < data->loop_end -8){
-                if((data->start + 1) >= 800){
-                    data->start = 800;
-                }else{
-                    data->start += 1;
-                }
+            if(data->start < data->loop_end - 8){
+                int lim = data->loop_end - 8;
+                if(lim > 800) lim = 800;
+                int d = accel_step();
+                if(data->start + d > lim) d = lim - data->start;
+                data->start += d;
 
                 if(data->mode == SINGLE){
                     //ESP_LOGI("UI", "DATA MODE SINGLE");
@@ -378,50 +391,40 @@ void incPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_hand
             break;
         case SID_LSTART:
             if(data->loop_start < data->loop_end - 8){
-                if((data->loop_start + 1) >= 800){
-                    data->loop_start = 800;
-                    data->loop_position = 800;
-                }else{
-                    data->loop_start += 1;
-                    data->loop_position += 1;
-                    data->loop_length--;
-                }
+                int lim = data->loop_end - 8;
+                if(lim > 800) lim = 800;
+                int d = accel_step();
+                if(data->loop_start + d > lim) d = lim - data->loop_start;
+                data->loop_start += d;
+                data->loop_position += d;
+                data->loop_length -= d;
                 if(data->mode == SINGLE) data->start = data->loop_start;
             }
-                
+
             // ESP_LOGI("UI","Incremented loop_start %u", data->loop_start);
             break;
         case SID_LEND:
-            if((data->loop_end + 1) >= 800){
-                data->loop_end = 800;
-            }else{
-                data->loop_end += 1;
-                data->loop_length++;
+            {
+                int d = accel_step();
+                if(data->loop_end + d > 800) d = 800 - data->loop_end;
+                data->loop_end += d;
+                data->loop_length += d;
             }
-            
-                
-            
             // ESP_LOGI("UI","Incremented loop_end %u", data->loop_end);
-            break;    
+            break;
         case SID_LPOSITION:
             if(data->loop_end != 800){
-                
-                if((data->loop_position + 1) >= 800){
-                    data->loop_position = 800;
-                }else{
-                    data->loop_position += 1;
-                }
+                // slide the whole loop window up; clamp so the end stops at 800
+                int d = accel_step();
+                if(data->loop_end + d > 800) d = 800 - data->loop_end;
+                data->loop_position += d;
                 data->loop_start = data->loop_position;
                 if(data->mode == SINGLE){
                     data->start = data->loop_position;
                 }
-
-                if((data->loop_end + 1) >= 800){
-                    data->loop_end = 800;
+                data->loop_end += d;
+                if(data->loop_end == 800)
                     data->loop_length = data->loop_end - data->loop_start;
-                }else{
-                    data->loop_end += 1;
-                }
             }
             break;
         default:
@@ -451,10 +454,10 @@ void decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_hand
             // ESP_LOGI("UI","Changed mode %d", data->mode);
             break;
         case SID_START:
-            if((data->start - 1) <= 0){
-                data->start = 0;
-            }else{
-                data->start -= 1;
+            {
+                int d = accel_step();
+                if(d > data->start) d = data->start;
+                data->start -= d;
             }
             if(data->mode == SINGLE){
                 data->loop_start = data->start;
@@ -463,13 +466,13 @@ void decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_hand
             // ESP_LOGI("UI","Decremented start %u", data->start);
             break;
         case SID_LSTART:
-            if((data->loop_start - 1) <= 0){
-                data->loop_start = 0;
-                data->loop_position = 0;
-            }else{
-                data->loop_start -= 1;
-                data->loop_position -= 1;
-                data->loop_length++;
+            {
+                int d = accel_step();
+                if(d > data->loop_start) d = data->loop_start;
+                data->loop_start -= d;
+                data->loop_position -= d;
+                data->loop_length += d;
+                if(data->loop_start == 0) data->loop_position = 0;
             }
             if(data->mode == SINGLE){
                 data->start = data->loop_start;
@@ -479,34 +482,30 @@ void decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_hand
             break;
         case SID_LEND:
             if(data->loop_end > data->loop_start + 8 && data->loop_end > data->start + 8){
-                if((data->loop_end - 1) <= 0){
-                    data->loop_end = 0;
-                }else{
-                    data->loop_end -= 1;
-                    data->loop_length--;
-                }
+                // keep loop_end at least 8 above both start marks
+                int floor_ = ((data->loop_start > data->start) ? data->loop_start : data->start) + 8;
+                int d = accel_step();
+                if(data->loop_end - d < floor_) d = data->loop_end - floor_;
+                data->loop_end -= d;
+                data->loop_length -= d;
             }
-            
+
             // ESP_LOGI("UI","Decremented loop_end %u", data->loop_end);
-            break;    
+            break;
         case SID_LPOSITION:
             //Loop Position
             if(data->loop_start != 0 && data->loop_position != 0 && data->loop_end > data->start+ 8){
-                if((data->loop_position - 1) <= 0){
-                    data->loop_position = 0;
-                }else{
-                    data->loop_position -= 1;
-                }
-
+                // slide the whole loop window down; clamp at position 0 and
+                // keep loop_end at least 8 above start
+                int d = accel_step();
+                if(d > data->loop_position) d = data->loop_position;
+                if(data->loop_end - d < data->start + 8) d = data->loop_end - (data->start + 8);
+                data->loop_position -= d;
                 data->loop_start = data->loop_position;
                 if(data->mode == SINGLE){
                     data->start = data->loop_position;
                 }
-                if((data->loop_end - 1) <= 0){
-                    data->loop_end = 0;
-                }else{
-                    data->loop_end -= 1;
-                }
+                data->loop_end -= d;
             }
 
             break;
