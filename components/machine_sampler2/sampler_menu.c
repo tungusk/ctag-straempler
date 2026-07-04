@@ -71,12 +71,12 @@ static int sampler_main_event(int event, void *event_data){
             s2_menuTFTUpdatePlayState(0, -1);
             s2_menuTFTUpdatePlayState(1, -1);
             s2_menuTFTPrintCurrentSettings(data);
-            s2_menuTFTDrawLiveCVBars();
+            s2_menuTFTDrawLiveCVBars(matrix);
             break;
         case EV_TIMER_REPEATING_SLOW:
             s2_menuTFTUpdatePlayState(0, -1);
             s2_menuTFTUpdatePlayState(1, -1);
-            s2_menuTFTDrawLiveCVBars();
+            s2_menuTFTDrawLiveCVBars(matrix);
             break;
         case EV_SHORT_PRESS: {
             // Cycle arm state: none → T0 armed → T1 armed → none

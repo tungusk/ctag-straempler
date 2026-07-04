@@ -47,6 +47,6 @@ void s2_menuTFTPrintFileBrowser(list_t* files, int current);
 void s2_menuTFTPrintDecoding();
 void s2_menuTFTAnimateFileBrowser(void);
 void s2_menuTFTInvalidatePlayArea(void);
-void s2_menuTFTDrawLiveCVBars(void);
+void s2_menuTFTDrawLiveCVBars(const matrix_ui_row_t *mtx);
 void s2_menuTFTUpdatePlayState(int vid, int state);
 void s2_menuTFTPrintRecordingState(int f0, int f1);
