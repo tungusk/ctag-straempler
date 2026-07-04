@@ -509,6 +509,11 @@ static void menuMachineBindNow(void){
         cJSON_Delete(root);
     }
 
+    // a machine switch redraws over whatever page was on screen, and menu
+    // pages leave the TFT clip window set below the menu bar — reset and
+    // clear so the rebuilt UI starts from a clean slate like boot does
+    TFT_resetclipwin();
+    TFT_fillScreen(TFT_BLACK);
     menuTFTPrintMainMenus(s_main_labels, s_n_main);
     menusys_set_active_item(_ms, M_MAIN);
     menuProcessEvent(EV_ENTERED_MENU, NULL);
