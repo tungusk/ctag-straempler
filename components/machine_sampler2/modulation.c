@@ -115,14 +115,14 @@ void s2_parse_play_state_data(xQueueHandle* queue, play_state_data_t* play_state
             voice->playback_engine.loop_end = temp_comp;
         }
 
-        if((play_state_data->mode >= 0) && (play_state_data->mode < 3)){
+        if((play_state_data->mode >= 0) && (play_state_data->mode < 4)){
             voice->playback_engine.play_mode = play_modes[play_state_data->mode];
             ui_params->mode = play_state_data->mode;
             voice->playback_engine.mode = play_state_data->mode;
         }
         else
         {
-            ESP_LOGE("Parse Playback Data", "Error, index of playmode data must be between 0 and 2");
+            ESP_LOGE("Parse Playback Data", "Error, index of playmode data must be between 0 and 3");
         }
 
     }

@@ -31,7 +31,7 @@ const char* s2_adsr_menus[] = {"Attack", "Decay", "Sustain", "Release", "Env"};
 const int s2_n_adsr_menus = sizeof(s2_adsr_menus) / sizeof(int);
 
 const char* s2_playmode_menus[] = {"Mode", "Start", "Loop Start", "Loop End", "Loop Position"};
-const char* s2_playmode_modes[] = {"Single Shot", "Loop", "Ping Pong"};
+const char* s2_playmode_modes[] = {"Single Shot", "Loop", "Ping Pong", "Crop"};
 const int s2_n_playmode_menus = sizeof(s2_playmode_menus) / sizeof(int);
 const int s2_n_play_modes = sizeof(s2_playmode_modes) / sizeof(int);
 

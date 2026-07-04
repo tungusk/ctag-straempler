@@ -349,6 +349,11 @@ void s2_incPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
                     data->mode = PIPO;
                     break;
                 case PIPO:
+                    data->mode = CROP;
+                    data->loop_start = data->start;
+                    data->loop_position = data->start;
+                    break;
+                case CROP:
                     data->mode = SINGLE;
                     data->loop_start = data->start;
                     data->loop_position = data->start;
@@ -364,7 +369,7 @@ void s2_incPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
                 if(data->start + d > lim) d = lim - data->start;
                 data->start += d;
 
-                if(data->mode == SINGLE){
+                if(data->mode == SINGLE || data->mode == CROP){
                     //ESP_LOGI("UI", "DATA MODE SINGLE");
                     data->loop_start = data->start;
                     data->loop_position = data->start;
@@ -382,7 +387,7 @@ void s2_incPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
                 data->loop_start += d;
                 data->loop_position += d;
                 data->loop_length -= d;
-                if(data->mode == SINGLE) data->start = data->loop_start;
+                if(data->mode == SINGLE || data->mode == CROP) data->start = data->loop_start;
             }
 
             // ESP_LOGI("UI","Incremented loop_start %u", data->loop_start);
@@ -403,7 +408,7 @@ void s2_incPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
                 if(data->loop_end + d > 800) d = 800 - data->loop_end;
                 data->loop_position += d;
                 data->loop_start = data->loop_position;
-                if(data->mode == SINGLE){
+                if(data->mode == SINGLE || data->mode == CROP){
                     data->start = data->loop_position;
                 }
                 data->loop_end += d;
@@ -423,6 +428,11 @@ void s2_decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
         case SID_MODE:
             switch(data->mode){
                 case SINGLE:
+                    data->mode = CROP;
+                    data->loop_start = data->start;
+                    data->loop_position = data->start;
+                    break;
+                case CROP:
                     data->mode = PIPO;
                     break;
                 case LOOP:
@@ -443,7 +453,7 @@ void s2_decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
                 if(d > data->start) d = data->start;
                 data->start -= d;
             }
-            if(data->mode == SINGLE){
+            if(data->mode == SINGLE || data->mode == CROP){
                 data->loop_start = data->start;
                 data->loop_position = data->start;
             }
@@ -458,7 +468,7 @@ void s2_decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
                 data->loop_length += d;
                 if(data->loop_start == 0) data->loop_position = 0;
             }
-            if(data->mode == SINGLE){
+            if(data->mode == SINGLE || data->mode == CROP){
                 data->start = data->loop_start;
                 data->loop_position = data->loop_start;
             }
@@ -486,7 +496,7 @@ void s2_decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
                 if(data->loop_end - d < data->start + 8) d = data->loop_end - (data->start + 8);
                 data->loop_position -= d;
                 data->loop_start = data->loop_position;
-                if(data->mode == SINGLE){
+                if(data->mode == SINGLE || data->mode == CROP){
                     data->start = data->loop_position;
                 }
                 data->loop_end -= d;

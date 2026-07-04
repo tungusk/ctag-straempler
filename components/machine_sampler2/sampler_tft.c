@@ -409,7 +409,7 @@ void s2_menuTFTSelectPresetBank(int* activeSlot, list_t* list, int selected){
 
 void s2_menuTFTPrintVoiceValues(param_data_t* data, int r){
     int y = 0;
-    char tmp[10];
+    char tmp[16];
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
    
     _bg = TFT_BLACK;
@@ -524,7 +524,7 @@ void s2_menuTFTPrintVoiceValues(param_data_t* data, int r){
 
 void s2_menuTFTPrintADSRValues(adsr_data_t* data, int r){
     int y = 0;
-    char tmp[10];
+    char tmp[16];
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     
     _bg = TFT_BLACK;
@@ -583,7 +583,7 @@ void s2_menuTFTPrintADSRValues(adsr_data_t* data, int r){
 
 void s2_menuTFTPrintFilterValues(filter_data_t* data, int r){
     int y = 0;
-    char tmp[10];
+    char tmp[16];
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     
     _bg = TFT_BLACK;
@@ -637,7 +637,7 @@ void s2_menuTFTPrintFilterValues(filter_data_t* data, int r){
 
 void s2_menuTFTPrintPlaymodeValues(play_state_data_t *data, int r){
     int y = 0;
-    char tmp[10];
+    char tmp[16];
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     
     _bg = TFT_BLACK;
@@ -757,7 +757,7 @@ void s2_menuTFTPrintMatrixAmount(matrix_ui_row_t* matrix, int r){
     TFT_setclipwin(x_offset ,TFT_getfontheight()* 2 +18, x_offset * 2, _height);
     int y = 4;
     int amt = 0;
-    char tmp[10];
+    char tmp[16];
     static matrix_param_t prevParam [8];
     _fg = TFT_WHITE;
     
@@ -802,7 +802,7 @@ void s2_menuTFTPrintMatrixDestination(matrix_ui_row_t* matrix, int row){
     int x_incr = _width/3;   
     TFT_setclipwin(x_offset ,TFT_getfontheight()* 2 +18, x_offset + x_incr, _height);
     int y = 4;
-    char tmp[10];
+    char tmp[16];
     _fg = TFT_WHITE;
     
     _bg = TFT_BLACK;
@@ -829,7 +829,7 @@ void s2_menuTFTPrintMatrixDestination(matrix_ui_row_t* matrix, int row){
 
 void s2_menuTFTPrintDelayValues(delay_data_t* data, int r){
     int y = 0;
-    char tmp[10];
+    char tmp[16];
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     
     _bg = TFT_BLACK;
@@ -906,7 +906,7 @@ void s2_menuTFTPrintDelayValues(delay_data_t* data, int r){
 
 void s2_menuTFTPrintExtInValues(ext_in_data_t* data, int r){
     int y = 0;
-    char tmp[10];
+    char tmp[16];
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     _bg = TFT_BLACK;
     _fg = TFT_LIGHTGREY;
