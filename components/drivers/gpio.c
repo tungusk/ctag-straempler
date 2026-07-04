@@ -14,32 +14,32 @@ static xQueueHandle ui_event_queue = NULL;
 
 static void IRAM_ATTR gpio_isr_handler_encoder1(void* arg)
 {
+    // Quadrature state machine, one event per detent. This encoder rests at
+    // BOTH quadrature states (00 and 11), so a detent is half a cycle = two
+    // valid transitions; the old decoder fired only on the 00 arrival and
+    // ate every second click. Invalid/bounce transitions score 0 or cancel,
+    // so the accumulator also debounces.
+    static const int8_t qdec[16] = { 0, +1, -1,  0,
+                                    -1,  0,  0, +1,
+                                    +1,  0,  0, -1,
+                                     0, -1, +1,  0 };
+    static uint8_t prev = 3;
+    static int8_t accum = 0;
     ui_ev_ts_t ev;
-    uint32_t pin = (uint32_t) arg;
-    uint32_t pv = (uint32_t) gpio_get_level(pin);
-    uint32_t a = gpio_get_level(ENC_A_PIN);
-    uint32_t b = gpio_get_level(ENC_B_PIN);
-    static uint32_t check = 0;
-    // de bounce
-    if(pv) return;
-    if(pin == ENC_B_PIN && a){
-        check = ENC_B_PIN;
-        return;
+    ev.event_data = NULL;
+    uint8_t ab = ((uint8_t)gpio_get_level(ENC_A_PIN) << 1) | (uint8_t)gpio_get_level(ENC_B_PIN);
+    accum += qdec[(prev << 2) | ab];
+    prev = ab;
+    if(ab == 0 || ab == 3){ // rest state (detent position) reached
+        if(accum >= 2){
+            ev.event = EV_ENC1_FWD;
+            xQueueSendFromISR(ui_event_queue, &ev, NULL);
+        }else if(accum <= -2){
+            ev.event = EV_ENC1_BWD;
+            xQueueSendFromISR(ui_event_queue, &ev, NULL);
+        }
+        accum = 0;
     }
-    if(pin == ENC_A_PIN && b){
-        check = ENC_A_PIN;
-        return;
-    }
-    // real event
-    if(check == ENC_A_PIN && !a && !b){
-        ev.event = EV_ENC1_BWD;
-        xQueueSendFromISR(ui_event_queue, &ev, NULL);
-    }
-    if(check == ENC_B_PIN && !a && !b){
-        ev.event = EV_ENC1_FWD;
-        xQueueSendFromISR(ui_event_queue, &ev, NULL);
-    }
-    check = 0;
     return;
 }
 
@@ -78,6 +78,9 @@ void initGPIO(xQueueHandle queueui){
 
     //change gpio intrrupt type for one pin
     gpio_set_intr_type(ENC_BTN_PIN, GPIO_INTR_ANYEDGE);
+    // quadrature decoder needs both edges of both encoder pins
+    gpio_set_intr_type(ENC_A_PIN, GPIO_INTR_ANYEDGE);
+    gpio_set_intr_type(ENC_B_PIN, GPIO_INTR_ANYEDGE);
 
     //install gpio isr service
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
