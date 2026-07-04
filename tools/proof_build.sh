@@ -13,10 +13,10 @@ cat > main/machine_registry.c <<'REG'
 extern const machine_t machine_stub;
 const machine_t *const machine_registry[] = { &machine_stub, NULL };
 REG
-sed -i '' 's/REQUIRES ui machine audio machine_sampler menu)/REQUIRES ui machine audio menu)/' main/CMakeLists.txt
+sed -i '' 's/REQUIRES ui machine audio machine_sampler machine_sampler2 menu)/REQUIRES ui machine audio menu)/' main/CMakeLists.txt
 export PATH="$HOME/.espressif/tools/xtensa-esp32-elf/esp-2021r2-patch3-8.4.0/xtensa-esp32-elf/bin:$HOME/.espressif/tools/esp32ulp-elf/2.28.51-esp-20191205/esp32ulp-elf-binutils/bin:$PATH"
 export IDF_PATH="$HOME/esp/esp-idf-v4.3"
 ~/.espressif/python_env/idf4.3_py3.9_env/bin/python "$IDF_PATH/tools/idf.py" -B build_proof build \
-  -DEXCLUDE_COMPONENTS=machine_sampler -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DEXCLUDE_COMPONENTS="machine_sampler;machine_sampler2" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   && echo "PROOF PASSED: sampler-less build links"
 rm -rf build_proof
