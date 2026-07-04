@@ -47,23 +47,15 @@ void s2_incParamValue(param_data_t* data, int index, int vid, bool* pbs_state, m
         case SID_PITCH_CV_ACTIVE:
             
             data->pitch_cv_active = !(data->pitch_cv_active);
-            if(data->pitch_cv_active == 0){
-                if(vid)
-                    matrix[1].amt = 0;
-                else
-                {
-                    matrix[0].amt = 0;
+            {
+                // Sampler2: pitch may live on any matrix row — find it
+                int want = vid ? MTX_V1_PITCH : MTX_V0_PITCH;
+                for(int i = 0; i < 8; i++){
+                    if(matrix[i].dst == want){
+                        matrix[i].amt = (data->pitch_cv_active == 1) ? 100 : 0;
+                        break;
+                    }
                 }
-                
-            }
-            else if(data->pitch_cv_active == 1){
-                if(vid)
-                    matrix[1].amt = 100;
-                else
-                {
-                    matrix[0].amt = 100;
-                }
-                
             } 
             //ESP_LOGI("UI","Changed pitch_cv_active %u", data->pitch_cv_active);
             break;
@@ -134,23 +126,15 @@ void s2_decParamValue(param_data_t* data, int index, int vid, bool* pbs_state, m
             break;
         case SID_PITCH_CV_ACTIVE:
             data->pitch_cv_active = !(data->pitch_cv_active);
-            if(data->pitch_cv_active == 0){
-                if(vid)
-                    matrix[1].amt = 0;
-                else
-                {
-                    matrix[0].amt = 0;
+            {
+                // Sampler2: pitch may live on any matrix row — find it
+                int want = vid ? MTX_V1_PITCH : MTX_V0_PITCH;
+                for(int i = 0; i < 8; i++){
+                    if(matrix[i].dst == want){
+                        matrix[i].amt = (data->pitch_cv_active == 1) ? 100 : 0;
+                        break;
+                    }
                 }
-                
-            }
-            else if(data->pitch_cv_active == 1){
-                if(vid)
-                    matrix[1].amt = 100;
-                else
-                {
-                    matrix[0].amt = 100;
-                }
-                
             }
             //ESP_LOGI("UI","Changed pitch_cv_active %d", data->volume);
             break;
@@ -543,9 +527,7 @@ void s2_decItemAmount(matrix_ui_row_t* matrix, int source){
 
 void s2_incDestination(matrix_ui_row_t* matrix, int source){
     int j = 1;
-    if(source == 0 || source == 1){
-        return; 
-    }
+    // Sampler2: rows 0/1 are reassignable like any other row
     
     for(int i = 0; i < 8; i++){
         if(source == i) continue;
@@ -562,9 +544,7 @@ void s2_incDestination(matrix_ui_row_t* matrix, int source){
 
 void s2_decDestination(matrix_ui_row_t* matrix, int source){
     int j = 1;
-    if(source == 0 || source == 1){
-        return; 
-    }
+    // Sampler2: rows 0/1 are reassignable like any other row
 
     for(int i = 0; i < 8; i++){
         if(source == i) continue;

@@ -417,7 +417,7 @@ static int matrix_def_handler(int it_id, int event, void* event_data){
                     s2_menuTFTPrintMatrixAmount(matrix, matrix_pos_v);        
                 }
                 //Prepare & send event to audio thread
-                if(matrix_pos_h != 2 || (matrix[matrix_pos_v].dst != MTX_V0_PITCH && matrix[matrix_pos_v].dst != MTX_V1_PITCH)){
+                if(1){ // Sampler2: pitch destinations send matrix events like any other (engine keys pitch off dst, not row)
                     if(!((matrix_pos_h == 1) && (matrix[matrix_pos_v].dst == MTX_NONE))){
                         if(dst_changed){
                             //ESP_LOGI("UI", "Destination changed");
@@ -462,7 +462,7 @@ static int matrix_def_handler(int it_id, int event, void* event_data){
                 } 
 
                //Prepare & send event to audio thread
-                if(matrix_pos_h != 2 || (matrix[matrix_pos_v].dst != MTX_V0_PITCH && matrix[matrix_pos_v].dst != MTX_V1_PITCH)){
+                if(1){ // Sampler2: pitch destinations send matrix events like any other (engine keys pitch off dst, not row)
                     if(!((matrix_pos_h == 1) && (matrix[matrix_pos_v].dst == MTX_NONE))){
                         if(dst_changed){
                             matrix_event.changed_param = matrix[matrix_pos_v].dst + 1;

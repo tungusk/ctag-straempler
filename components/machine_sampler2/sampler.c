@@ -59,6 +59,9 @@ static audio_b_t audio_buffers[6];
 static voice_t voice[2];
 static fifo_t voice_fifos[2];
 static matrix_row_t matrix[8];
+// Sampler2: keyboard pitch is no longer hard-wired to matrix rows 0/1 — any
+// row may carry MTX_Vx_PITCH. Cache the row per voice; -1 = unassigned.
+static int s_pitch_row[2] = {0, 1};
 static ui_param_holder_t ui_params[2];
 static void (*play_modes[])(void *, void *, void *) = {s2_fill_buffer_one_shot, s2_fill_buffer_loop, s2_fill_buffer_pipo};
 
@@ -421,8 +424,13 @@ static inline void interpolate_buffer(int vid, float *sample_left, float *sample
 
     if (!ui_params[vid].is_pitch_cv_active)
         pitch_increment = voice[vid].playback_engine.pitch_increment;
-    if (ui_params[vid].is_pitch_cv_active)
-        pitch_increment = calculate_keyboard_pitch(ctrl_data[vid]) * matrix[vid].amt;
+    if (ui_params[vid].is_pitch_cv_active) {
+        int r = s_pitch_row[vid];
+        if (r >= 0)
+            pitch_increment = calculate_keyboard_pitch(cv_corrected(r, ctrl_data)) * matrix[r].amt;
+        else
+            pitch_increment = voice[vid].playback_engine.pitch_increment;
+    }
     pitch_increment *= modulatePitchParams(vid, ctrl_data);
     int32_t pos = (int32_t)(voice[vid].playback_engine.phase);
     float alpha = (float)(voice[vid].playback_engine.phase - pos);
@@ -480,6 +488,15 @@ static void float_to_int(int32_t *out, float *in, int32_t len)
     }
 }
 
+static void update_pitch_rows(void)
+{
+    s_pitch_row[0] = s_pitch_row[1] = -1;
+    for (int i = 7; i >= 0; i--) {
+        if (matrix[i].dst == MTX_V0_PITCH) s_pitch_row[0] = i;
+        if (matrix[i].dst == MTX_V1_PITCH) s_pitch_row[1] = i;
+    }
+}
+
 static void parse_matrix_params(xQueueHandle event_queue, matrix_event_t *m_ev)
 {
     //Fetch matrix events
@@ -488,6 +505,7 @@ static void parse_matrix_params(xQueueHandle event_queue, matrix_event_t *m_ev)
         // ESP_LOGI("AUDIO", "Received matrix_event with Source: %d, Dst: %d, Amt: %d", m_ev->source, m_ev->changed_param, m_ev->amount);
         matrix[m_ev->source].dst = m_ev->changed_param;
         matrix[m_ev->source].amt = (float)m_ev->amount / 100.0;
+        update_pitch_rows();
     }
 }
 
@@ -1476,6 +1494,7 @@ static void initAudioStructs()
         }
         matrix[j].amt = 0.0f;
     }
+    update_pitch_rows();
 
     for (int i = 0; i < 2; i++)
     {
