@@ -42,6 +42,17 @@ static int browser_name_y = 0;
 // whenever the screen underneath them is repainted
 static int s_cv_last_fill[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
 static bool s_cv_labels_drawn = false;
+static int s_cv_last_dst[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+
+// abbreviated matrix destination, indexed by matrix_param_t (see audio_types.h)
+static const char *s_dst_abbrev[] = {
+    "",     "1VOL", "1PAN", "1PIT", "1SPD", "1DST", "1DLY", "1FLB",
+    "1FLW", "1FLQ", "1ATK", "1DEC", "1SUS", "1REL", "1STA", "1LST",
+    "1END", "2VOL", "2PAN", "2PIT", "2SPD", "2DST", "2DLY", "2FLB",
+    "2FLW", "2FLQ", "2ATK", "2DEC", "2SUS", "2REL", "2STA", "2LST",
+    "2END", "DTIM", "DPAN", "DFB",  "DVOL", "1REC", "2REC",
+};
+#define S2_N_DST_ABBREV (sizeof(s_dst_abbrev)/sizeof(s_dst_abbrev[0]))
 static int s_ps_state[2] = {0, 0};
 static int s_ps_color[2] = {-1, -1};
 static int s_ps_ss_px[2], s_ps_ls_px[2], s_ps_le_px[2];
@@ -1230,11 +1241,12 @@ void s2_menuTFTAnimateFileBrowser(void){
 
 void s2_menuTFTInvalidatePlayArea(void) {
     for (int i = 0; i < 8; i++) s_cv_last_fill[i] = -1;
+    for (int i = 0; i < 8; i++) s_cv_last_dst[i] = -1;
     s_cv_labels_drawn = false;
     s_ps_color[0] = s_ps_color[1] = -1;
 }
 
-void s2_menuTFTDrawLiveCVBars(void) {
+void s2_menuTFTDrawLiveCVBars(const matrix_ui_row_t *mtx) {
     uint16_t cv[8];
     audio_get_cv(cv);
 
@@ -1262,6 +1274,26 @@ void s2_menuTFTDrawLiveCVBars(void) {
         }
         cfont = f;
         s_cv_labels_drawn = true;
+    }
+
+    // mapping abbreviations under the channel numbers, refreshed on change
+    if (mtx) {
+        Font f = cfont;
+        TFT_setFont(DEF_SMALL_FONT, NULL);
+        int sh = TFT_getfontheight();
+        int y_map = y_top + height + 2 + sh + 2;
+        for (int i = 0; i < 8; i++) {
+            if ((int)mtx[i].dst == s_cv_last_dst[i]) continue;
+            int x = x0 + i * (bar_w + gap);
+            TFT_fillRect(x, y_map, bar_w, sh + 2, TFT_BLACK);
+            if (mtx[i].dst > 0 && mtx[i].dst < S2_N_DST_ABBREV) {
+                _fg = TFT_LIGHTGREY;
+                char *lbl = (char *)s_dst_abbrev[mtx[i].dst];
+                TFT_print(lbl, x + bar_w / 2 - TFT_getStringWidth(lbl) / 2, y_map);
+            }
+            s_cv_last_dst[i] = (int)mtx[i].dst;
+        }
+        cfont = f;
     }
 
     for (int i = 0; i < 8; i++) {
