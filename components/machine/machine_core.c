@@ -1,6 +1,8 @@
 #include <string.h>
 #include "machine.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "MACHINE";
 static const machine_t *s_active = NULL;
@@ -18,10 +20,15 @@ const machine_t *machine_by_name(const char *name)
 esp_err_t machine_activate(const machine_t *m)
 {
     if (m == s_active) return ESP_OK;
-    if (s_active && s_active->stop) {
-        ESP_LOGI(TAG, "stopping %s", s_active->name);
-        s_active->stop();
+    if (s_active) {
+        const machine_t *old = s_active;
+        ESP_LOGI(TAG, "stopping %s", old->name);
+        // the audio task re-reads the active machine every block (~1.45 ms)
+        // and outputs silence on NULL; detach first and let the in-flight
+        // block drain so stop() never frees memory under a running process()
         s_active = NULL;
+        vTaskDelay(pdMS_TO_TICKS(5));
+        if (old->stop) old->stop();
     }
     if (m) {
         ESP_LOGI(TAG, "starting %s", m->name);

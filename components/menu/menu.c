@@ -39,8 +39,8 @@ static void autosave_kick(void);
 static xQueueHandle s_ev_queue = NULL;
 
 // core menu labels (machine-independent pages)
-static const char* more_menus[] = {"Settings", "About"};
-static const int n_more_menus = 2;
+static const char* more_menus[] = {"Machine", "Settings", "About"};
+static const int n_more_menus = 3;
 static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone"};
 static const int n_settings_menus = 4;
 
@@ -132,7 +132,7 @@ static int about_def_handler(int it_id, int event, void* event_data){
 }
 
 static int more_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_SETTINGS, M_ABOUT};
+    const int menu_states[] = {M_MACHINE_SEL, M_SETTINGS, M_ABOUT};
     const int states = sizeof(menu_states)/sizeof(int);
     static int menu_state_current = 0;
 
@@ -162,6 +162,61 @@ static int more_def_handler(int it_id, int event, void* event_data){
             break;
     }
     
+    return 0; // remain in current menu
+}
+
+static void autosave_now(void);
+
+// switch the active machine: capture the outgoing machine's state, swap
+// (machine_core mutes audio around the stop/start), persist the choice, and
+// queue the UI rebind — menuMachineBindNow rebuilds menusys with the new
+// machine's pages and re-enters M_MAIN on the next event-loop pass
+static void menuSwitchMachine(const machine_t *m){
+    autosave_now();
+    if(machine_activate(m) != ESP_OK){
+        ESP_LOGE("UI", "machine %s failed to start", m->name);
+        return;
+    }
+    configSetStringSetting("machine", m->name);
+    menuBindMachineUI();
+}
+
+static int machine_sel_def_handler(int it_id, int event, void* event_data){
+    static const char *names[8];
+    static int n = 0;
+    static int pos = 0;
+
+    switch(event){
+        case EV_ENTERED_MENU:
+            n = 0;
+            pos = 0;
+            for(int i = 0; machine_registry[i] != NULL && n < 8; i++){
+                if(machine_registry[i] == machine_active()) pos = n;
+                names[n++] = machine_registry[i]->name;
+            }
+            menuTFTPrintMenu(names, &n);
+            menuTFTSelectMenuItem(&pos, 0, names, &n);
+            break;
+        case EV_FWD:
+            pos++;
+            if(pos >= n) pos = 0;
+            menuTFTSelectMenuItem(&pos, 0, names, &n);
+            break;
+        case EV_BWD:
+            pos--;
+            if(pos < 0) pos = n - 1;
+            menuTFTSelectMenuItem(&pos, 0, names, &n);
+            break;
+        case EV_SHORT_PRESS:
+            if(machine_registry[pos] != machine_active())
+                menuSwitchMachine(machine_registry[pos]);
+            return 0; // queued EV_MACHINE_BIND re-enters M_MAIN itself
+        case EV_LONG_PRESS:
+            menuTFTFlushMenuDataRect();
+            return M_MORE;
+        default:
+            break;
+    }
     return 0; // remain in current menu
 }
 
@@ -400,7 +455,32 @@ void menuBindMachineUI(void){
     xQueueSend(s_ev_queue, &ev, portMAX_DELAY);
 }
 
+// core pages, machine-agnostic. Rebuilt (together with the machine's pages)
+// on every bind: menusys has no item removal, so a fresh instance is the only
+// way to drop the outgoing machine's pages and avoid duplicate ids.
+static void register_core_pages(void){
+    _ms = menusys_create();
+    menusys_new_item(_ms, M_MAIN);
+    menusys_item_set_default_cb(_ms, M_MAIN, main_menu_def_handler);
+
+    menusys_new_item(_ms, M_MORE);
+    menusys_item_set_default_cb(_ms, M_MORE, more_def_handler);
+        menusys_new_item(_ms, M_MACHINE_SEL);
+        menusys_item_set_default_cb(_ms, M_MACHINE_SEL, machine_sel_def_handler);
+        menusys_new_item(_ms, M_ABOUT);
+        menusys_item_set_default_cb(_ms, M_ABOUT, about_def_handler);
+        menusys_new_item(_ms, M_SETTINGS);
+        menusys_item_set_default_cb(_ms, M_SETTINGS, settings_def_handler);
+            menusys_new_item(_ms, M_SETTINGS_INPUT);
+            menusys_item_set_default_cb(_ms, M_SETTINGS_INPUT, settings_input_def_handler);
+
+    menusys_all_set_ev_cb(_ms, EV_TIMER_REPEATING_SLOW, timer_handler);
+}
+
 static void menuMachineBindNow(void){
+    if(_ms) menusys_free(_ms);
+    register_core_pages();
+
     const machine_ui_t *mui = machine_ui();
     int n = 0;
     if (mui) {
@@ -445,22 +525,7 @@ void initMenu(xQueueHandle ev_queue){
     esp_timer_create_args_t autosave_args = { .callback = autosave_cb, .name = "autosave" };
     esp_timer_create(&autosave_args, &s_autosave_timer);
 
-    // using indentation to somewhat indicate levels of menus
-    _ms = menusys_create();
-    menusys_new_item(_ms, M_MAIN);
-    menusys_item_set_default_cb(_ms, M_MAIN, main_menu_def_handler);
-
-    menusys_new_item(_ms, M_MORE);
-    menusys_item_set_default_cb(_ms, M_MORE, more_def_handler);
-        menusys_new_item(_ms, M_ABOUT);
-        menusys_item_set_default_cb(_ms, M_ABOUT, about_def_handler);
-        menusys_new_item(_ms, M_SETTINGS);
-        menusys_item_set_default_cb(_ms, M_SETTINGS, settings_def_handler);
-            menusys_new_item(_ms, M_SETTINGS_INPUT);
-            menusys_item_set_default_cb(_ms, M_SETTINGS_INPUT, settings_input_def_handler);
-
-    menusys_all_set_ev_cb(_ms, EV_TIMER_REPEATING_SLOW, timer_handler);
+    register_core_pages();
     menusys_set_active_item(_ms, M_MAIN);
-
 }
 

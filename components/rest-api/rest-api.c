@@ -10,6 +10,7 @@
 #include "string_tools.h"
 #include "fileio.h"
 #include "audio.h"
+#include "machine.h"
 #include "recording.h"
 #include "wifi.h"
 #include "freesound.h"
@@ -293,12 +294,14 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     audio_status_t st;
     audio_get_status(&st);
     bool rec = recording_is_active();
+    const machine_t *m = machine_active();
 
     // build compact JSON by hand to avoid cJSON overhead in hot path
     char buf[256];
     int n = snprintf(buf, sizeof(buf),
-        "{\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
+        "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
         "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u]}",
+        m ? m->name : "",
         rec ? "true" : "false",
         st.v0, st.v1,
         st.cv[0], st.cv[1], st.cv[2], st.cv[3],

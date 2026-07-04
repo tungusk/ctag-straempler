@@ -49,6 +49,11 @@
 #define FixedToDouble2(x) ((double)(x) / (1 << 9))
 #define DIVISOR 0.0000000004656612873077392578125f // is 1.0f/2^31
 
+// machine-switch teardown: sampler_stop() raises the flag, wakes the SD
+// tasks, and joins them via the counting semaphore before freeing anything
+static volatile bool s_shutdown = false;
+static SemaphoreHandle_t s_task_done = NULL;
+
 static audio_f_t audio_files[2];
 static audio_b_t audio_buffers[6];
 static voice_t voice[2];
@@ -102,6 +107,11 @@ static void file_reader_task_1(void *pvParams)
                                               ulNotifiedValue. */
                         portMAX_DELAY); /* Block indefinitely. */
 
+        if (s_shutdown) {               // sampler_stop() is waiting to join us
+            xSemaphoreGive(s_task_done);
+            vTaskDelete(NULL);
+        }
+
         // switch audio buffers
         //
 
@@ -148,6 +158,11 @@ static void file_reader_task_2(void *pvParams)
                                               ulNotifiedValue. */
                         portMAX_DELAY); /* Block indefinitely. */
 
+        if (s_shutdown) {               // sampler_stop() is waiting to join us
+            xSemaphoreGive(s_task_done);
+            vTaskDelete(NULL);
+        }
+
         // switch audio buffers
         if (uxBits & BIT_VOICE1)
         {
@@ -189,6 +204,11 @@ static void file_manipulation_task(void *pvParams)
                         &uxBits,        /* Notified value pass out in
                                               ulNotifiedValue. */
                         portMAX_DELAY); /* Block indefinitely. */
+
+        if (s_shutdown) {               // sampler_stop() is waiting to join us
+            xSemaphoreGive(s_task_done);
+            vTaskDelete(NULL);
+        }
 
         if (uxBits & BIT_VOICE_0_TRIG)
         {
@@ -1218,6 +1238,9 @@ static void sampler_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
 
 static esp_err_t sampler_start(void)
 {
+    s_shutdown = false;
+    s_task_done = xSemaphoreCreateCounting(3, 0);
+
     // the machine owns its parameter queues (menu side binds to the same ones)
     xQueueHandle q_v0   = xQueueCreate(1, sizeof(param_data_t));
     xQueueHandle q_v1   = xQueueCreate(1, sizeof(param_data_t));
@@ -1261,9 +1284,53 @@ static esp_err_t sampler_start(void)
 
 static void sampler_stop(void)
 {
-    // True unload (kill reader tasks, free delay + buffers) lands in M1 when
-    // machine switching becomes reachable; until then this never runs.
-    ESP_LOGW("SAMPLER", "stop(): unload not implemented until M1");
+    // machine_core has already detached us from the audio task and let the
+    // in-flight block drain, so process() cannot be running past this point.
+
+    // join the three SD tasks: raise the flag, wake them out of their
+    // notify-waits, and collect one "done" tick from each before freeing
+    // anything they might still be touching
+    s_shutdown = true;
+    xTaskNotify(file_reader_task_1_handle, 0, eNoAction);
+    xTaskNotify(file_reader_task_2_handle, 0, eNoAction);
+    xTaskNotify(file_manipulation_task_handle, 0, eNoAction);
+    for (int i = 0; i < 3; i++)
+        if (xSemaphoreTake(s_task_done, pdMS_TO_TICKS(1000)) != pdTRUE)
+            ESP_LOGE("SAMPLER", "stop(): SD task %d did not exit", i);
+    vSemaphoreDelete(s_task_done);
+    s_task_done = NULL;
+
+    for (int i = 0; i < 2; i++)
+        f_close(&audio_files[i].fil);   // harmless FR_INVALID_OBJECT if closed
+
+    for (int i = 0; i < 6; i++) {
+        free(audio_buffers[i].buf);
+        audio_buffers[i].buf = NULL;
+    }
+
+    for (int i = 0; i < 2; i++) {
+        vSemaphoreDelete(file_mutex[i]);    file_mutex[i] = NULL;
+        vSemaphoreDelete(buffer_mutex[i]);  buffer_mutex[i] = NULL;
+        vSemaphoreDelete(counter_mutex[i]); counter_mutex[i] = NULL;
+    }
+
+    delay_free(&delay);
+
+    // the parameter queues are ours (created in start); unhook the menu side
+    // first — its pages are unregistered by the menusys rebuild, so nothing
+    // sends on them past this point
+    sampler_menu_bind_queues(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    vQueueDelete(ui_parameter_queue_v0);        ui_parameter_queue_v0 = NULL;
+    vQueueDelete(ui_parameter_queue_v1);        ui_parameter_queue_v1 = NULL;
+    vQueueDelete(effect_parameter_queue);       effect_parameter_queue = NULL;
+    vQueueDelete(playbackspeed_state_queue_v0); playbackspeed_state_queue_v0 = NULL;
+    vQueueDelete(playbackspeed_state_queue_v1); playbackspeed_state_queue_v1 = NULL;
+    vQueueDelete(mode_handle_v0);               mode_handle_v0 = NULL;
+    vQueueDelete(mode_handle_v1);               mode_handle_v1 = NULL;
+    vQueueDelete(m_event_queue);                m_event_queue = NULL;
+    ui_ev_queue = NULL;                          // core's queue, not ours to delete
+
+    audio_status_set_voices("", "");
 }
 
 // M0c-1: the sampler's menu UI still compiles inside components/menu; the
