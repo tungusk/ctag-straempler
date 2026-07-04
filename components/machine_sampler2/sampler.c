@@ -43,6 +43,8 @@
 #define SAMPLE_RATE 44100
 #define FRACTION_MASK 0x1ff
 #define DELAY_MAX_LENGTH_MS 1500.0
+// ~100 ms at 44.1 kHz stereo 16-bit (4 bytes/frame), 4-byte aligned
+#define S2_MIN_LOOP_BYTES 17640u
 // Using Q16 Unsigned Fixed Point Notation for ENV_LUT
 #define LUT_SCALE 16
 #define MUL_ENV(x, y) (((int)(x) * (y)) >> LUT_SCALE)
@@ -747,7 +749,7 @@ static void modulate_adsr_parameter(int vid, uint16_t* ctrl_data)
     voice[vid].adsr.sustain_level = ui_params[vid].sustain_level * 0.01f;
     voice[vid].adsr.release_time = ui_params[vid].release_time * 44.1f;
 
-    for(size_t i = 2; i < 8; i++)
+    for(size_t i = 0; i < 8; i++)   // Sampler2: rows 0/1 reassignable
     {
         if((matrix[i].dst == MTX_V0_ADSR_ATTACK && vid == 0) || 
            (matrix[i].dst == MTX_V1_ADSR_ATTACK && vid == 1))
@@ -796,7 +798,7 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
              temp_loop_end = voice[vid].playback_engine.loop_end;
     uint32_t fsize = audio_files[vid].fsize;
 
-    for (size_t i = 2; i < 8; i++)
+    for (size_t i = 0; i < 8; i++)   // Sampler2: rows 0/1 reassignable
     {
         if ((matrix[i].dst == MTX_V0_MODE_START && vid == 0) ||
             (matrix[i].dst == MTX_V1_MODE_START && vid == 1))
@@ -820,30 +822,20 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
             temp_loop_end *= 4;
         }
 
-        if (temp_loop_start >= temp_loop_end)
+        // Sampler2: enforce a minimum loop length (~100 ms of stereo frames)
+        // regardless of CV or menu input — micro-loops re-read the SD card at
+        // a pathological rate (shared SPI bus with the display)
         {
-            if (temp_loop_end == 0)
-            {
-                temp_loop_end = 4;
-                temp_loop_start = 0;
-            }
-            else
-            {
-                temp_loop_start = temp_loop_end - 4;
-            }
-        }
+            uint32_t min_len = S2_MIN_LOOP_BYTES;
+            if (fsize > 0 && fsize < min_len) min_len = fsize & ~3u;
+            if (min_len < 4) min_len = 4;
 
-        if (temp_sample_start >= temp_loop_end)
-        {
-            if (temp_loop_end == 0)
-            {
-                temp_loop_end = 4;
-                temp_sample_start = 0;
-            }
-            else
-            {
-                temp_sample_start = temp_loop_end - 4;
-            }
+            if (temp_loop_end < min_len)
+                temp_loop_end = min_len;
+            if (temp_loop_start > temp_loop_end - min_len)
+                temp_loop_start = temp_loop_end - min_len;
+            if (temp_sample_start >= temp_loop_end)
+                temp_sample_start = temp_loop_end - min_len;
         }
 
         voice[vid].playback_engine.sample_start = temp_sample_start;
@@ -857,7 +849,7 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
 static void modulateDlyParameters(delay_t *delay, delay_cfg_t cfg, uint16_t *ctrlData)
 {
     bool isModulated = false;
-    for (size_t i = 2; i < 8; i++) // first two are for pitch cv
+    for (size_t i = 0; i < 8; i++) // Sampler2: rows 0/1 reassignable
     {
         switch (matrix[i].dst)
         {
