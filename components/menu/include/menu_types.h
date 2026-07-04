@@ -18,6 +18,7 @@ typedef enum{
     M_BROWSE_ID_RESULT,
     M_BROWSE_USER,
     M_MORE,
+    M_MACHINE_SEL,
     M_SETTINGS,
     M_SETTINGS_INPUT,
     M_ABOUT,

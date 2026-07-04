@@ -43,6 +43,38 @@ int wifiSettingsChanged(cJSON* curSettings){
     return 0;
 }
 
+int configGetStringSetting(const char* key, char* out, int out_len){
+    int found = 0;
+    cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+    if(root != NULL){
+        cJSON *settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
+        cJSON *val = settings ? cJSON_GetObjectItemCaseSensitive(settings, key) : NULL;
+        if(cJSON_IsString(val) && val->valuestring != NULL){
+            strncpy(out, val->valuestring, out_len - 1);
+            out[out_len - 1] = 0;
+            found = 1;
+        }
+        cJSON_Delete(root);
+    }
+    return found;
+}
+
+void configSetStringSetting(const char* key, const char* v){
+    cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+    if(root != NULL){
+        cJSON *settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
+        if(settings != NULL){
+            if(cJSON_GetObjectItemCaseSensitive(settings, key))
+                cJSON_ReplaceItemInObjectCaseSensitive(settings, key, cJSON_CreateString(v));
+            else
+                cJSON_AddStringToObject(settings, key, v);
+            char *out = cJSON_Print(root);
+            if(out){ writeJSONFile("/sdcard/CONFIG.JSN", out); free(out); }
+        }
+        cJSON_Delete(root);
+    }
+}
+
 int configGetIntSetting(const char* key, int dflt){
     int v = dflt;
     cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
