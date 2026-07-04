@@ -65,10 +65,11 @@ static void IRAM_ATTR ulp_isr(void* arg)
     data[2] = (uint16_t)*((&ulp_adc_data) + 2 + offs);
     data[3] = (uint16_t)*((&ulp_adc_data) + 3 + offs);
     data[4] = (uint16_t)*((&ulp_adc_data) + 4 + offs);
-    // swap these due to logic on PCB / UI layout
-    data[6] = (uint16_t)*((&ulp_adc_data) + 5 + offs);
-    data[5] = (uint16_t)*((&ulp_adc_data) + 6 + offs);
-    // end swap
+    // upstream swapped 5/6 here for their PCB revision; this unit's board is
+    // wired straight through, so the swap crossed panel knobs 6/7 (verified
+    // 2026-07-04 by static knob-endpoint test against /status cv[])
+    data[5] = (uint16_t)*((&ulp_adc_data) + 5 + offs);
+    data[6] = (uint16_t)*((&ulp_adc_data) + 6 + offs);
     data[7] = (uint16_t)*((&ulp_adc_data) + 7 + offs);
     
     xQueueSendFromISR( adcDataQueue, data, NULL );
