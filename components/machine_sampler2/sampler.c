@@ -65,7 +65,7 @@ static matrix_row_t matrix[8];
 // row may carry MTX_Vx_PITCH. Cache the row per voice; -1 = unassigned.
 static int s_pitch_row[2] = {0, 1};
 static ui_param_holder_t ui_params[2];
-static void (*play_modes[])(void *, void *, void *) = {s2_fill_buffer_one_shot, s2_fill_buffer_loop, s2_fill_buffer_pipo};
+static void (*play_modes[])(void *, void *, void *) = {s2_fill_buffer_one_shot, s2_fill_buffer_loop, s2_fill_buffer_pipo, s2_fill_buffer_loop /* CROP loops the window */};
 
 int s2_controlData[3][8];
 
@@ -821,6 +821,11 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
             temp_loop_end /= 4;
             temp_loop_end *= 4;
         }
+
+        // Sampler2 CROP mode: the crop window IS the loop — slave loop start
+        // to sample start so CV on Start/End reshapes the loop directly
+        if (voice[vid].playback_engine.mode == CROP)
+            temp_loop_start = temp_sample_start;
 
         // Sampler2: enforce a minimum loop length (~100 ms of stereo frames)
         // regardless of CV or menu input — micro-loops re-read the SD card at

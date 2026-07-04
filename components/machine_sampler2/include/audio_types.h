@@ -30,6 +30,7 @@ typedef enum{
     SINGLE = 0x00,
     LOOP = 0x01,
     PIPO = 0x02,
+    CROP = 0x03,   // Sampler2: loop over [start, end] — the crop window IS the loop
 } voice_play_state_t;
 
 typedef enum{
