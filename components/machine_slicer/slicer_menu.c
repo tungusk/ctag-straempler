@@ -28,6 +28,39 @@ static const color_t CUR_COL = {40, 200, 90};    // playing slice
 static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1;
 static char s_msg[24];
 
+// repaint a single slice column (waveform + grid + its highlight) without
+// clearing the whole screen — so moving the highlight doesn't black out
+static void repaint_slice(int s){
+    if (s < 0 || s >= sl.n_slices || sl.len == 0) return;
+    int x0 = WX + s * WW / sl.n_slices;
+    int x1 = WX + (s + 1) * WW / sl.n_slices;
+    int cy = WY + WH / 2;
+    bool is_cur = sl.playing && s == sl.cur;
+    _bg = is_cur ? (color_t){20, 40, 50} : BG;
+    TFT_fillRect(x0, WY, x1 - x0, WH, _bg);
+    for (int c = 0; c < sl.peak_n; c++){
+        int x = WX + c * WW / sl.peak_n;
+        if (x < x0 || x >= x1) continue;
+        int h = sl.peaks[c] * (WH / 2) / 31;
+        if (h < 1 && sl.peaks[c] > 0) h = 1;
+        TFT_drawLine(x, cy - h, x, cy + h, WAVE);
+    }
+    TFT_drawLine(x0, WY, x0, WY + WH, GRID);
+    TFT_drawLine(x1, WY, x1, WY + WH, GRID);
+    if (s == sl.sel) TFT_drawRect(x0, WY, x1 - x0, WH, SEL_COL);
+    if (is_cur)      TFT_drawRect(x0, WY, x1 - x0, WH, CUR_COL);
+}
+
+// move highlights by repainting only the vacated + newly-marked slices
+static void live_update_highlights(void){
+    repaint_slice(s_last_cur);
+    repaint_slice(s_last_sel);
+    repaint_slice(sl.cur);
+    repaint_slice(sl.sel);
+    s_last_cur = sl.cur;
+    s_last_sel = sl.sel;
+}
+
 static void draw_slice_region(int s, color_t c, bool fill){
     if (sl.n_slices < 1) return;
     int x0 = WX + s * WW / sl.n_slices;
@@ -94,18 +127,17 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
             break;
         case EV_TIMER_REPEATING_SLOW:
         case EV_TIMER_REPEATING_FAST:
-            // repaint only when the highlighted slice moved (slice-rate, not
-            // per-pixel) — cheap and flicker-free
-            if (sl.cur != s_last_cur || sl.sel != s_last_sel || sl.n_slices != s_last_slices)
-                live_full_redraw();
+            if (sl.n_slices != s_last_slices) live_full_redraw();   // grid changed
+            else if (sl.cur != s_last_cur || sl.sel != s_last_sel)
+                live_update_highlights();                           // just move highlights
             break;
         case EV_FWD:
             sl.sel = (sl.sel + 1) % sl.n_slices;
-            live_full_redraw();
+            live_update_highlights();
             break;
         case EV_BWD:
             sl.sel = (sl.sel + sl.n_slices - 1) % sl.n_slices;
-            live_full_redraw();
+            live_update_highlights();
             break;
         case EV_SHORT_PRESS:
             sl.cmd_fire = 1;            // audition the selected slice

@@ -92,7 +92,9 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     }
     sl.level = io->cv[5] >> 4;
     sl.pitch_cv = io->cv[6];
-    sl.inc = 0.25f + (float)sl.pitch_cv / 4095.0f * 1.75f;   // 0.25x .. 2.0x
+    // knob 7 centered (2048) = unity speed; 0.5x .. 2.0x around it
+    if (sl.pitch_cv >= 2048) sl.inc = 1.0f + (float)(sl.pitch_cv - 2048) / 2048.0f;
+    else                     sl.inc = 0.5f + (float)sl.pitch_cv / 2048.0f * 0.5f;
 
     if (sl.cmd_fire)    { sl.cmd_fire = 0;    fire_slice(sl.sel); }
     if (sl.cmd_advance) { sl.cmd_advance = 0; fire_slice(sl.sel); sl.sel = (sl.sel + 1) % sl.n_slices; }
