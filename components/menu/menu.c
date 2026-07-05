@@ -70,8 +70,8 @@ static int timer_handler(int it_id, int event, void* event_data){
     return 0; // remain in current menu
 }
 
-// main menu = active machine's entries + core "More". Rebuilt on machine bind.
-static const char *s_main_labels[9] = {"More"};
+// main menu = active machine's entries + core "System". Rebuilt on machine bind.
+static const char *s_main_labels[9] = {"System"};
 static int s_main_targets[9] = {M_MORE};
 static int s_n_main = 1;
 
@@ -494,7 +494,7 @@ static void menuMachineBindNow(void){
             s_main_targets[n] = mui->main_targets[n];
         }
     }
-    s_main_labels[n] = "More";
+    s_main_labels[n] = "System";
     s_main_targets[n] = M_MORE;
     s_n_main = n + 1;
 
