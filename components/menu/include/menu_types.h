@@ -19,6 +19,8 @@ typedef enum{
     M_BROWSE_USER,
     M_MORE,
     M_MACHINE_SEL,
+    M_LOOPER_LIVE,
+    M_LOOPER_SETUP,
     M_SETTINGS,
     M_SETTINGS_INPUT,
     M_ABOUT,
