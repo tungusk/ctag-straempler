@@ -15,23 +15,102 @@
 
 sl_state_t sl;
 
-// ---- slicing / playback ---------------------------------------------------
-static uint32_t slice_len(void)
+// ---- slicing ---------------------------------------------------------------
+static void recompute_grid(int n)
 {
-    if (sl.n_slices < 1 || sl.len == 0) return 0;
-    uint32_t sl_ = sl.len / sl.n_slices;
-    return sl_ < 4 ? sl.len : sl_;
+    if (n < 1) n = 1;
+    if (n > SL_MAX_SLICES) n = SL_MAX_SLICES;
+    sl.n_slices = n;
+    for (int i = 0; i <= n; i++)
+        sl.slice_pt[i] = (uint32_t)((uint64_t)i * sl.len / n);
 }
 
+// transient detector: window energy -> onset (rectified energy rise) -> pick
+// the strongest min-spaced onsets as slice boundaries. Offline, at load time.
+#define SL_WIN     512
+#define SL_MAXCAND 96
+static float s_env[SL_MAX_FRAMES / SL_WIN + 2];
+
+static void detect_transients(int target)
+{
+    uint32_t nwin = sl.len / SL_WIN;
+    if (nwin < 4 || target < 2) { recompute_grid(target); return; }
+
+    for (uint32_t w = 0; w < nwin; w++) {
+        uint32_t a = w * SL_WIN;
+        uint64_t acc = 0;
+        for (int k = 0; k < SL_WIN; k++) {
+            int l = sl.buf[(a + k) * 2];     if (l < 0) l = -l;
+            int r = sl.buf[(a + k) * 2 + 1]; if (r < 0) r = -r;
+            acc += (uint32_t)(l + r);
+        }
+        s_env[w] = (float)acc;
+    }
+
+    double sum = 0;
+    for (uint32_t w = 1; w < nwin; w++) { float o = s_env[w] - s_env[w - 1]; if (o > 0) sum += o; }
+    float thresh = (float)(sum / nwin) * 2.0f;
+    uint32_t min_gap = (SL_RATE / 12) / SL_WIN;   // ~80 ms minimum slice
+    if (min_gap < 1) min_gap = 1;
+
+    float cs[SL_MAXCAND]; uint32_t cp[SL_MAXCAND]; int nc = 0;
+    uint32_t last = 0; bool have_last = false;
+    for (uint32_t w = 2; w < nwin - 1 && nc < SL_MAXCAND; w++) {
+        float o = s_env[w] - s_env[w - 1];
+        if (o > thresh && o >= (s_env[w - 1] - s_env[w - 2]) && o > (s_env[w + 1] - s_env[w])) {
+            if (have_last && w - last < min_gap) continue;
+            cs[nc] = o; cp[nc] = w * SL_WIN; nc++; last = w; have_last = true;
+        }
+    }
+    if (nc == 0) { recompute_grid(target); return; }
+
+    for (int i = 1; i < nc; i++) {   // sort candidates by strength desc
+        float ks = cs[i]; uint32_t kp = cp[i]; int j = i - 1;
+        while (j >= 0 && cs[j] < ks) { cs[j + 1] = cs[j]; cp[j + 1] = cp[j]; j--; }
+        cs[j + 1] = ks; cp[j + 1] = kp;
+    }
+    int want = target - 1;
+    if (want > nc) want = nc;
+    if (want > SL_MAX_SLICES - 1) want = SL_MAX_SLICES - 1;
+
+    uint32_t pts[SL_MAX_SLICES];
+    for (int i = 0; i < want; i++) pts[i] = cp[i];
+    for (int i = 1; i < want; i++) {  // sort chosen positions ascending
+        uint32_t k = pts[i]; int j = i - 1;
+        while (j >= 0 && pts[j] > k) { pts[j + 1] = pts[j]; j--; }
+        pts[j + 1] = k;
+    }
+    sl.slice_pt[0] = 0;
+    for (int i = 0; i < want; i++) sl.slice_pt[i + 1] = pts[i];
+    sl.slice_pt[want + 1] = sl.len;
+    sl.n_slices = want + 1;
+}
+
+static void recompute_slices(void)
+{
+    if (sl.len == 0) { sl.n_slices = 1; sl.slice_pt[0] = 0; sl.slice_pt[1] = 0; return; }
+    if (sl.transient_mode) detect_transients(sl.slice_target);
+    else                   recompute_grid(sl.slice_target);
+    if (sl.sel >= sl.n_slices) sl.sel = sl.n_slices - 1;
+}
+
+void slicer_reslice(void)
+{
+    sl.loading = true;      // briefly mute — slice_pt[] is being rewritten
+    sl.playing = false;
+    recompute_slices();
+    sl.loading = false;
+}
+
+// ---- playback -------------------------------------------------------------
 static void fire_slice(int s)
 {
-    uint32_t sll = slice_len();
-    if (sll == 0) return;
+    if (sl.len == 0 || sl.n_slices < 1) return;
     if (s < 0) s = 0;
     if (s >= sl.n_slices) s = sl.n_slices - 1;
-    sl.s_start = (uint32_t)s * sll;
-    sl.s_end = sl.s_start + sll;
-    if (sl.s_end > sl.len) sl.s_end = sl.len;
+    sl.s_start = sl.slice_pt[s];
+    sl.s_end = sl.slice_pt[s + 1];
+    if (sl.s_end > sl.len || sl.s_end <= sl.s_start) sl.s_end = sl.len;
     sl.cur = s;
     sl.pos = sl.reverse ? (double)(sl.s_end - 1) : (double)sl.s_start;
     sl.playing = true;
@@ -50,7 +129,9 @@ static esp_err_t slicer_start(void)
     memset(&sl, 0, sizeof(sl));
     sl.buf = heap_caps_malloc((size_t)SL_MAX_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     if (!sl.buf) { ESP_LOGE("SLICER", "PSRAM alloc failed"); return ESP_ERR_NO_MEM; }
+    sl.slice_target = 16;
     sl.n_slices = 16;
+    sl.transient_mode = false;
     sl.level = 255;
     sl.pitch_cv = 2048;
     sl.inc = 1.0f;
@@ -179,10 +260,11 @@ int slicer_load(const char *name)
     strncpy(sl.sample, name, sizeof(sl.sample) - 1);
     sl.sample[sizeof(sl.sample) - 1] = 0;
     compute_peaks();
+    recompute_slices();     // (re)build slice boundaries for the new sample
     sl.cur = 0;
     sl.sel = 0;
     sl.loading = false;
-    ESP_LOGI("SLICER", "loaded %s (%lu frames)", name, (unsigned long)n);
+    ESP_LOGI("SLICER", "loaded %s (%lu frames, %d slices)", name, (unsigned long)n, sl.n_slices);
     return 0;
 }
 
@@ -211,7 +293,8 @@ int slicer_list_samples(char out[][24], int max)
 static cJSON *slicer_preset_save(void)
 {
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddNumberToObject(o, "slices", sl.n_slices);
+    cJSON_AddNumberToObject(o, "slices", sl.slice_target);
+    cJSON_AddBoolToObject(o, "transient", sl.transient_mode);
     cJSON_AddStringToObject(o, "sample", sl.sample);
     cJSON_AddBoolToObject(o, "auto", sl.auto_on);
     cJSON_AddBoolToObject(o, "reverse", sl.reverse);
@@ -222,11 +305,12 @@ static void slicer_preset_load(const cJSON *node)
 {
     if (!node) return;
     cJSON *j;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "slices")) && cJSON_IsNumber(j)) sl.n_slices = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "slices")) && cJSON_IsNumber(j)) sl.slice_target = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "transient"))) sl.transient_mode = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "auto")))    sl.auto_on = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "reverse"))) sl.reverse = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])
-        slicer_load(j->valuestring);   // reload the remembered sample (SD ok on UI task)
+        slicer_load(j->valuestring);   // reload the remembered sample (rebuilds slices)
 }
 
 extern const machine_ui_t slicer_menu_ui;

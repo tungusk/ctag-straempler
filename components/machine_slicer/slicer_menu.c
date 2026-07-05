@@ -29,14 +29,22 @@ static const color_t CUR_COL = {40, 200, 90};    // playing slice
 static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1;
 static char s_msg[24];
 
+// x pixel of slice boundary s (slices are non-uniform in transient mode)
+static int slice_x(int s){
+    if (sl.len == 0) return WX;
+    if (s < 0) s = 0;
+    if (s > sl.n_slices) s = sl.n_slices;
+    return WX + (int)((uint64_t)sl.slice_pt[s] * WW / sl.len);
+}
+
 // repaint a single slice column (waveform + grid + its highlight) without
 // clearing the whole screen. cur/sel are passed in (snapshotted by the caller)
 // so the drawn state matches the cache even though the audio thread writes
 // sl.cur/sl.sel asynchronously — otherwise a stale outline can linger.
 static void repaint_slice(int s, int cur, int sel){
     if (s < 0 || s >= sl.n_slices || sl.len == 0) return;
-    int x0 = WX + s * WW / sl.n_slices;
-    int x1 = WX + (s + 1) * WW / sl.n_slices;
+    int x0 = slice_x(s);
+    int x1 = slice_x(s + 1);
     int cy = WY + WH / 2;
     bool is_cur = sl.playing && s == cur;
     _bg = is_cur ? (color_t){20, 40, 50} : BG;
@@ -80,8 +88,8 @@ static void live_update_highlights(void){
 
 static void draw_slice_region(int s, color_t c, bool fill){
     if (sl.n_slices < 1) return;
-    int x0 = WX + s * WW / sl.n_slices;
-    int x1 = WX + (s + 1) * WW / sl.n_slices;
+    int x0 = slice_x(s);
+    int x1 = slice_x(s + 1);
     _fg = c;
     if (fill){
         _bg = (color_t){20, 40, 50};
@@ -102,9 +110,9 @@ static void draw_waveform(void){
         if (h < 1 && sl.peaks[c] > 0) h = 1;
         TFT_drawLine(x, cy - h, x, cy + h, WAVE);
     }
-    // slice division grid
+    // slice division grid (boundaries may be non-uniform in transient mode)
     for (int s = 0; s <= sl.n_slices; s++){
-        int x = WX + s * WW / sl.n_slices;
+        int x = slice_x(s);
         TFT_drawLine(x, WY, x, WY + WH, GRID);
     }
     // selected slice outline (bright) + current playing outline
@@ -161,8 +169,8 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup page -----------------------------------------------------------
-static const char *setup_labels[] = {"Slices", "Sample", "Auto", "Reverse"};
-#define SL_SETUP_N 4
+static const char *setup_labels[] = {"Mode", "Slices", "Sample", "Auto", "Reverse"};
+#define SL_SETUP_N 5
 
 // cached sample list for the Sample row cycler
 static char s_samples[32][24];
@@ -189,22 +197,23 @@ static void setup_redraw(int pos, int sel){
         TFT_print((char*)setup_labels[i], 8, y);
         char v[24];
         switch(i){
-            case 0: snprintf(v, sizeof(v), "%d", sl.n_slices); break;
-            case 1: snprintf(v, sizeof(v), "%s", sl.sample[0] ? sl.sample : "(none)"); break;
-            case 2: snprintf(v, sizeof(v), "%s", sl.auto_on ? "ON" : "OFF"); break;
-            case 3: snprintf(v, sizeof(v), "%s", sl.reverse ? "ON" : "OFF"); break;
+            case 0: snprintf(v, sizeof(v), "%s", sl.transient_mode ? "Transient" : "Grid"); break;
+            case 1: snprintf(v, sizeof(v), "%d", sl.slice_target); break;
+            case 2: snprintf(v, sizeof(v), "%s", sl.sample[0] ? sl.sample : "(none)"); break;
+            case 3: snprintf(v, sizeof(v), "%s", sl.auto_on ? "ON" : "OFF"); break;
+            case 4: snprintf(v, sizeof(v), "%s", sl.reverse ? "ON" : "OFF"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
     if (s_msg[0]){ _fg = TFT_LIGHTGREY; TFT_print(s_msg, 8, _height - fh - 2); }
 }
 
-static void cycle_slices(int dir){
-    int n = sl.n_slices;
+static void cycle_target(int dir){
+    int n = sl.slice_target;
     if (dir > 0) n = (n >= 32) ? 8 : n * 2;
     else         n = (n <= 8) ? 32 : n / 2;
-    sl.n_slices = n;
-    if (sl.sel >= n) sl.sel = n - 1;
+    sl.slice_target = n;
+    slicer_reslice();
 }
 
 static int slicer_setup_handler(int it_id, int event, void *ev_data){
@@ -216,24 +225,24 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
             break;
         case EV_FWD:
             if(sel){
-                if(pos==0) cycle_slices(+1);
-                else if(pos==1){ if(s_n_samples){ s_sample_idx = (s_sample_idx+1)%s_n_samples; snprintf(s_msg,sizeof(s_msg),"press to load"); } }
-                else if(pos==2) sl.auto_on = !sl.auto_on;
-                else if(pos==3) sl.reverse = !sl.reverse;
+                if(pos==0)      { sl.transient_mode = !sl.transient_mode; slicer_reslice(); }
+                else if(pos==1) cycle_target(+1);
+                else if(pos==3) sl.auto_on = !sl.auto_on;
+                else if(pos==4) sl.reverse = !sl.reverse;
             } else pos = (pos + 1) % SL_SETUP_N;
             setup_redraw(pos, sel);
             break;
         case EV_BWD:
             if(sel){
-                if(pos==0) cycle_slices(-1);
-                else if(pos==1){ if(s_n_samples){ s_sample_idx = (s_sample_idx+s_n_samples-1)%s_n_samples; snprintf(s_msg,sizeof(s_msg),"press to load"); } }
-                else if(pos==2) sl.auto_on = !sl.auto_on;
-                else if(pos==3) sl.reverse = !sl.reverse;
+                if(pos==0)      { sl.transient_mode = !sl.transient_mode; slicer_reslice(); }
+                else if(pos==1) cycle_target(-1);
+                else if(pos==3) sl.auto_on = !sl.auto_on;
+                else if(pos==4) sl.reverse = !sl.reverse;
             } else pos = (pos + SL_SETUP_N - 1) % SL_SETUP_N;
             setup_redraw(pos, sel);
             break;
         case EV_SHORT_PRESS:
-            if(pos == 1){
+            if(pos == 2){
                 setup_refresh_samples();
                 return M_SLICER_LOAD;   // open the centered sample browser
             }
