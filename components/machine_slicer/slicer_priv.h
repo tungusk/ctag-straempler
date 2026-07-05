@@ -11,6 +11,7 @@
 #define SL_MAX_SECS   12
 #define SL_MAX_FRAMES (SL_RATE * SL_MAX_SECS)   // stereo frames cap
 #define SL_PEAKS      300                       // waveform display columns
+#define SL_MAX_SLICES 32
 
 typedef struct {
     int16_t *buf;                 // PSRAM interleaved stereo L,R, SL_MAX_FRAMES*2
@@ -19,7 +20,11 @@ typedef struct {
     char sample[24];              // loaded sample id (no extension)
 
     // settings (UI writes, engine reads)
-    volatile int  n_slices;       // 8 / 16 / 32
+    volatile int  slice_target;   // requested slice count 8/16/32 (grid = exact,
+                                  // transient = max)
+    volatile int  n_slices;       // ACTUAL slice count in use
+    volatile bool transient_mode; // slice at detected transients vs equal grid
+    uint32_t slice_pt[SL_MAX_SLICES + 1];  // slice boundaries (frames), n_slices+1
     volatile int  sel;            // selected slice (UI/CV target)
     volatile bool auto_on;        // auto-advance through slices on slice end
     volatile bool reverse;        // play slices reversed
@@ -46,5 +51,7 @@ extern sl_state_t sl;
 
 // load a stereo RAW from /sdcard/usr/<name>.RAW into PSRAM (UI task). 0 = ok.
 int slicer_load(const char *name);
+// recompute slice boundaries from slice_target + mode (UI task; mutes briefly)
+void slicer_reslice(void);
 // list usr/*.RAW ids into out[][], returns count (<= max)
 int slicer_list_samples(char out[][24], int max);
