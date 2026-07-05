@@ -789,7 +789,7 @@ void s2_menuTFTPrintMatrixAmount(matrix_ui_row_t* matrix, int r){
             }
             break;
         default: ;
-            uint8_t* amt = &(matrix[r].amt);
+            int8_t* amt = &(matrix[r].amt);
             y += (TFT_getfontheight() + 8) * r;
 
             if(matrix[r].dst == MTX_NONE){

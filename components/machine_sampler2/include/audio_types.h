@@ -77,18 +77,18 @@ typedef enum{
 
 typedef struct{
     matrix_param_t dst;
-    float amt;
+    float amt;      // engine side: -1.0 .. 1.0
 } matrix_row_t;
 
 
 typedef struct{
     matrix_param_t dst;
-    uint8_t amt;
+    int8_t amt;    // -100 .. 100, negative inverts the CV response
 } matrix_ui_row_t;
 
 typedef struct{
     uint8_t source;
-    uint8_t amount;
+    int8_t amount; // -100 .. 100
     matrix_param_t changed_param;
 }matrix_event_t;
 

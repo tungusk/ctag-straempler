@@ -454,6 +454,7 @@ float s2_modulate_unipolar(float center, float max_min, float src, float amt){
 
     if(max_min > 0.0f){
         if(output > max_min) return max_min;
+        if(output < 0.0f) return 0.0f;   // negative amounts may push below range
     }
     else{
         if(output < max_min) return max_min;
