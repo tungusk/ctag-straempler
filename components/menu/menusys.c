@@ -32,8 +32,10 @@ void menusys_free(menusys_t *ms){
     for(int i=0;i<ms->n_menus;i++){
         menusys_item_t *it = ms->items_array[i];
         for(int j=0;j<it->n_callbacks;j++) free(it->cb_array[j]);
+        free(it->cb_array);
         free(ms->items_array[i]);
     }
+    free(ms->items_array);
     free(ms);
 }
 
