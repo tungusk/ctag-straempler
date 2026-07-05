@@ -84,17 +84,27 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     if (pressed & 1) sl.cmd_fire = 1;
     if (pressed & 2) sl.cmd_advance = 1;
 
-    // CV1 selects the slice (when driven — jack idles ~880), CV6 level, CV7 pitch
-    uint16_t c1 = io->cv[0] > 900 ? io->cv[0] - 900 : 0;   // 0..3195
-    if (c1) {
-        int s = (int)((uint32_t)c1 * sl.n_slices / 3196);
+    // knob 6 (CV6) selects the slice — update on knob movement so the encoder
+    // still works when the knob is still (both write sl.sel, last mover wins)
+    static uint16_t last_cv6 = 0xFFFF;
+    uint16_t cv6 = io->cv[5];
+    if (last_cv6 == 0xFFFF) last_cv6 = cv6;
+    if (cv6 > last_cv6 + 40 || cv6 + 40 < last_cv6) {
+        int s = (int)((uint32_t)cv6 * sl.n_slices / 4096);
         sl.sel = (s >= sl.n_slices) ? sl.n_slices - 1 : s;
+        last_cv6 = cv6;
     }
-    sl.level = io->cv[5] >> 4;
+
+    // CV1 jack = level (when driven, else unity — unpatched plays full volume)
+    uint16_t c1 = io->cv[0] > 900 ? io->cv[0] - 900 : 0;   // 0..3195
+    sl.level = c1 ? (uint16_t)((uint32_t)c1 * 255 / 3195) : 255;
+
+    // knob 7 (CV7) pitch: a unity plateau around center (easy to hit 100%),
+    // scaling to 0.5x .. 2.0x outside it
     sl.pitch_cv = io->cv[6];
-    // knob 7 centered (2048) = unity speed; 0.5x .. 2.0x around it
-    if (sl.pitch_cv >= 2048) sl.inc = 1.0f + (float)(sl.pitch_cv - 2048) / 2048.0f;
-    else                     sl.inc = 0.5f + (float)sl.pitch_cv / 2048.0f * 0.5f;
+    if (sl.pitch_cv >= 1843 && sl.pitch_cv <= 2253) sl.inc = 1.0f;         // ~±10% unity
+    else if (sl.pitch_cv > 2253) sl.inc = 1.0f + (float)(sl.pitch_cv - 2253) / 1842.0f;
+    else                         sl.inc = 0.5f + (float)sl.pitch_cv / 1843.0f * 0.5f;
 
     if (sl.cmd_fire)    { sl.cmd_fire = 0;    fire_slice(sl.sel); }
     if (sl.cmd_advance) { sl.cmd_advance = 0; fire_slice(sl.sel); sl.sel = (sl.sel + 1) % sl.n_slices; }
