@@ -156,13 +156,15 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
 {
     for (int i = 0; i < LP_TRACKS; i++) apply_cmd(i);
 
-    // TR button edges (active-low): TR1 = action on selected lane (arm/punch),
-    // TR2 = play/stop selected lane. Edge-detected once per block.
-    static uint8_t prev_trig;
-    uint8_t rising = (~prev_trig) & io->trig_level;   // this hw: pressed = bit set
+    // TR inputs are ACTIVE LOW on this hardware: idle reads high (bit set),
+    // a gate/press pulls it low. Detect the falling edge (1 -> 0). Seed the
+    // previous state to idle-high so a fresh start doesn't see a phantom edge
+    // and auto-record. TR1 = action on selected lane, TR2 = play/stop.
+    static uint8_t prev_trig = 0x03;
+    uint8_t pressed = prev_trig & (~io->trig_level) & 0x03;
     prev_trig = io->trig_level;
-    if (rising & 1) lp.cmd_action[lp.sel] = 1;
-    if (rising & 2) {
+    if (pressed & 1) lp.cmd_action[lp.sel] = 1;
+    if (pressed & 2) {
         lp_track_t *t = &lp.tr[lp.sel];
         if (t->state == LP_PLAY) t->state = LP_STOP;
         else if (t->len > 0) { t->pos = 0; t->state = LP_PLAY; }
