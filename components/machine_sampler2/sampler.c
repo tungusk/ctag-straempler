@@ -64,6 +64,25 @@ static matrix_row_t matrix[8];
 // Sampler2: keyboard pitch is no longer hard-wired to matrix rows 0/1 — any
 // row may carry MTX_Vx_PITCH. Cache the row per voice; -1 = unassigned.
 static int s_pitch_row[2] = {0, 1};
+
+// Sampler2: normalized modulation inputs. The 1V/oct jacks (channels 1/2)
+// idle around 880/4095 (~21%) by analog design; trim the floor so they reach
+// a true zero as generic mod sources. Keyboard pitch keeps raw values (the
+// pitch LUT expects the untrimmed window).
+static const uint16_t s2_cv_floor[8] = {900, 900, 0, 0, 0, 0, 0, 0};
+
+static inline float s2_cv_uni(int src, uint16_t *ctrl_data)
+{
+    uint16_t v = cv_corrected(src, ctrl_data);
+    uint16_t fl = s2_cv_floor[src];
+    if (v <= fl) return 0.0f;
+    return (float)(v - fl) / (float)(4095 - fl);      // 0..1
+}
+
+static inline float s2_cv_bi(int src, uint16_t *ctrl_data)
+{
+    return s2_cv_uni(src, ctrl_data) * 2.0f - 1.0f;   // -1..1
+}
 static ui_param_holder_t ui_params[2];
 static void (*play_modes[])(void *, void *, void *) = {s2_fill_buffer_one_shot, s2_fill_buffer_loop, s2_fill_buffer_pipo, s2_fill_buffer_loop /* CROP loops the window */};
 
@@ -324,7 +343,7 @@ static float modulate_pan(int vid, int index, uint16_t *ctrl_data)
 
     if (src >= 0 && src < 8)
     {
-        input_value = FixedToFloat_8((cv_corrected(src, ctrl_data) >> 3)) - 1.0;
+        input_value = s2_cv_bi(src, ctrl_data);
         input_value += ui_pan;
         if (input_value >= amount)
         {
@@ -371,7 +390,7 @@ static float modulate_pitch(int vid, int index, uint16_t *ctrl_data)
 
     if (src >= 0 && src < 8)
     {
-        input_value = FixedToFloat_8((cv_corrected(src, ctrl_data) >> 3)) - 1.0;
+        input_value = s2_cv_bi(src, ctrl_data);
         if (input_value < 0.0 && voice[vid].playback_engine.is_playback_direction_forward)
         {
             voice[vid].playback_engine.is_playback_direction_forward = 0;
@@ -532,7 +551,8 @@ float s2_modulateParameter(int index, uint16_t *ctrl_data)
     if (src >= 0 && src < 8)
     {
 
-        input_value = FixedToFloat_9((cv_corrected(src, ctrl_data) >> 3));
+        input_value = s2_cv_uni(src, ctrl_data);
+        if (amount < 0.0f) { input_value = 1.0f - input_value; amount = -amount; }
 
         if (input_value >= amount)
         {
@@ -576,7 +596,7 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
     {
         int index = 0;
         int array_amt = amount * 511;
-        input_value = FixedToFloat_8((cv_corrected(src, ctrl_data) >> 3)) - 1.0;
+        input_value = s2_cv_bi(src, ctrl_data);
         input_value *= 255;
         if (input_value + ui_base_id <= -1 * (ui_base_id + array_amt))
         {
@@ -621,8 +641,9 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
     if (src >= 0 && src < 8)
     {
         int index = 0;
+        input_value = s2_cv_uni(src, ctrl_data);
+        if (amount < 0.0f) { input_value = 1.0f - input_value; amount = -amount; }
         int array_amt = amount * 511;
-        input_value = FixedToFloat_9((cv_corrected(src, ctrl_data) >> 3));
         input_value *= 511;
 
         if (input_value + ui_width_id >= array_amt)
@@ -677,7 +698,8 @@ static void modulateFilterParameter(int vid, int base, int width, int q_index, u
     if (src >= 0 && src < 8)
     {
 
-        input_value = FixedToFloat_9((cv_corrected(src, ctrl_data) >> 3));
+        input_value = s2_cv_uni(src, ctrl_data);
+        if (amount < 0.0f) { input_value = 1.0f - input_value; amount = -amount; }
         input_value *= 5.0f;
         resonance = ui_resonance + input_value;
         amount *= 5.0f;
@@ -716,7 +738,8 @@ static float modulateDlySendParameter(int vid, int index, uint16_t *ctrl_data)
     if (src >= 0 && src < 8)
     {
 
-        input_value = FixedToFloat_9((cv_corrected(src, ctrl_data) >> 3));
+        input_value = s2_cv_uni(src, ctrl_data);
+        if (amount < 0.0f) { input_value = 1.0f - input_value; amount = -amount; }
 
         if (input_value >= amount)
         {
@@ -754,27 +777,27 @@ static void modulate_adsr_parameter(int vid, uint16_t* ctrl_data)
         if((matrix[i].dst == MTX_V0_ADSR_ATTACK && vid == 0) || 
            (matrix[i].dst == MTX_V1_ADSR_ATTACK && vid == 1))
         {
-            voice[vid].adsr.attack_time = s2_modulate_unipolar(ui_params[vid].attack_time, 10000, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt) * 44.1f;
+            voice[vid].adsr.attack_time = s2_modulate_unipolar(ui_params[vid].attack_time, 10000, s2_cv_uni(i, ctrl_data), matrix[i].amt) * 44.1f;
             time_value_modulated = true;
         }
 
         if((matrix[i].dst == MTX_V0_ADSR_DECAY && vid == 0) || 
            (matrix[i].dst == MTX_V1_ADSR_DECAY && vid == 1))
         {
-            voice[vid].adsr.decay_time = s2_modulate_unipolar(ui_params[vid].decay_time, 10000, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt) * 44.1f;
+            voice[vid].adsr.decay_time = s2_modulate_unipolar(ui_params[vid].decay_time, 10000, s2_cv_uni(i, ctrl_data), matrix[i].amt) * 44.1f;
             time_value_modulated = true;
         }
 
         if((matrix[i].dst == MTX_V0_ADSR_SUSTAIN && vid == 0) || 
            (matrix[i].dst == MTX_V1_ADSR_SUSTAIN && vid == 1))
         {
-            voice[vid].adsr.sustain_level = s2_modulate_unipolar(ui_params[vid].sustain_level, 100, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt) * 0.01f;
+            voice[vid].adsr.sustain_level = s2_modulate_unipolar(ui_params[vid].sustain_level, 100, s2_cv_uni(i, ctrl_data), matrix[i].amt) * 0.01f;
         }
 
         if((matrix[i].dst == MTX_V0_ADSR_RELEASE && vid == 0) || 
            (matrix[i].dst == MTX_V1_ADSR_RELEASE && vid == 1))
         {
-            voice[vid].adsr.release_time = s2_modulate_unipolar(ui_params[vid].release_time, 10000, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt) * 44.1f;
+            voice[vid].adsr.release_time = s2_modulate_unipolar(ui_params[vid].release_time, 10000, s2_cv_uni(i, ctrl_data), matrix[i].amt) * 44.1f;
             time_value_modulated = true;
         }
 
@@ -803,21 +826,21 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
         if ((matrix[i].dst == MTX_V0_MODE_START && vid == 0) ||
             (matrix[i].dst == MTX_V1_MODE_START && vid == 1))
         {
-            temp_sample_start = (uint32_t)s2_modulate_unipolar(ui_params[vid].sample_start, fsize, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt);
+            temp_sample_start = (uint32_t)s2_modulate_unipolar(ui_params[vid].sample_start, fsize, s2_cv_uni(i, ctrl_data), matrix[i].amt);
             temp_sample_start /= 4;
             temp_sample_start *= 4;
         }
         else if ((matrix[i].dst == MTX_V0_MODE_LSTART && vid == 0) ||
                  (matrix[i].dst == MTX_V1_MODE_LSTART && vid == 1))
         {
-            temp_loop_start = (uint32_t)s2_modulate_unipolar(ui_params[vid].loop_start, fsize, FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt);
+            temp_loop_start = (uint32_t)s2_modulate_unipolar(ui_params[vid].loop_start, fsize, s2_cv_uni(i, ctrl_data), matrix[i].amt);
             temp_loop_start /= 4;
             temp_loop_start *= 4;
         }
         else if ((matrix[i].dst == MTX_V0_MODE_LEND && vid == 0) ||
                  (matrix[i].dst == MTX_V1_MODE_LEND && vid == 1))
         {
-            temp_loop_end = (uint32_t)s2_modulate_unipolar(ui_params[vid].loop_end, 0, 1.0f - FixedToFloat_9((cv_corrected(i, ctrl_data) >> 3)), matrix[i].amt);
+            temp_loop_end = (uint32_t)s2_modulate_unipolar(ui_params[vid].loop_end, fsize, s2_cv_uni(i, ctrl_data), matrix[i].amt);
             temp_loop_end /= 4;
             temp_loop_end *= 4;
         }

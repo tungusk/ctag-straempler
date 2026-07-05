@@ -531,7 +531,7 @@ void s2_decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
 
 void s2_incItemAmount(matrix_ui_row_t* matrix, int source){
     if(matrix[source].dst != MTX_NONE){
-        uint8_t* tmp = &(matrix[source].amt);
+        int8_t* tmp = &(matrix[source].amt);
         if((*tmp  + 1) >= 100){
             *tmp  = 100;
         }else{
@@ -544,9 +544,9 @@ void s2_incItemAmount(matrix_ui_row_t* matrix, int source){
 
 void s2_decItemAmount(matrix_ui_row_t* matrix, int source){
     if(matrix[source].dst != MTX_NONE){
-        uint8_t* tmp = &(matrix[source].amt);
-        if((*tmp - 1) <= 0){
-            *tmp = 0;
+        int8_t* tmp = &(matrix[source].amt);
+        if((*tmp - 1) <= -100){
+            *tmp = -100;   // Sampler2: negative amounts invert the CV response
         } else{
             (*tmp)--;
         }
