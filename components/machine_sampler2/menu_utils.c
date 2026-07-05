@@ -281,18 +281,24 @@ void s2_incFilterValue(filter_data_t* data, int index){
             // ESP_LOGI("UI","Changed is_active %u", data->is_active);
             break;
         case SID_BASE:
-            if((data->base + 1) >= 511 ){       //Dummy base value 0 - 255
-                data->base = 511;
-            }else{
-                data->base += 1;
+            {
+                int d = accel_step();
+                if((data->base + d) >= 511 ){       //Dummy base value 0 - 255
+                    data->base = 511;
+                }else{
+                    data->base += d;
+                }
             }
             // ESP_LOGI("UI","Incremented base %u", data->base);
             break;
         case SID_WIDTH:
-            if((data->width + 1) >= 511){       //Dummy width value 0 - 255
-                data->width = 511;
-            }else{
-                data->width += 1;
+            {
+                int d = accel_step();
+                if((data->width + d) >= 511){       //Dummy width value 0 - 255
+                    data->width = 511;
+                }else{
+                    data->width += d;
+                }
             }
             // ESP_LOGI("UI","Incremented width %u", data->width);
             break;
@@ -317,18 +323,24 @@ void s2_decFilterValue(filter_data_t* data, int index){
             // ESP_LOGI("UI","Changed is_active %d", data->is_active);
             break;
         case SID_BASE:
-            if((data->base - 1) <= 0 ){       //Dummy base value 0 - 255
-                data->base = 0;
-            }else{
-                data->base -= 1;
+            {
+                int d = accel_step();
+                if((data->base - d) <= 0 ){       //Dummy base value 0 - 255
+                    data->base = 0;
+                }else{
+                    data->base -= d;
+                }
             }
             // ESP_LOGI("UI","Decremented base %u", data->base);
             break;
         case SID_WIDTH:
-            if((data->width - 1) <= 0){       //Dummy width value 0 - 255
-                data->width = 0;
-            }else{
-                data->width -= 1;
+            {
+                int d = accel_step();
+                if((data->width - d) <= 0){       //Dummy width value 0 - 255
+                    data->width = 0;
+                }else{
+                    data->width -= d;
+                }
             }
             // ESP_LOGI("UI","Decremented width %u", data->width);
             break;
@@ -589,10 +601,13 @@ void s2_incDelayValue(delay_data_t* delay, int index){
             delay->mode = !(delay->mode);
             break;
         case SID_DELAY_TIME:
-            if((delay->time + 2) >= 1500){
-                delay->time = 1500;
-            }else{
-                delay->time += 2;
+            {
+                int d = 2 * accel_step();
+                if((delay->time + d) >= 1500){
+                    delay->time = 1500;
+                }else{
+                    delay->time += d;
+                }
             }
             // ESP_LOGI("UI","Incremented delay_time_left %u", delay->delay_time_left);
             break;
@@ -633,10 +648,13 @@ void s2_decDelayValue(delay_data_t* delay, int index){
             delay->mode = !(delay->mode);
             break;
         case SID_DELAY_TIME:
-            if((delay->time - 2) < 2){
-                delay->time = 2;
-            }else{
-                delay->time -= 2;
+            {
+                int d = 2 * accel_step();
+                if((delay->time - d) < 2){
+                    delay->time = 2;
+                }else{
+                    delay->time -= d;
+                }
             }
             // ESP_LOGI("UI","Decremented delay_time_left %u", delay->delay_time_left);
             break;
