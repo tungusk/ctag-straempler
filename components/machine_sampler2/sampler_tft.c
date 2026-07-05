@@ -828,12 +828,11 @@ void s2_menuTFTPrintMatrixDestination(matrix_ui_row_t* matrix, int row){
             }
             break;
         default:
-            if(row != 0 && row != 1){
-                y += (TFT_getfontheight() + 8) * row;
-                sprintf(tmp, s2_matrix_parameter_items[matrix[row].dst]);
-                TFT_fillRect(4, y, x_incr - 6, TFT_getfontheight(), _bg);
-                TFT_print(tmp, CENTER, y);
-            }
+            // Sampler2: rows 0/1 are reassignable — redraw them like any row
+            y += (TFT_getfontheight() + 8) * row;
+            sprintf(tmp, s2_matrix_parameter_items[matrix[row].dst]);
+            TFT_fillRect(4, y, x_incr - 6, TFT_getfontheight(), _bg);
+            TFT_print(tmp, CENTER, y);
             break;
     }
 }
