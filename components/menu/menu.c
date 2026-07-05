@@ -91,6 +91,10 @@ static int main_menu_def_handler(int it_id, int event, void* event_data){
 
     switch(event){
         case EV_ENTERED_MENU:
+            // repaint the whole bar (labels included): a machine's full-screen
+            // page may have cleared it, and SelectMainMenu only draws the
+            // highlight boxes, not the label text
+            menuTFTPrintMainMenus(s_main_labels, s_n_main);
             menuTFTSelectMainMenu(s_main_menu_pos, 0, s_main_labels, s_n_main);
             if (mui && mui->main_event) mui->main_event(event, event_data);
             break;
