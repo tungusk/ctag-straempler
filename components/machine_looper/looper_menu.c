@@ -144,7 +144,11 @@ static void setup_redraw(int pos, int sel){
         char v[16];
         switch(i){
             case 0: snprintf(v, sizeof(v), "%s", lp.sync_on ? "ON" : "OFF"); break;
-            case 1: snprintf(v, sizeof(v), "CV%d", lp.clk_src + 1); break;
+            case 1:
+                if (lp.clk_src == LP_CLK_TR1)      snprintf(v, sizeof(v), "TR1");
+                else if (lp.clk_src == LP_CLK_TR2) snprintf(v, sizeof(v), "TR2");
+                else snprintf(v, sizeof(v), "CV%d", lp.clk_src + 1);
+                break;
             case 2: snprintf(v, sizeof(v), "%d", lp.bars); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
@@ -158,7 +162,7 @@ static int looper_setup_handler(int it_id, int event, void *ev_data){
         case EV_FWD:
             if(sel){
                 if(pos==0) lp.sync_on = !lp.sync_on;
-                else if(pos==1) lp.clk_src = (lp.clk_src + 1) & 7;
+                else if(pos==1) lp.clk_src = (lp.clk_src + 1) % LP_CLK_SRCS;
                 else { int b = lp.bars * 2; lp.bars = (b > 8) ? 1 : b; }
             } else pos = (pos + 1) % SETUP_N;
             setup_redraw(pos, sel);
@@ -166,7 +170,7 @@ static int looper_setup_handler(int it_id, int event, void *ev_data){
         case EV_BWD:
             if(sel){
                 if(pos==0) lp.sync_on = !lp.sync_on;
-                else if(pos==1) lp.clk_src = (lp.clk_src + 7) & 7;
+                else if(pos==1) lp.clk_src = (lp.clk_src + LP_CLK_SRCS - 1) % LP_CLK_SRCS;
                 else { int b = lp.bars / 2; lp.bars = (b < 1) ? 8 : b; }
             } else pos = (pos + SETUP_N - 1) % SETUP_N;
             setup_redraw(pos, sel);

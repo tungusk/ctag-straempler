@@ -40,6 +40,17 @@ static void clock_reset(void)
     lp.locked = false;
 }
 
+// clock line as a 0/4095 pseudo-analog level for clock_tick, from either a CV
+// channel (used raw, thresholded below) or a trig input. Trig inputs are
+// active-low: a clock pulse pulls the line low, which we map to the "high"
+// clock state so the same rising-edge detector works for both.
+static uint16_t clock_level(const machine_io_t *io)
+{
+    if (lp.clk_src == LP_CLK_TR1) return (io->trig_level & 1) ? 0 : 4095;
+    if (lp.clk_src == LP_CLK_TR2) return (io->trig_level & 2) ? 0 : 4095;
+    return io->cv[lp.clk_src & 7];
+}
+
 // advance the clock detector by one frame; returns true on a quarter-note edge
 static bool clock_tick(uint16_t cv)
 {
@@ -98,7 +109,7 @@ static esp_err_t looper_start(void)
 {
     memset(&lp, 0, sizeof(lp));
     lp.sync_on = true;
-    lp.clk_src = 6;      // CV7 default (per plan)
+    lp.clk_src = LP_CLK_TR1;   // trig input: clean clock edge, no attenuverter
     lp.bars = 4;
     lp.sel = 0;
     for (int i = 0; i < LP_TRACKS; i++) {
@@ -156,22 +167,20 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
 {
     for (int i = 0; i < LP_TRACKS; i++) apply_cmd(i);
 
-    // TR inputs are ACTIVE LOW on this hardware: idle reads high (bit set),
-    // a gate/press pulls it low. Detect the falling edge (1 -> 0). Seed the
-    // previous state to idle-high so a fresh start doesn't see a phantom edge
-    // and auto-record. TR1 = action on selected lane, TR2 = play/stop.
+    // TR inputs are ACTIVE LOW: idle reads high (bit set), a gate pulls low.
+    // Detect the falling edge (1 -> 0), prev seeded idle-high so a fresh start
+    // sees no phantom edge. A trig assigned as the clock source is masked out
+    // so it doesn't also fire the action. Any free trig = context action on
+    // the selected lane (arm / cancel / punch-out / play / stop cycle).
+    uint8_t clk_mask = (lp.clk_src == LP_CLK_TR1) ? 1 :
+                       (lp.clk_src == LP_CLK_TR2) ? 2 : 0;
     static uint8_t prev_trig = 0x03;
-    uint8_t pressed = prev_trig & (~io->trig_level) & 0x03;
+    uint8_t pressed = prev_trig & (~io->trig_level) & 0x03 & ~clk_mask;
     prev_trig = io->trig_level;
-    if (pressed & 1) lp.cmd_action[lp.sel] = 1;
-    if (pressed & 2) {
-        lp_track_t *t = &lp.tr[lp.sel];
-        if (t->state == LP_PLAY) t->state = LP_STOP;
-        else if (t->len > 0) { t->pos = 0; t->state = LP_PLAY; }
-    }
+    if (pressed) lp.cmd_action[lp.sel] = 1;
 
     int frames = MACHINE_BLOCK / 2;
-    uint16_t clk = io->cv[lp.clk_src & 7];
+    uint16_t clk = clock_level(io);
 
     for (int f = 0; f < frames; f++) {
         bool bar_edge = false;
