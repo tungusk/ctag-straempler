@@ -126,6 +126,11 @@ static void live_full_redraw(void){
     lanes_reset_cache();
     header_update();
     lanes_update();
+    // control hint along the bottom
+    _bg = TFT_BLACK; _fg = (color_t){90, 90, 90};
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    TFT_print("turn:select  press:rec/stop  hold:exit", 6, _height - TFT_getfontheight() - 1);
+    TFT_setFont(DEFAULT_FONT, NULL);
 }
 
 static int looper_live_handler(int it_id, int event, void *ev_data){
