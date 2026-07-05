@@ -11,6 +11,12 @@
 #define LP_SECONDS     8
 #define LP_BUF_FRAMES  (LP_RATE * LP_SECONDS)   // mono frames per track
 
+// clock source values: 0..7 = CV1..CV8, 8 = TR1, 9 = TR2. A trig is the
+// natural clock input (clean gate edge, no attenuverter knob in the path).
+#define LP_CLK_TR1     8
+#define LP_CLK_TR2     9
+#define LP_CLK_SRCS    10
+
 enum { LP_EMPTY = 0, LP_ARMED, LP_REC, LP_PLAY, LP_STOP };
 
 typedef struct {
