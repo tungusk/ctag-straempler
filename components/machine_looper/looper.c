@@ -2,9 +2,13 @@
 // recording. Runs entirely in the audio task's process() callback; the UI
 // task pokes commands via the shared lp state (see looper_priv.h).
 #include <string.h>
+#include <stdio.h>
+#include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "cJSON.h"
+#include "fileio.h"
 #include "machine.h"
 #include "audio.h"
 #include "looper_priv.h"
@@ -15,8 +19,11 @@ lp_state_t lp;
 // Rising edge on the selected CV channel (hysteresis around mid-scale), period
 // averaged over an 8-interval ring, sanity-gated to 20..300 BPM. "period" is
 // samples per quarter-note; a bar = 4 quarters.
-#define CLK_HI 2400
-#define CLK_LO 1600
+// thresholds sit low enough to catch a knob-attenuated CV clock (knob 8 caps
+// incoming CV at ~half scale on this unit) and a full-swing trig alike, while
+// staying above the noise floor.
+#define CLK_HI 1500
+#define CLK_LO 800
 #define CLK_RING 8
 static bool     s_clk_prev_high;
 static uint32_t s_clk_since;          // samples since last rising edge
@@ -109,7 +116,7 @@ static esp_err_t looper_start(void)
 {
     memset(&lp, 0, sizeof(lp));
     lp.sync_on = true;
-    lp.clk_src = LP_CLK_TR1;   // trig input: clean clock edge, no attenuverter
+    lp.clk_src = 7;   // CV8 by default — frees both trigs for buttons
     lp.bars = 4;
     lp.sel = 0;
     for (int i = 0; i < LP_TRACKS; i++) {
@@ -177,15 +184,20 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
 
     // TR inputs are ACTIVE LOW: idle reads high (bit set), a gate pulls low.
     // Detect the falling edge (1 -> 0), prev seeded idle-high so a fresh start
-    // sees no phantom edge. A trig assigned as the clock source is masked out
-    // so it doesn't also fire the action. Any free trig = context action on
-    // the selected lane (arm / cancel / punch-out / play / stop cycle).
+    // sees no phantom edge. TR1 = context action (arm/rec/punch/stop/re-arm),
+    // TR2 = play/stop on the selected lane. A trig used as the clock source is
+    // masked so it doesn't double as a button.
     uint8_t clk_mask = (lp.clk_src == LP_CLK_TR1) ? 1 :
                        (lp.clk_src == LP_CLK_TR2) ? 2 : 0;
     static uint8_t prev_trig = 0x03;
     uint8_t pressed = prev_trig & (~io->trig_level) & 0x03 & ~clk_mask;
     prev_trig = io->trig_level;
-    if (pressed) lp.cmd_action[lp.sel] = 1;
+    if (pressed & 1) lp.cmd_action[lp.sel] = 1;
+    if (pressed & 2) {
+        lp_track_t *t = &lp.tr[lp.sel];
+        if (t->state == LP_PLAY) t->state = LP_STOP;
+        else if (t->len > 0) { t->pos = 0; t->state = LP_PLAY; }
+    }
 
     // the two good knobs shape the selected track: CV6 = level, CV7 = pan.
     // (knobs 5/8 are faulty on this unit, so per-track-fixed mapping is out;
@@ -240,6 +252,59 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
         out[f * 2]     = mixL << 16;
         out[f * 2 + 1] = mixR << 16;
     }
+}
+
+// Save a track's RAM loop to the SD library as LOOP_NNNN.RAW + .JSN sidecar,
+// in the same stereo-packed int32 format the recording service writes (mono
+// duplicated L=R), so the samplers can load it and it survives reboot. Runs on
+// the UI task (explicit action); playback keeps reading the buffer read-only.
+int looper_save_track(int i)
+{
+    if (i < 0 || i >= LP_TRACKS) return -1;
+    lp_track_t *t = &lp.tr[i];
+    if (t->len == 0 || !t->buf) return -1;
+
+    char name[16], path[48];
+    struct stat st;
+    for (int n = 0; n < 9999; n++) {
+        snprintf(name, sizeof(name), "LOOP_%04d", n);
+        snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
+        if (stat(path, &st) != 0) break;
+    }
+    FILE *f = fopen(path, "wb");
+    if (!f) { ESP_LOGE("LOOPER", "save: cannot open %s", path); return -1; }
+
+    int32_t *chunk = heap_caps_malloc(512 * sizeof(int32_t), MALLOC_CAP_INTERNAL);
+    if (!chunk) { fclose(f); return -1; }
+    uint32_t pos = 0, left = t->len;
+    while (left) {
+        int nfr = left > 512 ? 512 : (int)left;
+        for (int k = 0; k < nfr; k++) {
+            uint16_t s = (uint16_t)t->buf[pos + k];
+            chunk[k] = ((uint32_t)s << 16) | s;   // mono -> L=R
+        }
+        fwrite(chunk, sizeof(int32_t), nfr, f);
+        pos += nfr; left -= nfr;
+    }
+    free(chunk);
+    fclose(f);
+
+    char jsn[48], field[24];
+    snprintf(jsn, sizeof(jsn), "/sdcard/usr/%s.JSN", name);
+    cJSON *root = cJSON_CreateObject();
+    snprintf(field, sizeof(field), "%s.raw", name);
+    cJSON_AddStringToObject(root, "name", field);
+    cJSON_AddStringToObject(root, "id", name);
+    cJSON_AddStringToObject(root, "description", "Looper capture");
+    cJSON_AddStringToObject(root, "tags_s", "loop");
+    cJSON_AddStringToObject(root, "username", "myself");
+    cJSON_AddStringToObject(root, "url", "local");
+    cJSON_AddStringToObject(root, "license", "own license");
+    char *s = cJSON_Print(root);
+    cJSON_Delete(root);
+    if (s) { writeJSONFile(jsn, s); free(s); }
+    ESP_LOGI("LOOPER", "saved track %d -> %s (%lu frames)", i, name, (unsigned long)t->len);
+    return 0;
 }
 
 extern const machine_ui_t looper_menu_ui;

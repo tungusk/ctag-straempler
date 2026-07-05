@@ -164,8 +164,11 @@ static int looper_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup page -----------------------------------------------------------
-static const char *setup_labels[] = {"Sync", "Clock Src", "Bars"};
-#define SETUP_N 3
+// Rows 0-2 are edit-in-place values; row 3 (Save) is an action button.
+static const char *setup_labels[] = {"Sync", "Clock Src", "Bars", "Save Trk"};
+#define SETUP_N 4
+#define SETUP_SAVE_ROW 3
+static const char *s_save_msg = "";   // transient result shown on the Save row
 
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -179,7 +182,7 @@ static void setup_redraw(int pos, int sel){
         _fg = (i == pos && sel) ? TFT_CYAN : TFT_WHITE;
         TFT_fillRect(0, y - 2, _width, fh + 6, _bg);
         TFT_print((char*)setup_labels[i], 8, y);
-        char v[16];
+        char v[24];
         switch(i){
             case 0: snprintf(v, sizeof(v), "%s", lp.sync_on ? "ON" : "OFF"); break;
             case 1:
@@ -188,6 +191,8 @@ static void setup_redraw(int pos, int sel){
                 else snprintf(v, sizeof(v), "CV%d", lp.clk_src + 1);
                 break;
             case 2: snprintf(v, sizeof(v), "%d", lp.bars); break;
+            case 3: snprintf(v, sizeof(v), "%s trk %d",
+                             s_save_msg[0] ? s_save_msg : "press:", lp.sel + 1); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -196,24 +201,33 @@ static void setup_redraw(int pos, int sel){
 static int looper_setup_handler(int it_id, int event, void *ev_data){
     static int pos = 0, sel = 0;
     switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
+        case EV_ENTERED_MENU: pos = 0; sel = 0; s_save_msg = ""; setup_redraw(pos, sel); break;
         case EV_FWD:
             if(sel){
                 if(pos==0) lp.sync_on = !lp.sync_on;
                 else if(pos==1) lp.clk_src = (lp.clk_src + 1) % LP_CLK_SRCS;
-                else { int b = lp.bars * 2; lp.bars = (b > 8) ? 1 : b; }
-            } else pos = (pos + 1) % SETUP_N;
+                else if(pos==2) { int b = lp.bars * 2; lp.bars = (b > 8) ? 1 : b; }
+            } else { pos = (pos + 1) % SETUP_N; s_save_msg = ""; }
             setup_redraw(pos, sel);
             break;
         case EV_BWD:
             if(sel){
                 if(pos==0) lp.sync_on = !lp.sync_on;
                 else if(pos==1) lp.clk_src = (lp.clk_src + LP_CLK_SRCS - 1) % LP_CLK_SRCS;
-                else { int b = lp.bars / 2; lp.bars = (b < 1) ? 8 : b; }
-            } else pos = (pos + SETUP_N - 1) % SETUP_N;
+                else if(pos==2) { int b = lp.bars / 2; lp.bars = (b < 1) ? 8 : b; }
+            } else { pos = (pos + SETUP_N - 1) % SETUP_N; s_save_msg = ""; }
             setup_redraw(pos, sel);
             break;
-        case EV_SHORT_PRESS: sel = !sel; setup_redraw(pos, sel); break;
+        case EV_SHORT_PRESS:
+            if(pos == SETUP_SAVE_ROW){
+                // action row: write the selected track to the SD library
+                int r = looper_save_track(lp.sel);
+                s_save_msg = (r == 0) ? "SAVED" : "EMPTY";
+                setup_redraw(pos, 0);
+            } else {
+                sel = !sel; setup_redraw(pos, sel);
+            }
+            break;
         case EV_LONG_PRESS: return M_MAIN;
         default: break;
     }
