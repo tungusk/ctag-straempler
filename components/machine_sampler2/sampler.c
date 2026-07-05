@@ -83,6 +83,17 @@ static inline float s2_cv_bi(int src, uint16_t *ctrl_data)
 {
     return s2_cv_uni(src, ctrl_data) * 2.0f - 1.0f;   // -1..1
 }
+
+// full-depth playback-point modulation: CV adds amt*cv*fsize to the set
+// point, clamped to the file — depth independent of where the point sits
+// (scaling by residual headroom made a point near EOF nearly immovable)
+static inline uint32_t s2_mod_point(float base, float amt, float cv, uint32_t fsize)
+{
+    int64_t v = (int64_t)(base + amt * cv * (float)fsize);
+    if (v < 0) v = 0;
+    if (v > (int64_t)fsize) v = (int64_t)fsize;
+    return ((uint32_t)v / 4) * 4;
+}
 static ui_param_holder_t ui_params[2];
 static void (*play_modes[])(void *, void *, void *) = {s2_fill_buffer_one_shot, s2_fill_buffer_loop, s2_fill_buffer_pipo, s2_fill_buffer_loop /* CROP loops the window */};
 
@@ -826,23 +837,17 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
         if ((matrix[i].dst == MTX_V0_MODE_START && vid == 0) ||
             (matrix[i].dst == MTX_V1_MODE_START && vid == 1))
         {
-            temp_sample_start = (uint32_t)s2_modulate_unipolar(ui_params[vid].sample_start, fsize, s2_cv_uni(i, ctrl_data), matrix[i].amt);
-            temp_sample_start /= 4;
-            temp_sample_start *= 4;
+            temp_sample_start = s2_mod_point(ui_params[vid].sample_start, matrix[i].amt, s2_cv_uni(i, ctrl_data), fsize);
         }
         else if ((matrix[i].dst == MTX_V0_MODE_LSTART && vid == 0) ||
                  (matrix[i].dst == MTX_V1_MODE_LSTART && vid == 1))
         {
-            temp_loop_start = (uint32_t)s2_modulate_unipolar(ui_params[vid].loop_start, fsize, s2_cv_uni(i, ctrl_data), matrix[i].amt);
-            temp_loop_start /= 4;
-            temp_loop_start *= 4;
+            temp_loop_start = s2_mod_point(ui_params[vid].loop_start, matrix[i].amt, s2_cv_uni(i, ctrl_data), fsize);
         }
         else if ((matrix[i].dst == MTX_V0_MODE_LEND && vid == 0) ||
                  (matrix[i].dst == MTX_V1_MODE_LEND && vid == 1))
         {
-            temp_loop_end = (uint32_t)s2_modulate_unipolar(ui_params[vid].loop_end, fsize, s2_cv_uni(i, ctrl_data), matrix[i].amt);
-            temp_loop_end /= 4;
-            temp_loop_end *= 4;
+            temp_loop_end = s2_mod_point(ui_params[vid].loop_end, matrix[i].amt, s2_cv_uni(i, ctrl_data), fsize);
         }
 
         // Sampler2 CROP mode: the crop window IS the loop — slave loop start
