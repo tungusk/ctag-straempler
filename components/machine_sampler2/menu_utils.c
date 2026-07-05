@@ -382,14 +382,23 @@ void s2_incPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
             // ESP_LOGI("UI","Changed mode %d", data->mode);
             break;
         case SID_START:
-            if(data->start < data->loop_end - 8){
+            if(data->mode == CROP){
+                // crop: start slides the whole window, length preserved
+                int d = accel_step();
+                if(data->loop_end + d > 800) d = 800 - data->loop_end;
+                data->start += d;
+                data->loop_end += d;
+                data->loop_start = data->start;
+                data->loop_position = data->start;
+            }
+            else if(data->start < data->loop_end - 8){
                 int lim = data->loop_end - 8;
                 if(lim > 800) lim = 800;
                 int d = accel_step();
                 if(data->start + d > lim) d = lim - data->start;
                 data->start += d;
 
-                if(data->mode == SINGLE || data->mode == CROP){
+                if(data->mode == SINGLE){
                     //ESP_LOGI("UI", "DATA MODE SINGLE");
                     data->loop_start = data->start;
                     data->loop_position = data->start;
@@ -468,14 +477,23 @@ void s2_decPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
             // ESP_LOGI("UI","Changed mode %d", data->mode);
             break;
         case SID_START:
-            {
+            if(data->mode == CROP){
+                // crop: start slides the whole window, length preserved
                 int d = accel_step();
                 if(d > data->start) d = data->start;
                 data->start -= d;
-            }
-            if(data->mode == SINGLE || data->mode == CROP){
+                data->loop_end -= d;
                 data->loop_start = data->start;
                 data->loop_position = data->start;
+            }
+            else {
+                int d = accel_step();
+                if(d > data->start) d = data->start;
+                data->start -= d;
+                if(data->mode == SINGLE){
+                    data->loop_start = data->start;
+                    data->loop_position = data->start;
+                }
             }
             // ESP_LOGI("UI","Decremented start %u", data->start);
             break;

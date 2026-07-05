@@ -850,10 +850,19 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
             temp_loop_end = s2_mod_point(ui_params[vid].loop_end, matrix[i].amt, s2_cv_uni(i, ctrl_data), fsize);
         }
 
-        // Sampler2 CROP mode: the crop window IS the loop — slave loop start
-        // to sample start so CV on Start/End reshapes the loop directly
+        // Sampler2 CROP mode: the window is start + length. The Start dest
+        // slides the whole window; the "Loop End" dest modulates LENGTH.
+        // temp_loop_end currently holds (ui_end + length mod); subtracting the
+        // ui start yields base length + mod, re-anchored to the moving start.
         if (voice[vid].playback_engine.mode == CROP)
+        {
+            int64_t len = (int64_t)temp_loop_end - (int64_t)ui_params[vid].sample_start;
+            if (len < 0) len = 0;
+            int64_t end = (int64_t)temp_sample_start + len;
+            if (end > (int64_t)fsize) end = (int64_t)fsize;
+            temp_loop_end = ((uint32_t)end / 4) * 4;
             temp_loop_start = temp_sample_start;
+        }
 
         // Sampler2: enforce a minimum loop length (~100 ms of stereo frames)
         // regardless of CV or menu input — micro-loops re-read the SD card at

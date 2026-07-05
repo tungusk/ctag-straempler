@@ -285,8 +285,6 @@ void menuTFTPrintTime(int *shift){
 }
 
 void menuTFTPrintRecordIndicator(void) {
-    trig_func_t f0 = recording_get_trig_func(0);
-    trig_func_t f1 = recording_get_trig_func(1);
     bool active = recording_is_active();
 
     TFT_saveClipWin();
@@ -300,13 +298,9 @@ void menuTFTPrintRecordIndicator(void) {
     if (active) {
         snprintf(label, sizeof(label), "REC");
         _fg = TFT_RED;
-    } else if (f0 == TRIG_FUNC_RECORD) {
-        snprintf(label, sizeof(label), "T0 ARM");
-        _fg = (color_t){255, 140, 0};
-    } else if (f1 == TRIG_FUNC_RECORD) {
-        snprintf(label, sizeof(label), "T1 ARM");
-        _fg = (color_t){255, 140, 0};
     }
+    // T0/T1 ARM labels hidden (Arlo 2026-07-05): stale 0-based naming and
+    // visual noise; arm state still shows in the transport bar colors
     _bg = MENUBAR_BG;
 
     if (label[0]) {
