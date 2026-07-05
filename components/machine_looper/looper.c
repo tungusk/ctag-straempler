@@ -3,6 +3,7 @@
 // task pokes commands via the shared lp state (see looper_priv.h).
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "esp_heap_caps.h"
@@ -128,6 +129,9 @@ static esp_err_t looper_start(void)
         lp.tr[i].state = LP_EMPTY;
         lp.tr[i].vol = 255;      // unity
         lp.tr[i].pan = 2048;     // center
+        lp.tr[i].cutoff = 4095;  // filter open (bright)
+        lp.tr[i].res = 900;
+        lp.tr[i].svf_low = lp.tr[i].svf_band = 0.0f;
     }
     clock_reset();
     audio_status_set_voices("looper", "");
@@ -205,6 +209,25 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     lp.tr[lp.sel].vol = io->cv[5] >> 4;   // CV6 -> 0..255
     lp.tr[lp.sel].pan = io->cv[6];        // CV7 -> 0..4095
 
+    // filter mod on the jacks: CV1 sweeps the selected track's cutoff DOWN from
+    // open (patch an envelope/LFO to close it), CV2 raises resonance. The
+    // 1V/oct jacks idle ~880/4095 so trim that floor first.
+    if (lp.filter_on) {
+        uint16_t c1 = io->cv[0] > 900 ? io->cv[0] - 900 : 0;   // 0..3195
+        uint16_t c2 = io->cv[1] > 900 ? io->cv[1] - 900 : 0;
+        lp.tr[lp.sel].cutoff = 4095 - (uint16_t)((uint32_t)c1 * 3800 / 3195);
+        lp.tr[lp.sel].res    = 900 + (uint16_t)((uint32_t)c2 * 3000 / 3195);
+    }
+
+    // per-block SVF coeffs for every track (cheap: 4 sinf per 1.45ms block)
+    for (int i = 0; i < LP_TRACKS; i++) {
+        float fc = 120.0f + ((float)lp.tr[i].cutoff / 4095.0f) * 5800.0f;  // Hz
+        float f = 2.0f * sinf((float)M_PI * fc / (float)LP_RATE);
+        if (f > 0.95f) f = 0.95f;
+        lp.tr[i].f = f;
+        lp.tr[i].q = 2.0f - ((float)lp.tr[i].res / 4095.0f) * 1.9f;        // 2.0..0.1
+    }
+
     int frames = MACHINE_BLOCK / 2;
     uint16_t clk = clock_level(io);
 
@@ -239,7 +262,14 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
                     t->state = LP_PLAY;
                 }
             } else if (t->state == LP_PLAY && t->len > 0) {
-                int32_t s = ((int32_t)t->buf[t->pos] * t->vol) >> 8;   // level
+                int32_t raw = t->buf[t->pos];
+                if (lp.filter_on) {                                    // bandpass SVF
+                    t->svf_low += t->f * t->svf_band;
+                    float high = (float)raw - t->svf_low - t->q * t->svf_band;
+                    t->svf_band += t->f * high;
+                    raw = (int32_t)t->svf_band;
+                }
+                int32_t s = (raw * t->vol) >> 8;                       // level
                 mixL += (s * (4095 - t->pan)) >> 12;                   // linear pan
                 mixR += (s * t->pan) >> 12;
                 t->pos++;

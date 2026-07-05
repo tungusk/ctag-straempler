@@ -27,6 +27,10 @@ typedef struct {
     volatile uint8_t  state;
     volatile uint16_t vol;        // 0..255 level (Q8); driven by CV6 when selected
     volatile uint16_t pan;        // 0..4095, 2048 = center; driven by CV7 when selected
+    volatile uint16_t cutoff;     // 0..4095 BP filter cutoff (CV1 when selected)
+    volatile uint16_t res;        // 0..4095 BP resonance (CV2 when selected)
+    float f, q;                   // per-block filter coeffs (engine)
+    float svf_low, svf_band;      // state-variable filter state (engine)
 } lp_track_t;
 
 typedef struct {
@@ -38,6 +42,7 @@ typedef struct {
     volatile int  clk_src;        // clock source (0..7 CV, 8 TR1, 9 TR2)
     volatile int  bars;           // loop length in bars when synced
     volatile bool monitor;        // pass line-in through to the output
+    volatile bool filter_on;      // per-track bandpass filter enable
 
     // clock detector output (engine writes, UI reads)
     volatile float bpm;
