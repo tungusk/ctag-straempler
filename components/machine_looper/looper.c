@@ -185,10 +185,10 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     for (int f = 0; f < frames; f++) {
         bool bar_edge = false;
         if (clock_tick(clk)) {
-            // a quarter edge; a bar edge is every (4*bars) quarters — approximate
-            // by starting armed tracks on any quarter when unsynced-length isn't
-            // critical, but gate to bar using the ring count
-            if (lp.locked && (s_clk_ring_n % (4 * (lp.bars > 0 ? lp.bars : 1))) == 0)
+            // each clock pulse = one quarter; a bar (4/4) is every 4 pulses.
+            // Armed tracks start on the next bar boundary; the record LENGTH
+            // (bars) is handled separately by track_start_record's target.
+            if (lp.locked && (s_clk_ring_n % 4) == 0)
                 bar_edge = true;
         }
 

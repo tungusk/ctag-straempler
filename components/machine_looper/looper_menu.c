@@ -29,69 +29,103 @@ static color_t state_col(int s){
 }
 
 // ---- Live lane view -------------------------------------------------------
-static void draw_lane(int i, bool full){
-    int fh = TFT_getfontheight();
-    int top = fh + 11;
-    int lane_h = 46;
-    int y = top + i * lane_h;
-    lp_track_t *t = &lp.tr[i];
+// Incremental drawing: full chrome only on state/selection change, and the
+// playhead only when it moves a whole pixel. Blanking-and-repainting every
+// tick was the flicker. Caches reset on entry so a fresh page repaints fully.
+static uint8_t s_last_state[LP_TRACKS];
+static int     s_last_ph[LP_TRACKS];
+static int     s_last_sel = -1;
+static bool    s_last_locked;
+static int     s_last_bpm10 = -12345;
 
-    // lane background; selected lane gets a bright frame
+static void lanes_reset_cache(void){
+    for (int i = 0; i < LP_TRACKS; i++){ s_last_state[i] = 0xFF; s_last_ph[i] = -1; }
+    s_last_sel = -1; s_last_bpm10 = -12345; s_last_locked = false;
+}
+
+static int lane_y(int i){ return TFT_getfontheight() + 11 + i * 46; }
+#define LANE_BX 26
+#define LANE_BW (_width - 150)
+#define LANE_BH 16
+
+// full lane chrome: frame, number, empty bar outline, state word, length
+static void lane_chrome(int i){
+    int y = lane_y(i);
+    lp_track_t *t = &lp.tr[i];
     _bg = LANE_BG;
-    TFT_fillRect(0, y, _width, lane_h - 2, _bg);
-    if (i == lp.sel) { _fg = TFT_CYAN; TFT_drawRect(1, y, _width - 2, lane_h - 3, _fg); }
+    TFT_fillRect(0, y, _width, 44, _bg);
+    if (i == lp.sel){ _fg = TFT_CYAN; TFT_drawRect(1, y, _width - 2, 43, _fg); }
 
     char buf[12];
-    _bg = LANE_BG; _fg = TFT_WHITE;
+    _fg = TFT_WHITE;
     snprintf(buf, sizeof(buf), "%d", i + 1);
     TFT_print(buf, 6, y + 6);
 
-    // loop bar with recorded fill + playhead
-    int bx = 26, bw = _width - 150, bh = 16, by = y + 6;
     _fg = (color_t){40, 60, 110};
-    TFT_drawRect(bx, by, bw, bh, _fg);
-    if (t->len > 0) {
-        color_t c = state_col(t->state);
-        int pw = bw - 2;
-        _bg = (color_t){24, 34, 74};
-        TFT_fillRect(bx + 1, by + 1, pw, bh - 2, _bg);
-        int ph = (int)((uint64_t)t->pos * pw / (t->len ? t->len : 1));
-        if (ph < 1) ph = 1;
-        TFT_fillRect(bx + 1, by + 1, ph, bh - 2, c);
-    }
+    TFT_drawRect(LANE_BX, y + 6, LANE_BW, LANE_BH, _fg);
 
-    // state word + length
-    color_t c = state_col(t->state);
-    _fg = c; _bg = LANE_BG;
-    TFT_print((char*)state_word(t->state), bx + bw + 8, y + 6);
-    if (t->len > 0) {
+    _fg = state_col(t->state);
+    TFT_print((char*)state_word(t->state), LANE_BX + LANE_BW + 8, y + 6);
+    if (t->len > 0){
         snprintf(buf, sizeof(buf), "%lus", (unsigned long)(t->len / LP_RATE));
         _fg = TFT_LIGHTGREY;
         TFT_print(buf, _width - 40, y + 6);
     }
-    (void)full;
 }
 
-static void draw_header(void){
+// just the playhead inside the bar; no full-lane blank
+static void lane_playhead(int i){
+    int y = lane_y(i);
+    lp_track_t *t = &lp.tr[i];
+    int pw = LANE_BW - 2, bx = LANE_BX + 1, by = y + 7, bh = LANE_BH - 2;
+    int ph = (t->len > 0) ? (int)((uint64_t)t->pos * pw / t->len) : 0;
+    _bg = (color_t){24, 34, 74};
+    TFT_fillRect(bx, by, pw, bh, _bg);
+    if (t->len > 0 && ph > 0){
+        _bg = state_col(t->state);
+        TFT_fillRect(bx, by, ph, bh, _bg);
+    }
+    s_last_ph[i] = ph;
+}
+
+static void lanes_update(void){
+    for (int i = 0; i < LP_TRACKS; i++){
+        lp_track_t *t = &lp.tr[i];
+        bool chrome = (t->state != s_last_state[i]) || (i == lp.sel) != (i == s_last_sel);
+        if (chrome){ lane_chrome(i); lane_playhead(i); s_last_state[i] = t->state; }
+        else {
+            int pw = LANE_BW - 2;
+            int ph = (t->len > 0) ? (int)((uint64_t)t->pos * pw / t->len) : 0;
+            if (ph != s_last_ph[i]) lane_playhead(i);
+        }
+    }
+    s_last_sel = lp.sel;
+}
+
+static void header_update(void){
+    int bpm10 = (int)(lp.bpm * 10.0f);
+    if (bpm10 == s_last_bpm10 && lp.locked == s_last_locked) return;
+    s_last_bpm10 = bpm10; s_last_locked = lp.locked;
     int fh = TFT_getfontheight();
-    color_t bar = {10, 18, 56};
-    _bg = bar;
-    TFT_fillRect(0, 0, _width, fh + 8, _bg);
-    _fg = TFT_WHITE;
-    TFT_print("Looper", 6, 4);
+    _bg = (color_t){10, 18, 56};
+    TFT_fillRect(_width / 2, 0, _width / 2, fh + 8, _bg);
     char buf[24];
     if (lp.locked) snprintf(buf, sizeof(buf), "%.1f BPM [CLK]", lp.bpm);
     else           snprintf(buf, sizeof(buf), "-- BPM");
-    _fg = lp.locked ? (color_t){40,200,90} : TFT_LIGHTGREY;
+    _fg = lp.locked ? (color_t){40, 200, 90} : TFT_LIGHTGREY;
     TFT_print(buf, _width - TFT_getStringWidth(buf) - 6, 4);
 }
 
 static void live_full_redraw(void){
     TFT_resetclipwin();
-    _bg = TFT_BLACK;
     TFT_fillScreen(TFT_BLACK);
-    draw_header();
-    for (int i = 0; i < LP_TRACKS; i++) draw_lane(i, true);
+    int fh = TFT_getfontheight();
+    _bg = (color_t){10, 18, 56};
+    TFT_fillRect(0, 0, _width, fh + 8, _bg);
+    _fg = TFT_WHITE; TFT_print("Looper", 6, 4);
+    lanes_reset_cache();
+    header_update();
+    lanes_update();
 }
 
 static int looper_live_handler(int it_id, int event, void *ev_data){
@@ -101,20 +135,19 @@ static int looper_live_handler(int it_id, int event, void *ev_data){
             break;
         case EV_TIMER_REPEATING_SLOW:
         case EV_TIMER_REPEATING_FAST:
-            draw_header();
-            for (int i = 0; i < LP_TRACKS; i++) draw_lane(i, false);
+            header_update();
+            lanes_update();
             break;
         case EV_FWD:
             lp.sel = (lp.sel + 1) % LP_TRACKS;
-            for (int i = 0; i < LP_TRACKS; i++) draw_lane(i, false);
+            lanes_update();
             break;
         case EV_BWD:
             lp.sel = (lp.sel + LP_TRACKS - 1) % LP_TRACKS;
-            for (int i = 0; i < LP_TRACKS; i++) draw_lane(i, false);
+            lanes_update();
             break;
         case EV_SHORT_PRESS:
-            // encoder press = the TR1 action on the selected lane
-            // (arm/cancel/punch cycle) so the panel works without patching
+            // context action on selected lane (arm/cancel/punch/play/stop)
             lp.cmd_action[lp.sel] = 1;
             break;
         case EV_LONG_PRESS:
@@ -191,13 +224,17 @@ static void looper_register_pages(void *menusys){
     menusys_item_set_default_cb(_ms, M_LOOPER_SETUP, looper_setup_handler);
 }
 
-// main screen: draw the lanes as a live backdrop and hint how to interact
+// main screen: lanes as a live backdrop BELOW the menu bar. Must not draw the
+// header — that row belongs to the core main menu (Live/Setup/System labels);
+// painting over it left the scroll highlight sliding through blank space.
 static int looper_main_event(int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU:
+            lanes_reset_cache();
+            lanes_update();
+            break;
         case EV_TIMER_REPEATING_SLOW:
-            draw_header();
-            for (int i = 0; i < LP_TRACKS; i++) draw_lane(i, false);
+            lanes_update();
             break;
         default: break;
     }
