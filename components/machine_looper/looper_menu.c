@@ -35,12 +35,14 @@ static color_t state_col(int s){
 // tick was the flicker. Caches reset on entry so a fresh page repaints fully.
 static uint8_t s_last_state[LP_TRACKS];
 static int     s_last_ph[LP_TRACKS];
+static int     s_last_vol[LP_TRACKS];
 static int     s_last_sel = -1;
 static bool    s_last_locked;
 static int     s_last_bpm10 = -12345;
+static void    lane_vol(int i);   // defined after lane_chrome
 
 static void lanes_reset_cache(void){
-    for (int i = 0; i < LP_TRACKS; i++){ s_last_state[i] = 0xFF; s_last_ph[i] = -1; }
+    for (int i = 0; i < LP_TRACKS; i++){ s_last_state[i] = 0xFF; s_last_ph[i] = -1; s_last_vol[i] = -1; }
     s_last_sel = -1; s_last_bpm10 = -12345; s_last_locked = false;
 }
 
@@ -77,8 +79,29 @@ static void lane_chrome(int i){
     if (t->len > 0){
         snprintf(buf, sizeof(buf), "%lus", (unsigned long)(t->len / LP_RATE));
         _fg = TFT_LIGHTGREY;
-        TFT_print(buf, _width - 40, y + 6);
+        TFT_print(buf, _width - 58, y + 6);
     }
+    lane_vol(i);
+}
+
+// per-track volume: a small vertical level bar at the lane's right edge,
+// reflecting t->vol (CV6 on the selected track). Cached in pixels so it only
+// repaints on a visible change.
+#define VOL_X (_width - 9)
+#define VOL_H 30
+static void lane_vol(int i){
+    int y = lane_y(i) + 7;
+    lp_track_t *t = &lp.tr[i];
+    _fg = (color_t){40, 60, 110};
+    TFT_drawRect(VOL_X, y, 6, VOL_H, _fg);
+    int fill = (int)((uint32_t)t->vol * (VOL_H - 2) / 255);
+    _bg = LANE_BG;
+    TFT_fillRect(VOL_X + 1, y + 1, 4, VOL_H - 2, _bg);
+    if (fill > 0){
+        _bg = (color_t){60, 150, 220};
+        TFT_fillRect(VOL_X + 1, y + 1 + (VOL_H - 2 - fill), 4, fill, _bg);
+    }
+    s_last_vol[i] = t->vol >> 3;   // ~1 cache step per pixel
 }
 
 // during REC the loop length isn't known yet, so show progress toward the
@@ -119,6 +142,7 @@ static void lanes_update(void){
             uint32_t denom = lane_denom(t);
             int ph = (denom > 0) ? (int)((uint64_t)t->pos * pw / denom) : 0;
             if (ph != s_last_ph[i]) lane_playhead(i);
+            if ((t->vol >> 3) != s_last_vol[i]) lane_vol(i);
         }
     }
     s_last_sel = lp.sel;
