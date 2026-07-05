@@ -19,11 +19,12 @@ static const color_t GRID    = {40, 60, 110};
 static const color_t SEL_COL = {40, 200, 230};   // selected slice
 static const color_t CUR_COL = {40, 200, 90};    // playing slice
 
-// waveform box
+// waveform box — near the top now; sample/grid info sits below it
 #define WX 8
-#define WY (TFT_getfontheight() + 16)
+#define WY 8
 #define WW (_width - 16)
-#define WH 120
+#define WH 150
+#define INFO_Y (WY + WH + 6)
 
 static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1;
 static char s_msg[24];
@@ -53,6 +54,18 @@ static void repaint_slice(int s, int cur, int sel){
     if (is_cur)   TFT_drawRect(x0, WY, x1 - x0, WH, CUR_COL);
 }
 
+// sample name + grid size + live slice number, below the waveform
+static void draw_info_line(void){
+    int fh = TFT_getfontheight();
+    _bg = TFT_BLACK; TFT_fillRect(0, INFO_Y, _width, fh + 4, _bg);
+    _fg = TFT_WHITE;
+    char s[64];
+    snprintf(s, sizeof(s), "%s   x%d   slice %d/%d   %s%s",
+             sl.sample[0] ? sl.sample : "(none)", sl.n_slices, sl.sel + 1, sl.n_slices,
+             sl.auto_on ? "AUTO " : "", sl.reverse ? "REV" : "");
+    TFT_print(s, 6, INFO_Y + 2);
+}
+
 // move highlights by repainting only the vacated + newly-marked slices
 static void live_update_highlights(void){
     int cur = sl.cur, sel = sl.sel;     // one snapshot for draw AND cache
@@ -62,6 +75,7 @@ static void live_update_highlights(void){
     repaint_slice(sel, cur, sel);
     s_last_cur = cur;
     s_last_sel = sel;
+    draw_info_line();                   // keep the slice number current
 }
 
 static void draw_slice_region(int s, color_t c, bool fill){
@@ -101,10 +115,6 @@ static void draw_waveform(void){
 static void live_full_redraw(void){
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
-    _bg = TFT_BLACK; _fg = TFT_WHITE;
-    char hdr[40];
-    snprintf(hdr, sizeof(hdr), "Slicer  %s  x%d", sl.sample[0] ? sl.sample : "(none)", sl.n_slices);
-    TFT_print(hdr, 6, 4);
     _bg = BG;
     TFT_fillRect(WX - 2, WY - 2, WW + 4, WH + 4, _bg);
     if (sl.len == 0){
@@ -113,12 +123,10 @@ static void live_full_redraw(void){
     } else {
         draw_waveform();
     }
+    draw_info_line();
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    char foot[80];
-    snprintf(foot, sizeof(foot), "slice %d/%d  %s%s  turn:sel press:fire hold:exit",
-             sl.sel + 1, sl.n_slices, sl.auto_on ? "AUTO " : "", sl.reverse ? "REV" : "");
-    TFT_print(foot, 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:select  press:fire  hold:exit", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
     s_last_cur = sl.cur; s_last_sel = sl.sel; s_last_slices = sl.n_slices;
 }
@@ -225,16 +233,61 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
             setup_redraw(pos, sel);
             break;
         case EV_SHORT_PRESS:
-            if(pos == 1 && sel && s_n_samples){
-                // load the highlighted sample
-                int r = slicer_load(s_samples[s_sample_idx]);
-                snprintf(s_msg, sizeof(s_msg), "%s", r == 0 ? "loaded" : "load failed");
-                setup_redraw(pos, sel);
-            } else {
-                sel = !sel; s_msg[0] = 0; setup_redraw(pos, sel);
+            if(pos == 1){
+                setup_refresh_samples();
+                return M_SLICER_LOAD;   // open the centered sample browser
             }
+            sel = !sel; s_msg[0] = 0; setup_redraw(pos, sel);
             break;
         case EV_LONG_PRESS: return M_MAIN;
+        default: break;
+    }
+    return 0;
+}
+
+// ---- Load browser (center-justified sample selector) ----------------------
+static void load_redraw(void){
+    TFT_resetclipwin();
+    TFT_fillScreen(TFT_BLACK);
+    int fh = TFT_getfontheight();
+    _bg = TFT_BLACK; _fg = TFT_LIGHTGREY;
+    char h[32];
+    snprintf(h, sizeof(h), "Load Sample  (%d/%d)", s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
+    TFT_print(h, _width / 2 - TFT_getStringWidth(h) / 2, 4);
+    if (!s_n_samples){
+        char *m = "no samples in usr/";
+        _fg = TFT_LIGHTGREY;
+        TFT_print(m, _width / 2 - TFT_getStringWidth(m) / 2, _height / 2);
+        return;
+    }
+    int cy = _height / 2 - fh / 2;
+    int rowh = fh + 8;
+    for (int k = -2; k <= 2; k++){
+        int idx = s_sample_idx + k;
+        if (idx < 0 || idx >= s_n_samples) continue;
+        char *nm = s_samples[idx];
+        _fg = (k == 0) ? TFT_WHITE : (color_t){110, 110, 110};
+        TFT_print(nm, _width / 2 - TFT_getStringWidth(nm) / 2, cy + k * rowh);
+    }
+    _fg = TFT_CYAN;
+    TFT_drawRect(18, cy - 4, _width - 36, fh + 6, TFT_CYAN);
+    _fg = (color_t){90, 90, 90};
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    char *hint = "turn:browse  press:load  hold:cancel";
+    TFT_print(hint, _width / 2 - TFT_getStringWidth(hint) / 2, _height - TFT_getfontheight() - 1);
+    TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+static int slicer_load_handler(int it_id, int event, void *ev_data){
+    switch(event){
+        case EV_ENTERED_MENU: setup_refresh_samples(); load_redraw(); break;
+        case EV_FWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + 1) % s_n_samples; load_redraw(); } break;
+        case EV_BWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + s_n_samples - 1) % s_n_samples; load_redraw(); } break;
+        case EV_SHORT_PRESS:
+            if(s_n_samples) slicer_load(s_samples[s_sample_idx]);
+            return M_SLICER_SETUP;
+        case EV_LONG_PRESS:
+            return M_SLICER_SETUP;   // cancel without loading
         default: break;
     }
     return 0;
@@ -247,6 +300,8 @@ static void slicer_register_pages(void *menusys){
     menusys_item_set_default_cb(_ms, M_SLICER_LIVE, slicer_live_handler);
     menusys_new_item(_ms, M_SLICER_SETUP);
     menusys_item_set_default_cb(_ms, M_SLICER_SETUP, slicer_setup_handler);
+    menusys_new_item(_ms, M_SLICER_LOAD);
+    menusys_item_set_default_cb(_ms, M_SLICER_LOAD, slicer_load_handler);
 }
 
 static int slicer_main_event(int event, void *ev_data){
