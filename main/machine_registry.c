@@ -1,6 +1,7 @@
 #include "machine.h"
 #include "machine_sampler.h"
 #include "machine_looper.h"
+#include "machine_slicer.h"
 
 // declared bare: machine_sampler2.h drags the fork's whole type universe,
 // which collides with machine_sampler.h's copy inside a single TU
@@ -16,6 +17,7 @@ const machine_t *const machine_registry[] = {
     &machine_sampler,
     &s2_machine_sampler,
     &machine_looper,
+    &machine_slicer,
     &machine_stub,
     NULL,
 };

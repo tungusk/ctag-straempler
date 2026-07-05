@@ -21,6 +21,8 @@ typedef enum{
     M_MACHINE_SEL,
     M_LOOPER_LIVE,
     M_LOOPER_SETUP,
+    M_SLICER_LIVE,
+    M_SLICER_SETUP,
     M_SETTINGS,
     M_SETTINGS_INPUT,
     M_ABOUT,
