@@ -60,16 +60,21 @@ void s2_incParamValue(param_data_t* data, int index, int vid, bool* pbs_state, m
             //ESP_LOGI("UI","Changed pitch_cv_active %u", data->pitch_cv_active);
             break;
         case SID_PBSPEED:
-            if((data->playback_speed + 16) >= 32767){
-                data->playback_speed = 32767;   // ~2.0 in Q2.14 — up to double-speed playback
-            }else{
-                data->playback_speed += 16;
-                if(data->playback_speed > 1 && ((*pbs_state) == 0)){
-                    *pbs_state = 1;
-                    xQueueSend(handle, (void*) pbs_state, portMAX_DELAY);
+            {
+                // Sampler2: accelerated — base step 16 in Q2.14 is a
+                // 4096-detent full sweep otherwise
+                int d = 16 * accel_step();
+                if((data->playback_speed + d) >= 32767){
+                    data->playback_speed = 32767;   // ~2.0 in Q2.14 — up to double-speed playback
+                }else{
+                    data->playback_speed += d;
+                    if(data->playback_speed > 1 && ((*pbs_state) == 0)){
+                        *pbs_state = 1;
+                        xQueueSend(handle, (void*) pbs_state, portMAX_DELAY);
+                    }
                 }
             }
-            break;    
+            break;
         case SID_DIST_ACTIVE:
             data->dist_active = !(data->dist_active);
             //ESP_LOGI("UI","Changed is_active %u", data->dist_active);
@@ -139,16 +144,19 @@ void s2_decParamValue(param_data_t* data, int index, int vid, bool* pbs_state, m
             //ESP_LOGI("UI","Changed pitch_cv_active %d", data->volume);
             break;
         case SID_PBSPEED:
-            if((data->playback_speed - 16) <= -32767){
-                data->playback_speed = -32767;
-            }else{
-                data->playback_speed -= 16;
-                if(data->playback_speed < 0 && ((*pbs_state) == 1)){
-                    *pbs_state = 0;
-                    xQueueSend(handle, (void*) pbs_state, portMAX_DELAY);
+            {
+                int d = 16 * accel_step();
+                if((data->playback_speed - d) <= -32767){
+                    data->playback_speed = -32767;
+                }else{
+                    data->playback_speed -= d;
+                    if(data->playback_speed < 0 && ((*pbs_state) == 1)){
+                        *pbs_state = 0;
+                        xQueueSend(handle, (void*) pbs_state, portMAX_DELAY);
+                    }
                 }
             }
-            break;    
+            break;
         case SID_DIST_ACTIVE:
             data->dist_active = !(data->dist_active);
             //ESP_LOGI("UI","Changed is_active %u", data->dist_active);
