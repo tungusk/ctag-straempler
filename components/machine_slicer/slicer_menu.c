@@ -29,13 +29,15 @@ static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1;
 static char s_msg[24];
 
 // repaint a single slice column (waveform + grid + its highlight) without
-// clearing the whole screen — so moving the highlight doesn't black out
-static void repaint_slice(int s){
+// clearing the whole screen. cur/sel are passed in (snapshotted by the caller)
+// so the drawn state matches the cache even though the audio thread writes
+// sl.cur/sl.sel asynchronously — otherwise a stale outline can linger.
+static void repaint_slice(int s, int cur, int sel){
     if (s < 0 || s >= sl.n_slices || sl.len == 0) return;
     int x0 = WX + s * WW / sl.n_slices;
     int x1 = WX + (s + 1) * WW / sl.n_slices;
     int cy = WY + WH / 2;
-    bool is_cur = sl.playing && s == sl.cur;
+    bool is_cur = sl.playing && s == cur;
     _bg = is_cur ? (color_t){20, 40, 50} : BG;
     TFT_fillRect(x0, WY, x1 - x0, WH, _bg);
     for (int c = 0; c < sl.peak_n; c++){
@@ -47,18 +49,19 @@ static void repaint_slice(int s){
     }
     TFT_drawLine(x0, WY, x0, WY + WH, GRID);
     TFT_drawLine(x1, WY, x1, WY + WH, GRID);
-    if (s == sl.sel) TFT_drawRect(x0, WY, x1 - x0, WH, SEL_COL);
-    if (is_cur)      TFT_drawRect(x0, WY, x1 - x0, WH, CUR_COL);
+    if (s == sel) TFT_drawRect(x0, WY, x1 - x0, WH, SEL_COL);
+    if (is_cur)   TFT_drawRect(x0, WY, x1 - x0, WH, CUR_COL);
 }
 
 // move highlights by repainting only the vacated + newly-marked slices
 static void live_update_highlights(void){
-    repaint_slice(s_last_cur);
-    repaint_slice(s_last_sel);
-    repaint_slice(sl.cur);
-    repaint_slice(sl.sel);
-    s_last_cur = sl.cur;
-    s_last_sel = sl.sel;
+    int cur = sl.cur, sel = sl.sel;     // one snapshot for draw AND cache
+    repaint_slice(s_last_cur, cur, sel);
+    repaint_slice(s_last_sel, cur, sel);
+    repaint_slice(cur, cur, sel);
+    repaint_slice(sel, cur, sel);
+    s_last_cur = cur;
+    s_last_sel = sel;
 }
 
 static void draw_slice_region(int s, color_t c, bool fill){
