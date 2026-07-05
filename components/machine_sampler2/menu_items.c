@@ -12,7 +12,7 @@ const int s2_n_main_menus = sizeof(s2_main_menus)/sizeof(int);
 const char* s2_browse_menus[] = {"Tag", "ID", "Text", "User"};
 const int s2_n_browse_menus = sizeof(s2_browse_menus)/sizeof(int);
 
-const char* s2_play_menus[] = {"Voice 0", "Voice 1", "Recording", "External In", "Effects", "CV Matrix"};
+const char* s2_play_menus[] = {"Voice 1", "Voice 2", "Recording", "External In", "Effects", "CV Matrix"};
 const int s2_n_play_menus = sizeof(s2_play_menus)/sizeof(int);
 
 const char* s2_effect_menus[] = {"Delay"};
@@ -44,11 +44,11 @@ const int s2_n_delay_mode_items = sizeof(s2_toggle_items) / sizeof(int);
 const char* s2_cv_matrix_items[] = {"SOURCE", "AMOUNT", "DESTINATION"};
 const int s2_n_cv_matrix_items = sizeof(s2_cv_matrix_items) / sizeof(int);
 
-const char* s2_matrix_parameter_items[] = {"None","V0 Volume", "V0 Pan", "V0 Pitch", "V0 PB Speed", "V0 Dist Drive", "V0 Dly Send", "V0 F. Base", "V0 F. Width", "V0 F. Q", "V0 Attack", 
-                                                "V0 Decay", "V0 Sustain", "V0 Release", "V0 Start", "V0 Loop Start", "V0 Loop End", "V1 Volume", "V1 Pan", "V1 Pitch", "V1 PB Speed",
-                                                "V1 Dist Drive", "V1 Dly Send", "V1 F. Base", "V1 F. Width", "V1 F. Q", "V1 Attack", "V1 Decay", "V1 Sustain", "V1 Release", "V1 Start",
-                                                "V1 Loop Start", "V1 Loop End", "Dly Time", "Dly Pan", "Dly Feedback", "Dly Volume",
-                                                "T0 Rec Arm", "T1 Rec Arm"};
+const char* s2_matrix_parameter_items[] = {"None","V1 Volume", "V1 Pan", "V1 Pitch", "V1 PB Speed", "V1 Dist Drive", "V1 Dly Send", "V1 F. Base", "V1 F. Width", "V1 F. Q", "V1 Attack", 
+                                                "V1 Decay", "V1 Sustain", "V1 Release", "V1 Start", "V1 Loop Start", "V1 Loop End", "V2 Volume", "V2 Pan", "V2 Pitch", "V2 PB Speed",
+                                                "V2 Dist Drive", "V2 Dly Send", "V2 F. Base", "V2 F. Width", "V2 F. Q", "V2 Attack", "V2 Decay", "V2 Sustain", "V2 Release", "V2 Start",
+                                                "V2 Loop Start", "V2 Loop End", "Dly Time", "Dly Pan", "Dly Feedback", "Dly Volume",
+                                                "T1 Rec Arm", "T2 Rec Arm"};
 const int s2_n_matrix_parameters = sizeof(s2_matrix_parameter_items) / sizeof(int);
 
 const char* s2_preset_menus[] = {"Presets", "Banks"};
