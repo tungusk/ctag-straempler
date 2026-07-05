@@ -824,13 +824,15 @@ static void modulate_adsr_parameter(int vid, uint16_t* ctrl_data)
 
 static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
 {
-    uint32_t *sample_start = &voice[vid].playback_engine.sample_start;
-    uint32_t *loop_start = &voice[vid].playback_engine.loop_start;
-    uint32_t *loop_end = &voice[vid].playback_engine.loop_end;
-    uint32_t temp_sample_start = voice[vid].playback_engine.sample_start,
-             temp_loop_start = voice[vid].playback_engine.loop_start,
-             temp_loop_end = voice[vid].playback_engine.loop_end;
     uint32_t fsize = audio_files[vid].fsize;
+
+    // Sampler2: everything derives from the SET (ui) values plus this block's
+    // CV. The old code seeded temps from the engine's previous output, which
+    // in crop mode fed the computed end back into the next block's length —
+    // the window inflated while start scrubbed.
+    uint32_t temp_sample_start = (uint32_t)ui_params[vid].sample_start;
+    uint32_t temp_loop_start   = (uint32_t)ui_params[vid].loop_start;
+    uint32_t temp_loop_end     = (uint32_t)ui_params[vid].loop_end;
 
     for (size_t i = 0; i < 8; i++)   // Sampler2: rows 0/1 reassignable
     {
@@ -849,44 +851,43 @@ static void modulatePlaymodeParameters(int vid, uint16_t *ctrl_data)
         {
             temp_loop_end = s2_mod_point(ui_params[vid].loop_end, matrix[i].amt, s2_cv_uni(i, ctrl_data), fsize);
         }
-
-        // Sampler2 CROP mode: the window is start + length. The Start dest
-        // slides the whole window; the "Loop End" dest modulates LENGTH.
-        // temp_loop_end currently holds (ui_end + length mod); subtracting the
-        // ui start yields base length + mod, re-anchored to the moving start.
-        if (voice[vid].playback_engine.mode == CROP)
-        {
-            int64_t len = (int64_t)temp_loop_end - (int64_t)ui_params[vid].sample_start;
-            if (len < 0) len = 0;
-            int64_t end = (int64_t)temp_sample_start + len;
-            if (end > (int64_t)fsize) end = (int64_t)fsize;
-            temp_loop_end = ((uint32_t)end / 4) * 4;
-            temp_loop_start = temp_sample_start;
-        }
-
-        // Sampler2: enforce a minimum loop length (~100 ms of stereo frames)
-        // regardless of CV or menu input — micro-loops re-read the SD card at
-        // a pathological rate (shared SPI bus with the display)
-        {
-            uint32_t min_len = S2_MIN_LOOP_BYTES;
-            if (fsize > 0 && fsize < min_len) min_len = fsize & ~3u;
-            if (min_len < 4) min_len = 4;
-
-            if (temp_loop_end < min_len)
-                temp_loop_end = min_len;
-            if (temp_loop_start > temp_loop_end - min_len)
-                temp_loop_start = temp_loop_end - min_len;
-            if (temp_sample_start >= temp_loop_end)
-                temp_sample_start = temp_loop_end - min_len;
-        }
-
-        voice[vid].playback_engine.sample_start = temp_sample_start;
-
-        voice[vid].playback_engine.loop_start = temp_loop_start;
-
-        voice[vid].playback_engine.loop_end = temp_loop_end;
     }
+
+    // Sampler2 CROP mode: the window is start + length. The Start dest slides
+    // the whole window; the "Loop End" dest modulates LENGTH. temp_loop_end
+    // holds (ui_end + length mod); subtracting the ui start yields base
+    // length + mod, re-anchored to the (possibly CV-moved) start.
+    if (voice[vid].playback_engine.mode == CROP)
+    {
+        int64_t len = (int64_t)temp_loop_end - (int64_t)ui_params[vid].sample_start;
+        if (len < 0) len = 0;
+        int64_t end = (int64_t)temp_sample_start + len;
+        if (end > (int64_t)fsize) end = (int64_t)fsize;
+        temp_loop_end = ((uint32_t)end / 4) * 4;
+        temp_loop_start = temp_sample_start;
+    }
+
+    // Sampler2: enforce a minimum loop length (~100 ms of stereo frames)
+    // regardless of CV or menu input — micro-loops re-read the SD card at
+    // a pathological rate (shared SPI bus with the display)
+    {
+        uint32_t min_len = S2_MIN_LOOP_BYTES;
+        if (fsize > 0 && fsize < min_len) min_len = fsize & ~3u;
+        if (min_len < 4) min_len = 4;
+
+        if (temp_loop_end < min_len)
+            temp_loop_end = min_len;
+        if (temp_loop_start > temp_loop_end - min_len)
+            temp_loop_start = temp_loop_end - min_len;
+        if (temp_sample_start >= temp_loop_end)
+            temp_sample_start = temp_loop_end - min_len;
+    }
+
+    voice[vid].playback_engine.sample_start = temp_sample_start;
+    voice[vid].playback_engine.loop_start = temp_loop_start;
+    voice[vid].playback_engine.loop_end = temp_loop_end;
 }
+
 
 static void modulateDlyParameters(delay_t *delay, delay_cfg_t cfg, uint16_t *ctrlData)
 {
