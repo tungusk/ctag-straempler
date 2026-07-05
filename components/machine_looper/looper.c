@@ -247,6 +247,8 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
             }
         }
 
+        if (lp.monitor) { mixL += mono_in; mixR += mono_in; }
+
         if (mixL > 32767) mixL = 32767; else if (mixL < -32768) mixL = -32768;
         if (mixR > 32767) mixR = 32767; else if (mixR < -32768) mixR = -32768;
         out[f * 2]     = mixL << 16;

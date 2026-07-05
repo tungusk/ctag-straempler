@@ -12,7 +12,8 @@
 #include "machine.h"
 #include "looper_priv.h"
 
-static const color_t LANE_BG   = {10, 18, 56};
+static const color_t LANE_BG   = {5, 9, 28};      // darker blue track background
+static const color_t BAR_BG    = {14, 22, 52};    // subtle track region inside the bar
 static const color_t COL_EMPTY = {70, 90, 140};
 static const color_t COL_ARMED = {230, 170, 0};
 static const color_t COL_REC   = {220, 40, 40};
@@ -54,7 +55,14 @@ static void lane_chrome(int i){
     lp_track_t *t = &lp.tr[i];
     _bg = LANE_BG;
     TFT_fillRect(0, y, _width, 44, _bg);
-    if (i == lp.sel){ _fg = TFT_CYAN; TFT_drawRect(1, y, _width - 2, 43, _fg); }
+    // frame color by state so the recording/armed lane is unmistakable;
+    // recording wins over the selection frame
+    color_t frame; bool draw_frame = true;
+    if (t->state == LP_REC)        frame = COL_REC;
+    else if (t->state == LP_ARMED) frame = COL_ARMED;
+    else if (i == lp.sel)          frame = TFT_CYAN;
+    else                           draw_frame = false;
+    if (draw_frame){ _fg = frame; TFT_drawRect(1, y, _width - 2, 43, _fg); }
 
     char buf[12];
     _fg = TFT_WHITE;
@@ -73,19 +81,32 @@ static void lane_chrome(int i){
     }
 }
 
+// during REC the loop length isn't known yet, so show progress toward the
+// auto-stop target (bar-quantized length); otherwise show play position
+static uint32_t lane_denom(lp_track_t *t){
+    return (t->state == LP_REC) ? t->target : t->len;
+}
+
 // just the playhead inside the bar; no full-lane blank
 static void lane_playhead(int i){
     int y = lane_y(i);
     lp_track_t *t = &lp.tr[i];
     int pw = LANE_BW - 2, bx = LANE_BX + 1, by = y + 7, bh = LANE_BH - 2;
-    int ph = (t->len > 0) ? (int)((uint64_t)t->pos * pw / t->len) : 0;
-    _bg = (color_t){24, 34, 74};
+    uint32_t denom = lane_denom(t);
+    // subtle track region + a bright thin playhead line (not a solid fill)
+    _bg = BAR_BG;
     TFT_fillRect(bx, by, pw, bh, _bg);
-    if (t->len > 0 && ph > 0){
+    if (denom > 0){
+        int ph = (int)((uint64_t)t->pos * pw / denom);
+        int lw = 3;
+        if (ph > pw - lw) ph = pw - lw;
+        if (ph < 0) ph = 0;
         _bg = state_col(t->state);
-        TFT_fillRect(bx, by, ph, bh, _bg);
+        TFT_fillRect(bx + ph, by, lw, bh, _bg);
+        s_last_ph[i] = ph;
+    } else {
+        s_last_ph[i] = -1;
     }
-    s_last_ph[i] = ph;
 }
 
 static void lanes_update(void){
@@ -95,7 +116,8 @@ static void lanes_update(void){
         if (chrome){ lane_chrome(i); lane_playhead(i); s_last_state[i] = t->state; }
         else {
             int pw = LANE_BW - 2;
-            int ph = (t->len > 0) ? (int)((uint64_t)t->pos * pw / t->len) : 0;
+            uint32_t denom = lane_denom(t);
+            int ph = (denom > 0) ? (int)((uint64_t)t->pos * pw / denom) : 0;
             if (ph != s_last_ph[i]) lane_playhead(i);
         }
     }
@@ -165,9 +187,9 @@ static int looper_live_handler(int it_id, int event, void *ev_data){
 
 // ---- Setup page -----------------------------------------------------------
 // Rows 0-2 are edit-in-place values; row 3 (Save) is an action button.
-static const char *setup_labels[] = {"Sync", "Clock Src", "Bars", "Save Trk"};
-#define SETUP_N 4
-#define SETUP_SAVE_ROW 3
+static const char *setup_labels[] = {"Sync", "Clock Src", "Bars", "Monitor", "Save Trk"};
+#define SETUP_N 5
+#define SETUP_SAVE_ROW 4
 static const char *s_save_msg = "";   // transient result shown on the Save row
 
 static void setup_redraw(int pos, int sel){
@@ -191,7 +213,8 @@ static void setup_redraw(int pos, int sel){
                 else snprintf(v, sizeof(v), "CV%d", lp.clk_src + 1);
                 break;
             case 2: snprintf(v, sizeof(v), "%d", lp.bars); break;
-            case 3: snprintf(v, sizeof(v), "%s trk %d",
+            case 3: snprintf(v, sizeof(v), "%s", lp.monitor ? "ON" : "OFF"); break;
+            case 4: snprintf(v, sizeof(v), "%s trk %d",
                              s_save_msg[0] ? s_save_msg : "press:", lp.sel + 1); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
@@ -207,6 +230,7 @@ static int looper_setup_handler(int it_id, int event, void *ev_data){
                 if(pos==0) lp.sync_on = !lp.sync_on;
                 else if(pos==1) lp.clk_src = (lp.clk_src + 1) % LP_CLK_SRCS;
                 else if(pos==2) { int b = lp.bars * 2; lp.bars = (b > 8) ? 1 : b; }
+                else if(pos==3) lp.monitor = !lp.monitor;
             } else { pos = (pos + 1) % SETUP_N; s_save_msg = ""; }
             setup_redraw(pos, sel);
             break;
@@ -215,6 +239,7 @@ static int looper_setup_handler(int it_id, int event, void *ev_data){
                 if(pos==0) lp.sync_on = !lp.sync_on;
                 else if(pos==1) lp.clk_src = (lp.clk_src + LP_CLK_SRCS - 1) % LP_CLK_SRCS;
                 else if(pos==2) { int b = lp.bars / 2; lp.bars = (b < 1) ? 8 : b; }
+                else if(pos==3) lp.monitor = !lp.monitor;
             } else { pos = (pos + SETUP_N - 1) % SETUP_N; s_save_msg = ""; }
             setup_redraw(pos, sel);
             break;
