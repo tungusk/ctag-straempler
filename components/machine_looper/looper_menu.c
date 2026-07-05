@@ -49,7 +49,7 @@ static void lanes_reset_cache(void){
 static int lane_y(int i){ return TFT_getfontheight() + 11 + i * 46; }
 #define LANE_BX 26
 #define LANE_BW (_width - 150)
-#define LANE_BH 16
+#define LANE_BH 26
 
 // full lane chrome: frame, number, empty bar outline, state word, length
 static void lane_chrome(int i){
@@ -211,9 +211,9 @@ static int looper_live_handler(int it_id, int event, void *ev_data){
 
 // ---- Setup page -----------------------------------------------------------
 // Rows 0-2 are edit-in-place values; row 3 (Save) is an action button.
-static const char *setup_labels[] = {"Sync", "Clock Src", "Bars", "Monitor", "Save Trk"};
-#define SETUP_N 5
-#define SETUP_SAVE_ROW 4
+static const char *setup_labels[] = {"Sync", "Clock Src", "Bars", "Monitor", "BP Filter", "Save Trk"};
+#define SETUP_N 6
+#define SETUP_SAVE_ROW 5
 static const char *s_save_msg = "";   // transient result shown on the Save row
 
 static void setup_redraw(int pos, int sel){
@@ -238,7 +238,8 @@ static void setup_redraw(int pos, int sel){
                 break;
             case 2: snprintf(v, sizeof(v), "%d", lp.bars); break;
             case 3: snprintf(v, sizeof(v), "%s", lp.monitor ? "ON" : "OFF"); break;
-            case 4: snprintf(v, sizeof(v), "%s trk %d",
+            case 4: snprintf(v, sizeof(v), "%s", lp.filter_on ? "ON" : "OFF"); break;
+            case 5: snprintf(v, sizeof(v), "%s trk %d",
                              s_save_msg[0] ? s_save_msg : "press:", lp.sel + 1); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
@@ -255,6 +256,7 @@ static int looper_setup_handler(int it_id, int event, void *ev_data){
                 else if(pos==1) lp.clk_src = (lp.clk_src + 1) % LP_CLK_SRCS;
                 else if(pos==2) { int b = lp.bars * 2; lp.bars = (b > 8) ? 1 : b; }
                 else if(pos==3) lp.monitor = !lp.monitor;
+                else if(pos==4) lp.filter_on = !lp.filter_on;
             } else { pos = (pos + 1) % SETUP_N; s_save_msg = ""; }
             setup_redraw(pos, sel);
             break;
@@ -264,6 +266,7 @@ static int looper_setup_handler(int it_id, int event, void *ev_data){
                 else if(pos==1) lp.clk_src = (lp.clk_src + LP_CLK_SRCS - 1) % LP_CLK_SRCS;
                 else if(pos==2) { int b = lp.bars / 2; lp.bars = (b < 1) ? 8 : b; }
                 else if(pos==3) lp.monitor = !lp.monitor;
+                else if(pos==4) lp.filter_on = !lp.filter_on;
             } else { pos = (pos + SETUP_N - 1) % SETUP_N; s_save_msg = ""; }
             setup_redraw(pos, sel);
             break;
