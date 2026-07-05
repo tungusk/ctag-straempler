@@ -763,13 +763,14 @@ static int filebrowser_def_handler(int it_id, int event, void* event_data){
             list_free(file_list);
             return M_SLOT_DECODING;
             break;
-        /*
         case EV_LONG_PRESS:
+            // escape without loading
             cJSON_Delete(info);
+            cJSON_Delete(cfgData);
             list_free(file_list);
-            return M_MAIN;
+            menuTFTFlushMenuDataRect();
+            return M_SLOT;
             break;
-            */
         case EV_TIMER_REPEATING_FAST:
             s2_menuTFTAnimateFileBrowser();
             break;
@@ -838,6 +839,14 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             cJSON_ReplaceItemInObjectCaseSensitive(slotObject, "file", cJSON_CreateString(buf));
             //cJSON_ReplaceItemInArray(slots, (int)_state_data, cJSON_CreateString(list_get_item(file_list, currentFile)->value));
             writeJSONFile("/sdcard/CONFIG.JSN", cJSON_Print(cfgData));
+            cJSON_Delete(info);
+            cJSON_Delete(cfgData);
+            list_free(file_list);
+            menuTFTFlushMenuDataRect();
+            return M_SLOT;
+            break;
+        case EV_LONG_PRESS:
+            // escape without loading
             cJSON_Delete(info);
             cJSON_Delete(cfgData);
             list_free(file_list);
