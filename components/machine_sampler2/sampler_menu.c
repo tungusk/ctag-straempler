@@ -722,7 +722,7 @@ static int filebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            s2_menuTFTPrintFileBrowser(file_list, currentFile);
+            s2_menuTFTPrintFileBrowser(file_list, currentFile, activeSlot == 1);
             break;
         case EV_FWD:
             currentFile++;
@@ -732,7 +732,7 @@ static int filebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            s2_menuTFTPrintFileBrowser(file_list, currentFile);
+            s2_menuTFTPrintFileBrowser(file_list, currentFile, activeSlot == 1);
             break;
         case EV_BWD:
             currentFile--;
@@ -742,7 +742,7 @@ static int filebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            s2_menuTFTPrintFileBrowser(file_list, currentFile);
+            s2_menuTFTPrintFileBrowser(file_list, currentFile, activeSlot == 1);
             break;
         case EV_SHORT_PRESS:
             cJSON_Delete(info);
@@ -808,7 +808,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             //ESP_LOGI("Menu", "jsn file %s", buf);
             info = readJSONFileAsCJSON(buf);
             //ESP_LOGI("Menu", "JSON String %s", cJSON_Print(info));
-            s2_menuTFTPrintFileBrowser(file_list, currentFile);
+            s2_menuTFTPrintFileBrowser(file_list, currentFile, activeSlot == 1);
             break;
         case EV_TIMER_REPEATING_FAST:
             s2_menuTFTAnimateFileBrowser();
@@ -820,7 +820,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             name = (char*)list_get_item(file_list, currentFile)->value;
             snprintf(buf, 64, "/sdcard/usr/%s.JSN", name);
             info = readJSONFileAsCJSON(buf);
-            s2_menuTFTPrintFileBrowser(file_list, currentFile);
+            s2_menuTFTPrintFileBrowser(file_list, currentFile, activeSlot == 1);
             break;
         case EV_BWD:
             currentFile--;
@@ -829,7 +829,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             name = (char*)list_get_item(file_list, currentFile)->value;
             snprintf(buf, 64, "/sdcard/usr/%s.JSN", name);
             info = readJSONFileAsCJSON(buf);
-            s2_menuTFTPrintFileBrowser(file_list, currentFile);
+            s2_menuTFTPrintFileBrowser(file_list, currentFile, activeSlot == 1);
             break;
         case EV_SHORT_PRESS:
             name = (char*)list_get_item(file_list, currentFile)->value;
@@ -862,7 +862,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            s2_menuTFTPrintFileBrowser(file_list, currentFile);
+            s2_menuTFTPrintFileBrowser(file_list, currentFile, activeSlot == 1);
             break;
         case EV_FWD:
             currentFile++;
@@ -872,7 +872,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            s2_menuTFTPrintFileBrowser(file_list, currentFile);
+            s2_menuTFTPrintFileBrowser(file_list, currentFile, activeSlot == 1);
             break;
         case EV_BWD:
             currentFile--;
@@ -882,7 +882,7 @@ static int userfilebrowser_def_handler(int it_id, int event, void* event_data){
             snprintf(buf, 64, "/sdcard/POOL/%s.JSN", id);
             info = readJSONFileAsCJSON(buf);
             parseJSONAudioTags(info);
-            s2_menuTFTPrintFileBrowser(file_list, currentFile);
+            s2_menuTFTPrintFileBrowser(file_list, currentFile, activeSlot == 1);
             break;
         case EV_SHORT_PRESS:
             cJSON_Delete(info);
@@ -2162,7 +2162,7 @@ static void sampler_register_pages(void *menusys){
 }
 
 // Freesound ("Sample" -> M_BROWSE) hidden for now — future standalone machine
-static const char *const sampler_main_items[] = {"Play", "Slot", "Preset"};
+static const char *const sampler_main_items[] = {"Play", "Load", "Preset"};
 static const int sampler_main_targets[] = {M_PLAY, M_SLOT, M_PRESET};
 
 const machine_ui_t s2_sampler_menu_ui = {

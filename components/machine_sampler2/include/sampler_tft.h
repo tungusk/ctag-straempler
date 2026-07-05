@@ -43,7 +43,7 @@ void s2_menuTFTFeedbackMenuItemHSpaced(int *cnt, int* pos, const char** items, c
 void s2_menuTFTUpdateProgress(char *text, int progress);
 void s2_menuTFTPrintBrowseTagList(list_t*);
 int s2_printTags(list_item_t* it);
-void s2_menuTFTPrintFileBrowser(list_t* files, int current);
+void s2_menuTFTPrintFileBrowser(list_t* files, int current, bool align_right);
 void s2_menuTFTPrintDecoding();
 void s2_menuTFTAnimateFileBrowser(void);
 void s2_menuTFTInvalidatePlayArea(void);

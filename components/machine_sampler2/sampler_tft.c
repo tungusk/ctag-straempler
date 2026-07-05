@@ -172,6 +172,8 @@ void s2_menuTFTPrintSlotMenu(const cJSON *slotData, int activeSlot){
     _fg = TFT_LIGHTGREY;
     _bbox_list = list_create();
     cJSON *slots = cJSON_GetObjectItem(slotData, "slots");
+    Font _slotf = cfont;
+    TFT_setFont(DEJAVU18_FONT, NULL);   // scaled up for readability (Arlo)
     for(i=0; i<2; i++){
         cJSON *slotObj = cJSON_GetArrayItem(slots, i);
         char *slot;
@@ -185,6 +187,7 @@ void s2_menuTFTPrintSlotMenu(const cJSON *slotData, int activeSlot){
         TFT_print(s, x, 3 + (TFT_getfontheight() + 3) *_cur_row);
         _cur_row++;
     }
+    cfont = _slotf;
     menuTFTHighlightNextEl();
 }
 
@@ -1171,7 +1174,10 @@ int s2_printTags(list_item_t* it){
     return 0;
 }
 
-void s2_menuTFTPrintFileBrowser(list_t* files, int current){
+static bool browser_align_right = false;
+
+void s2_menuTFTPrintFileBrowser(list_t* files, int current, bool align_right){
+    browser_align_right = align_right;
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     TFT_fillWindow(TFT_BLACK);
     char buf[64];
@@ -1183,7 +1189,7 @@ void s2_menuTFTPrintFileBrowser(list_t* files, int current){
 
     _fg = TFT_LIGHTGREY;
     snprintf(buf, 64, "File %d out of %d", current + 1, total);
-    TFT_print(buf, 3, 0);
+    TFT_print(buf, align_right ? _width - TFT_getStringWidth(buf) - 3 : 3, 0);
 
     // neighbors above (blank spacer row after the header; no wraparound)
     int y = fh + 6 + (fh + 3);
@@ -1191,7 +1197,8 @@ void s2_menuTFTPrintFileBrowser(list_t* files, int current){
         int idx = current - k;
         if (idx >= 0) {
             _fg = TFT_LIGHTGREY;
-            TFT_print((char*)list_get_item(files, idx)->value, 14, y);
+            char *nm = (char*)list_get_item(files, idx)->value;
+            TFT_print(nm, align_right ? _width - TFT_getStringWidth(nm) - 14 : 14, y);
         }
         y += fh + 3;
     }
@@ -1202,7 +1209,11 @@ void s2_menuTFTPrintFileBrowser(list_t* files, int current){
     Font f = cfont;
     TFT_setFont(BROWSER_NAME_FONT, NULL);
     _fg = TFT_WHITE;
-    TFT_print(browser_sel_name, 3, browser_name_y);
+    {
+        int nw = TFT_getStringWidth(browser_sel_name);
+        int nx = (align_right && nw < _width - 6) ? _width - nw - 3 : 3;
+        TFT_print(browser_sel_name, nx, browser_name_y);
+    }
     int name_fh = TFT_getfontheight();
     cfont = f;
     y = browser_name_y + name_fh + 5;
@@ -1212,7 +1223,8 @@ void s2_menuTFTPrintFileBrowser(list_t* files, int current){
         int idx = current + k;
         if (idx < total) {
             _fg = TFT_LIGHTGREY;
-            TFT_print((char*)list_get_item(files, idx)->value, 14, y);
+            char *nm = (char*)list_get_item(files, idx)->value;
+            TFT_print(nm, align_right ? _width - TFT_getStringWidth(nm) - 14 : 14, y);
         }
         y += fh + 3;
     }
