@@ -145,7 +145,11 @@ void configDisplay(){
 	printf("SPI: Max rd speed = %u\r\n", max_rdclock);
 
     // ==== Set SPI clock used for display operations ====
-	spi_lobo_set_speed(spi, DEFAULT_SPI_CLOCK);
+    // 16 MHz instead of DEFAULT_SPI_CLOCK (26 MHz): experiment 2026-07-04 —
+    // display corruption (white screen / stale-pixel artifacts) correlates
+    // with heavy SD streaming during draws; slower edges buy noise/timing
+    // margin on the shared bus and a marginal supply rail
+	spi_lobo_set_speed(spi, 16000000);
     printf("SPI: Changed speed to %u\r\n", spi_lobo_get_speed(spi));
     TFT_setGammaCurve(DEFAULT_GAMMA_CURVE);
 	TFT_setRotation(LANDSCAPE_FLIP);
