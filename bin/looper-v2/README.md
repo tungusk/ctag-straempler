@@ -1,6 +1,6 @@
 # looper-v2 firmware (2026-07-05)
 
-Snapshot of `v09-machines` at commit `8b7f80c` (tag `looper-v2-20260705`).
+Snapshot of `v09-machines` at commit `b43bb36` (tag `looper-v2-20260705`).
 Built with IDF 4.3 + xtensa-esp32-elf esp-2021r2-patch3-8.4.0. Hardware-tested.
 Supersedes looper-v1 with a full round of live-playing refinements.
 
@@ -28,7 +28,9 @@ yellow (ARM), cyan (selected).
   unit; the filter jacks want an envelope/LFO patched in.)
 
 **Per-track BP filter** — Setup toggle (default OFF). State-variable
-bandpass; the selected track's cutoff/res follow CV1/CV2.
+bandpass; each track has its own cutoff/res/state (4 run at once). CV1/CV2
+drive the selected track's cutoff/res, but only when actually driven, so each
+track REMEMBERS its setting and an unpatched jack won't slam it on select.
 
 **Setup page** — Sync / Clock Src / Bars / Monitor / BP Filter / Save Trk.
 - Monitor: pass line-in through to the output.
