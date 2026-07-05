@@ -680,7 +680,8 @@ static int bank_def_handler(int it_id, int event, void* event_data){
             break;
         case EV_SHORT_PRESS:
             _state_data = (void*)activeSlot;
-            return M_SLOT_TYPESELECT;
+            // straight to the User sample list; Pool is one back-step away
+            return M_SLOT_USER;
             break;
         case EV_LONG_PRESS:
             s2_assignAudioFiles();
@@ -2160,13 +2161,14 @@ static void sampler_register_pages(void *menusys){
 
 }
 
-static const char *const sampler_main_items[] = {"Play", "Slot", "Sample", "Preset"};
-static const int sampler_main_targets[] = {M_PLAY, M_SLOT, M_BROWSE, M_PRESET};
+// Freesound ("Sample" -> M_BROWSE) hidden for now — future standalone machine
+static const char *const sampler_main_items[] = {"Play", "Slot", "Preset"};
+static const int sampler_main_targets[] = {M_PLAY, M_SLOT, M_PRESET};
 
 const machine_ui_t s2_sampler_menu_ui = {
     .main_items = sampler_main_items,
     .main_targets = sampler_main_targets,
-    .n_main = 4,
+    .n_main = 3,
     .register_pages = sampler_register_pages,
     .main_event = sampler_main_event,
 };

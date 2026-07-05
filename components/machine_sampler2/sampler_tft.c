@@ -708,7 +708,8 @@ void s2_menuTFTPrintPlaymodeValues(play_state_data_t *data, int r){
             } 
             break;
         case SID_LEND:
-            sprintf(tmp,"%d %%", scaledLEnd);
+            if(data->mode == CROP) sprintf(tmp,"L %d %%", (uint16_t)menuTFTScaleToRange(data->loop_end - data->start, 800, 100));
+            else sprintf(tmp,"%d %%", scaledLEnd);
             menuTFTFlushValue(data->loop_end, 3, playmode_conditions, &playmode_cond_size, &_bg);
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 3);
             break;
@@ -719,7 +720,8 @@ void s2_menuTFTPrintPlaymodeValues(play_state_data_t *data, int r){
             menuTFTFlushValue(data->loop_start, 2, playmode_conditions, &playmode_cond_size, &_bg);
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 2);
 
-            sprintf(tmp,"%d %%", scaledLEnd);
+            if(data->mode == CROP) sprintf(tmp,"L %d %%", (uint16_t)menuTFTScaleToRange(data->loop_end - data->start, 800, 100));
+            else sprintf(tmp,"%d %%", scaledLEnd);
             menuTFTFlushValue(data->loop_end, 3, playmode_conditions, &playmode_cond_size, &_bg);
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * 3);
             
@@ -748,7 +750,8 @@ void s2_menuTFTPrintPlaymodeValues(play_state_data_t *data, int r){
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y);
             y++;
 
-            sprintf(tmp,"%d %%", scaledLEnd);
+            if(data->mode == CROP) sprintf(tmp,"L %d %%", (uint16_t)menuTFTScaleToRange(data->loop_end - data->start, 800, 100));
+            else sprintf(tmp,"%d %%", scaledLEnd);
             TFT_print(tmp, _width/2, 3 + (TFT_getfontheight() + 3) * y);
             y++;
    
