@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "cJSON.h"
 #include "machine.h"
 #include "audio.h"
 #include "slicer_priv.h"
@@ -193,6 +194,29 @@ int slicer_list_samples(char out[][24], int max)
     return n;
 }
 
+// persist settings + the loaded sample name so the slicer comes back the way
+// you left it (reloads the remembered sample on bind)
+static cJSON *slicer_preset_save(void)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "slices", sl.n_slices);
+    cJSON_AddStringToObject(o, "sample", sl.sample);
+    cJSON_AddBoolToObject(o, "auto", sl.auto_on);
+    cJSON_AddBoolToObject(o, "reverse", sl.reverse);
+    return o;
+}
+
+static void slicer_preset_load(const cJSON *node)
+{
+    if (!node) return;
+    cJSON *j;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "slices")) && cJSON_IsNumber(j)) sl.n_slices = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "auto")))    sl.auto_on = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "reverse"))) sl.reverse = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])
+        slicer_load(j->valuestring);   // reload the remembered sample (SD ok on UI task)
+}
+
 extern const machine_ui_t slicer_menu_ui;
 
 const machine_t machine_slicer = {
@@ -200,5 +224,7 @@ const machine_t machine_slicer = {
     .start = slicer_start,
     .stop = slicer_stop,
     .process = slicer_process,
+    .preset_save = slicer_preset_save,
+    .preset_load = slicer_preset_load,
     .ui = &slicer_menu_ui,
 };
