@@ -383,11 +383,14 @@ void s2_incPlaymodeValue(play_state_data_t* data, int index, xQueueHandle mode_h
             break;
         case SID_START:
             if(data->mode == CROP){
-                // crop: start slides the whole window, length preserved
+                // crop: start slides the whole window; once the end hits EOF
+                // the length gives way (otherwise a full-length window pins
+                // start at 0 forever — the default state)
                 int d = accel_step();
-                if(data->loop_end + d > 800) d = 800 - data->loop_end;
+                if(data->start + d > 800 - 8) d = (800 - 8) - data->start;
                 data->start += d;
                 data->loop_end += d;
+                if(data->loop_end > 800) data->loop_end = 800;
                 data->loop_start = data->start;
                 data->loop_position = data->start;
             }
