@@ -269,17 +269,23 @@ static void load_redraw(void){
         TFT_print(m, _width / 2 - TFT_getStringWidth(m) / 2, _height / 2);
         return;
     }
-    int cy = _height / 2 - fh / 2;
-    int rowh = fh + 8;
-    for (int k = -2; k <= 2; k++){
-        int idx = s_sample_idx + k;
-        if (idx < 0 || idx >= s_n_samples) continue;
-        char *nm = s_samples[idx];
-        _fg = (k == 0) ? TFT_WHITE : (color_t){110, 110, 110};
-        TFT_print(nm, _width / 2 - TFT_getStringWidth(nm) / 2, cy + k * rowh);
+    int cy = _height / 2;
+    // selected sample in a large font, centered
+    Font f = cfont;
+    TFT_setFont(DEJAVU24_FONT, NULL);
+    int bigfh = TFT_getfontheight();
+    _fg = TFT_WHITE;
+    char *selnm = s_samples[s_sample_idx];
+    TFT_print(selnm, _width / 2 - TFT_getStringWidth(selnm) / 2, cy - bigfh / 2);
+    cfont = f;   // back to default for the dim neighbours
+    _fg = (color_t){110, 110, 110};
+    for (int k = 1; k <= 2; k++){
+        int up = s_sample_idx - k, dn = s_sample_idx + k;
+        int yup = cy - bigfh / 2 - k * (fh + 4) - 4;
+        int ydn = cy + bigfh / 2 + (k - 1) * (fh + 4) + 6;
+        if (up >= 0){ char *n = s_samples[up]; TFT_print(n, _width / 2 - TFT_getStringWidth(n) / 2, yup); }
+        if (dn < s_n_samples){ char *n = s_samples[dn]; TFT_print(n, _width / 2 - TFT_getStringWidth(n) / 2, ydn); }
     }
-    _fg = TFT_CYAN;
-    TFT_drawRect(18, cy - 4, _width - 36, fh + 6, TFT_CYAN);
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     char *hint = "turn:browse  press:load  hold:cancel";
