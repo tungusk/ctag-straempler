@@ -82,28 +82,31 @@ static const machine_ui_t *machine_ui(void){
 
 // sampler main-screen live area (arm cycling + live displays).
 // M0c-1: still in this file; moves out with the rest of the sampler UI.
+// main-menu selection index: file-scope so a machine rebind can reset it —
+// the entry count changes across machines and a stale index points nowhere
+static int s_main_menu_pos = 0;
+
 static int main_menu_def_handler(int it_id, int event, void* event_data){
-    static int menu_state_current = 0;
     const machine_ui_t *mui = machine_ui();
 
     switch(event){
         case EV_ENTERED_MENU:
-            menuTFTSelectMainMenu(menu_state_current, 0, s_main_labels, s_n_main);
+            menuTFTSelectMainMenu(s_main_menu_pos, 0, s_main_labels, s_n_main);
             if (mui && mui->main_event) mui->main_event(event, event_data);
             break;
         case EV_FWD:
-            menu_state_current++;
-            if(menu_state_current >= s_n_main) menu_state_current = 0;
-            menuTFTSelectMainMenu(menu_state_current, 0, s_main_labels, s_n_main);
+            s_main_menu_pos++;
+            if(s_main_menu_pos >= s_n_main) s_main_menu_pos = 0;
+            menuTFTSelectMainMenu(s_main_menu_pos, 0, s_main_labels, s_n_main);
             break;
         case EV_BWD:
-            menu_state_current--;
-            if(menu_state_current < 0) menu_state_current = s_n_main - 1;
-            menuTFTSelectMainMenu(menu_state_current, 0, s_main_labels, s_n_main);
+            s_main_menu_pos--;
+            if(s_main_menu_pos < 0) s_main_menu_pos = s_n_main - 1;
+            menuTFTSelectMainMenu(s_main_menu_pos, 0, s_main_labels, s_n_main);
             break;
         case EV_LONG_PRESS:
-            menuTFTSelectMainMenu(menu_state_current, 1, s_main_labels, s_n_main);
-            return s_main_targets[menu_state_current];
+            menuTFTSelectMainMenu(s_main_menu_pos, 1, s_main_labels, s_n_main);
+            return s_main_targets[s_main_menu_pos];
             break;
         default:
             if (mui && mui->main_event) return mui->main_event(event, event_data);
@@ -480,6 +483,7 @@ static void register_core_pages(void){
 static void menuMachineBindNow(void){
     if(_ms) menusys_free(_ms);
     register_core_pages();
+    s_main_menu_pos = 0;   // entry count differs per machine; stale index is invalid
 
     const machine_ui_t *mui = machine_ui();
     int n = 0;
