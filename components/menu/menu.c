@@ -433,14 +433,18 @@ static void autosave_cb(void *arg) {
     xQueueSend(s_ev_queue, &ev, 0);
 }
 
+// AUTOSAVE.JSN keeps each machine's state under its own name key, so every
+// machine remembers its settings independently across switches:
+//   { "Sampler": {...}, "Looper": {...}, "Slicer": {...} }
 static void autosave_now(void) {
     const machine_t *m = machine_active();
     if (!m || !m->preset_save) return;
     cJSON *node = m->preset_save();
     if (!node) return;
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "machine", m->name);
-    cJSON_AddItemToObject(root, "state", node);
+    cJSON *root = readJSONFileAsCJSON("/sdcard/AUTOSAVE.JSN");
+    if (!root) root = cJSON_CreateObject();
+    cJSON_DeleteItemFromObjectCaseSensitive(root, m->name);   // replace this machine's entry
+    cJSON_AddItemToObject(root, m->name, node);               // root now owns node
     char *out = cJSON_PrintUnformatted(root);
     if (out) { writeJSONFile("/sdcard/AUTOSAVE.JSN", out); free(out); }
     cJSON_Delete(root);
@@ -502,17 +506,12 @@ static void menuMachineBindNow(void){
     s_main_targets[n] = M_MORE;
     s_n_main = n + 1;
 
-    // machine-agnostic state restore: AUTOSAVE.JSN carries a machine-named
-    // node; a mismatched or missing file means "load your defaults" (NULL)
+    // per-machine state restore: AUTOSAVE.JSN keys each machine's state under
+    // its name; a missing entry means "load your defaults" (NULL)
     const machine_t *m = machine_active();
     if (m && m->preset_load) {
         cJSON *root = readJSONFileAsCJSON("/sdcard/AUTOSAVE.JSN");
-        cJSON *node = NULL;
-        if (root) {
-            cJSON *mn = cJSON_GetObjectItemCaseSensitive(root, "machine");
-            if (mn && mn->valuestring && strcmp(mn->valuestring, m->name) == 0)
-                node = cJSON_GetObjectItemCaseSensitive(root, "state");
-        }
+        cJSON *node = root ? cJSON_GetObjectItemCaseSensitive(root, m->name) : NULL;
         m->preset_load(node);
         cJSON_Delete(root);
     }

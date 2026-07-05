@@ -341,6 +341,30 @@ int looper_save_track(int i)
     return 0;
 }
 
+// persist the machine settings (not the RAM loops) so the looper remembers
+// its configuration across machine switches and reboots
+static cJSON *looper_preset_save(void)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "sync", lp.sync_on);
+    cJSON_AddNumberToObject(o, "clk_src", lp.clk_src);
+    cJSON_AddNumberToObject(o, "bars", lp.bars);
+    cJSON_AddBoolToObject(o, "monitor", lp.monitor);
+    cJSON_AddBoolToObject(o, "filter", lp.filter_on);
+    return o;
+}
+
+static void looper_preset_load(const cJSON *node)
+{
+    if (!node) return;   // no saved state — keep start() defaults
+    cJSON *j;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync")))                     lp.sync_on = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) lp.clk_src = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "bars")) && cJSON_IsNumber(j))    lp.bars = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor")))                  lp.monitor = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "filter")))                   lp.filter_on = cJSON_IsTrue(j);
+}
+
 extern const machine_ui_t looper_menu_ui;
 
 const machine_t machine_looper = {
@@ -348,6 +372,8 @@ const machine_t machine_looper = {
     .start = looper_start,
     .stop = looper_stop,
     .process = looper_process,
+    .preset_save = looper_preset_save,
+    .preset_load = looper_preset_load,
     .ui = &looper_menu_ui,
-    // loops are RAM-only in v1; preset_save/load (save-to-library) comes later
+    // audio loops stay RAM-only (save-to-library is the explicit gesture)
 };
