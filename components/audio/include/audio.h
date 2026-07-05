@@ -9,9 +9,12 @@
 #define BUF_SZ 64
 #define SAMPLE_RATE 44100
 
-// CV channels 2 and 3 go through inverting op-amps; correct raw ADC reads with
-// this helper (self-inverse on those channels).
-static const bool cv_bipolar[8] = {false, false, true, true, false, false, false, false};
+// Upstream flagged channels 3/4 (idx 2/3) as inverting op-amps, but this unit
+// reads them straight (verified 2026-07-05: same CV source, meter 1 rose while
+// meter 3 fell under the old correction) — same story as the upstream 5/6 ADC
+// swap this board doesn't have. idx3 (CV4, broken jack) flipped together with
+// idx2: same analog block; revisit when the jack is repaired.
+static const bool cv_bipolar[8] = {false, false, false, false, false, false, false, false};
 static inline uint16_t cv_corrected(int src, const uint16_t *d) {
     return cv_bipolar[src] ? (uint16_t)(4095u - d[src]) : d[src];
 }
