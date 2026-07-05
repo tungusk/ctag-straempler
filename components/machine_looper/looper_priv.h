@@ -25,6 +25,8 @@ typedef struct {
     volatile uint32_t pos;        // play/record head
     volatile uint32_t target;     // record auto-stop point
     volatile uint8_t  state;
+    volatile uint16_t vol;        // 0..255 level (Q8); driven by CV6 when selected
+    volatile uint16_t pan;        // 0..4095, 2048 = center; driven by CV7 when selected
 } lp_track_t;
 
 typedef struct {

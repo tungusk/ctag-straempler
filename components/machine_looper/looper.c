@@ -119,6 +119,8 @@ static esp_err_t looper_start(void)
             return ESP_ERR_NO_MEM;
         }
         lp.tr[i].state = LP_EMPTY;
+        lp.tr[i].vol = 255;      // unity
+        lp.tr[i].pan = 2048;     // center
     }
     clock_reset();
     audio_status_set_voices("looper", "");
@@ -153,7 +155,13 @@ static void apply_cmd(int i)
             case LP_ARMED:  t->state = LP_EMPTY; break;    // cancel arm
             case LP_REC:    t->len = t->pos; t->pos = 0; t->state = LP_PLAY; break; // punch out early
             case LP_PLAY:   t->state = LP_STOP; break;
-            case LP_STOP:   t->pos = 0; t->state = LP_PLAY; break;
+            case LP_STOP:
+                // re-arm: clear the loop and record over it (the encoder-only
+                // way to redo a track). Play/stop cycle: PLAY -> STOP -> re-arm
+                t->len = 0; t->pos = 0;
+                if (lp.sync_on && lp.locked) t->state = LP_ARMED;
+                else track_start_record(t);
+                break;
         }
     }
 }
@@ -179,6 +187,12 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     prev_trig = io->trig_level;
     if (pressed) lp.cmd_action[lp.sel] = 1;
 
+    // the two good knobs shape the selected track: CV6 = level, CV7 = pan.
+    // (knobs 5/8 are faulty on this unit, so per-track-fixed mapping is out;
+    // this is a focus-style control — values persist per track when deselected)
+    lp.tr[lp.sel].vol = io->cv[5] >> 4;   // CV6 -> 0..255
+    lp.tr[lp.sel].pan = io->cv[6];        // CV7 -> 0..4095
+
     int frames = MACHINE_BLOCK / 2;
     uint16_t clk = clock_level(io);
 
@@ -197,7 +211,7 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
         int32_t r = in[f * 2 + 1] >> 16;
         int16_t mono_in = (int16_t)((l + r) / 2);
 
-        int32_t mix = 0;
+        int32_t mixL = 0, mixR = 0;
         for (int i = 0; i < LP_TRACKS; i++) {
             lp_track_t *t = &lp.tr[i];
 
@@ -213,16 +227,18 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
                     t->state = LP_PLAY;
                 }
             } else if (t->state == LP_PLAY && t->len > 0) {
-                mix += t->buf[t->pos];
+                int32_t s = ((int32_t)t->buf[t->pos] * t->vol) >> 8;   // level
+                mixL += (s * (4095 - t->pan)) >> 12;                   // linear pan
+                mixR += (s * t->pan) >> 12;
                 t->pos++;
                 if (t->pos >= t->len) t->pos = 0;
             }
         }
 
-        if (mix > 32767) mix = 32767;
-        if (mix < -32768) mix = -32768;
-        out[f * 2]     = mix << 16;
-        out[f * 2 + 1] = mix << 16;
+        if (mixL > 32767) mixL = 32767; else if (mixL < -32768) mixL = -32768;
+        if (mixR > 32767) mixR = 32767; else if (mixR < -32768) mixR = -32768;
+        out[f * 2]     = mixL << 16;
+        out[f * 2 + 1] = mixR << 16;
     }
 }
 
