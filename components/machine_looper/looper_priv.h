@@ -35,8 +35,9 @@ typedef struct {
 
     // settings (UI writes, engine reads)
     volatile bool sync_on;
-    volatile int  clk_src;        // CV channel 0..7
+    volatile int  clk_src;        // clock source (0..7 CV, 8 TR1, 9 TR2)
     volatile int  bars;           // loop length in bars when synced
+    volatile bool monitor;        // pass line-in through to the output
 
     // clock detector output (engine writes, UI reads)
     volatile float bpm;
