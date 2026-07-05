@@ -23,6 +23,7 @@ typedef enum{
     M_LOOPER_SETUP,
     M_SLICER_LIVE,
     M_SLICER_SETUP,
+    M_SLICER_LOAD,
     M_SETTINGS,
     M_SETTINGS_INPUT,
     M_ABOUT,
