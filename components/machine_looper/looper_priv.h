@@ -48,3 +48,7 @@ typedef struct {
 } lp_state_t;
 
 extern lp_state_t lp;
+
+// save track i's RAM loop to the SD library (LOOP_NNNN.RAW + .JSN). Returns 0
+// on success, -1 if the track is empty or the write failed. Call from UI task.
+int looper_save_track(int i);
