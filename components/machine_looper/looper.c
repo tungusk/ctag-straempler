@@ -211,12 +211,14 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
 
     // filter mod on the jacks: rising CV1 OPENS the selected track's cutoff
     // (patch an envelope/LFO to open it), CV2 raises resonance. The 1V/oct
-    // jacks idle ~880/4095 so trim that floor first.
+    // jacks idle ~880/4095 (below the 900 floor). Only overwrite the track's
+    // stored setting when the jack is actually driven (c > 0) — so each track
+    // REMEMBERS its cutoff/res and an unpatched jack doesn't slam it on select.
     if (lp.filter_on) {
         uint16_t c1 = io->cv[0] > 900 ? io->cv[0] - 900 : 0;   // 0..3195
         uint16_t c2 = io->cv[1] > 900 ? io->cv[1] - 900 : 0;
-        lp.tr[lp.sel].cutoff = 295 + (uint16_t)((uint32_t)c1 * 3800 / 3195);
-        lp.tr[lp.sel].res    = 900 + (uint16_t)((uint32_t)c2 * 3000 / 3195);
+        if (c1) lp.tr[lp.sel].cutoff = 295 + (uint16_t)((uint32_t)c1 * 3800 / 3195);
+        if (c2) lp.tr[lp.sel].res    = 900 + (uint16_t)((uint32_t)c2 * 3000 / 3195);
     }
 
     // per-block SVF coeffs for every track (cheap: 4 sinf per 1.45ms block)
