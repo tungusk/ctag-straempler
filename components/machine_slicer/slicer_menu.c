@@ -169,8 +169,8 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup page -----------------------------------------------------------
-static const char *setup_labels[] = {"Mode", "Slices", "Sample", "Auto", "Reverse"};
-#define SL_SETUP_N 5
+static const char *setup_labels[] = {"Mode", "Slices", "Sensitivity", "Sample", "Auto", "Reverse"};
+#define SL_SETUP_N 6
 
 // cached sample list for the Sample row cycler
 static char s_samples[32][24];
@@ -202,9 +202,10 @@ static void setup_redraw(int pos, int sel){
                 if(sl.slice_target == 0) snprintf(v, sizeof(v), "Auto");
                 else { snprintf(v, sizeof(v), "%d", sl.slice_target); }
                 break;
-            case 2: snprintf(v, sizeof(v), "%s", sl.sample[0] ? sl.sample : "(none)"); break;
-            case 3: snprintf(v, sizeof(v), "%s", sl.auto_on ? "ON" : "OFF"); break;
-            case 4: snprintf(v, sizeof(v), "%s", sl.reverse ? "ON" : "OFF"); break;
+            case 2: snprintf(v, sizeof(v), "%d", sl.sensitivity); break;
+            case 3: snprintf(v, sizeof(v), "%s", sl.sample[0] ? sl.sample : "(none)"); break;
+            case 4: snprintf(v, sizeof(v), "%s", sl.auto_on ? "ON" : "OFF"); break;
+            case 5: snprintf(v, sizeof(v), "%s", sl.reverse ? "ON" : "OFF"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -230,8 +231,8 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
             if(sel){
                 if(pos==0)      { sl.transient_mode = !sl.transient_mode; slicer_reslice(); }
                 else if(pos==1) cycle_target(+1);
-                else if(pos==3) sl.auto_on = !sl.auto_on;
-                else if(pos==4) sl.reverse = !sl.reverse;
+                else if(pos==4) sl.auto_on = !sl.auto_on;
+                else if(pos==5) sl.reverse = !sl.reverse;
             } else pos = (pos + 1) % SL_SETUP_N;
             setup_redraw(pos, sel);
             break;
@@ -239,15 +240,16 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
             if(sel){
                 if(pos==0)      { sl.transient_mode = !sl.transient_mode; slicer_reslice(); }
                 else if(pos==1) cycle_target(-1);
-                else if(pos==3) sl.auto_on = !sl.auto_on;
-                else if(pos==4) sl.reverse = !sl.reverse;
+                else if(pos==4) sl.auto_on = !sl.auto_on;
+                else if(pos==5) sl.reverse = !sl.reverse;
             } else pos = (pos + SL_SETUP_N - 1) % SL_SETUP_N;
             setup_redraw(pos, sel);
             break;
         case EV_SHORT_PRESS:
-            if(pos == 2){
+            if(pos == 2) return M_SLICER_SENS;   // open the dial-in screen
+            if(pos == 3){
                 setup_refresh_samples();
-                return M_SLICER_LOAD;   // open the centered sample browser
+                return M_SLICER_LOAD;            // open the sample browser
             }
             sel = !sel; s_msg[0] = 0; setup_redraw(pos, sel);
             break;
@@ -311,6 +313,66 @@ static int slicer_load_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
+// ---- Sensitivity dial-in screen -------------------------------------------
+// waveform + live slice grid; turning the encoder re-slices so you watch the
+// slices appear/disappear as you set the threshold. Forces transient mode.
+static void sens_redraw(void){
+    TFT_resetclipwin();
+    TFT_fillScreen(TFT_BLACK);
+    _bg = BG;
+    TFT_fillRect(WX - 2, WY - 2, WW + 4, WH + 4, _bg);
+    if (sl.len == 0){
+        _fg = TFT_LIGHTGREY;
+        TFT_print("no sample", WX + 10, WY + WH / 2);
+    } else {
+        int cy = WY + WH / 2;
+        _fg = WAVE;
+        for (int c = 0; c < sl.peak_n; c++){
+            int x = WX + c * WW / (sl.peak_n ? sl.peak_n : 1);
+            int h = sl.peaks[c] * (WH / 2) / 31;
+            if (h < 1 && sl.peaks[c] > 0) h = 1;
+            TFT_drawLine(x, cy - h, x, cy + h, WAVE);
+        }
+        for (int s = 0; s <= sl.n_slices; s++){
+            int x = slice_x(s);
+            TFT_drawLine(x, WY, x, WY + WH, SEL_COL);
+        }
+    }
+    _bg = TFT_BLACK; _fg = TFT_WHITE;
+    char s[48];
+    snprintf(s, sizeof(s), "Sensitivity  %d      slices: %d", sl.sensitivity, sl.n_slices);
+    TFT_print(s, 6, INFO_Y + 2);
+    _fg = (color_t){90, 90, 90};
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    TFT_print("turn:adjust  hold:done", 6, _height - TFT_getfontheight() - 1);
+    TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+static int slicer_sens_handler(int it_id, int event, void *ev_data){
+    switch(event){
+        case EV_ENTERED_MENU:
+            sl.transient_mode = true;   // sensitivity only affects transient slicing
+            slicer_reslice();
+            sens_redraw();
+            break;
+        case EV_FWD:
+            if(sl.sensitivity < 100) sl.sensitivity += 5;
+            slicer_reslice();
+            sens_redraw();
+            break;
+        case EV_BWD:
+            if(sl.sensitivity > 0) sl.sensitivity -= 5;
+            slicer_reslice();
+            sens_redraw();
+            break;
+        case EV_LONG_PRESS:
+        case EV_SHORT_PRESS:
+            return M_SLICER_SETUP;
+        default: break;
+    }
+    return 0;
+}
+
 // ---- registration ---------------------------------------------------------
 static void slicer_register_pages(void *menusys){
     menusys_t *_ms = (menusys_t *)menusys;
@@ -320,6 +382,8 @@ static void slicer_register_pages(void *menusys){
     menusys_item_set_default_cb(_ms, M_SLICER_SETUP, slicer_setup_handler);
     menusys_new_item(_ms, M_SLICER_LOAD);
     menusys_item_set_default_cb(_ms, M_SLICER_LOAD, slicer_load_handler);
+    menusys_new_item(_ms, M_SLICER_SENS);
+    menusys_item_set_default_cb(_ms, M_SLICER_SENS, slicer_sens_handler);
 }
 
 static int slicer_main_event(int event, void *ev_data){
