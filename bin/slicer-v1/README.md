@@ -1,6 +1,6 @@
 # slicer-v1 firmware (2026-07-05)
 
-Snapshot of `v09-machines` at commit `115f39e` (tag `slicer-v1-20260705`).
+Snapshot of `v09-machines` at commit `61f00ab` (tag `slicer-v1-20260705`).
 Built with IDF 4.3 + xtensa-esp32-elf esp-2021r2-patch3-8.4.0. Hardware-tested.
 **Approved by Arlo** — the M3 slicer, fifth machine.
 

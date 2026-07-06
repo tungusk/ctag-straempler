@@ -1,6 +1,6 @@
 # looper-v2 firmware (2026-07-05)
 
-Snapshot of `v09-machines` at commit `b43bb36` (tag `looper-v2-20260705`).
+Snapshot of `v09-machines` at commit `61f00ab` (tag `looper-v2-20260705`).
 Built with IDF 4.3 + xtensa-esp32-elf esp-2021r2-patch3-8.4.0. Hardware-tested.
 Supersedes looper-v1 with a full round of live-playing refinements.
 
