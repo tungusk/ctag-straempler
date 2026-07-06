@@ -1072,19 +1072,39 @@ void s2_menuTFTPrintCurrentSettings(param_data_t* data){
     s2_getAudioBasename(0, f0, sizeof(f0));
     s2_getAudioBasename(1, f1, sizeof(f1));
 
+    // Big bold track numbers: 1 (top, left-justified) / 2 (bottom, right-justified)
+    TFT_setFont(DEJAVU24_FONT, NULL);
+    _fg = TFT_WHITE;
+    TFT_print("1", 2, 100);
+    int num_w = TFT_getStringWidth("1");
+    TFT_print("2", _width - TFT_getStringWidth("2") - 2, 155);
+    TFT_setFont(DEFAULT_FONT, NULL);
+    int lx0 = num_w + 8;   // shared left indent so both voice lines align
+
+    // playback-speed readouts (deviation from unity: 0% / +N% / -N%)
+    char spd[2][12];
+    for(int v = 0; v < 2; v++){
+        int16_t sp = (int16_t)(((int32_t)data[v].playback_speed * 100 + (data[v].playback_speed < 0 ? -8192 : 8192)) / 16384);
+        if(sp == 0)      snprintf(spd[v], sizeof(spd[v]), "0%%");
+        else if(sp < 0)  snprintf(spd[v], sizeof(spd[v]), "-%d%%", -sp);
+        else             snprintf(spd[v], sizeof(spd[v]), "+%d%%", sp);
+    }
+
+    // Voice 0: mode + filename + speed, right of the big "1"
     _fg = TFT_WHITE;
     snprintf(buf, sizeof(buf), "%s", s2_playmode_modes[data[0].play_state.mode]);
-    TFT_print(buf, 4, 104);
+    TFT_print(buf, lx0, 104);
     _fg = TFT_LIGHTGREY;
-    snprintf(buf, sizeof(buf), "  T0: %s", f0);
-    TFT_print(buf, TFT_getStringWidth((char*)s2_playmode_modes[data[0].play_state.mode]) + 4, 104);
+    snprintf(buf, sizeof(buf), " %s  %s", f0, spd[0]);
+    TFT_print(buf, lx0 + TFT_getStringWidth((char*)s2_playmode_modes[data[0].play_state.mode]), 104);
 
+    // Voice 1: same indent as voice 0 (big "2" sits at far right)
     _fg = TFT_WHITE;
     snprintf(buf, sizeof(buf), "%s", s2_playmode_modes[data[1].play_state.mode]);
-    TFT_print(buf, 4, 159);
+    TFT_print(buf, lx0, 159);
     _fg = TFT_LIGHTGREY;
-    snprintf(buf, sizeof(buf), "  T1: %s", f1);
-    TFT_print(buf, TFT_getStringWidth((char*)s2_playmode_modes[data[1].play_state.mode]) + 4, 159);
+    snprintf(buf, sizeof(buf), " %s  %s", f1, spd[1]);
+    TFT_print(buf, lx0 + TFT_getStringWidth((char*)s2_playmode_modes[data[1].play_state.mode]), 159);
 
     TFT_restoreClipWin();
 }

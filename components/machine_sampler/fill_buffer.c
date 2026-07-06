@@ -1,20 +1,26 @@
 #include "fill_buffer.h"
+#include "sd_lock.h"
 
 
 void fill_audio_buffer(voice_play_mode_t* playback_engine, audio_b_t* buffer, audio_f_t* file, SemaphoreHandle_t* mutex){
     // ESP_LOGE("Audio Buffer", "start sample: %ud, loop start: %ud, loop end: %d, rpos %ud", playback_engine->sample_start, playback_engine->loop_start, playback_engine->loop_end, file->fpos);
+    // sd_lock nested INSIDE file_mutex so raw f_read can't race REST/recording
     if(mutex != NULL)
     {
         xSemaphoreTake(*mutex, portMAX_DELAY);
+        sd_lock_take();
         playback_engine->play_mode(playback_engine, buffer, file);
+        sd_lock_give();
         xSemaphoreGive(*mutex);
     }
     else
     {
+        sd_lock_take();
         playback_engine->play_mode(playback_engine, buffer, file);
+        sd_lock_give();
     }
 
-    
+
 }
 
 void fill_buffer_one_shot(void* _playback_engine, void* _buffer, void* _file){
@@ -70,11 +76,13 @@ void jump_to_start(voice_play_mode_t* playback_engine, audio_b_t* first_buffer,a
         first_buffer->len = pointToSeek;
         first_buffer->rpos = 0;
         xSemaphoreTake(*mutex, portMAX_DELAY);
+        sd_lock_take();
         f_lseek(&(file->fil), (pointToSeek + sample_start)); // seek to the position in file from which the sample needs to be loaded to buffers
         file->fpos = sample_start + pointToSeek;
-        xSemaphoreGive(*mutex); 
+        sd_lock_give();
+        xSemaphoreGive(*mutex);
     }
-    else 
+    else
     {
         uint32_t loop_end = playback_engine->loop_end;
         uint32_t pointToSeek = (loop_end < SD_BUF_SZ) ? loop_end : SD_BUF_SZ;
@@ -83,32 +91,38 @@ void jump_to_start(voice_play_mode_t* playback_engine, audio_b_t* first_buffer,a
         pointToSeek = (loop_end  - pointToSeek);
         if(pointToSeek <= 0) pointToSeek = 0;
         xSemaphoreTake(*mutex, portMAX_DELAY);
+        sd_lock_take();
         f_lseek(&(file->fil), pointToSeek); // seek to the position in file from which the sample needs to be loaded to buffers
         file->fpos = pointToSeek;
+        sd_lock_give();
         xSemaphoreGive(*mutex);
     }
     xSemaphoreTake(*mutex, portMAX_DELAY);
+    sd_lock_take();
     playback_engine->play_mode(playback_engine, second_buffer, file);
+    sd_lock_give();
     xSemaphoreGive(*mutex);
 }
 
 void refill_first_buf(voice_play_mode_t* playback_engine, audio_b_t* buffer, audio_f_t* file, SemaphoreHandle_t* mutex){
     bool play_dir = playback_engine->is_playback_direction_forward;
     xSemaphoreTake(*mutex, portMAX_DELAY);
+    sd_lock_take();
     uint32_t file_pos = (uint32_t)f_tell(&(file->fil));
 
     if(play_dir)
     {
-        f_lseek(&(file->fil), playback_engine->sample_start); 
+        f_lseek(&(file->fil), playback_engine->sample_start);
     }
     else
     {
-        f_lseek(&(file->fil), playback_engine->loop_end); 
+        f_lseek(&(file->fil), playback_engine->loop_end);
     }
 
     playback_engine->play_mode(playback_engine, buffer, file);
 
     f_lseek(&(file->fil), file_pos); // make sure to reset where file was before first buffer was reloaded
+    sd_lock_give();
     xSemaphoreGive(*mutex);
 }
 
