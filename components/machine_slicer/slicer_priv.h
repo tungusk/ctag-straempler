@@ -24,6 +24,7 @@ typedef struct {
                                   // transient = max)
     volatile int  n_slices;       // ACTUAL slice count in use
     volatile bool transient_mode; // slice at detected transients vs equal grid
+    volatile int  sensitivity;    // 0..100 transient threshold (higher = more)
     uint32_t slice_pt[SL_MAX_SLICES + 1];  // slice boundaries (frames), n_slices+1
     volatile int  sel;            // selected slice (UI/CV target)
     volatile bool auto_on;        // auto-advance through slices on slice end

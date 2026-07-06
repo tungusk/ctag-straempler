@@ -26,18 +26,18 @@ static void recompute_grid(int n)
 }
 
 // transient detector: window energy -> onset (rectified energy rise) -> pick
-// the strongest min-spaced onsets as slice boundaries. Offline, at load time.
+// the strongest min-spaced onsets as slice boundaries. The energy envelope is
+// computed once on load (compute_envelope); pick_transients re-runs cheaply on
+// sensitivity/count changes so the dial-in screen is responsive.
 #define SL_WIN     512
 #define SL_MAXCAND 96
-static float s_env[SL_MAX_FRAMES / SL_WIN + 2];
+static float    s_env[SL_MAX_FRAMES / SL_WIN + 2];
+static uint32_t s_nwin = 0;
 
-// target: 0 = Auto (keep every detected transient), else a max slice count
-static void detect_transients(int target)
+static void compute_envelope(void)
 {
-    uint32_t nwin = sl.len / SL_WIN;
-    if (nwin < 4) { recompute_grid(target); return; }
-
-    for (uint32_t w = 0; w < nwin; w++) {
+    s_nwin = sl.len / SL_WIN;
+    for (uint32_t w = 0; w < s_nwin; w++) {
         uint32_t a = w * SL_WIN;
         uint64_t acc = 0;
         for (int k = 0; k < SL_WIN; k++) {
@@ -47,10 +47,20 @@ static void detect_transients(int target)
         }
         s_env[w] = (float)acc;
     }
+}
+
+// target: 0 = Auto (keep every detected transient), else a max slice count.
+// sl.sensitivity (0..100) scales the onset threshold: higher = more slices.
+static void pick_transients(int target)
+{
+    uint32_t nwin = s_nwin;
+    if (nwin < 4) { recompute_grid(target); return; }
 
     double sum = 0;
     for (uint32_t w = 1; w < nwin; w++) { float o = s_env[w] - s_env[w - 1]; if (o > 0) sum += o; }
-    float thresh = (float)(sum / nwin) * 2.0f;
+    float scale = 4.0f - (float)sl.sensitivity / 100.0f * 3.6f;   // 4.0 (few) .. 0.4 (many)
+    if (scale < 0.3f) scale = 0.3f;
+    float thresh = (float)(sum / nwin) * scale;
     uint32_t min_gap = (SL_RATE / 12) / SL_WIN;   // ~80 ms minimum slice
     if (min_gap < 1) min_gap = 1;
 
@@ -90,7 +100,7 @@ static void detect_transients(int target)
 static void recompute_slices(void)
 {
     if (sl.len == 0) { sl.n_slices = 1; sl.slice_pt[0] = 0; sl.slice_pt[1] = 0; return; }
-    if (sl.transient_mode) detect_transients(sl.slice_target);
+    if (sl.transient_mode) pick_transients(sl.slice_target);   // uses cached envelope
     else                   recompute_grid(sl.slice_target);
     if (sl.sel >= sl.n_slices) sl.sel = sl.n_slices - 1;
 }
@@ -133,6 +143,7 @@ static esp_err_t slicer_start(void)
     sl.slice_target = 16;
     sl.n_slices = 16;
     sl.transient_mode = false;
+    sl.sensitivity = 50;
     sl.level = 255;
     sl.pitch_cv = 2048;
     sl.inc = 1.0f;
@@ -261,6 +272,7 @@ int slicer_load(const char *name)
     strncpy(sl.sample, name, sizeof(sl.sample) - 1);
     sl.sample[sizeof(sl.sample) - 1] = 0;
     compute_peaks();
+    compute_envelope();     // onset envelope for transient detection
     recompute_slices();     // (re)build slice boundaries for the new sample
     sl.cur = 0;
     sl.sel = 0;
@@ -296,6 +308,7 @@ static cJSON *slicer_preset_save(void)
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "slices", sl.slice_target);
     cJSON_AddBoolToObject(o, "transient", sl.transient_mode);
+    cJSON_AddNumberToObject(o, "sens", sl.sensitivity);
     cJSON_AddStringToObject(o, "sample", sl.sample);
     cJSON_AddBoolToObject(o, "auto", sl.auto_on);
     cJSON_AddBoolToObject(o, "reverse", sl.reverse);
@@ -308,6 +321,7 @@ static void slicer_preset_load(const cJSON *node)
     cJSON *j;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "slices")) && cJSON_IsNumber(j)) sl.slice_target = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "transient"))) sl.transient_mode = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sens")) && cJSON_IsNumber(j)) sl.sensitivity = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "auto")))    sl.auto_on = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "reverse"))) sl.reverse = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])
