@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "clock.h"
 
 // M5 glitch — live-input stutter/beat-repeat. Continuously captures line-in
 // into a rolling ring; on trigger it grabs the most recent window and loops
@@ -23,10 +24,16 @@ typedef struct {
     float  inc;                   // pitch increment
 
     // params (UI writes, engine reads)
-    volatile int  win_ms;         // 20..500 window length (knob6)
+    volatile int  win_ms;         // 20..500 window length (knob6, free mode)
     volatile int  pitch_cv;       // 0..4095 (knob7)
     volatile bool reverse;        // play the window reversed
     volatile int  level;          // 0..255 (CV1 jack)
+
+    // beat sync (shared clock detector)
+    beatclock_t       clk;
+    volatile bool sync;           // window length follows the clock
+    volatile int  clk_src;        // clock CV channel (0..7), default CV8
+    volatile int  division;       // 0=1/4, 1=1/8, 2=1/16, 3=1/32 note
 } gl_state_t;
 
 extern gl_state_t gl;

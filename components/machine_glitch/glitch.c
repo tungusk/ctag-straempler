@@ -11,11 +11,19 @@
 
 gl_state_t gl;
 
+// window length in frames: a clock division when synced+locked, else knob/ms
+static uint32_t window_frames(void)
+{
+    if (gl.sync && gl.clk.locked && gl.clk.period > 0)
+        return gl.clk.period / (1u << gl.division);   // 1/4 = period .. 1/32 = period/8
+    return (uint32_t)gl.win_ms * GL_RATE / 1000;
+}
+
 // copy the last win_len frames (ending at the write head) out of the ring into
 // the linear window buffer, handling the ring wrap with two memcpys
 static void capture_window(void)
 {
-    uint32_t wl = (uint32_t)gl.win_ms * GL_RATE / 1000;
+    uint32_t wl = window_frames();
     if (wl < 64) wl = 64;
     if (wl > GL_MAX_WIN) wl = GL_MAX_WIN;
     gl.win_len = wl;
@@ -39,6 +47,9 @@ static esp_err_t glitch_start(void)
     gl.win_ms = 120;
     gl.pitch_cv = 2048;
     gl.level = 255;
+    gl.clk_src = 7;     // CV8 default (both trigs are stutter controls)
+    gl.division = 1;    // 1/8 note
+    clock_reset(&gl.clk);
     audio_status_set_voices("glitch", "");
     return ESP_OK;
 }
@@ -74,8 +85,11 @@ static void glitch_process(int32_t out[MACHINE_BLOCK],
     if (want && !gl.stutter) { capture_window(); gl.stutter = true; }
     else if (!want && gl.stutter) { gl.stutter = false; }
 
+    uint16_t clk_cv = io->cv[gl.clk_src & 7];
     int frames = MACHINE_BLOCK / 2;
     for (int f = 0; f < frames; f++) {
+        clock_tick(&gl.clk, clk_cv);        // keep the tempo detector running
+
         int32_t l, r;
         if (!gl.stutter) {
             // passthrough + write live into the ring
@@ -113,6 +127,9 @@ static cJSON *glitch_preset_save(void)
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "win_ms", gl.win_ms);
     cJSON_AddBoolToObject(o, "reverse", gl.reverse);
+    cJSON_AddBoolToObject(o, "sync", gl.sync);
+    cJSON_AddNumberToObject(o, "division", gl.division);
+    cJSON_AddNumberToObject(o, "clk_src", gl.clk_src);
     return o;
 }
 
@@ -122,6 +139,9 @@ static void glitch_preset_load(const cJSON *node)
     cJSON *j;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "win_ms")) && cJSON_IsNumber(j)) gl.win_ms = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "reverse"))) gl.reverse = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync"))) gl.sync = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "division")) && cJSON_IsNumber(j)) gl.division = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) gl.clk_src = j->valueint;
 }
 
 extern const machine_ui_t glitch_menu_ui;

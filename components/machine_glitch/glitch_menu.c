@@ -34,15 +34,26 @@ static void state_block(void){
     s_last_stutter = st;
 }
 
+static const char *div_name(int d){
+    switch(d){ case 0: return "1/4"; case 1: return "1/8"; case 2: return "1/16"; default: return "1/32"; }
+}
+
 static void info_block(void){
     int fh = TFT_getfontheight();
     int y = fh + 100;
-    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, fh + 4, _bg);
+    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, (fh + 4) * 2, _bg);
     _fg = TFT_WHITE;
     char s[48];
     snprintf(s, sizeof(s), "window %d ms   %s%s",
              gl.win_ms, gl.reverse ? "REV " : "", gl.latch ? "LATCH" : "");
     TFT_print(s, _width/2 - TFT_getStringWidth(s)/2, y + 2);
+    char t[40];
+    if (gl.sync){
+        if (gl.clk.locked) snprintf(t, sizeof(t), "SYNC %s  %.1f BPM", div_name(gl.division), gl.clk.bpm);
+        else               snprintf(t, sizeof(t), "SYNC %s  (no clock)", div_name(gl.division));
+        _fg = gl.clk.locked ? (color_t){40,200,90} : TFT_LIGHTGREY;
+        TFT_print(t, _width/2 - TFT_getStringWidth(t)/2, y + fh + 6);
+    }
     s_last_win = gl.win_ms;
 }
 
@@ -65,7 +76,7 @@ static int glitch_live_handler(int it_id, int event, void *ev_data){
         case EV_TIMER_REPEATING_SLOW:
         case EV_TIMER_REPEATING_FAST:
             if (gl.stutter != s_last_stutter) state_block();
-            if (gl.win_ms != s_last_win) info_block();
+            info_block();   // refresh window/BPM/lock
             break;
         case EV_LONG_PRESS: return M_MAIN;
         default: break;
@@ -74,8 +85,8 @@ static int glitch_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup ----------------------------------------------------------------
-static const char *setup_labels[] = {"Window ms", "Reverse"};
-#define GL_SETUP_N 2
+static const char *setup_labels[] = {"Window ms", "Reverse", "Sync", "Division", "Clock Src"};
+#define GL_SETUP_N 5
 
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -93,13 +104,26 @@ static void setup_redraw(int pos, int sel){
         switch(i){
             case 0: snprintf(v, sizeof(v), "%d", gl.win_ms); break;
             case 1: snprintf(v, sizeof(v), "%s", gl.reverse ? "ON" : "OFF"); break;
+            case 2: snprintf(v, sizeof(v), "%s", gl.sync ? "ON" : "OFF"); break;
+            case 3: snprintf(v, sizeof(v), "%s", div_name(gl.division)); break;
+            case 4: snprintf(v, sizeof(v), "CV%d", gl.clk_src + 1); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("(window also on knob 6)", 8, _height - TFT_getfontheight() - 1);
+    TFT_print("window on knob6 (free) or clock division (sync)", 8, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+static void gl_adj(int i, int dir){
+    switch(i){
+        case 0: gl.win_ms += dir * 10; if(gl.win_ms < 20) gl.win_ms = 20; if(gl.win_ms > 500) gl.win_ms = 500; break;
+        case 1: gl.reverse = !gl.reverse; break;
+        case 2: gl.sync = !gl.sync; break;
+        case 3: gl.division += dir; if(gl.division < 0) gl.division = 0; if(gl.division > 3) gl.division = 3; break;
+        case 4: gl.clk_src = (gl.clk_src + (dir > 0 ? 1 : 7)) & 7; break;
+    }
 }
 
 static int glitch_setup_handler(int it_id, int event, void *ev_data){
@@ -107,17 +131,13 @@ static int glitch_setup_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
         case EV_FWD:
-            if(sel){
-                if(pos==0){ gl.win_ms += 10; if(gl.win_ms > 500) gl.win_ms = 500; }
-                else       gl.reverse = !gl.reverse;
-            } else pos = (pos + 1) % GL_SETUP_N;
+            if(sel) gl_adj(pos, +1);
+            else pos = (pos + 1) % GL_SETUP_N;
             setup_redraw(pos, sel);
             break;
         case EV_BWD:
-            if(sel){
-                if(pos==0){ gl.win_ms -= 10; if(gl.win_ms < 20) gl.win_ms = 20; }
-                else       gl.reverse = !gl.reverse;
-            } else pos = (pos + GL_SETUP_N - 1) % GL_SETUP_N;
+            if(sel) gl_adj(pos, -1);
+            else pos = (pos + GL_SETUP_N - 1) % GL_SETUP_N;
             setup_redraw(pos, sel);
             break;
         case EV_SHORT_PRESS: sel = !sel; setup_redraw(pos, sel); break;
