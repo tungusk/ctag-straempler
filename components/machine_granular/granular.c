@@ -3,11 +3,11 @@
 #include <strings.h>
 #include <stdio.h>
 #include <math.h>
-#include <dirent.h>
 #include "freertos/FreeRTOS.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "cJSON.h"
+#include "sample_ram.h"
 #include "machine.h"
 #include "audio.h"
 #include "granular_priv.h"
@@ -159,24 +159,10 @@ static void compute_peaks(void)
 int granular_load(const char *name)
 {
     if (!gr.buf) return -1;
-    char path[64];
-    snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
-    FILE *f = fopen(path, "rb");
-    if (!f) { ESP_LOGE("GRAN", "load: cannot open %s", path); return -1; }
-
     gr.loading = true;
     for (int i = 0; i < GR_GRAINS; i++) gr.grains[i].active = false;
-    uint32_t n = 0;
-    int32_t rbuf[256];
-    size_t got;
-    while (n < GR_MAX_FRAMES && (got = fread(rbuf, sizeof(int32_t), 256, f)) > 0) {
-        for (size_t k = 0; k < got && n < GR_MAX_FRAMES; k++) {
-            int l = (int16_t)(rbuf[k] & 0xFFFF);
-            int r = (int16_t)(rbuf[k] >> 16);
-            gr.buf[n++] = (int16_t)((l + r) / 2);   // mix to mono
-        }
-    }
-    fclose(f);
+    uint32_t n = sample_load(name, gr.buf, GR_MAX_FRAMES, true);   // mono
+    if (n == 0) { gr.loading = false; return -1; }
     gr.len = n;
     strncpy(gr.sample, name, sizeof(gr.sample) - 1);
     gr.sample[sizeof(gr.sample) - 1] = 0;
@@ -188,20 +174,7 @@ int granular_load(const char *name)
 
 int granular_list_samples(char out[][24], int max)
 {
-    DIR *d = opendir("/sdcard/usr");
-    if (!d) return 0;
-    int n = 0;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL && n < max) {
-        int L = strlen(e->d_name);
-        if (L > 4 && strcasecmp(e->d_name + L - 4, ".RAW") == 0) {
-            int idl = L - 4; if (idl > 23) idl = 23;
-            memcpy(out[n], e->d_name, idl); out[n][idl] = 0;
-            n++;
-        }
-    }
-    closedir(d);
-    return n;
+    return sample_list(out, max);
 }
 
 // ---- preset ---------------------------------------------------------------
