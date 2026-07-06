@@ -18,7 +18,7 @@ sl_state_t sl;
 // ---- slicing ---------------------------------------------------------------
 static void recompute_grid(int n)
 {
-    if (n < 1) n = 1;
+    if (n < 1) n = 16;   // Auto has no meaning for an even grid — use 16
     if (n > SL_MAX_SLICES) n = SL_MAX_SLICES;
     sl.n_slices = n;
     for (int i = 0; i <= n; i++)
@@ -31,10 +31,11 @@ static void recompute_grid(int n)
 #define SL_MAXCAND 96
 static float s_env[SL_MAX_FRAMES / SL_WIN + 2];
 
+// target: 0 = Auto (keep every detected transient), else a max slice count
 static void detect_transients(int target)
 {
     uint32_t nwin = sl.len / SL_WIN;
-    if (nwin < 4 || target < 2) { recompute_grid(target); return; }
+    if (nwin < 4) { recompute_grid(target); return; }
 
     for (uint32_t w = 0; w < nwin; w++) {
         uint32_t a = w * SL_WIN;
@@ -69,7 +70,7 @@ static void detect_transients(int target)
         while (j >= 0 && cs[j] < ks) { cs[j + 1] = cs[j]; cp[j + 1] = cp[j]; j--; }
         cs[j + 1] = ks; cp[j + 1] = kp;
     }
-    int want = target - 1;
+    int want = (target <= 0) ? nc : target - 1;   // Auto keeps all detected
     if (want > nc) want = nc;
     if (want > SL_MAX_SLICES - 1) want = SL_MAX_SLICES - 1;
 
