@@ -5,10 +5,12 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
+#include "ff.h"
 #include <esp_http_server.h>
 #include "ui_events.h"
 #include "string_tools.h"
 #include "fileio.h"
+#include "sd_lock.h"
 #include "audio.h"
 #include "machine.h"
 #include "recording.h"
@@ -67,54 +69,69 @@ static esp_err_t landing_handler(httpd_req_t *req)
 
 static esp_err_t files_get_handler(httpd_req_t *req)
 {
-    // cJSON handles string escaping — descriptions/tags may contain quotes
-    cJSON *root = cJSON_CreateObject();
-    cJSON *arr = cJSON_AddArrayToObject(root, "files");
+    // STREAMED response. Internal RAM on this board is tight enough that
+    // building the whole file array + printing it in one shot OOMs (the list
+    // came back empty). Instead we emit one small object per file as we walk
+    // the directory, so peak memory stays flat no matter how many files exist.
+    // We also skip reading each .JSN sidecar: names come free from readdir and
+    // sizes from stat, so the listing never touches the failing per-file reads
+    // that were dragging the handler and tripping browser socket resets.
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send_chunk(req, "{\"files\":[", HTTPD_RESP_USE_STRLEN);
 
+    sd_lock_take();
     DIR *d = opendir("/sdcard/usr");
+    sd_lock_give();
+    bool first = true;
     if (d) {
-        struct dirent *ent;
-        while ((ent = readdir(d)) != NULL) {
+        for (;;) {
+            // grab the SD bus only for the readdir step, release between entries
+            sd_lock_take();
+            struct dirent *ent = readdir(d);
+            sd_lock_give();
+            if (ent == NULL) break;
             if (ent->d_type != DT_REG) continue;
             int len = strlen(ent->d_name);
             if (len < 5) continue;
             // only list .JSN sidecars — each represents a complete sample
             if (strcasecmp(ent->d_name + len - 4, ".JSN") != 0) continue;
 
-            char jsn_path[280];
-            snprintf(jsn_path, sizeof(jsn_path), "/sdcard/usr/%s", ent->d_name);
-            cJSON *meta = readJSONFileAsCJSON(jsn_path);
-            if (!meta) continue;
-
-            // derive RAW path and size
-            char raw_path[280];
+            // id = sidecar name without the .JSN extension
             char id[260] = {0};
-            strncpy(id, ent->d_name, len - 4);  // strip .JSN
+            strncpy(id, ent->d_name, len - 4);
+
+            // RAW size via stat — light, no file open needed
+            char raw_path[280];
             snprintf(raw_path, sizeof(raw_path), "/sdcard/usr/%s.RAW", id);
             struct stat st;
+            sd_lock_take();
             long fsize = (stat(raw_path, &st) == 0) ? st.st_size : 0;
+            sd_lock_give();
 
-            const char *desc = "";
-            const char *tags = "";
-            cJSON *j;
-            if ((j = cJSON_GetObjectItem(meta, "description")) && j->valuestring) desc = j->valuestring;
-            if ((j = cJSON_GetObjectItem(meta, "tags_s")) && j->valuestring) tags = j->valuestring;
-
+            // build ONE tiny object (cJSON just for correct string escaping),
+            // print it small, stream it, free it — flat memory footprint
             cJSON *o = cJSON_CreateObject();
             cJSON_AddStringToObject(o, "name", id);
-            cJSON_AddStringToObject(o, "description", desc);
-            cJSON_AddStringToObject(o, "tags", tags);
+            cJSON_AddStringToObject(o, "description", "");
+            cJSON_AddStringToObject(o, "tags", "");
             cJSON_AddNumberToObject(o, "size", fsize);
-            cJSON_AddItemToArray(arr, o);
-            cJSON_Delete(meta);
+            char *os = cJSON_PrintUnformatted(o);
+            cJSON_Delete(o);
+            if (os) {
+                if (!first) httpd_resp_send_chunk(req, ",", 1);
+                httpd_resp_send_chunk(req, os, HTTPD_RESP_USE_STRLEN);
+                free(os);
+                first = false;
+            }
         }
+        sd_lock_take();
         closedir(d);
+        sd_lock_give();
     }
 
-    char *s = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (s) { send_json(req, s); free(s); }
-    else send_json(req, "{\"files\":[]}");
+    httpd_resp_send_chunk(req, "]}", HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send_chunk(req, NULL, 0);   // end of stream
     return ESP_OK;
 }
 
@@ -129,10 +146,12 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
     }
 
     char path[72];
+    sd_lock_take();
     snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
     remove(path);
     snprintf(path, sizeof(path), "/sdcard/usr/%s.JSN", name);
     remove(path);
+    sd_lock_give();
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_sendstr(req, "{}");
@@ -153,14 +172,18 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
 
     char path[72];
     snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
+    sd_lock_take();
     FILE *f = fopen(path, "rb");
+    sd_lock_give();
     if (!f) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
         return ESP_FAIL;
     }
 
     struct stat st;
+    sd_lock_take();
     stat(path, &st);
+    sd_lock_give();
     char len_str[16];
     snprintf(len_str, sizeof(len_str), "%ld", (long)st.st_size);
 
@@ -172,14 +195,21 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
     if (!buf) { fclose(f); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
 
     int n;
-    while ((n = fread(buf, 1, STREAM_CHUNK, f)) > 0) {
+    for (;;) {
+        // read one chunk under the SD lock, then release it before the (slow)
+        // network send so audio file-reader refills can interleave
+        sd_lock_take();
+        n = fread(buf, 1, STREAM_CHUNK, f);
+        sd_lock_give();
+        if (n <= 0) break;
         httpd_resp_send_chunk(req, buf, n);
-        // yield the SD bus between chunks so audio file-reader refills aren't starved
         vTaskDelay(1);
     }
     httpd_resp_send_chunk(req, NULL, 0);
 
+    sd_lock_take();
     fclose(f);
+    sd_lock_give();
     free(buf);
     return ESP_OK;
 }
@@ -364,7 +394,9 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
 
     // FS_LOCK makes this fail with FR_LOCKED if a voice is streaming the file —
     // refuse rather than truncate a sample that is currently playing
+    sd_lock_take();
     FRESULT fr = f_open(&raw_file, file_name, FA_CREATE_ALWAYS | FA_WRITE);
+    sd_lock_give();
     if (fr != FR_OK) {
         ESP_LOGE(TAG, "drop_sample: f_open %s failed (%d)", file_name, fr);
         cJSON_Delete(root);
@@ -377,18 +409,27 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     if (req->content_len % 4 != 0) {
         int pad = 4 - (req->content_len % 4);
         const char zeros[3] = {0};
+        sd_lock_take();
         f_write(&raw_file, zeros, pad, &bw);
+        sd_lock_give();
     }
     remaining = req->content_len;
 
     while (remaining > 0) {
         if ((ret = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0) {
             if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            f_close(&raw_file); f_unlink(file_name); free(buf); cJSON_Delete(root);
+            sd_lock_take();
+            f_close(&raw_file); f_unlink(file_name);
+            sd_lock_give();
+            free(buf); cJSON_Delete(root);
             return ESP_FAIL;
         }
         total += ret; remaining -= ret;
-        if (ret > 0) f_write(&raw_file, buf, ret, &bw);
+        if (ret > 0) {
+            sd_lock_take();
+            f_write(&raw_file, buf, ret, &bw);
+            sd_lock_give();
+        }
         ev.event = EV_DECODING_PROGRESS;
         ev.event_data = (void *)(total / (file_len_d100 ? file_len_d100 : 1));
         xQueueSend(ui_ev_queue, &ev, portMAX_DELAY);
@@ -399,7 +440,9 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "license", "own license");
     writeJSONFile(file_name_jsn, cJSON_Print(root));
 
+    sd_lock_take();
     f_close(&raw_file);
+    sd_lock_give();
     free(buf);
     cJSON_Delete(root);
 
@@ -409,10 +452,38 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── GET /sysinfo ─────────────────────────────────────────────────────────────
+// Device IP + SD free/total bytes. Fetched on-demand by the web page (not the
+// hot /status poll), so the one-off f_getfree FAT scan is fine.
+
+static esp_err_t sysinfo_get_handler(httpd_req_t *req)
+{
+    char ip[20] = {0};
+    wifiGetIPString(ip, sizeof(ip));
+
+    uint64_t freeb = 0, totb = 0;
+    FATFS *fs = NULL;
+    DWORD fre_clust = 0;
+    sd_lock_take();
+    if (f_getfree("0:", &fre_clust, &fs) == FR_OK && fs) {
+        uint64_t bytes_per_clust = (uint64_t)fs->csize * 512; // SD sectors are 512B
+        totb  = (uint64_t)(fs->n_fatent - 2) * bytes_per_clust;
+        freeb = (uint64_t)fre_clust * bytes_per_clust;
+    }
+    sd_lock_give();
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu}",
+             ip, (unsigned long long)freeb, (unsigned long long)totb);
+    send_json(req, buf);
+    return ESP_OK;
+}
+
 // ─── server lifecycle ────────────────────────────────────────────────────────
 
 static httpd_uri_t uris[] = {
     { .uri = "/",           .method = HTTP_GET,    .handler = landing_handler },
+    { .uri = "/sysinfo",    .method = HTTP_GET,    .handler = sysinfo_get_handler },
     { .uri = "/files",      .method = HTTP_GET,    .handler = files_get_handler },
     { .uri = "/files",      .method = HTTP_DELETE, .handler = files_delete_handler },
     { .uri = "/files/raw",  .method = HTTP_GET,    .handler = files_raw_handler },

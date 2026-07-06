@@ -41,8 +41,8 @@ static xQueueHandle s_ev_queue = NULL;
 // core menu labels (machine-independent pages)
 static const char* more_menus[] = {"Machine", "Settings", "About"};
 static const int n_more_menus = 3;
-static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone"};
-static const int n_settings_menus = 4;
+static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "IP"};
+static const int n_settings_menus = 5;
 
 static void incSettingsItem(int *tz, int index){
     if (index == SID_TIMEZONE) { if(*tz + 1 >= 12) *tz = 12; else (*tz)++; }
@@ -243,6 +243,7 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 settings = cJSON_GetObjectItemCaseSensitive(cfgData, "settings");
                 if(settings != NULL)menuTFTPrintSettings(settings);
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
+                menuTFTPrintIP(settings_menus, &n_settings_menus);
             }else ESP_LOGE("UI", "couldn't fetch cfgData from state or file");
             break;
         case EV_FWD:

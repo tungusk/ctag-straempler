@@ -11,10 +11,13 @@
 #include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
 #include "fileio.h"
+#include "sd_lock.h"
 #include "cJSON.h"
 
 void mountSDStorage(){
     ESP_LOGI("SD", "Initializing SD card");
+    sd_lock_init();   // global SD bus lock must exist before any SD access
+
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
 
     // To use 1-line SD mode, uncomment the following line:
