@@ -48,23 +48,37 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   `start/stop/process/preset_save/preset_load` + a `machine_ui_t`. `process()`
   runs in the audio task once per 64-sample block; no SD/heap/blocking there.
 - **Registry**: `main/machine_registry.c` is the ONLY file outside a machine's
-  own component that may name a machine symbol. Registry now:
-  Sampler / Sampler2 / Looper / Stub.
+  own component that may name a machine symbol. Registry (selector order):
+  Sampler / Sampler2 / Looper / Slicer / Granular / Glitch / Stub.
 - **Core owns**: boot, SD + sample library, TFT + menusys shell, encoder/UI
   events, WiFi + REST, CV acquisition, I2S transport, recording service.
   **Machine owns**: everything between input and output.
-- **Adding a machine**: new `components/machine_<name>/` (see machine_looper as
-  the clean minimal example — engine + menu + priv header + CMakeLists), add
+- **Per-machine autosave**: `AUTOSAVE.JSN` keys each machine's `preset_save`
+  state under its name, so machines remember settings independently across
+  switches/reboots. `"machine"` in CONFIG.JSN persists the boot choice.
+- **Adding a machine**: new `components/machine_<name>/` (see machine_glitch as
+  the smallest clean example — engine + menu + priv header + CMakeLists), add
   one line to the registry + `main/CMakeLists.txt` REQUIRES, add it to
   `tools/proof_build.sh`'s EXCLUDE list.
 - **Proof invariant**: `tools/proof_build.sh` must pass — the firmware links
-  with ALL sampler/looper machines excluded and a stub-only registry. Run it
-  after any change touching core or the registry.
+  with every real machine excluded and a stub-only registry. Run it after any
+  change touching core or the registry.
 
-Components: `machine_sampler` (classic, byte-identical, frozen fallback),
-`machine_sampler2` (`s2_`-prefixed fork, active dev — crop mode, signed CV
-amounts, CV-addressable start/length), `machine_looper` (4-track clock-synced),
-`main/machine_stub.c` (silence, the unloadable-proof + safe fallback).
+The seven machines (all working, all archived in `bin/`):
+- `machine_sampler` — classic, byte-identical, frozen fallback
+- `machine_sampler2` — `s2_`-prefixed fork: crop mode, signed CV matrix
+  amounts, CV-addressable start/length, min-loop guard
+- `machine_looper` — 4-track clock-synced RAM looper, save-to-library, per-track BP filter
+- `machine_slicer` — one stereo sample, grid OR transient slicing + a
+  sensitivity dial-in screen
+- `machine_granular` — 16-grain cloud over a mono sample (raised-cosine grains)
+- `machine_glitch` — live-input stutter/beat-repeat (no SD), clock beat-sync
+- `main/machine_stub.c` — silence; the unloadable-proof + safe fallback
+
+**Shared core services** (factored out of duplication):
+- `components/machine/clock.{h,c}` — `beatclock_t` CV clock detector (looper + glitch)
+- `components/util/sample_ram.{h,c}` — `sample_list()` / `sample_load()` for
+  loading usr/*.RAW into RAM (slicer + granular)
 
 ## Working with the hardware (operational)
 
@@ -72,14 +86,29 @@ amounts, CV-addressable start/length), `machine_looper` (4-track clock-synced),
 - **Flash**: port is `/dev/cu.usbserial-3110`; use the esptool invocation with
   `--flash_size detect`. ALWAYS announce before flashing (it reboots the device)
   and only flash on Arlo's explicit go — one flash per go.
-- **Opening the serial port REBOOTS the device** even with rts/dtr deasserted.
-  To check a running module non-invasively use REST (`curl http://192.168.3.227/status`;
-  reports the active machine name). For boot/crash capture use the reopen-loop
-  reader pattern in the scratchpad `serial_watch.py`.
-- **Archives** (flashable snapshots + READMEs in `bin/`): `v09-dev-stable`
-  (pre-machines), `m0-complete` (M0), `sampler2-v1`, `looper-v1`. Flash the
-  matching archive to instantly return to a known-good state.
+- **Opening the serial port REBOOTS the device** even with rts/dtr deasserted,
+  and occasionally drops it into ROM download mode (`boot:0x3 ... waiting for
+  download`) — the display freezes on its last frame, looking like a hang.
+  Recover: `esptool.py -p PORT --before default_reset --after hard_reset
+  flash_id`, or a power cycle. To check a running module non-invasively use REST
+  (`curl http://192.168.3.227/status`; reports the active machine name). For
+  boot/crash capture use the reopen-loop reader `serial_watch.py` in scratchpad.
+- **Archives** (flashable snapshots + READMEs in `bin/`, each = the full
+  current firmware at that milestone): `v09-dev-stable` (pre-machines),
+  `m0-complete`, `sampler2-v1`, `looper-v1`/`looper-v2`, `slicer-v1`,
+  `granular-v1`, `glitch-v1`. `bin/<name>/flash.sh` returns to any known-good
+  state. Matching dated git tags.
 
-`v09-dev` is frozen: tag `v09-dev-stable-20260703`. Its plan was
-`/Users/arlo/.claude/plans/keen-wishing-mango.md` (all but the clock-sync
-recorder shipped; that became machine M2, now the looper).
+## Repo / publishing
+
+- **origin** = `tungusk/ctag-straempler` (Arlo's fork, PUBLIC). **upstream** =
+  `ctag-fh-kiel/ctag-straempler` (the original — NEVER push here).
+- The seven-machine work lives on **`v09-machines`** (pushed to origin with all
+  archive tags). `v09-dev` is frozen at `v09-dev-stable-20260703`.
+- `overhaul` is archived/broken (IDF 4.4 audio crackling) — tagged
+  `overhaul-broken-audio`, do not flash. Local overhaul branches were deleted
+  (origin/overhaul preserves the commit).
+- **Upstream contribution**: the `char tmp[10]` stack-smash fix (generic, not
+  unit-specific) was sent as PR ctag-fh-kiel/ctag-straempler#29 from a clean
+  branch off upstream/master. Do NOT PR the machine work or the unit-specific
+  corrections upstream — they'd break a standard board.
