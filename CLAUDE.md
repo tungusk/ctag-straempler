@@ -25,11 +25,17 @@ export PATH=/path/to/xtensa-esp32-elf/bin:/path/to/esp32ulp-elf/bin:$PATH
 
 **No mic input in Eurorack** — the `codec_set_input()` function exists but the hardware is always wired for line in. Don't add mic-mode logic.
 
+**No CV/gate OUTPUT** — the only output is audio via the I2S codec (WM8731 line out on GPIO22). There is no CV/gate DAC anywhere; a machine's `process()` can only write the two audio channels, and those outputs are AC-coupled (can't hold a DC level). So true analog CV/gates are NOT achievable — any "output" feature must be an audio-rate signal. (Input side is rich: 8 CV in + 2 gate in.)
+
 **Audio block size:** 64 samples per I2S DMA block at 44100 Hz (~1.45ms per audio loop tick).
 
 ## Code rules
 
 **FatFS paths only** — file paths passed to `f_open()` must NOT have a `/sdcard` prefix. VFS-style paths (`/sdcard/...`) cause an `f_open` abort crash. Use bare paths like `usr/REC_0001.RAW`.
+
+**SD bus is serialized by `sd_lock`** (`components/util/sd_lock.{h,c}`) — a global recursive mutex that EVERY SD I/O burst must hold: the audio raw-FatFS reads, REST file serving, recording writer, config/JSON, `sample_ram`. Acquired INSIDE the per-voice `file_mutex` (consistent order → no deadlock), released between bursts. The raw audio read path bypasses the esp_vfs_fat lock, so without this it races VFS I/O and wedges/corrupts the card. Don't add SD access that skips `sd_lock`.
+
+**SDMMC DMA can't target PSRAM** — read SD data into INTERNAL DMA-capable RAM (`heap_caps_malloc(sz, MALLOC_CAP_DMA)`), never a PSRAM buffer, or `sdmmc_read_blocks` fails `ESP_ERR_NO_MEM (257)` under memory pressure (its internal bounce-buffer alloc fails). This bit `readJSONFileAsCJSON` (empty web browser) — reads into PSRAM failed for every sidecar. Internal RAM is tight (~250 KB total); prefer STREAMING responses (see `/files`) over building big buffers, which also OOMs.
 
 **No core pinning for tasks that read files** — pinning reader tasks to core 0 causes WiFi preemption and produces constant clicks on both voices. Leave file-reading tasks unpinned.
 
@@ -49,7 +55,11 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   runs in the audio task once per 64-sample block; no SD/heap/blocking there.
 - **Registry**: `main/machine_registry.c` is the ONLY file outside a machine's
   own component that may name a machine symbol. Registry (selector order):
-  Sampler / Sampler2 / Looper / Slicer / Granular / Glitch / Stub.
+  Sampler / Sampler2 / Looper / Slicer / Granular / Glitch / Stub. **Stub is
+  now HIDDEN from the System→Machine selector** (skipped by name in
+  `machine_sel_def_handler`, `menu.c`) but stays in the registry as fallback +
+  proof target; the selector uses a parallel `machines[]` array so the hidden
+  entry doesn't desync the on-screen index.
 - **Core owns**: boot, SD + sample library, TFT + menusys shell, encoder/UI
   events, WiFi + REST, CV acquisition, I2S transport, recording service.
   **Machine owns**: everything between input and output.
@@ -59,7 +69,9 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
 - **Adding a machine**: new `components/machine_<name>/` (see machine_glitch as
   the smallest clean example — engine + menu + priv header + CMakeLists), add
   one line to the registry + `main/CMakeLists.txt` REQUIRES, add it to
-  `tools/proof_build.sh`'s EXCLUDE list.
+  `tools/proof_build.sh`'s EXCLUDE list, add `M_<NAME>_*` menu IDs to
+  `components/menu/include/menu_types.h`, and bump the selector cap in `menu.c`
+  (`names[16]`/`machines[16]`/`n<16`) if the roster exceeds it.
 - **Proof invariant**: `tools/proof_build.sh` must pass — the firmware links
   with every real machine excluded and a stub-only registry. Run it after any
   change touching core or the registry.
@@ -79,6 +91,29 @@ The seven machines (all working, all archived in `bin/`):
 - `components/machine/clock.{h,c}` — `beatclock_t` CV clock detector (looper + glitch)
 - `components/util/sample_ram.{h,c}` — `sample_list()` / `sample_load()` for
   loading usr/*.RAW into RAM (slicer + granular)
+- `components/util/sd_lock.{h,c}` — global SD-bus mutex (see Code rules)
+
+**Roadmap (planned machines):** `/Users/arlo/.claude/plans/mighty-percolating-spindle.md`
+— a **Drum sampler** (CV-triggered one-shots; Direct mode = 8 CV→8 pads, plus a
+CV-select mode where TRIG1/2 fire a pad addressed by a selector CV, to dodge the
+flaky/broken CV channels), a **Freesound** utility machine (search + preview
+download now, OAuth-ready), a **Teleremote** remote-control utility, and a shared
+"machine-registers-REST-endpoints" hook they need. **Sampler3** (Sampler2
+split-screen fork) deferred. Original-import machine dropped (machine_sampler
+already IS the upstream v0.9 engine).
+
+## Web UI / REST
+
+- **Web page source** is `components/rest-api/html/index.html`; it is **NOT
+  auto-built** — after editing, regenerate `components/rest-api/include/index.html.h`
+  with `html/convert.sh` (`xxd -i` + sed) or the change won't ship.
+- **Endpoints** (`rest-api.c`): `/status` (hot 500ms poll: machine, rec, v0/v1,
+  8 CV), `/sysinfo` (device IP + SD free/total via `f_getfree`, on-demand — not in
+  the hot poll), `/files` (**streamed**, name+size only, no sidecar reads — see the
+  PSRAM/DMA rule), `/files/raw` (download), `/settings`, `/drop_sample` (upload),
+  DELETE `/files`. Tabs: Files (⬇ download + ✕ delete), Upload, Settings (shows
+  Device IP). Device IP also appears on the on-device **System→Settings** screen
+  (`wifiGetIPString` tries STA then AP).
 
 ## Working with the hardware (operational)
 
@@ -96,8 +131,12 @@ The seven machines (all working, all archived in `bin/`):
 - **Archives** (flashable snapshots + READMEs in `bin/`, each = the full
   current firmware at that milestone): `v09-dev-stable` (pre-machines),
   `m0-complete`, `sampler2-v1`, `looper-v1`/`looper-v2`, `slicer-v1`,
-  `granular-v1`, `glitch-v1`. `bin/<name>/flash.sh` returns to any known-good
+  `granular-v1`, `glitch-v1`, `sd-hardening-v1` (SD-bus lock + low-memory web
+  fix + IP/disk/download UI). `bin/<name>/flash.sh` returns to any known-good
   state. Matching dated git tags.
+- **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
+  (complete repo, `git clone`-able) + a copy of `bin/`. Refresh with
+  `git bundle create ~/ctag-straempler-backups/ctag-straempler-$(date +%Y%m%d).bundle --all`.
 
 ## Repo / publishing
 
