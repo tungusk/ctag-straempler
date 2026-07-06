@@ -56,11 +56,12 @@ static void pick_transients(int target)
     uint32_t nwin = s_nwin;
     if (nwin < 4) { recompute_grid(target); return; }
 
-    double sum = 0;
-    for (uint32_t w = 1; w < nwin; w++) { float o = s_env[w] - s_env[w - 1]; if (o > 0) sum += o; }
-    float scale = 4.0f - (float)sl.sensitivity / 100.0f * 3.6f;   // 4.0 (few) .. 0.4 (many)
-    if (scale < 0.3f) scale = 0.3f;
-    float thresh = (float)(sum / nwin) * scale;
+    // threshold relative to the LOUDEST onset — maps sensitivity monotonically
+    // to how far below the peak to include (few near the top, many near 0)
+    float maxo = 1.0f;
+    for (uint32_t w = 2; w < nwin; w++) { float o = s_env[w] - s_env[w - 1]; if (o > maxo) maxo = o; }
+    float thresh = maxo * (1.0f - (float)sl.sensitivity / 100.0f * 0.97f);
+    if (thresh < maxo * 0.02f) thresh = maxo * 0.02f;
     uint32_t min_gap = (SL_RATE / 12) / SL_WIN;   // ~80 ms minimum slice
     if (min_gap < 1) min_gap = 1;
 
