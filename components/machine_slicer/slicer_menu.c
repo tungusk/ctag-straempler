@@ -316,32 +316,38 @@ static int slicer_load_handler(int it_id, int event, void *ev_data){
 // ---- Sensitivity dial-in screen -------------------------------------------
 // waveform + live slice grid; turning the encoder re-slices so you watch the
 // slices appear/disappear as you set the threshold. Forces transient mode.
-static void sens_redraw(void){
-    TFT_resetclipwin();
-    TFT_fillScreen(TFT_BLACK);
+// waveform + slice lines (only region that changes on adjust)
+static void sens_draw_wave(void){
     _bg = BG;
     TFT_fillRect(WX - 2, WY - 2, WW + 4, WH + 4, _bg);
-    if (sl.len == 0){
-        _fg = TFT_LIGHTGREY;
-        TFT_print("no sample", WX + 10, WY + WH / 2);
-    } else {
-        int cy = WY + WH / 2;
-        _fg = WAVE;
-        for (int c = 0; c < sl.peak_n; c++){
-            int x = WX + c * WW / (sl.peak_n ? sl.peak_n : 1);
-            int h = sl.peaks[c] * (WH / 2) / 31;
-            if (h < 1 && sl.peaks[c] > 0) h = 1;
-            TFT_drawLine(x, cy - h, x, cy + h, WAVE);
-        }
-        for (int s = 0; s <= sl.n_slices; s++){
-            int x = slice_x(s);
-            TFT_drawLine(x, WY, x, WY + WH, SEL_COL);
-        }
+    if (sl.len == 0){ _fg = TFT_LIGHTGREY; TFT_print("no sample", WX + 10, WY + WH / 2); return; }
+    int cy = WY + WH / 2;
+    for (int c = 0; c < sl.peak_n; c++){
+        int x = WX + c * WW / (sl.peak_n ? sl.peak_n : 1);
+        int h = sl.peaks[c] * (WH / 2) / 31;
+        if (h < 1 && sl.peaks[c] > 0) h = 1;
+        TFT_drawLine(x, cy - h, x, cy + h, WAVE);
     }
-    _bg = TFT_BLACK; _fg = TFT_WHITE;
+    for (int s = 0; s <= sl.n_slices; s++){
+        int x = slice_x(s);
+        TFT_drawLine(x, WY, x, WY + WH, SEL_COL);
+    }
+}
+
+static void sens_draw_info(void){
+    int fh = TFT_getfontheight();
+    _bg = TFT_BLACK; TFT_fillRect(0, INFO_Y, _width, fh + 4, _bg);
+    _fg = TFT_WHITE;
     char s[48];
     snprintf(s, sizeof(s), "Sensitivity  %d      slices: %d", sl.sensitivity, sl.n_slices);
     TFT_print(s, 6, INFO_Y + 2);
+}
+
+static void sens_full_redraw(void){
+    TFT_resetclipwin();
+    TFT_fillScreen(TFT_BLACK);
+    sens_draw_wave();
+    sens_draw_info();
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     TFT_print("turn:adjust  hold:done", 6, _height - TFT_getfontheight() - 1);
@@ -351,19 +357,18 @@ static void sens_redraw(void){
 static int slicer_sens_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU:
-            sl.transient_mode = true;   // sensitivity only affects transient slicing
+            // sensitivity dials the detected COUNT, which only varies in Auto —
+            // so force transient + Auto here
+            sl.transient_mode = true;
+            sl.slice_target = 0;
             slicer_reslice();
-            sens_redraw();
+            sens_full_redraw();
             break;
         case EV_FWD:
-            if(sl.sensitivity < 100) sl.sensitivity += 5;
-            slicer_reslice();
-            sens_redraw();
+            if(sl.sensitivity < 100){ sl.sensitivity += 5; slicer_reslice(); sens_draw_wave(); sens_draw_info(); }
             break;
         case EV_BWD:
-            if(sl.sensitivity > 0) sl.sensitivity -= 5;
-            slicer_reslice();
-            sens_redraw();
+            if(sl.sensitivity > 0){ sl.sensitivity -= 5; slicer_reslice(); sens_draw_wave(); sens_draw_info(); }
             break;
         case EV_LONG_PRESS:
         case EV_SHORT_PRESS:
