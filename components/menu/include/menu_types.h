@@ -28,6 +28,8 @@ typedef enum{
     M_GRAN_LIVE,
     M_GRAN_SETUP,
     M_GRAN_LOAD,
+    M_GLITCH_LIVE,
+    M_GLITCH_SETUP,
     M_SETTINGS,
     M_SETTINGS_INPUT,
     M_ABOUT,
