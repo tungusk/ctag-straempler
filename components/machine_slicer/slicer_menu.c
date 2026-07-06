@@ -198,7 +198,10 @@ static void setup_redraw(int pos, int sel){
         char v[24];
         switch(i){
             case 0: snprintf(v, sizeof(v), "%s", sl.transient_mode ? "Transient" : "Grid"); break;
-            case 1: snprintf(v, sizeof(v), "%d", sl.slice_target); break;
+            case 1:
+                if(sl.slice_target == 0) snprintf(v, sizeof(v), "Auto");
+                else { snprintf(v, sizeof(v), "%d", sl.slice_target); }
+                break;
             case 2: snprintf(v, sizeof(v), "%s", sl.sample[0] ? sl.sample : "(none)"); break;
             case 3: snprintf(v, sizeof(v), "%s", sl.auto_on ? "ON" : "OFF"); break;
             case 4: snprintf(v, sizeof(v), "%s", sl.reverse ? "ON" : "OFF"); break;
@@ -209,9 +212,9 @@ static void setup_redraw(int pos, int sel){
 }
 
 static void cycle_target(int dir){
-    int n = sl.slice_target;
-    if (dir > 0) n = (n >= 32) ? 8 : n * 2;
-    else         n = (n <= 8) ? 32 : n / 2;
+    int n = sl.slice_target;   // Auto(0) -> 8 -> 16 -> 32 -> Auto
+    if (dir > 0) { if(n == 0) n = 8; else if(n >= 32) n = 0; else n *= 2; }
+    else         { if(n == 0) n = 32; else if(n <= 8) n = 0; else n /= 2; }
     sl.slice_target = n;
     slicer_reslice();
 }
@@ -279,7 +282,7 @@ static void load_redraw(void){
     TFT_print(selnm, _width / 2 - TFT_getStringWidth(selnm) / 2, cy - bigfh / 2);
     cfont = f;   // back to default for the dim neighbours
     _fg = (color_t){110, 110, 110};
-    for (int k = 1; k <= 2; k++){
+    for (int k = 1; k <= 4; k++){
         int up = s_sample_idx - k, dn = s_sample_idx + k;
         int yup = cy - bigfh / 2 - k * (fh + 4) - 4;
         int ydn = cy + bigfh / 2 + (k - 1) * (fh + 4) + 6;
