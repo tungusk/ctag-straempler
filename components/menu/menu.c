@@ -189,7 +189,8 @@ static void menuSwitchMachine(const machine_t *m){
 }
 
 static int machine_sel_def_handler(int it_id, int event, void* event_data){
-    static const char *names[8];
+    static const char *names[16];
+    static const machine_t *machines[16];   // visible-position -> machine (Stub filtered out)
     static int n = 0;
     static int pos = 0;
 
@@ -197,9 +198,12 @@ static int machine_sel_def_handler(int it_id, int event, void* event_data){
         case EV_ENTERED_MENU:
             n = 0;
             pos = 0;
-            for(int i = 0; machine_registry[i] != NULL && n < 8; i++){
+            for(int i = 0; machine_registry[i] != NULL && n < 16; i++){
+                if(strcmp(machine_registry[i]->name, "Stub") == 0) continue; // hidden fallback
                 if(machine_registry[i] == machine_active()) pos = n;
-                names[n++] = machine_registry[i]->name;
+                machines[n] = machine_registry[i];
+                names[n] = machine_registry[i]->name;
+                n++;
             }
             menuTFTPrintMenu(names, &n);
             menuTFTSelectMenuItem(&pos, 0, names, &n);
@@ -215,8 +219,8 @@ static int machine_sel_def_handler(int it_id, int event, void* event_data){
             menuTFTSelectMenuItem(&pos, 0, names, &n);
             break;
         case EV_SHORT_PRESS:
-            if(machine_registry[pos] != machine_active())
-                menuSwitchMachine(machine_registry[pos]);
+            if(machines[pos] != machine_active())
+                menuSwitchMachine(machines[pos]);
             return 0; // queued EV_MACHINE_BIND re-enters M_MAIN itself
         case EV_LONG_PRESS:
             menuTFTFlushMenuDataRect();
