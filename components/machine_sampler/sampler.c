@@ -13,6 +13,7 @@
 #include "driver/i2s.h"
 #include "cJSON.h"
 #include "fileio.h"
+#include "sd_lock.h"
 #include "spi_per.h"
 #include "i2s_per.h"
 #include "driver/gpio.h"
@@ -1380,7 +1381,10 @@ void assignAudioFiles()
                         
 
 
-                        // close file 
+                        // hold the SD bus across the reopen/seek/first-fill
+                        sd_lock_take();
+
+                        // close file
                         f_close(&audio_files[i].fil);
 
                         
@@ -1418,6 +1422,7 @@ void assignAudioFiles()
                         }
                         
                         fill_audio_buffer(&voice[i].playback_engine, &audio_buffers[i * 3], &audio_files[i], NULL);
+                        sd_lock_give();
                         //calculate new values for sample start, loop start, loop end
                         uint32_t sample_start = (ui_sample_start * audio_files[i].fsize / 4);
                         sample_start *= 4;

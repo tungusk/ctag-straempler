@@ -155,6 +155,13 @@ void s2_fill_buffer_fwd_loop(voice_play_mode_t* playback_engine, audio_b_t* buff
     int *loop_end = (int*)&(playback_engine->loop_end);
     UINT n = 0;
 
+    // CROP slides the window under the play cursor; if the cursor now sits in the
+    // cropped-out region, snap it back into the window instead of playing outside
+    // it until the next wrap (keeps the playhead inside the crop window)
+    if(playback_engine->mode == CROP &&
+       ((int)file->fpos < *loop_start || (int)file->fpos > *loop_end))
+        file->fpos = *loop_start;
+
     if(file->fpos + SD_BUF_SZ <= *loop_end) // we have not reached the loop end playing forward
     {
         f_lseek(&(file->fil), file->fpos);
@@ -196,6 +203,12 @@ void s2_fill_buffer_bwd_loop(voice_play_mode_t* playback_engine, audio_b_t* buff
     int loop_end = playback_engine->loop_end;
     UINT n = 0;
     int file_pos = file->fpos;
+
+    // CROP window slid under the (reverse) play cursor — snap it back inside
+    if(playback_engine->mode == CROP && (file_pos < loop_start || file_pos > loop_end)){
+        file->fpos = loop_end;
+        file_pos = loop_end;
+    }
 
     if(file_pos - SD_BUF_SZ >= loop_start){
         int read_pos = file_pos - SD_BUF_SZ;
