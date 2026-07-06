@@ -11,47 +11,20 @@
 #include "cJSON.h"
 #include "fileio.h"
 #include "machine.h"
+#include "clock.h"
 #include "audio.h"
 #include "looper_priv.h"
 
 lp_state_t lp;
 
 // ---- clock detection ------------------------------------------------------
-// Rising edge on the selected CV channel (hysteresis around mid-scale), period
-// averaged over an 8-interval ring, sanity-gated to 20..300 BPM. "period" is
-// samples per quarter-note; a bar = 4 quarters.
-// thresholds sit low enough to catch a knob-attenuated CV clock (knob 8 caps
-// incoming CV at ~half scale on this unit) and a full-swing trig alike, while
-// staying above the noise floor.
-#define CLK_HI 1500
-#define CLK_LO 800
-#define CLK_RING 8
-static bool     s_clk_prev_high;
-static uint32_t s_clk_since;          // samples since last rising edge
-static uint32_t s_clk_ring[CLK_RING];
-static int      s_clk_ring_n;
-static uint32_t s_clk_period;         // averaged samples/quarter (0 = none)
-static uint32_t s_clk_idle;           // samples since last edge (for lock timeout)
+// tempo detection via the shared core detector (components/machine/clock.c);
+// lp.bpm / lp.locked mirror it for the UI. "period" is samples per quarter.
+static beatclock_t s_clk;
 
-// BPM window -> samples/quarter window
-#define PERIOD_MIN (LP_RATE * 60 / 300)   // 300 BPM
-#define PERIOD_MAX (LP_RATE * 60 / 20)    // 20 BPM
-
-static void clock_reset(void)
-{
-    s_clk_prev_high = false;
-    s_clk_since = 0;
-    s_clk_ring_n = 0;
-    s_clk_period = 0;
-    s_clk_idle = 0;
-    lp.bpm = 0.0f;
-    lp.locked = false;
-}
-
-// clock line as a 0/4095 pseudo-analog level for clock_tick, from either a CV
-// channel (used raw, thresholded below) or a trig input. Trig inputs are
-// active-low: a clock pulse pulls the line low, which we map to the "high"
-// clock state so the same rising-edge detector works for both.
+// clock line as a 0/4095 level fed to the detector, from either a CV channel
+// (raw, thresholded in clock.c) or a trig input. Trigs are active-low: a clock
+// pulse pulls the line low, mapped to the "high" clock state.
 static uint16_t clock_level(const machine_io_t *io)
 {
     if (lp.clk_src == LP_CLK_TR1) return (io->trig_level & 1) ? 0 : 4095;
@@ -59,46 +32,11 @@ static uint16_t clock_level(const machine_io_t *io)
     return io->cv[lp.clk_src & 7];
 }
 
-// advance the clock detector by one frame; returns true on a quarter-note edge
-static bool clock_tick(uint16_t cv)
-{
-    bool edge = false;
-    s_clk_since++;
-    s_clk_idle++;
-
-    bool high = s_clk_prev_high ? (cv > CLK_LO) : (cv > CLK_HI);
-    if (high && !s_clk_prev_high) {
-        // rising edge
-        if (s_clk_since >= PERIOD_MIN && s_clk_since <= PERIOD_MAX) {
-            s_clk_ring[s_clk_ring_n % CLK_RING] = s_clk_since;
-            s_clk_ring_n++;
-            int n = s_clk_ring_n < CLK_RING ? s_clk_ring_n : CLK_RING;
-            uint64_t sum = 0;
-            for (int i = 0; i < n; i++) sum += s_clk_ring[i];
-            s_clk_period = (uint32_t)(sum / n);
-            lp.bpm = (float)LP_RATE * 60.0f / (float)s_clk_period;
-            lp.locked = (n >= 2);
-            edge = true;
-        }
-        s_clk_since = 0;
-        s_clk_idle = 0;
-    }
-    s_clk_prev_high = high;
-
-    if (s_clk_idle > PERIOD_MAX) {    // clock stopped
-        lp.locked = false;
-        s_clk_ring_n = 0;
-        s_clk_period = 0;
-        lp.bpm = 0.0f;
-    }
-    return edge;
-}
-
 // ---- track helpers --------------------------------------------------------
 static uint32_t bar_frames(void)
 {
-    if (!s_clk_period) return 0;
-    return s_clk_period * 4u * (uint32_t)(lp.bars > 0 ? lp.bars : 1);
+    if (!s_clk.period) return 0;
+    return s_clk.period * 4u * (uint32_t)(lp.bars > 0 ? lp.bars : 1);
 }
 
 static void track_start_record(lp_track_t *t)
@@ -133,7 +71,7 @@ static esp_err_t looper_start(void)
         lp.tr[i].res = 900;
         lp.tr[i].svf_low = lp.tr[i].svf_band = 0.0f;
     }
-    clock_reset();
+    clock_reset(&s_clk);
     audio_status_set_voices("looper", "");
     return ESP_OK;
 }
@@ -235,13 +173,16 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
 
     for (int f = 0; f < frames; f++) {
         bool bar_edge = false;
-        if (clock_tick(clk)) {
+        if (clock_tick(&s_clk, clk)) {
+            lp.bpm = s_clk.bpm;             // mirror to the UI-facing fields
+            lp.locked = s_clk.locked;
             // each clock pulse = one quarter; a bar (4/4) is every 4 pulses.
             // Armed tracks start on the next bar boundary; the record LENGTH
             // (bars) is handled separately by track_start_record's target.
-            if (lp.locked && (s_clk_ring_n % 4) == 0)
+            if (s_clk.locked && (s_clk.ring_n % 4) == 0)
                 bar_edge = true;
         }
+        if (!s_clk.locked) lp.locked = false;   // reflect clock-stop promptly
 
         // mono input = (L+R)/2 from the 32-bit left-justified samples
         int32_t l = in[f * 2] >> 16;
