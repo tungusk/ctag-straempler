@@ -142,6 +142,19 @@ void menuTFTPrintSettings(const cJSON *data){
 
 
 
+void menuTFTPrintIP(const char** items, const int* n_items){
+    TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
+    _bg = TFT_BLACK;
+    _fg = TFT_WHITE;
+    char ip[20];
+    wifiGetIPString(ip, sizeof(ip));
+    int x = 4, row = 0;
+    for(int i = 0; i < *n_items; i++){
+        if(strcasecmp(items[i], "IP") == 0) row = i;
+    }
+    TFT_print(ip, x + _width/2, 3 + (TFT_getfontheight() + 3) * row);
+}
+
 void menuTFTPrintInputMenu(char* title){
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     TFT_fillWindow(TFT_BLACK);

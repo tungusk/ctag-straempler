@@ -48,6 +48,7 @@ void menuTFTSelectMainMenu(int active, int select, const char *const *items, int
 //Additional UI
 void menuTFTPrintTime(int*);
 void menuTFTPrintTimezone(const char** items, const int* n_items, int *shift);
+void menuTFTPrintIP(const char** items, const int* n_items);
 
 
 

@@ -4,11 +4,13 @@
 #include <strings.h>
 #include <dirent.h>
 #include "esp_log.h"
+#include "sd_lock.h"
 
 int sample_list(char out[][24], int max)
 {
+    sd_lock_take();   // brief name-only walk; hold the bus for its duration
     DIR *d = opendir("/sdcard/usr");
-    if (!d) return 0;
+    if (!d) { sd_lock_give(); return 0; }
     int n = 0;
     struct dirent *e;
     while ((e = readdir(d)) != NULL && n < max) {
@@ -22,6 +24,7 @@ int sample_list(char out[][24], int max)
         }
     }
     closedir(d);
+    sd_lock_give();
     return n;
 }
 
@@ -29,13 +32,21 @@ uint32_t sample_load(const char *name, int16_t *dst, uint32_t max_frames, bool m
 {
     char path[64];
     snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
+    sd_lock_take();
     FILE *f = fopen(path, "rb");
+    sd_lock_give();
     if (!f) { ESP_LOGE("SAMPLE", "cannot open %s", path); return 0; }
 
     uint32_t n = 0;
     int32_t rbuf[256];
     size_t got;
-    while (n < max_frames && (got = fread(rbuf, sizeof(int32_t), 256, f)) > 0) {
+    for (;;) {
+        if (n >= max_frames) break;
+        // one 1 KB read per lock hold, released between so audio/REST interleave
+        sd_lock_take();
+        got = fread(rbuf, sizeof(int32_t), 256, f);
+        sd_lock_give();
+        if (got == 0) break;
         for (size_t k = 0; k < got && n < max_frames; k++) {
             int16_t l = (int16_t)(rbuf[k] & 0xFFFF);
             int16_t r = (int16_t)(rbuf[k] >> 16);
@@ -44,6 +55,8 @@ uint32_t sample_load(const char *name, int16_t *dst, uint32_t max_frames, bool m
             n++;
         }
     }
+    sd_lock_take();
     fclose(f);
+    sd_lock_give();
     return n;
 }

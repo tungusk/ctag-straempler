@@ -123,11 +123,18 @@ void wifiWaitForConnected(){
 
 void wifiGetIPString(char *out, int len){
     tcpip_adapter_ip_info_t ip;
-    tcpip_adapter_if_t ifx = wifi_ap_mode ? TCPIP_ADAPTER_IF_AP : TCPIP_ADAPTER_IF_STA;
-    if (tcpip_adapter_get_ip_info(ifx, &ip) == ESP_OK && ip.ip.addr != 0)
+    // Prefer whichever interface actually has an address: try the joined
+    // network (STA) first, then the soft-AP. This is robust even if the
+    // wifi_ap_mode flag doesn't match the interface that really got an IP.
+    if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip) == ESP_OK && ip.ip.addr != 0) {
         snprintf(out, len, IPSTR, IP2STR(&ip.ip));
-    else
-        snprintf(out, len, "no IP");
+        return;
+    }
+    if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &ip) == ESP_OK && ip.ip.addr != 0) {
+        snprintf(out, len, IPSTR, IP2STR(&ip.ip));
+        return;
+    }
+    snprintf(out, len, "no IP");
 }
 
 // returns true

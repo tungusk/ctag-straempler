@@ -1,5 +1,6 @@
 #include "recording.h"
 #include "fileio.h"
+#include "sd_lock.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -75,7 +76,9 @@ static void rec_writer_task(void *pvParams)
     char fname[48];
     find_next_filename(fname, sizeof(fname));
 
+    sd_lock_take();
     FILE *f = fopen(fname, "wb");
+    sd_lock_give();
     if (f == NULL) {
         ESP_LOGE(TAG, "Could not open %s for writing", fname);
         atomic_store(&rec_active, false);
@@ -98,10 +101,14 @@ static void rec_writer_task(void *pvParams)
             int16_t r = (int16_t)(chunk.samples[i * 2 + 1] >> 16);
             packed[i] = (int32_t)(((uint32_t)(uint16_t)r << 16) | (uint16_t)l);
         }
+        sd_lock_take();
         fwrite(packed, sizeof(int32_t), REC_CHUNK_SAMPLES / 2, f);
+        sd_lock_give();
     }
 
+    sd_lock_take();
     fclose(f);
+    sd_lock_give();
     ESP_LOGI(TAG, "Recording saved: %s", fname);
     write_rec_jsn(fname);
 

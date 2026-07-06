@@ -1,4 +1,5 @@
 #include "fileio.h"
+#include "sd_lock.h"
 #include <dirent.h>
 #include <string.h>
 #include <stdio.h>
@@ -166,32 +167,44 @@ cJSON* readJSONFileAsCJSON(const char *fileName){
     char *buf;
     FILE *fin;
     cJSON *data;
-    stat(fileName, &st);
+    sd_lock_take();                       // hold the SD bus across stat..fclose
+    if (stat(fileName, &st) != 0 || st.st_size <= 0) {
+        sd_lock_give();
+        ESP_LOGE("FILEIO", "Could not stat file %s", fileName);
+        return NULL;
+    }
     sz = st.st_size;
     //ESP_LOGI("FILEIO", "Trying to read %s as CJSON File | %s, Filesize: %d", fileName, strerror(errno), sz);
 
     fin = fopen(fileName, "rb");
     if(fin == NULL){
+        sd_lock_give();
         ESP_LOGE("FILEIO", "Could not open file %s for reading", fileName);
         return NULL;
     }
-    buf = (char*) heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
+    // Read into INTERNAL DMA-capable RAM, not PSRAM: SDMMC's DMA can't target
+    // PSRAM and falls back to a per-read internal bounce buffer that fails with
+    // ESP_ERR_NO_MEM under memory pressure. JSON files are small, so this is cheap.
+    buf = (char*) heap_caps_malloc(sz, MALLOC_CAP_DMA);
 
     if(buf == NULL){
-        ESP_LOGE("FILEIO", "Could not allocate memory");
         fclose(fin);
+        sd_lock_give();
+        ESP_LOGE("FILEIO", "Could not allocate memory");
         return NULL;
     }
 
     cnt = fread(buf, 1, sz, fin);
     if(cnt != sz){
-        ESP_LOGE("FILEIO", "Error reading from file");
         free(buf);
         fclose(fin);
+        sd_lock_give();
+        ESP_LOGE("FILEIO", "Error reading from file");
         return NULL;
     }
 
     fclose(fin);
+    sd_lock_give();                       // parsing needs no SD — release early
     data = cJSON_Parse(buf);
     heap_caps_free(buf);
 
@@ -228,24 +241,26 @@ void parseJSONAudioTags(cJSON* data){
 }
 
 void writeJSONFile(const char *fileName, const char* data){
-    FILE *fout = fopen(fileName, "wb");
     int len;
+    if(data == NULL){
+        ESP_LOGE("FILEIO", "data is NULL");
+        return;
+    }
+
+    sd_lock_take();
+    FILE *fout = fopen(fileName, "wb");
     if(fout == NULL){
+        sd_lock_give();
         ESP_LOGE("FILEIO", "Could not open file %s for writing", fileName);
         return;
     }
 
     //ESP_LOGI("FILEIO", "Write - Free heap: %u", esp_get_free_heap_size());
-    if(data != NULL){
-        len = strlen(data);
-        //ESP_LOGI("FILEIO", "File string length: %d Byte", len);
-        fwrite(data, 1, len, fout);
-
-        fclose(fout);
-    }else{
-        ESP_LOGE("FILEIO", "data is NULL");
-    }
-
+    len = strlen(data);
+    //ESP_LOGI("FILEIO", "File string length: %d Byte", len);
+    fwrite(data, 1, len, fout);
+    fclose(fout);
+    sd_lock_give();
 }
 
 // returns list of file names without extension
