@@ -1,6 +1,6 @@
 # granular-v1 firmware (2026-07-05)
 
-Snapshot of `v09-machines` at commit `f343f3b` (tag `granular-v1-20260705`).
+Snapshot of `v09-machines` at commit `61f00ab` (tag `granular-v1-20260705`).
 Built with IDF 4.3 + xtensa-esp32-elf esp-2021r2-patch3-8.4.0. Hardware-tested,
 sounds great; 16 grains of float DSP fit the CPU budget with headroom.
 
