@@ -570,7 +570,9 @@ static void menuMachineBindNow(void){
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
     menuTFTPrintMainMenus(s_main_labels, s_n_main);
-    menusys_set_active_item(_ms, M_MAIN);
+    // land straight on the machine's primary (live) page — the main menu is
+    // a long-press away; machines with no pages fall back to the menu
+    menusys_set_active_item(_ms, (s_n_main > 1) ? s_main_targets[0] : M_MAIN);
     menuProcessEvent(EV_ENTERED_MENU, NULL);
 }
 
