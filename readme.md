@@ -10,8 +10,8 @@ on the [`v09-machines`](../../tree/v09-machines) branch (July 2026).
 
 | Machine | What it does |
 |---|---|
-| **Sampler** | The original v0.9 dual-voice streaming sampler, byte-identical |
-| **Sampler2** | Extended fork: crop mode, signed CV matrix amounts, CV-addressable start/length |
+| **Sampler** | The original v0.9 dual-voice streaming sampler |
+| **Sampler2** | Extended fork: recording, crop mode, signed CV matrix amounts, CV-addressable start/length |
 | **Looper** | 4-track clock-synced RAM looper with save-to-library and per-track filter |
 | **Slicer** | Grid or transient slicing of a sample, CV-addressable slices |
 | **Granular** | 16-grain cloud over a mono sample |
