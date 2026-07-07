@@ -404,7 +404,12 @@ function rpDrumForm(d,names){
     for(var c=1;c<=8;c++)cvs+='<option value="'+c+'"'+(c===p.src?' selected':'')+'>CV'+c+'</option>';
     h+='<fieldset style="border:1px solid #2a2a2a;border-radius:3px;padding:4px 8px 8px;margin:6px 0">'
       +'<legend style="color:#0af;font-size:10px;padding:0 4px">pad '+(i+1)+'</legend>'
-      +'<div class="row"><div style="flex:2"><label>sample</label><select data-rp="pad.'+i+'.s">'+opts+'</select></div>'
+      +'<div class="row"><div style="flex:2"><label>sample</label>'
+      +'<div style="display:flex;gap:4px">'
+      +'<button class="btn" style="flex:0 0 30px" onclick="rpStep('+i+',-1)">&#8722;</button>'
+      +'<select data-rp="pad.'+i+'.s">'+opts+'</select>'
+      +'<button class="btn" style="flex:0 0 30px" onclick="rpStep('+i+',1)">+</button>'
+      +'</div></div>'
       +'<div><label>trig in</label><select data-rp="pad.'+i+'.src">'+cvs+'</select></div></div>'
       +'<label>level <span id="rdl'+i+'">'+p.lvl+'</span></label>'
       +'<input type="range" min="0" max="255" value="'+p.lvl+'" data-rp="pad.'+i+'.lvl" oninput="document.getElementById(\'rdl'+i+'\').textContent=this.value">'
@@ -415,6 +420,15 @@ function rpDrumForm(d,names){
       +'</fieldset>';
   }
   return h;
+}
+
+function rpStep(i,d){
+  var s=document.querySelector('[data-rp="pad.'+i+'.s"]');
+  if(!s||!s.options.length)return;
+  var n=s.selectedIndex+d;
+  if(n<0)n=s.options.length-1;
+  if(n>=s.options.length)n=0;
+  s.selectedIndex=n;
 }
 
 function rpLoad(){
