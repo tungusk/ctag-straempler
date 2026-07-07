@@ -24,6 +24,8 @@ tr:hover td{background:#161616}
 .del:hover{background:#2a1010}
 label{display:block;color:#666;font-size:11px;margin:8px 0 2px}
 input{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px 8px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
+select{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
+input[type=range]{padding:0;height:22px;accent-color:#0af}
 .row{display:flex;gap:8px;margin-top:8px}
 .row>*{flex:1}
 .dz{border:2px dashed #333;padding:24px;text-align:center;color:#555;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
@@ -345,7 +347,7 @@ function fsState(){
   }).catch(function(){});
 }
 
-var remMachines=[];
+var remMachines=[],curMach='';
 
 function loadRemote(){
   fetch('/sysinfo').then(function(r){return r.json();}).then(function(d){
@@ -387,12 +389,47 @@ function rpForm(o,path){
   return h;
 }
 
+// dedicated pad editor for the Drums machine: sample dropdowns from the
+// library, trig routing, level/pan sliders, decay, enable
+function rpDrumForm(d,names){
+  var top={},k;
+  for(k in d)if(k!=='pad')top[k]=d[k];
+  var h=rpForm(top,'');
+  var np=(d.pads===4)?4:8;
+  for(var i=0;i<np&&i<(d.pad||[]).length;i++){
+    var p=d.pad[i];
+    var opts='<option value=""'+(p.s?'':' selected')+'>(none)</option>';
+    names.forEach(function(n){opts+='<option'+(n===p.s?' selected':'')+'>'+esc(n)+'</option>';});
+    var cvs='';
+    for(var c=1;c<=8;c++)cvs+='<option value="'+c+'"'+(c===p.src?' selected':'')+'>CV'+c+'</option>';
+    h+='<fieldset style="border:1px solid #2a2a2a;border-radius:3px;padding:4px 8px 8px;margin:6px 0">'
+      +'<legend style="color:#0af;font-size:10px;padding:0 4px">pad '+(i+1)+'</legend>'
+      +'<div class="row"><div style="flex:2"><label>sample</label><select data-rp="pad.'+i+'.s">'+opts+'</select></div>'
+      +'<div><label>trig in</label><select data-rp="pad.'+i+'.src">'+cvs+'</select></div></div>'
+      +'<label>level <span id="rdl'+i+'">'+p.lvl+'</span></label>'
+      +'<input type="range" min="0" max="255" value="'+p.lvl+'" data-rp="pad.'+i+'.lvl" oninput="document.getElementById(\'rdl'+i+'\').textContent=this.value">'
+      +'<label>pan <span id="rdp'+i+'">'+p.pan+'</span> (128 = center)</label>'
+      +'<input type="range" min="0" max="255" value="'+p.pan+'" data-rp="pad.'+i+'.pan" oninput="document.getElementById(\'rdp'+i+'\').textContent=this.value">'
+      +'<div class="row"><div><label>decay ms (0 = full)</label><input type="number" min="0" max="5000" step="10" value="'+(p.dec||0)+'" data-rp="pad.'+i+'.dec"></div>'
+      +'<label style="display:flex;align-items:flex-end;gap:6px;color:#aaa;padding-bottom:4px"><input type="checkbox" style="width:auto" data-rp="pad.'+i+'.en"'+(p.en?' checked':'')+'> enabled</label></div>'
+      +'</fieldset>';
+  }
+  return h;
+}
+
 function rpLoad(){
   fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
     if(d.error){document.getElementById('rparams').innerHTML='<div class="msg er">'+esc(d.error)+'</div>';return;}
     rpData=d;
-    document.getElementById('rparams').innerHTML=
-      Object.keys(d).length?rpForm(d,''):'<div class="msg">this machine has no settings</div>';
+    var el=document.getElementById('rparams');
+    if(curMach==='Drums'&&d.pad){
+      fetch('/files').then(function(r){return r.json();}).then(function(fd){
+        var names=(fd.files||[]).map(function(f){return f.name;}).sort();
+        el.innerHTML=rpDrumForm(d,names);
+      }).catch(function(){el.innerHTML=rpDrumForm(d,[]);});
+    }else{
+      el.innerHTML=Object.keys(d).length?rpForm(d,''):'<div class="msg">this machine has no settings</div>';
+    }
   }).catch(function(){});
 }
 
@@ -448,6 +485,7 @@ function updateRemote(d){
 
 function pollStatus(){
   fetch('/status').then(function(r){return r.json();}).then(function(d){
+    curMach=d.machine||'';
     var cv=d.cv||[],h='';
     for(var i=0;i<cv.length;i++){
       var pct=Math.round(cv[i]/4095*100);

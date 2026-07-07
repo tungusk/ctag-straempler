@@ -32,6 +32,7 @@ typedef struct {
     volatile bool enabled;
     volatile uint8_t level;       // 0..255
     volatile uint8_t pan;         // 0..255, 128 = centre (linear pan)
+    volatile uint16_t decay_ms;   // linear decay envelope; 0 = play full sample
     volatile int trig_src;        // Direct mode: CV input (0..7) that fires this
                                   // pad, default = pad index; routable so pads
                                   // can dodge bad jacks (e.g. this unit's ch4)
