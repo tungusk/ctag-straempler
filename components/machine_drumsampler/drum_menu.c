@@ -75,11 +75,20 @@ static void draw_pad_cell(int i, bool lit){
     char n[16];
     snprintf(n, sizeof(n), "%d", i + 1);
     TFT_print(n, x + 4, y + 3);
-    TFT_setFont(DEF_SMALL_FONT, NULL);
     char nm[10];
     snprintf(nm, sizeof(nm), "%.8s", p->sample[0] ? p->sample : "-");
-    TFT_print(nm, x + 4, y + h - TFT_getfontheight() - 3);
-    TFT_setFont(DEFAULT_FONT, NULL);
+    if (dr.n_pads <= 4) {
+        // 4-voice cells are big: sample name large and centred
+        Font f = cfont;
+        TFT_setFont(DEJAVU24_FONT, NULL);
+        TFT_print(nm, x + w / 2 - TFT_getStringWidth(nm) / 2,
+                  y + h / 2 - TFT_getfontheight() / 2);
+        cfont = f;
+    } else {
+        TFT_setFont(DEF_SMALL_FONT, NULL);
+        TFT_print(nm, x + 4, y + h - TFT_getfontheight() - 3);
+        TFT_setFont(DEFAULT_FONT, NULL);
+    }
     pad_dot(i, lit);
 }
 
