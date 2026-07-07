@@ -1,4 +1,49 @@
-# **CTAG Strämpler**
+# **CTAG Strämpler** — multi-machine fork
+
+This is a fork of [ctag-fh-kiel/ctag-straempler](https://github.com/ctag-fh-kiel/ctag-straempler)
+that turns the Strämpler into a **multi-machine instrument**: the core owns
+the hardware (audio transport, CV, SD, display, WiFi) and hosts swappable
+"machines" selected at runtime via System → Machine. Active development is
+on the [`v09-machines`](../../tree/v09-machines) branch (July 2026).
+
+**The machines** (one active at a time, per-machine autosave):
+
+| Machine | What it does |
+|---|---|
+| **Sampler** | The original v0.9 dual-voice streaming sampler, byte-identical |
+| **Sampler2** | Extended fork: crop mode, signed CV matrix amounts, CV-addressable start/length |
+| **Looper** | 4-track clock-synced RAM looper with save-to-library and per-track filter |
+| **Slicer** | Grid or transient slicing of a sample, CV-addressable slices |
+| **Granular** | 16-grain cloud over a mono sample |
+| **Glitch** | Live-input stutter/beat-repeat with clock sync |
+| **Drums** | 8-pad CV-triggered drum sampler: routable trigger inputs with floor-tracking detection, per-pad level/pan/decay, CV-select mode |
+| **Freesound** | Web-driven freesound.org search + preview download straight into the sample library; direct MP3-URL import |
+
+**Web features** (the module serves its own page):
+- **Teleremote**: live CV/gate monitor, encoder control, soft trigger pulses,
+  machine switching, and a machine-settings editor — all from the browser
+  (on-device kill switch in System → Settings). 
+- **Universal upload**: drop any audio file (wav/mp3/flac/ogg) — converted
+  in-browser to the native RAW format.
+- File manager with download/delete, streaming-safe SD access.
+
+Plus core fixes along the way: SD-bus serialization (`sd_lock`), low-memory
+web fixes, HTTPS cert-bundle repair (freesound access had been silently
+broken since IDF 4.3), a decades-old display-corrupting stack smash
+(upstreamed as [PR #29](https://github.com/ctag-fh-kiel/ctag-straempler/pull/29)),
+and declick/trigger-detection work throughout. Build docs live in
+[CLAUDE.md](CLAUDE.md); flashable snapshots of each milestone are in
+[`bin/`](bin/) (latest: `drums-remote-v1`).
+
+**Building the hardware?** See the companion
+[strampler-build-pack](https://github.com/tungusk/strampler-build-pack):
+Eagle + KiCad board files for the Antumbra 18 HP redesign, BOMs with 2026
+EOL substitutions, and fab/assembly + DIY-kit ordering guides.
+
+---
+
+*Original upstream README follows.*
+
 This repository contains the firmware and the hardwaredesigns (CTAG and [Antumbra](http://www.antumbra.eu/)) of Strämpler.
 
 !!**NEW**!! Strämpler firmware can now be built in the cloud using Github actions
