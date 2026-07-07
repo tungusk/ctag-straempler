@@ -48,12 +48,27 @@ static void pad_cell_rect(int i, int *x, int *y, int *w, int *h){
     *y = gy + (i / cols) * (gh / rows) + 2;
 }
 
+// flash indicator: a small dot at the cell corner facing screen centre —
+// repainting the whole (large) cell per hit couldn't keep up with the rhythm
+static void pad_dot(int i, bool on){
+    int x, y, w, h;
+    pad_cell_rect(i, &x, &y, &w, &h);
+    int cols = (dr.n_pads <= 4) ? 2 : 4;
+    int col = i % cols, row = i / cols;
+    int r = (dr.n_pads <= 4) ? 9 : 6;
+    int cx = (col < cols / 2) ? x + w - r - 5 : x + r + 5;
+    int cy = (row == 0) ? y + h - r - 5 : y + r + 5;
+    color_t c = on ? PAD_LIT[s_flash_col[i] % 3]
+                   : (dr.pad[i].len ? PAD_IDLE : PAD_EMPTY);
+    TFT_fillCircle(cx, cy, r, c);
+    s_lit[i] = on;
+}
+
 static void draw_pad_cell(int i, bool lit){
     int x, y, w, h;
     pad_cell_rect(i, &x, &y, &w, &h);
     dr_pad_t *p = &dr.pad[i];
-    color_t fill = lit ? PAD_LIT[s_flash_col[i] % 3] : (p->len ? PAD_IDLE : PAD_EMPTY);
-    _bg = fill;
+    _bg = p->len ? PAD_IDLE : PAD_EMPTY;    // static cell; the dot does the flashing
     TFT_fillRect(x, y, w, h, _bg);
     _fg = p->enabled ? TFT_WHITE : (color_t){90, 90, 90};
     TFT_drawRect(x, y, w, h, _fg);
@@ -65,7 +80,7 @@ static void draw_pad_cell(int i, bool lit){
     snprintf(nm, sizeof(nm), "%.8s", p->sample[0] ? p->sample : "-");
     TFT_print(nm, x + 4, y + h - TFT_getfontheight() - 3);
     TFT_setFont(DEFAULT_FONT, NULL);
-    s_lit[i] = lit;
+    pad_dot(i, lit);
 }
 
 static void live_full_redraw(void){
@@ -92,9 +107,9 @@ static int drum_live_handler(int it_id, int event, void *ev_data){
                 if (dr.pad[i].hit){
                     dr.pad[i].hit = false;
                     s_flash_col[i]++;               // next hit, next colour
-                    draw_pad_cell(i, true);
+                    pad_dot(i, true);               // dot only — fast enough to groove
                 }
-                else if (lit != s_lit[i]) draw_pad_cell(i, lit);
+                else if (lit != s_lit[i]) pad_dot(i, lit);
             }
             break;
         case EV_LONG_PRESS: return M_MAIN;
@@ -104,8 +119,8 @@ static int drum_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Pads page: per-pad editor ----------------------------------------------
-static const char *pads_labels[] = {"Pad", "Sample", "Trig In", "Level", "Pan", "Enabled"};
-#define DR_PADS_N 6
+static const char *pads_labels[] = {"Pad", "Sample", "Trig In", "Level", "Pan", "Decay", "Enabled"};
+#define DR_PADS_N 7
 
 static void pads_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -131,7 +146,11 @@ static void pads_redraw(int pos, int sel){
                 else if (p->pan < 128) snprintf(v, sizeof(v), "L%d", (128 - p->pan) * 100 / 128);
                 else snprintf(v, sizeof(v), "R%d", (p->pan - 128) * 100 / 127);
                 break;
-            case 5: snprintf(v, sizeof(v), "%s", p->enabled ? "ON" : "OFF"); break;
+            case 5:
+                if (p->decay_ms == 0) snprintf(v, sizeof(v), "FULL");
+                else snprintf(v, sizeof(v), "%dms", p->decay_ms);
+                break;
+            case 6: snprintf(v, sizeof(v), "%s", p->enabled ? "ON" : "OFF"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -160,7 +179,14 @@ static void pads_adj(int i, int dir){
             p->pan = (uint8_t)pn;
             break;
         }
-        case 5: p->enabled = !p->enabled; break;
+        case 5: {
+            int dm = (int)p->decay_ms + dir * 50;
+            if (dm < 0) dm = 0;
+            if (dm > 5000) dm = 5000;
+            p->decay_ms = (uint16_t)dm;
+            break;
+        }
+        case 6: p->enabled = !p->enabled; break;
     }
 }
 

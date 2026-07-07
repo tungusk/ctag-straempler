@@ -112,6 +112,7 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         if (!p->playing) continue;
         any = true;
         uint32_t len = p->len;
+        uint32_t df = (uint32_t)p->decay_ms * 441 / 10;   // decay length in frames
         for (int f = 0; f < frames; f++) {
             if (p->retrig) {
                 // ~0.7 ms fade of the old voice, then restart at the new hit
@@ -133,6 +134,11 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
                 if (pos < 64) env = (int)pos << 2;          // ~1.5 ms attack
                 uint32_t rem = len - pos;
                 if (rem < 256 && (int)rem < env) env = (int)rem;   // ~6 ms tail
+                if (df) {                                   // optional decay envelope
+                    if (pos >= df) { p->playing = false; break; }
+                    int denv = (int)(((df - pos) << 8) / df);
+                    if (denv < env) env = denv;
+                }
             }
             int s = (p->buf[pos] * env) >> 8;
             int g  = ((int)p->level * (int)p->vel) >> 8;    // 0..255
@@ -194,6 +200,7 @@ static cJSON *drum_preset_save(void)
         cJSON_AddStringToObject(p, "s", dr.pad[i].sample);
         cJSON_AddNumberToObject(p, "lvl", dr.pad[i].level);
         cJSON_AddNumberToObject(p, "pan", dr.pad[i].pan);
+        cJSON_AddNumberToObject(p, "dec", dr.pad[i].decay_ms);
         cJSON_AddBoolToObject(p, "en", dr.pad[i].enabled);
         cJSON_AddNumberToObject(p, "src", dr.pad[i].trig_src + 1);   // CV number, 1-based
         cJSON_AddItemToArray(pads, p);
@@ -224,6 +231,12 @@ static void drum_preset_load(const cJSON *node)
             if (i >= DR_PADS) break;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "lvl")) && cJSON_IsNumber(j)) dr.pad[i].level = (uint8_t)j->valueint;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "pan")) && cJSON_IsNumber(j)) dr.pad[i].pan = (uint8_t)j->valueint;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "dec")) && cJSON_IsNumber(j)) {
+                int d = j->valueint;
+                if (d < 0) d = 0;
+                if (d > 5000) d = 5000;
+                dr.pad[i].decay_ms = (uint16_t)d;
+            }
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "en")))                       dr.pad[i].enabled = cJSON_IsTrue(j);
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "src")) && cJSON_IsNumber(j)) dr.pad[i].trig_src = (j->valueint - 1) & 7;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "s")) && cJSON_IsString(j) && j->valuestring[0])
