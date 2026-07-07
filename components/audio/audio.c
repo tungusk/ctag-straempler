@@ -39,6 +39,15 @@ void audio_status_set_voices(const char *v0, const char *v1) {
     portEXIT_CRITICAL(&_status_mux);
 }
 
+// teleremote soft triggers: each entry holds the tick until which that gate
+// is held asserted; the audio task ANDs them into the hardware reading
+static volatile TickType_t s_remote_trig_until[2] = {0, 0};
+
+void audio_remote_trig(int t, int ms) {
+    if (t < 0 || t > 1) return;
+    s_remote_trig_until[t] = xTaskGetTickCount() + pdMS_TO_TICKS(ms > 0 ? ms : 30);
+}
+
 static void audio_task(void *pvParams)
 {
     int32_t out[BUF_SZ], in[BUF_SZ];
@@ -50,10 +59,6 @@ static void audio_task(void *pvParams)
     {
         // get control data
         xQueueReceive(control_queue, &ctrlData, 0);
-        // v0/v1 names are pushed by the machine via audio_status_set_voices()
-        portENTER_CRITICAL(&_status_mux);
-        for (int i = 0; i < 8; i++) _audio_status.cv[i] = cv_corrected(i, ctrlData);
-        portEXIT_CRITICAL(&_status_mux);
 
         // machine I/O snapshot
         for (int i = 0; i < 8; i++) {
@@ -61,6 +66,16 @@ static void audio_task(void *pvParams)
             io.cv_raw[i] = ctrlData[i];
         }
         io.trig_level = (gpio_get_level(TRIG0_PIN) ? 1 : 0) | (gpio_get_level(TRIG1_PIN) ? 2 : 0);
+        // merge teleremote soft pulses (assert = pull low, like the jacks)
+        TickType_t now = xTaskGetTickCount();
+        if (now < s_remote_trig_until[0]) io.trig_level &= ~1;
+        if (now < s_remote_trig_until[1]) io.trig_level &= ~2;
+
+        // v0/v1 names are pushed by the machine via audio_status_set_voices()
+        portENTER_CRITICAL(&_status_mux);
+        for (int i = 0; i < 8; i++) _audio_status.cv[i] = io.cv[i];
+        _audio_status.trig = io.trig_level;
+        portEXIT_CRITICAL(&_status_mux);
 
         // always read I2S to drain the RX buffer; route to machine or recording
         i2s_read(I2S_NUM_0, in, 256, &nb, portMAX_DELAY);

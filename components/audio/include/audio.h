@@ -23,6 +23,7 @@ typedef struct {
     char v0[32];
     char v1[32];
     uint16_t cv[8];
+    uint8_t trig;      // raw gate levels, bit0=TR1 bit1=TR2 (active low)
 } audio_status_t;
 
 void initAudio(void);
@@ -30,3 +31,6 @@ void audio_get_status(audio_status_t *out);
 void audio_get_cv(uint16_t out[8]);
 // machines report their display names through this (spinlock-protected)
 void audio_status_set_voices(const char *v0, const char *v1);
+// teleremote: assert trigger input t (0/1) in software for ms milliseconds —
+// the audio task pulls the bit low (= active) alongside the hardware gate
+void audio_remote_trig(int t, int ms);

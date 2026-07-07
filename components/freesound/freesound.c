@@ -7,14 +7,17 @@
 #include "cJSON.h"
 #include "mp3.h"
 #include "fileio.h"
+#include "sd_lock.h"
 #include "ui_events.h"
 #include "list.h"
 #include "esp_vfs_fat.h"
 #include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 #include <stdint.h>
 
 static xQueueHandle ui_ev_queue = NULL;
-static char freesound_token[48];
+// sized for future OAuth2 bearer tokens, not just the 32-char API key
+static char freesound_token[128];
 
 static int print_list_elements(list_item_t* it){
     printf("%s\n", (char*)it->value);
@@ -304,9 +307,12 @@ static void instance_request(void *pvParameters)
     ESP_LOGI("fsnd", "%s", url);
     wifiWaitForConnected();
 
+    // IDF 4.3 esp-tls refuses https without a verification option; the old
+    // no-cert config silently broke this path when the project moved off 3.x
     esp_http_client_config_t config = {
             .url = url,
-            .method = HTTP_METHOD_GET
+            .method = HTTP_METHOD_GET,
+            .crt_bundle_attach = esp_crt_bundle_attach
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     esp_err_t err = 0;
@@ -368,7 +374,9 @@ static void instance_request(void *pvParameters)
     snprintf(fnamebuf, 64, "/pool/%d.mp3", i_id);
     ESP_LOGI("ID","mp3 URL is: %s, fname: %s", mp3_url, fnamebuf);
     FRESULT fr;
+    sd_lock_take();
     fr = f_open(&_mp3_file, fnamebuf, FA_CREATE_ALWAYS | FA_WRITE);
+    sd_lock_give();
     snprintf(fnamebuf, 64, "/sdcard/pool/%d.jsn", i_id);
     writeJSONFile(fnamebuf, buffer);
     // file open ok?
@@ -384,7 +392,9 @@ static void instance_request(void *pvParameters)
         heap_caps_free(buffer);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
+        sd_lock_take();
         f_close(&_mp3_file);
+        sd_lock_give();
         vTaskDelete(NULL);
         return;
     }
@@ -401,7 +411,9 @@ static void instance_request(void *pvParameters)
             heap_caps_free(buffer);
             esp_http_client_close(client);
             esp_http_client_cleanup(client);
+            sd_lock_take();
             f_close(&_mp3_file);
+            sd_lock_give();
             vTaskDelete(NULL);
             return;
         }
@@ -413,12 +425,16 @@ static void instance_request(void *pvParameters)
             xQueueSend(ui_ev_queue, &ev, portMAX_DELAY);
         oldProgress = progress;
         UINT bw;
+        sd_lock_take();
         f_write(&_mp3_file, buffer, read_len, &bw);
+        sd_lock_give();
         total_read_len += read_len;
     }
 
     // close file and finish up
+    sd_lock_take();
     f_close(&_mp3_file);
+    sd_lock_give();
     ESP_LOGI("FREESOUND","Completed");
     ev.event = EV_FREESND_MP3_COMPLETE;
     ev.event_data = NULL;
@@ -440,7 +456,9 @@ static void init_token(){
             cJSON *val;
             val = cJSON_GetObjectItemCaseSensitive(settings, "apikey");
             memset(freesound_token, 0, sizeof(freesound_token) / sizeof(char));
-            strcpy(freesound_token, val->valuestring);
+            if (val != NULL && cJSON_IsString(val))
+                strlcpy(freesound_token, val->valuestring, sizeof(freesound_token));
+            cJSON_Delete(root);
             return;
         }else ESP_LOGE("FREESOUND", "settings == NULL");
     }else ESP_LOGE("FREESOUND", "root == NULL");
@@ -472,5 +490,9 @@ void freesoundInit(xQueueHandle queueui){
 
 void freesoundSetToken(const char *token){
     memset(freesound_token, 0, sizeof(freesound_token) / sizeof(char));
-    strcpy(freesound_token, token);
+    strlcpy(freesound_token, token, sizeof(freesound_token));
+}
+
+const char *freesoundGetToken(void){
+    return freesound_token;
 }

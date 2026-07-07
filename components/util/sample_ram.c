@@ -1,5 +1,6 @@
 #include "sample_ram.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <dirent.h>
@@ -25,6 +26,21 @@ int sample_list(char out[][24], int max)
     }
     closedir(d);
     sd_lock_give();
+    return n;
+}
+
+static char s_shared_list[SAMPLE_LIST_MAX][24];
+
+static int cmp_name24(const void *a, const void *b)
+{
+    return strcasecmp((const char *)a, (const char *)b);
+}
+
+int sample_list_shared(char (**out)[24])
+{
+    int n = sample_list(s_shared_list, SAMPLE_LIST_MAX);
+    qsort(s_shared_list, n, sizeof(s_shared_list[0]), cmp_name24);
+    *out = s_shared_list;
     return n;
 }
 

@@ -11,6 +11,14 @@
 // returns the count (<= max).
 int sample_list(char out[][24], int max);
 
+// shared browser list: usr/ can hold hundreds of samples, and each menu
+// keeping its own static array both wastes DRAM and silently truncates (the
+// old per-menu [32] caps hid fresh uploads, which land last in FAT order).
+// Only one machine browses at a time, so every browser shares this buffer.
+// Sorted case-insensitively; returns the count, points *out at the buffer.
+#define SAMPLE_LIST_MAX 224
+int sample_list_shared(char (**out)[24]);
+
 // load /sdcard/usr/<name>.RAW into dst. mono=false writes interleaved stereo
 // (dst must hold max_frames*2 int16); mono=true averages L/R to one int16 per
 // frame (dst holds max_frames). returns frames loaded, 0 on failure.

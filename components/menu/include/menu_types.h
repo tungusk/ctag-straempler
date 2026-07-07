@@ -30,6 +30,11 @@ typedef enum{
     M_GRAN_LOAD,
     M_GLITCH_LIVE,
     M_GLITCH_SETUP,
+    M_DRUM_LIVE,
+    M_DRUM_PADS,
+    M_DRUM_LOAD,
+    M_DRUM_SETUP,
+    M_FS_LIVE,
     M_SETTINGS,
     M_SETTINGS_INPUT,
     M_ABOUT,
@@ -95,7 +100,8 @@ typedef enum{
     SID_WIFI_SSID,
     SID_WIFI_PASSWD,
     SID_APIKEY,
-    SID_TIMEZONE
+    SID_TIMEZONE,
+    SID_REMOTE
 } submenu_ids_t;
 
 typedef enum{

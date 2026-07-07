@@ -25,6 +25,15 @@
 static const char *TAG = "REST-API";
 static httpd_handle_t server = NULL;
 static xQueueHandle ui_ev_queue = NULL;
+// teleremote gate — settings.remote in CONFIG.JSN (default on), toggled live
+// from System→Settings via rest_remote_enable()
+static int s_remote_on = 1;
+
+void rest_remote_enable(int on)
+{
+    s_remote_on = on ? 1 : 0;
+    ESP_LOGI(TAG, "teleremote %s", s_remote_on ? "enabled" : "disabled");
+}
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -327,15 +336,16 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     const machine_t *m = machine_active();
 
     // build compact JSON by hand to avoid cJSON overhead in hot path
-    char buf[256];
+    char buf[288];
     int n = snprintf(buf, sizeof(buf),
         "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
-        "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u]}",
+        "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u}",
         m ? m->name : "",
         rec ? "true" : "false",
         st.v0, st.v1,
         st.cv[0], st.cv[1], st.cv[2], st.cv[3],
-        st.cv[4], st.cv[5], st.cv[6], st.cv[7]);
+        st.cv[4], st.cv[5], st.cv[6], st.cv[7],
+        st.trig);
     (void)n;
     send_json(req, buf);
     return ESP_OK;
@@ -472,11 +482,172 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
     }
     sd_lock_give();
 
-    char buf[128];
-    snprintf(buf, sizeof(buf), "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu}",
-             ip, (unsigned long long)freeb, (unsigned long long)totb);
+    // registry names for the Remote tab (Stub stays hidden here too)
+    char machines[192] = "";
+    int mp = 0;
+    for (int i = 0; machine_registry[i] != NULL; i++) {
+        if (strcmp(machine_registry[i]->name, "Stub") == 0) continue;
+        mp += snprintf(machines + mp, sizeof(machines) - mp, "%s\"%s\"",
+                       mp ? "," : "", machine_registry[i]->name);
+        if (mp >= (int)sizeof(machines) - 1) break;
+    }
+
+    char buf[384];
+    snprintf(buf, sizeof(buf),
+             "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu,\"remote\":%d,\"machines\":[%s]}",
+             ip, (unsigned long long)freeb, (unsigned long long)totb,
+             s_remote_on ? 1 : 0, machines);
     send_json(req, buf);
     return ESP_OK;
+}
+
+// ─── teleremote: /remote/* ────────────────────────────────────────────────────
+// Always-on core endpoints (gated by the System→Settings→Remote toggle):
+// encoder events into the UI queue, soft trigger pulses into the audio task,
+// and machine switching via the UI task (same path as a front-panel switch).
+
+static esp_err_t remote_gate(httpd_req_t *req)
+{
+    if (s_remote_on) return ESP_OK;
+    httpd_resp_set_status(req, "403 Forbidden");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"error\":\"remote disabled on device\"}");
+    return ESP_FAIL;
+}
+
+static esp_err_t remote_event_handler(httpd_req_t *req)
+{
+    if (remote_gate(req) != ESP_OK) return ESP_OK;
+    char evs[12];
+    if (!get_query_param(req, "ev", evs, sizeof(evs))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing ev");
+        return ESP_FAIL;
+    }
+    int ev;
+    if      (strcmp(evs, "fwd")   == 0) ev = EV_FWD;
+    else if (strcmp(evs, "bwd")   == 0) ev = EV_BWD;
+    else if (strcmp(evs, "press") == 0) ev = EV_SHORT_PRESS;
+    else if (strcmp(evs, "long")  == 0) ev = EV_LONG_PRESS;
+    else {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad ev");
+        return ESP_FAIL;
+    }
+    ui_ev_ts_t uev = { .event = ev, .event_data = NULL };
+    xQueueSend(ui_ev_queue, &uev, 0);
+    send_json(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+static esp_err_t remote_trig_handler(httpd_req_t *req)
+{
+    if (remote_gate(req) != ESP_OK) return ESP_OK;
+    char ts[8], ms_s[8];
+    if (!get_query_param(req, "t", ts, sizeof(ts)) || (ts[0] != '1' && ts[0] != '2') || ts[1]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "t must be 1 or 2");
+        return ESP_FAIL;
+    }
+    int ms = 40;
+    if (get_query_param(req, "ms", ms_s, sizeof(ms_s))) ms = atoi(ms_s);
+    if (ms < 5) ms = 5;
+    if (ms > 2000) ms = 2000;
+    audio_remote_trig(ts[0] - '1', ms);
+    send_json(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// GET = the active machine's full settings (same JSON as its autosave state);
+// POST = apply edited settings via preset_load on the UI task + autosave
+static esp_err_t remote_params_get_handler(httpd_req_t *req)
+{
+    if (remote_gate(req) != ESP_OK) return ESP_OK;
+    const machine_t *m = machine_active();
+    if (!m || !m->preset_save) { send_json(req, "{}"); return ESP_OK; }
+    cJSON *o = m->preset_save();
+    char *s = o ? cJSON_PrintUnformatted(o) : NULL;
+    cJSON_Delete(o);
+    if (s) { send_json(req, s); free(s); } else send_json(req, "{}");
+    return ESP_OK;
+}
+
+static esp_err_t remote_params_post_handler(httpd_req_t *req)
+{
+    if (remote_gate(req) != ESP_OK) return ESP_OK;
+    int total = req->content_len;
+    if (total < 2 || total > 8192) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad body"); return ESP_FAIL; }
+    char *body = malloc(total + 1);
+    if (!body) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
+    int received = 0;
+    while (received < total) {
+        int r = httpd_req_recv(req, body + received, total - received);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (r <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Recv failed"); return ESP_FAIL; }
+        received += r;
+    }
+    body[total] = 0;
+
+    cJSON *chk = cJSON_Parse(body);      // reject garbage before queueing
+    if (!chk) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad JSON"); return ESP_FAIL; }
+    cJSON_Delete(chk);
+
+    ui_ev_ts_t uev = { .event = EV_REMOTE_PRESET, .event_data = body };
+    if (xQueueSend(ui_ev_queue, &uev, 0) != pdTRUE) {
+        free(body);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Queue full");
+        return ESP_FAIL;
+    }
+    send_json(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+static esp_err_t remote_machine_handler(httpd_req_t *req)
+{
+    if (remote_gate(req) != ESP_OK) return ESP_OK;
+    char name[16];
+    if (!get_query_param(req, "name", name, sizeof(name)) || !name[0]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name");
+        return ESP_FAIL;
+    }
+    if (!machine_by_name(name) || strcmp(name, "Stub") == 0) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No such machine");
+        return ESP_FAIL;
+    }
+    // switch on the UI task so autosave/activate/rebind matches the front panel
+    ui_ev_ts_t uev = { .event = EV_REMOTE_MACHINE, .event_data = strdup(name) };
+    if (!uev.event_data || xQueueSend(ui_ev_queue, &uev, 0) != pdTRUE) {
+        free(uev.event_data);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Queue full");
+        return ESP_FAIL;
+    }
+    send_json(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// ─── machine-contributed endpoints ───────────────────────────────────────────
+// The active machine may publish extra URIs (machine_ui_t.web_uris); they are
+// registered on activate and dropped on deactivate. We remember what we
+// registered so a machine switch swaps them cleanly, and the last-seen machine
+// so URIs registered before WiFi/httpd came up are applied when it does.
+
+#define MAX_MACHINE_URIS 8
+static const httpd_uri_t *machine_uris[MAX_MACHINE_URIS];
+static int n_machine_uris = 0;
+static const machine_t *web_machine = NULL;
+
+static void machine_web_apply(const machine_t *m)
+{
+    web_machine = m;
+    if (!server) return;
+    for (int i = 0; i < n_machine_uris; i++)
+        httpd_unregister_uri_handler(server, machine_uris[i]->uri, machine_uris[i]->method);
+    n_machine_uris = 0;
+    if (!m || !m->ui || !m->ui->web_uris) return;
+    const httpd_uri_t *u = (const httpd_uri_t *)m->ui->web_uris;
+    for (int i = 0; i < m->ui->n_web_uris && n_machine_uris < MAX_MACHINE_URIS; i++)
+        if (httpd_register_uri_handler(server, &u[i]) == ESP_OK)
+            machine_uris[n_machine_uris++] = &u[i];
+    if (n_machine_uris)
+        ESP_LOGI(TAG, "%s: %d machine URIs registered", m->name, n_machine_uris);
 }
 
 // ─── server lifecycle ────────────────────────────────────────────────────────
@@ -491,6 +662,11 @@ static httpd_uri_t uris[] = {
     { .uri = "/settings",   .method = HTTP_POST,   .handler = settings_post_handler },
     { .uri = "/status",     .method = HTTP_GET,    .handler = status_get_handler },
     { .uri = "/drop_sample",.method = HTTP_PUT,    .handler = drop_sample_put_handler },
+    { .uri = "/remote/event",  .method = HTTP_POST, .handler = remote_event_handler },
+    { .uri = "/remote/trig",   .method = HTTP_POST, .handler = remote_trig_handler },
+    { .uri = "/remote/machine",.method = HTTP_POST, .handler = remote_machine_handler },
+    { .uri = "/remote/params", .method = HTTP_GET,  .handler = remote_params_get_handler },
+    { .uri = "/remote/params", .method = HTTP_POST, .handler = remote_params_post_handler },
 };
 #define N_URIS (sizeof(uris)/sizeof(uris[0]))
 
@@ -500,7 +676,7 @@ static httpd_handle_t start_webserver(void)
     config.stack_size      = 4096 * 2;
     config.core_id         = 0;
     config.task_priority   = 5;
-    config.max_uri_handlers = N_URIS + 2;
+    config.max_uri_handlers = N_URIS + 2 + MAX_MACHINE_URIS;
 
     ESP_LOGI(TAG, "Starting server on port %d", config.server_port);
     if (httpd_start(&server, &config) != ESP_OK) {
@@ -510,16 +686,30 @@ static httpd_handle_t start_webserver(void)
     for (int i = 0; i < (int)N_URIS; i++)
         httpd_register_uri_handler(server, &uris[i]);
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_404_error_handler);
+    machine_web_apply(web_machine);   // machine activated before the server? apply now
     return server;
 }
 
 void startRestAPI(xQueueHandle queueui)
 {
     ui_ev_queue = queueui;
+    // boot-time teleremote flag (menu_config lives above us in the dep graph,
+    // so read the config file directly)
+    cJSON *cfg = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+    if (cfg) {
+        cJSON *settings = cJSON_GetObjectItemCaseSensitive(cfg, "settings");
+        cJSON *r = settings ? cJSON_GetObjectItemCaseSensitive(settings, "remote") : NULL;
+        if (r && cJSON_IsNumber(r)) s_remote_on = r->valueint ? 1 : 0;
+        cJSON_Delete(cfg);
+    }
     start_webserver();
+    machine_set_web_cb(machine_web_apply);
 }
 
 void stopRestAPI(void)
 {
+    machine_set_web_cb(NULL);
+    n_machine_uris = 0;
     httpd_stop(server);
+    server = NULL;
 }

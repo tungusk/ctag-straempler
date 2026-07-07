@@ -324,7 +324,7 @@ void menuTFTPrintRecordIndicator(void) {
 }
 
 void menuTFTPrintTimezone(const char** items, const int* n_items, int *shift){
-    TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height); 
+    TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     _bg = TFT_BLACK;
     _fg = TFT_WHITE;
     char buf[32];
@@ -332,11 +332,24 @@ void menuTFTPrintTimezone(const char** items, const int* n_items, int *shift){
     _cur_row = 0;
     for(int i = 0; i < *n_items; i++)
     {
-        if(strcasecmp(items[i],"Timezone") == 0) _cur_row = i; 
+        if(strcasecmp(items[i],"Timezone") == 0) _cur_row = i;
     }
     menuTFTFlushValue(abs(*shift), _cur_row, negpos_conditions, &negpos_cond_size, &_bg);
     (*shift >= 0) ? sprintf(buf, "CET+%d",*shift) : sprintf(buf, "CET%d",*shift);
     TFT_print(buf, x + _width/2, 3 + (TFT_getfontheight() + 3) *_cur_row);
+}
+
+void menuTFTPrintRemote(const char** items, const int* n_items, int *on){
+    TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
+    _bg = TFT_BLACK;
+    _fg = TFT_WHITE;
+    int x = 4, row = 0;
+    for(int i = 0; i < *n_items; i++){
+        if(strcasecmp(items[i], "Remote") == 0) row = i;
+    }
+    int y = 3 + (TFT_getfontheight() + 3) * row;
+    TFT_fillRect(x + _width/2, y, _width/2 - x - 4, TFT_getfontheight() + 2, _bg);
+    TFT_print(*on ? "ON" : "OFF", x + _width/2, y);
 }
 
 

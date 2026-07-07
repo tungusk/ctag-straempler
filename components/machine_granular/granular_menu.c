@@ -10,6 +10,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "sample_ram.h"
 #include "granular_priv.h"
 
 static const color_t BG   = {5, 9, 28};
@@ -103,11 +104,11 @@ static int gran_live_handler(int it_id, int event, void *ev_data){
 static const char *setup_labels[] = {"Grain ms", "Density", "Spray", "Spread", "Sample"};
 #define GR_SETUP_N 5
 
-static char s_samples[32][24];
+static char (*s_samples)[24] = NULL;    // shared sorted library list (sample_ram)
 static int  s_n_samples = 0, s_sample_idx = 0;
 
 static void refresh_samples(void){
-    s_n_samples = granular_list_samples(s_samples, 32);
+    s_n_samples = sample_list_shared(&s_samples);
     s_sample_idx = 0;
     for (int i = 0; i < s_n_samples; i++) if (strcmp(s_samples[i], gr.sample) == 0) { s_sample_idx = i; break; }
 }
