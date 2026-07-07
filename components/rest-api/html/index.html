@@ -40,6 +40,13 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 .ri.on{background:#a00;color:#fff;border-color:#a00}
 .vl{color:#555;font-size:11px}
 .sep{color:#333}
+.rmon{display:flex;gap:8px;align-items:flex-end;margin:4px 0 8px}
+.rcol{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;color:#666}
+.rbar{width:22px;height:70px;background:#1e1e1e;border:1px solid #2a2a2a;border-radius:2px;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden}
+.rfill{background:#0af;width:100%;transition:height .12s}
+.rdot{width:16px;height:16px;border-radius:50%;background:#2a2a2a;border:1px solid #444;margin-bottom:2px}
+.rdot.on{background:#a00;border-color:#f44}
+.btn.cur{background:#0af;color:#000;border-color:#0af}
 </style>
 </head>
 <body>
@@ -48,7 +55,9 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <div class="tabs">
     <div class="tab on" id="t0" onclick="tab(0)">Files</div>
     <div class="tab" id="t1" onclick="tab(1)">Upload</div>
-    <div class="tab" id="t2" onclick="tab(2)">Settings</div>
+    <div class="tab" id="t2" onclick="tab(2)">Freesound</div>
+    <div class="tab" id="t3" onclick="tab(3)">Remote</div>
+    <div class="tab" id="t4" onclick="tab(4)">Settings</div>
   </div>
 </header>
 <div class="pane on" id="p0">
@@ -59,9 +68,9 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 </div>
 <div class="pane" id="p1">
   <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
-    Drop a 16-bit 44.1kHz stereo RAW file here, or click to browse
+    Drop any audio file here (wav/mp3/flac/ogg/m4a &#8594; converted in-browser), or a 16-bit 44.1kHz stereo RAW
   </div>
-  <input type="file" id="fi" accept=".raw,.RAW" style="display:none" onchange="onFile(this.files[0])">
+  <input type="file" id="fi" accept="audio/*,.raw,.RAW" style="display:none" onchange="onFile(this.files[0])">
   <label>Name (max 8 chars)</label><input id="un" maxlength="8" placeholder="Pad123">
   <label>Description</label><input id="ud" maxlength="128" placeholder="Nice pad">
   <label>Tags</label><input id="ut" maxlength="32" placeholder="pad, warm">
@@ -72,6 +81,54 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <div class="msg" id="um"></div>
 </div>
 <div class="pane" id="p2">
+  <div class="msg" id="fsnote">Requires the Freesound machine to be active (System &#8594; Machine) and an API key (Settings tab).</div>
+  <div class="row">
+    <input id="fq" placeholder="kick drum" onkeydown="if(event.key==='Enter')fsSearch(1)">
+    <button class="btn" style="flex:0 0 80px" onclick="fsSearch(1)">Search</button>
+  </div>
+  <div class="row" id="fspg" style="display:none">
+    <button class="btn" onclick="fsSearch(fsPage-1)" id="fsprev">&#8592; Prev</button>
+    <span style="text-align:center;color:#666" id="fsinfo"></span>
+    <button class="btn" onclick="fsSearch(fsPage+1)" id="fsnext">Next &#8594;</button>
+  </div>
+  <table style="margin-top:8px">
+    <thead><tr><th>Name</th><th>Dur</th><th>By</th><th></th></tr></thead>
+    <tbody id="fstb"></tbody>
+  </table>
+  <label style="margin-top:14px">Or fetch a direct MP3 URL (44.1kHz only)</label>
+  <div class="row">
+    <input id="furl" placeholder="https://example.com/loop.mp3" onkeydown="if(event.key==='Enter')fsFetch()">
+    <button class="btn" style="flex:0 0 80px" onclick="fsFetch()">Fetch</button>
+  </div>
+  <progress id="fspr" value="0" max="100"></progress>
+  <div class="msg" id="fsm"></div>
+</div>
+<div class="pane" id="p3">
+  <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
+  <label>Inputs</label>
+  <div class="rmon" id="rmon"></div>
+  <div class="row" style="margin-top:4px">
+    <button class="btn" onclick="remTrig(1)">TR1 pulse</button>
+    <button class="btn" onclick="remTrig(2)">TR2 pulse</button>
+  </div>
+  <label>Encoder</label>
+  <div class="row">
+    <button class="btn" onclick="remEv('bwd')">&#8592; turn</button>
+    <button class="btn" onclick="remEv('fwd')">turn &#8594;</button>
+    <button class="btn" onclick="remEv('press')">press</button>
+    <button class="btn" onclick="remEv('long')">hold</button>
+  </div>
+  <label>Machine</label>
+  <div class="row" id="rmach" style="flex-wrap:wrap"></div>
+  <label>Machine settings (applied live, remembered by the module)</label>
+  <div id="rparams" style="max-width:480px"></div>
+  <div class="row">
+    <button class="btn" onclick="rpLoad()">Reload settings</button>
+    <button class="btn" onclick="rpApply()">Apply &amp; save</button>
+  </div>
+  <div class="msg" id="rm"></div>
+</div>
+<div class="pane" id="p4">
   <label>Device IP</label><input id="ip" readonly style="opacity:.7">
   <label>WiFi SSID</label><input id="ss">
   <label>WiFi Password (leave blank to keep current)</label><input id="sp" type="password">
@@ -95,12 +152,13 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 var fileToUpload=null;
 
 function tab(n){
-  for(var i=0;i<3;i++){
+  for(var i=0;i<5;i++){
     document.getElementById('t'+i).className='tab'+(i===n?' on':'');
     document.getElementById('p'+i).className='pane'+(i===n?' on':'');
   }
   if(n===0)loadFiles();
-  if(n===2)loadSet();
+  if(n===3)loadRemote();
+  if(n===4)loadSet();
 }
 
 function loadFiles(){
@@ -125,12 +183,46 @@ function del(name){
   });
 }
 
+var rawBlob=null;   // converted 44.1k stereo int16 RAW (null = file sent as-is)
+
 function onFile(file){
-  fileToUpload=file;
+  fileToUpload=file;rawBlob=null;
   if(!file)return;
   var base=file.name.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_]/g,'').substring(0,8);
   document.getElementById('un').value=base;
-  document.getElementById('um').textContent=file.name+' ('+Math.round(file.size/1024)+'KB)';
+  var um=document.getElementById('um');
+  if(/\.raw$/i.test(file.name)){
+    um.className='msg';
+    um.textContent=file.name+' ('+Math.round(file.size/1024)+'KB, uploaded as-is)';
+    return;
+  }
+  um.className='msg';um.textContent='Decoding '+file.name+'…';
+  file.arrayBuffer().then(function(ab){
+    var AC=window.AudioContext||window.webkitAudioContext;
+    return new AC().decodeAudioData(ab);
+  }).then(function(audio){
+    if(audio.duration>90)throw new Error('too long ('+Math.round(audio.duration)+'s, max 90s)');
+    var frames=Math.ceil(audio.duration*44100);
+    var oc=new OfflineAudioContext(2,frames,44100);   // resamples + up/downmixes to stereo
+    var src=oc.createBufferSource();
+    src.buffer=audio;src.connect(oc.destination);src.start();
+    return oc.startRendering();
+  }).then(function(rend){
+    var L=rend.getChannelData(0),R=rend.numberOfChannels>1?rend.getChannelData(1):L;
+    var n=rend.length,out=new Int16Array(n*2);
+    for(var i=0;i<n;i++){
+      var l=Math.max(-1,Math.min(1,L[i])),r=Math.max(-1,Math.min(1,R[i]));
+      out[i*2]=l<0?l*32768:l*32767;
+      out[i*2+1]=r<0?r*32768:r*32767;
+    }
+    rawBlob=new Blob([out.buffer]);
+    um.className='msg ok';
+    um.textContent=file.name+' converted: '+(n/44100).toFixed(1)+'s, '+Math.round(rawBlob.size/1024)+'KB RAW';
+  }).catch(function(e){
+    fileToUpload=null;rawBlob=null;
+    um.className='msg er';
+    um.textContent='Convert failed: '+(e&&e.message?e.message:'not a decodable audio file');
+  });
 }
 var dz=document.getElementById('dz');
 dz.ondragover=function(e){e.preventDefault();dz.className='dz ov';};
@@ -152,10 +244,10 @@ function doUpload(){
     pr.style.display='none';
     um.className='msg '+(xhr.status<300?'ok':'er');
     um.textContent=xhr.status<300?'Uploaded! '+name:'Error '+xhr.status;
-    if(xhr.status<300){fileToUpload=null;}
+    if(xhr.status<300){fileToUpload=null;rawBlob=null;}
   };
   xhr.onerror=function(){pr.style.display='none';um.className='msg er';um.textContent='Network error';};
-  xhr.send(fileToUpload);
+  xhr.send(rawBlob||fileToUpload);
 }
 
 function loadSet(){
@@ -183,6 +275,177 @@ function saveSet(){
   });
 }
 
+var fsPage=1,fsCount=0,fsPoll=null;
+
+function fsSearch(page){
+  var q=document.getElementById('fq').value.trim();
+  if(!q)return;
+  if(page<1)page=1;
+  var m=document.getElementById('fsm');
+  m.className='msg';m.textContent='Searching…';
+  fetch('/fs/search?q='+encodeURIComponent(q)+'&page='+page).then(function(r){return r.json();}).then(function(d){
+    if(d.error){m.className='msg er';m.textContent=d.error;return;}
+    fsPage=page;fsCount=d.count||0;
+    var tb=document.getElementById('fstb'),h='';
+    (d.results||[]).forEach(function(s){
+      var nm=String(s.name||'').replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||('FS'+s.id);
+      h+='<tr><td>'+esc(s.name)+'</td><td>'+(s.duration!=null?s.duration.toFixed(1)+'s':'')+'</td><td>'+esc(s.username||'')+'</td>'
+        +'<td style="white-space:nowrap"><button class="btn" onclick="fsGet('+s.id+',\''+nm+'\')">&#11015; Get</button></td></tr>';
+    });
+    tb.innerHTML=h||'<tr><td colspan="4" style="color:#555;padding:12px">No results</td></tr>';
+    m.textContent=fsCount?fsCount+' results':'';
+    var pg=document.getElementById('fspg');
+    pg.style.display=fsCount>16?'flex':'none';
+    document.getElementById('fsinfo').textContent='page '+fsPage+' / '+Math.ceil(fsCount/16);
+    document.getElementById('fsprev').disabled=fsPage<=1;
+    document.getElementById('fsnext').disabled=fsPage>=Math.ceil(fsCount/16);
+  }).catch(function(){m.className='msg er';m.textContent='Search failed (is the Freesound machine active?)';});
+}
+
+function fsStarted(d){
+  var m=document.getElementById('fsm');
+  if(d.error){m.className='msg er';m.textContent=d.error;return;}
+  m.className='msg';m.textContent='Started…';
+  document.getElementById('fspr').style.display='block';
+  if(fsPoll)clearInterval(fsPoll);
+  fsPoll=setInterval(fsState,700);
+}
+
+function fsGet(id,defName){
+  var name=prompt('Save to library as (max 12 chars):',defName);
+  if(name===null)return;
+  name=name.replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||defName;
+  fetch('/fs/get?id='+id+'&name='+encodeURIComponent(name),{method:'POST'}).then(function(r){return r.json();}).then(fsStarted);
+}
+
+function fsFetch(){
+  var u=document.getElementById('furl').value.trim();
+  if(!/^https?:\/\//.test(u)){alert('Enter an http(s) MP3 URL');return;}
+  var def=(u.split('/').pop()||'').split('?')[0].replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||'MP3';
+  var name=prompt('Save to library as (max 12 chars):',def);
+  if(name===null)return;
+  name=name.replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||def;
+  fetch('/fs/fetch?url='+encodeURIComponent(u)+'&name='+encodeURIComponent(name),{method:'POST'}).then(function(r){return r.json();}).then(fsStarted)
+    .catch(function(){var m=document.getElementById('fsm');m.className='msg er';m.textContent='Fetch failed (is the Freesound machine active?)';});
+}
+
+function fsState(){
+  fetch('/fs/state').then(function(r){return r.json();}).then(function(d){
+    var m=document.getElementById('fsm'),pr=document.getElementById('fspr');
+    if(d.phase==='done'){
+      clearInterval(fsPoll);fsPoll=null;pr.style.display='none';
+      m.className='msg ok';m.textContent='Installed '+d.name+' to the library!';
+    }else if(d.phase==='error'){
+      clearInterval(fsPoll);fsPoll=null;pr.style.display='none';
+      m.className='msg er';m.textContent='Error: '+d.err;
+    }else{
+      pr.value=d.progress||0;
+      m.className='msg';m.textContent=d.phase+' '+d.name+' '+(d.progress||0)+'%';
+    }
+  }).catch(function(){});
+}
+
+var remMachines=[];
+
+function loadRemote(){
+  fetch('/sysinfo').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('roff').style.display=d.remote?'none':'block';
+    remMachines=d.machines||[];
+    var h='';
+    remMachines.forEach(function(m){
+      h+='<button class="btn" style="flex:0 0 auto" id="rmb-'+m+'" onclick="remMach(\''+m+'\')">'+esc(m)+'</button>';
+    });
+    document.getElementById('rmach').innerHTML=h;
+    // seed the bar columns once; pollStatus animates the fills
+    var mh='';
+    for(var i=0;i<8;i++)
+      mh+='<div class="rcol"><div class="rbar"><div class="rfill" id="rf'+i+'" style="height:0%"></div></div>CV'+(i+1)+'<span id="rv'+i+'">-</span></div>';
+    mh+='<div class="rcol"><div class="rdot" id="rt0"></div>TR1</div><div class="rcol"><div class="rdot" id="rt1"></div>TR2</div>';
+    document.getElementById('rmon').innerHTML=mh;
+  }).catch(function(){});
+}
+
+var rpData=null;
+
+function rpForm(o,path){
+  var h='';
+  for(var k in o){
+    var v=o[k],p=path?path+'.'+k:k;
+    if(v===null)continue;
+    if(typeof v==='object'){
+      h+='<fieldset style="border:1px solid #2a2a2a;border-radius:3px;padding:4px 8px 8px;margin:6px 0">'
+        +'<legend style="color:#666;font-size:10px;padding:0 4px">'+esc(k)+'</legend>'+rpForm(v,p)+'</fieldset>';
+    }else if(typeof v==='boolean'){
+      h+='<label style="display:flex;align-items:center;gap:6px;margin:4px 0;color:#aaa">'
+        +'<input type="checkbox" style="width:auto" data-rp="'+p+'"'+(v?' checked':'')+'>'+esc(k)+'</label>';
+    }else if(typeof v==='number'){
+      h+='<label>'+esc(k)+'</label><input type="number" step="any" data-rp="'+p+'" value="'+v+'">';
+    }else{
+      h+='<label>'+esc(k)+'</label><input data-rp="'+p+'" value="'+esc(String(v))+'">';
+    }
+  }
+  return h;
+}
+
+function rpLoad(){
+  fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
+    if(d.error){document.getElementById('rparams').innerHTML='<div class="msg er">'+esc(d.error)+'</div>';return;}
+    rpData=d;
+    document.getElementById('rparams').innerHTML=
+      Object.keys(d).length?rpForm(d,''):'<div class="msg">this machine has no settings</div>';
+  }).catch(function(){});
+}
+
+function rpApply(){
+  if(!rpData)return;
+  var d=JSON.parse(JSON.stringify(rpData));
+  document.querySelectorAll('[data-rp]').forEach(function(inp){
+    var path=inp.getAttribute('data-rp').split('.'),o=d;
+    for(var i=0;i<path.length-1;i++)o=o[path[i]];
+    var k=path[path.length-1],old=o[k];
+    if(typeof old==='boolean')o[k]=inp.checked;
+    else if(typeof old==='number')o[k]=parseFloat(inp.value)||0;
+    else o[k]=inp.value;
+  });
+  fetch('/remote/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)})
+    .then(function(r){return r.json();}).then(function(res){
+      var m=document.getElementById('rm');
+      m.className='msg '+(res.error?'er':'ok');
+      m.textContent=res.error||'Applied — autosaves in a couple of seconds';
+      if(!res.error)rpData=d;
+    }).catch(function(){});
+}
+
+function remEv(e){fetch('/remote/event?ev='+e,{method:'POST'}).catch(function(){});}
+function remTrig(t){fetch('/remote/trig?t='+t+'&ms=40',{method:'POST'}).catch(function(){});}
+function remMach(n){
+  fetch('/remote/machine?name='+encodeURIComponent(n),{method:'POST'}).then(function(r){return r.json();}).then(function(d){
+    var m=document.getElementById('rm');
+    m.className='msg '+(d.error?'er':'ok');
+    m.textContent=d.error||('Switching to '+n+'…');
+    if(!d.error)setTimeout(rpLoad,2500);   // refresh the form for the new machine
+  }).catch(function(){});
+}
+
+function updateRemote(d){
+  if(!document.getElementById('p3').className.match(/on/))return;
+  var cv=d.cv||[];
+  for(var i=0;i<cv.length;i++){
+    var f=document.getElementById('rf'+i),v=document.getElementById('rv'+i);
+    if(f)f.style.height=Math.round(cv[i]/4095*100)+'%';
+    if(v)v.textContent=Math.round(cv[i]/4095*100)+'%';
+  }
+  // active low: bit clear = gate asserted
+  var tr=(typeof d.trig==='number')?d.trig:3;
+  var t0=document.getElementById('rt0'),t1=document.getElementById('rt1');
+  if(t0)t0.className='rdot'+((tr&1)?'':' on');
+  if(t1)t1.className='rdot'+((tr&2)?'':' on');
+  remMachines.forEach(function(m){
+    var b=document.getElementById('rmb-'+m);
+    if(b)b.className='btn'+(m===d.machine?' cur':'');
+  });
+}
+
 function pollStatus(){
   fetch('/status').then(function(r){return r.json();}).then(function(d){
     var cv=d.cv||[],h='';
@@ -195,6 +458,7 @@ function pollStatus(){
     ri.className='ri'+(d.recording?' on':'');
     document.getElementById('v0').textContent='V0: '+(d.v0||'--');
     document.getElementById('v1').textContent='V1: '+(d.v1||'--');
+    updateRemote(d);
   }).catch(function(){});
 }
 setInterval(pollStatus,500);

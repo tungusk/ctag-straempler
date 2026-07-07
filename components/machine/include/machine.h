@@ -40,6 +40,13 @@ typedef struct {
     int n_main;
     void (*register_pages)(void *menusys);       // create the machine's pages
     int  (*main_event)(int event, void *ev_data); // main-screen live area
+    // optional web endpoints, served only while this machine is active:
+    // points to a const httpd_uri_t[n_web_uris] (kept void* so machine.h
+    // doesn't drag httpd types into every machine build). Handlers must only
+    // touch state that survives stop() — an in-flight request can still be
+    // executing while the machine is being switched away.
+    const void *web_uris;
+    int n_web_uris;
 } machine_ui_t;
 
 typedef struct machine_s {
@@ -77,3 +84,10 @@ extern const machine_t *const machine_registry[];
 const machine_t *machine_active(void);
 esp_err_t machine_activate(const machine_t *m);   // stop old, start new
 const machine_t *machine_by_name(const char *name);
+
+// rest-api hookup: the web server installs a callback fired on every
+// activate/deactivate (m = new machine, NULL while switching/stopped).
+// Installing fires immediately with the currently active machine, so the
+// boot order of WiFi vs. machine start doesn't matter. The server uses it
+// to (un)register the machine's web_uris.
+void machine_set_web_cb(void (*cb)(const machine_t *m));

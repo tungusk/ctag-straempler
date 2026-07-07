@@ -11,6 +11,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "sample_ram.h"
 #include "slicer_priv.h"
 
 static const color_t BG      = {5, 9, 28};
@@ -172,12 +173,12 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
 static const char *setup_labels[] = {"Mode", "Slices", "Sensitivity", "Sample", "Auto", "Reverse"};
 #define SL_SETUP_N 6
 
-// cached sample list for the Sample row cycler
-static char s_samples[32][24];
+// shared sorted library list (sample_ram) — big cards hold >200 samples
+static char (*s_samples)[24] = NULL;
 static int  s_n_samples = 0, s_sample_idx = 0;
 
 static void setup_refresh_samples(void){
-    s_n_samples = slicer_list_samples(s_samples, 32);
+    s_n_samples = sample_list_shared(&s_samples);
     s_sample_idx = 0;
     for (int i = 0; i < s_n_samples; i++)
         if (strcmp(s_samples[i], sl.sample) == 0) { s_sample_idx = i; break; }

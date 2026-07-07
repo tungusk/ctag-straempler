@@ -25,7 +25,9 @@ typedef enum{
     EV_UPDATE_V0_POS,
     EV_UPDATE_V1_POS,
     EV_AUTOSAVE,
-    EV_MACHINE_BIND
+    EV_MACHINE_BIND,
+    EV_REMOTE_MACHINE,  // teleremote machine switch; event_data = strdup'd name
+    EV_REMOTE_PRESET    // teleremote settings apply; event_data = malloc'd JSON string
 } ui_ev_t;
 
 typedef struct{

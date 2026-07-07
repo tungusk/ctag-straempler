@@ -5,3 +5,4 @@ void freesoundGetTags(const char *path);
 void freesoundSearch(const char *query);
 void freesoundGetInstance(const char *id);
 void freesoundSetToken(const char *token);
+const char *freesoundGetToken(void);

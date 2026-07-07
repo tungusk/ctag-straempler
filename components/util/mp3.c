@@ -12,6 +12,7 @@
 #include "ui_events.h"
 #include "mp3.h"
 #include "esp_vfs_fat.h"
+#include "sd_lock.h"
 #include <stdint.h>
 
 #define MAX_FRAME_SIZE 4096
@@ -32,10 +33,9 @@ void initMP3Engine(xQueueHandle queueui){
     ui_ev_queue = queueui;
 }
 
-static void decode(FIL *mp3File, FIL* rawOut, int sz){
-    ui_ev_ts_t ev;
+static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *out_samprate,
+                   void (*pcb)(int pct, void *arg), void *pcb_arg){
     uint32_t toRead = sz, progress = 0;
-    ev.event = EV_DECODING_PROGRESS;
     HMP3Decoder decoder = MP3InitDecoder();
 
     if(decoder == NULL){
@@ -50,12 +50,13 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz){
     do
     {
         // Read the input file
+        sd_lock_take();
         f_read(mp3File, input, MAX_FRAME_SIZE, &nRead);
+        sd_lock_give();
         toRead -= nRead;
         progress = (sz - toRead) * 100;
         progress /= sz;
-        ev.event_data = (void*)progress;
-        xQueueSend(ui_ev_queue, &ev, portMAX_DELAY);
+        if(pcb) pcb((int)progress, pcb_arg);
 
         if(nRead == 0)
         {
@@ -105,6 +106,10 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz){
     }
 
     ESP_LOGI("MP3", "FrameInfo: %d", frameInfo.samprate);
+    if(out_channels != NULL && foundStartOfFrame)
+        *out_channels = frameInfo.nChans;
+    if(out_samprate != NULL && foundStartOfFrame)
+        *out_samprate = frameInfo.samprate;
     
     // Decode a MP3 frame. It is assumed that the MP3FindSyncWord() function was used
     // to find a start of frame.
@@ -121,13 +126,14 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz){
         // This code example shows how the errors can be handled.
         // This may differ between applications.
         memmove(input, readPtr, bytesLeft);
+        sd_lock_take();
         f_read(mp3File, input + bytesLeft, MAX_FRAME_SIZE - bytesLeft, &nRead);
+        sd_lock_give();
         toRead -= nRead;
         progress = (sz - toRead) * 100;
         progress /= sz;
-        ev.event_data = (void*)progress;
-        if(progress != oldProgress){
-            xQueueSend(ui_ev_queue, &ev, portMAX_DELAY);
+        if(pcb && progress != oldProgress){
+            pcb((int)progress, pcb_arg);
         }
         oldProgress = progress;;
         //ESP_LOGI("MP3", "Read %d, size %d, to read %d, progress %d", nRead, sz, toRead, progress);
@@ -146,7 +152,9 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz){
             //ESP_LOGI("MP3", "Decoded samples %d", mp3frameInfo.outputSamps );
             if(mp3frameInfo.outputSamps != 0)
             {
+                sd_lock_take();
                 f_write(rawOut, output, mp3frameInfo.outputSamps*2, &nWrite);
+                sd_lock_give();
                 //ESP_LOGI("MP3", "Number of output samples decoded %d", mp3frameInfo.outputSamps)
             }
         }else{
@@ -160,15 +168,24 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz){
     MP3FreeDecoder(decoder);
 }
 
+// progress relay for the async path: keeps the old UI-event behaviour
+static void decode_ev_cb(int pct, void *arg){
+    ui_ev_ts_t ev;
+    ev.event = EV_DECODING_PROGRESS;
+    ev.event_data = (void*)pct;
+    xQueueSend(ui_ev_queue, &ev, portMAX_DELAY);
+}
+
 static void decoder_task(void* pvParams){
     ui_ev_ts_t ev;
-    int progress = 0;
     FIL fin, fout;
     FRESULT fr;
     task_param_t *params = (task_param_t*) pvParams;
     ESP_LOGI("MP3", "Decoder task, working with: fin %s, fout %s", params->fin, params->fout);
 
+    sd_lock_take();
     fr = f_open(&fin, params->fin, FA_READ);
+    sd_lock_give();
     if(fr){
         ESP_LOGE("MP3", "Could not open infile %s", params->fin);
         free(pvParams);
@@ -178,30 +195,79 @@ static void decoder_task(void* pvParams){
     uint32_t mp3FileSize = f_size(&fin);
     ESP_LOGI("MP3", "Size of mp3 file to be decoded %d", mp3FileSize);
 
+    sd_lock_take();
     fr = f_open(&fout, params->fout, FA_CREATE_ALWAYS | FA_WRITE);
+    sd_lock_give();
     if(fr){
         ESP_LOGE("MP3", "Could not open outfile %s", params->fout);
+        sd_lock_take();
         f_close(&fin);
+        sd_lock_give();
         free(pvParams);
         vTaskDelete(NULL);
         return;
     }
 
     input = (unsigned char*) malloc(MAX_FRAME_SIZE);
-    ev.event = EV_DECODING_PROGRESS;
-    ev.event_data = (void*)progress;
-    xQueueSend(ui_ev_queue, &ev, portMAX_DELAY);
-    
-    decode(&fin, &fout, mp3FileSize);
+    decode_ev_cb(0, NULL);
+
+    decode(&fin, &fout, mp3FileSize, NULL, NULL, decode_ev_cb, NULL);
     free(input);
 
+    sd_lock_take();
     f_close(&fin);
     f_close(&fout);
+    sd_lock_give();
 
     ev.event = EV_DECODING_DONE;
     xQueueSend(ui_ev_queue, &ev, portMAX_DELAY);
     free(pvParams);
     vTaskDelete(NULL);
+}
+
+int decodeMP3FileSync(const char *fin_path, const char *fout_path,
+                      int *out_channels, int *out_samprate,
+                      void (*progress_cb)(int pct, void *arg), void *arg){
+    FIL fin, fout;
+    FRESULT fr;
+
+    sd_lock_take();
+    fr = f_open(&fin, fin_path, FA_READ);
+    sd_lock_give();
+    if(fr){
+        ESP_LOGE("MP3", "sync: could not open infile %s (%d)", fin_path, fr);
+        return -1;
+    }
+    uint32_t mp3FileSize = f_size(&fin);
+
+    sd_lock_take();
+    fr = f_open(&fout, fout_path, FA_CREATE_ALWAYS | FA_WRITE);
+    sd_lock_give();
+    if(fr){
+        ESP_LOGE("MP3", "sync: could not open outfile %s (%d)", fout_path, fr);
+        sd_lock_take();
+        f_close(&fin);
+        sd_lock_give();
+        return -1;
+    }
+
+    input = (unsigned char*) malloc(MAX_FRAME_SIZE);
+    if(input == NULL){
+        sd_lock_take();
+        f_close(&fin);
+        f_close(&fout);
+        sd_lock_give();
+        return -1;
+    }
+    decode(&fin, &fout, mp3FileSize, out_channels, out_samprate, progress_cb, arg);
+    free(input);
+
+    uint32_t written = f_size(&fout);
+    sd_lock_take();
+    f_close(&fin);
+    f_close(&fout);
+    sd_lock_give();
+    return written > 0 ? 0 : -1;
 }
 
 

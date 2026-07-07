@@ -41,8 +41,8 @@ static xQueueHandle s_ev_queue = NULL;
 // core menu labels (machine-independent pages)
 static const char* more_menus[] = {"Machine", "Settings", "About"};
 static const int n_more_menus = 3;
-static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "IP"};
-static const int n_settings_menus = 5;
+static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "IP"};
+static const int n_settings_menus = 6;
 
 static void incSettingsItem(int *tz, int index){
     if (index == SID_TIMEZONE) { if(*tz + 1 >= 12) *tz = 12; else (*tz)++; }
@@ -232,21 +232,28 @@ static int machine_sel_def_handler(int it_id, int event, void* event_data){
 }
 
 static int settings_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE};
+    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE};
     const int items = sizeof(menu_items)/sizeof(int);
     static int menu_pos = 0, selected = 0;
+    static int remote_on = 1;
     static cJSON *cfgData = NULL, *settings = NULL;
     switch(event){
         case EV_ENTERED_MENU:
             selected = 0;
             menuTFTPrintMenu(settings_menus, &n_settings_menus);
             menuTFTSelectMenuItem(&menu_pos, 0, settings_menus, &n_settings_menus);
-            if(_state_json != NULL)cfgData = (cJSON*) _state_json;  
+            if(_state_json != NULL)cfgData = (cJSON*) _state_json;
             else cfgData = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
             if(cfgData != NULL){
                 settings = cJSON_GetObjectItemCaseSensitive(cfgData, "settings");
                 if(settings != NULL)menuTFTPrintSettings(settings);
+                remote_on = 1;
+                if(settings != NULL){
+                    cJSON *r = cJSON_GetObjectItemCaseSensitive(settings, "remote");
+                    if(r != NULL && cJSON_IsNumber(r)) remote_on = r->valueint ? 1 : 0;
+                }
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
+                menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
                 menuTFTPrintIP(settings_menus, &n_settings_menus);
             }else ESP_LOGE("UI", "couldn't fetch cfgData from state or file");
             break;
@@ -255,6 +262,9 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 menu_pos++;
                 if(menu_pos >= items) menu_pos = 0;
                 menuTFTSelectMenuItem(&menu_pos, 0, settings_menus, &n_settings_menus);
+            }else if(menu_items[menu_pos] == SID_REMOTE){
+                remote_on = !remote_on;
+                menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
             }else{
                 incSettingsItem(&tz_shift, menu_items[menu_pos]);
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
@@ -265,13 +275,16 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 menu_pos--;
                 if(menu_pos < 0) menu_pos = items - 1;
                 menuTFTSelectMenuItem(&menu_pos, 0, settings_menus, &n_settings_menus);
+            }else if(menu_items[menu_pos] == SID_REMOTE){
+                remote_on = !remote_on;
+                menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
             }else{
                 decSettingsItem(&tz_shift, menu_items[menu_pos]);
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
             }
             break;
         case EV_SHORT_PRESS:
-            if(menu_items[menu_pos] != SID_TIMEZONE){
+            if(menu_items[menu_pos] != SID_TIMEZONE && menu_items[menu_pos] != SID_REMOTE){
                 _state_json = (void*) cfgData;
                 _state_data = (void*) &menu_pos;
                 return M_SETTINGS_INPUT;
@@ -284,6 +297,10 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             int wifiChanged = wifiSettingsChanged(settings);
             //replace tz_shift value
             cJSON_ReplaceItemInObjectCaseSensitive(settings, "tz_shift", cJSON_CreateNumber(tz_shift));
+            //persist + apply the teleremote toggle
+            cJSON_DeleteItemFromObjectCaseSensitive(settings, "remote");
+            cJSON_AddNumberToObject(settings, "remote", remote_on);
+            rest_remote_enable(remote_on);
             //save current settings on menu exit
             writeJSONFile("/sdcard/CONFIG.jsn", cJSON_Print(cfgData));
             //set token 
@@ -421,6 +438,32 @@ void menuProcessEvent(int ev, void * ev_data){
     }
     if(ev == EV_MACHINE_BIND){
         menuMachineBindNow();
+        return;
+    }
+    // teleremote machine switch: runs here (UI task) so the autosave/activate/
+    // rebind sequence is identical to a front-panel switch
+    if(ev == EV_REMOTE_MACHINE){
+        char *name = (char*) ev_data;
+        const machine_t *m = name ? machine_by_name(name) : NULL;
+        if(m != NULL && strcmp(m->name, "Stub") != 0 && m != machine_active())
+            menuSwitchMachine(m);
+        free(name);
+        return;
+    }
+    // teleremote settings apply: same JSON shape as the autosave state, fed
+    // through preset_load on the UI task, then persisted by the autosave
+    if(ev == EV_REMOTE_PRESET){
+        char *js = (char*) ev_data;
+        const machine_t *m = machine_active();
+        if(js != NULL && m != NULL && m->preset_load != NULL){
+            cJSON *node = cJSON_Parse(js);
+            if(node != NULL){
+                m->preset_load(node);
+                cJSON_Delete(node);
+                autosave_kick();
+            }
+        }
+        free(js);
         return;
     }
     // any user input may change a parameter — (re)arm the debounced state save,

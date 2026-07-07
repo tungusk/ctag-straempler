@@ -6,6 +6,13 @@
 
 static const char *TAG = "MACHINE";
 static const machine_t *s_active = NULL;
+static void (*s_web_cb)(const machine_t *) = NULL;
+
+void machine_set_web_cb(void (*cb)(const machine_t *m))
+{
+    s_web_cb = cb;
+    if (s_web_cb) s_web_cb(s_active);
+}
 
 const machine_t *machine_active(void) { return s_active; }
 
@@ -27,6 +34,7 @@ esp_err_t machine_activate(const machine_t *m)
         // and outputs silence on NULL; detach first and let the in-flight
         // block drain so stop() never frees memory under a running process()
         s_active = NULL;
+        if (s_web_cb) s_web_cb(NULL);   // drop web URIs before stop() frees state
         vTaskDelay(pdMS_TO_TICKS(5));
         if (old->stop) old->stop();
     }
@@ -38,6 +46,7 @@ esp_err_t machine_activate(const machine_t *m)
             return err;
         }
         s_active = m;
+        if (s_web_cb) s_web_cb(m);
     }
     return ESP_OK;
 }

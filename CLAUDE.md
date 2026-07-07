@@ -55,11 +55,15 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   runs in the audio task once per 64-sample block; no SD/heap/blocking there.
 - **Registry**: `main/machine_registry.c` is the ONLY file outside a machine's
   own component that may name a machine symbol. Registry (selector order):
-  Sampler / Sampler2 / Looper / Slicer / Granular / Glitch / Stub. **Stub is
-  now HIDDEN from the System→Machine selector** (skipped by name in
-  `machine_sel_def_handler`, `menu.c`) but stays in the registry as fallback +
-  proof target; the selector uses a parallel `machines[]` array so the hidden
-  entry doesn't desync the on-screen index.
+  Sampler / Sampler2 / Looper / Slicer / Granular / Glitch / Drums /
+  Freesound / Stub. **Stub is HIDDEN from the System→Machine selector**
+  (skipped by name in `machine_sel_def_handler`, `menu.c`) but stays in the
+  registry as fallback + proof target; the selector uses a parallel
+  `machines[]` array so the hidden entry doesn't desync the on-screen index.
+- **Machine web URIs**: a machine may publish REST endpoints served only while
+  it is active (`machine_ui_t.web_uris` = `const httpd_uri_t[]`); the core
+  registers/unregisters them on switch via `machine_set_web_cb()`
+  (machine_core ↔ rest-api, boot-order independent).
 - **Core owns**: boot, SD + sample library, TFT + menusys shell, encoder/UI
   events, WiFi + REST, CV acquisition, I2S transport, recording service.
   **Machine owns**: everything between input and output.
@@ -76,7 +80,7 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   with every real machine excluded and a stub-only registry. Run it after any
   change touching core or the registry.
 
-The seven machines (all working, all archived in `bin/`):
+The machines (all working; archives in `bin/`):
 - `machine_sampler` — classic, byte-identical, frozen fallback
 - `machine_sampler2` — `s2_`-prefixed fork: crop mode, signed CV matrix
   amounts, CV-addressable start/length, min-loop guard
@@ -85,22 +89,41 @@ The seven machines (all working, all archived in `bin/`):
   sensitivity dial-in screen
 - `machine_granular` — 16-grain cloud over a mono sample (raised-cosine grains)
 - `machine_glitch` — live-input stutter/beat-repeat (no SD), clock beat-sync
+- `machine_drumsampler` ("Drums") — up to 8 one-shot mono RAM pads. Direct
+  mode: per-pad routable CV trigger (`Trig In`) through a floor-tracking
+  Schmitt detector (absolute thresholds fail on bipolar/1V-oct idle levels)
+  with a Low/Med/High `Sensi` setting (knobs 5/8 halve patched CV); CV-select
+  mode: TRIG1/2 fire the pad addressed by a selector CV. Declick ramps +
+  retrigger fade; 2x2 pad grid in 4-voice mode, 4x2 in 8-voice; R/G/B hit flash.
+- `machine_freesound` — silent web-driven utility: freesound search/preview
+  download (`/fs/search`, `/fs/get`, `/fs/state`) and direct MP3-URL import
+  (`/fs/fetch`), decoding to `usr/` (mono→stereo expand, sidecar). Auth behind
+  `fs_auth` (OAuth-ready). Rejects non-44.1 kHz MP3s (no resampler).
 - `main/machine_stub.c` — silence; the unloadable-proof + safe fallback
 
 **Shared core services** (factored out of duplication):
 - `components/machine/clock.{h,c}` — `beatclock_t` CV clock detector (looper + glitch)
-- `components/util/sample_ram.{h,c}` — `sample_list()` / `sample_load()` for
-  loading usr/*.RAW into RAM (slicer + granular)
+- `components/util/sample_ram.{h,c}` — `sample_list()` / `sample_load()` +
+  `sample_list_shared()` (one sorted 224-entry browser list shared by
+  slicer/granular/drums — per-menu `[32]` caps silently hid fresh uploads)
 - `components/util/sd_lock.{h,c}` — global SD-bus mutex (see Code rules)
+- `components/util/mp3.{h,c}` — async decode + `decodeMP3FileSync()` (reports
+  channels + samprate; the decoder does NOT resample)
 
-**Roadmap (planned machines):** `/Users/arlo/.claude/plans/mighty-percolating-spindle.md`
-— a **Drum sampler** (CV-triggered one-shots; Direct mode = 8 CV→8 pads, plus a
-CV-select mode where TRIG1/2 fire a pad addressed by a selector CV, to dodge the
-flaky/broken CV channels), a **Freesound** utility machine (search + preview
-download now, OAuth-ready), a **Teleremote** remote-control utility, and a shared
-"machine-registers-REST-endpoints" hook they need. **Sampler3** (Sampler2
-split-screen fork) deferred. Original-import machine dropped (machine_sampler
-already IS the upstream v0.9 engine).
+**Teleremote (always-on core, NOT a machine):** `/remote/*` endpoints +
+"Remote" web tab — encoder events into the UI queue, soft trigger pulses
+(`audio_remote_trig()` pulls the active-low bits in the audio task), machine
+switch (`EV_REMOTE_MACHINE`, same path as the front panel), and a generic
+machine-settings editor (`/remote/params` = the machine's preset JSON through
+`preset_load` + autosave). Gated by **System→Settings→Remote** (persisted as
+`settings.remote` in CONFIG.JSN, applied live via `rest_remote_enable()`).
+
+**Roadmap status:** all phases of
+`/Users/arlo/.claude/plans/mighty-percolating-spindle.md` are BUILT and
+hardware-verified (drums, web-URI hook, freesound, import routes, teleremote).
+Still open: **Sampler3** (deferred fork), Freesound OAuth2, looper overdub,
+granular position-CV, glitch grid-align. Original-import machine dropped
+(machine_sampler already IS the upstream v0.9 engine).
 
 ## Web UI / REST
 
@@ -108,19 +131,27 @@ already IS the upstream v0.9 engine).
   auto-built** — after editing, regenerate `components/rest-api/include/index.html.h`
   with `html/convert.sh` (`xxd -i` + sed) or the change won't ship.
 - **Endpoints** (`rest-api.c`): `/status` (hot 500ms poll: machine, rec, v0/v1,
-  8 CV), `/sysinfo` (device IP + SD free/total via `f_getfree`, on-demand — not in
-  the hot poll), `/files` (**streamed**, name+size only, no sidecar reads — see the
-  PSRAM/DMA rule), `/files/raw` (download), `/settings`, `/drop_sample` (upload),
-  DELETE `/files`. Tabs: Files (⬇ download + ✕ delete), Upload, Settings (shows
-  Device IP). Device IP also appears on the on-device **System→Settings** screen
-  (`wifiGetIPString` tries STA then AP).
+  8 CV, trig bits), `/sysinfo` (IP + SD free/total + remote flag + machine list,
+  on-demand — not in the hot poll), `/files` (**streamed**, name+size only, no
+  sidecar reads — see the PSRAM/DMA rule), `/files/raw` (download), `/settings`,
+  `/drop_sample` (upload), DELETE `/files`, `/remote/*` (teleremote, gated),
+  plus the active machine's own URIs (e.g. `/fs/*`). Tabs: Files, Upload
+  (**converts any audio file in-browser** via Web Audio → 44.1k stereo RAW),
+  Freesound (search/Get + direct-URL fetch), Remote (monitor + controls +
+  machine settings form), Settings. Device IP also appears on the on-device
+  **System→Settings** screen (`wifiGetIPString` tries STA then AP).
+- **HTTPS from the device** needs `.crt_bundle_attach = esp_crt_bundle_attach`
+  in every `esp_http_client_config_t` — IDF 4.3 esp-tls REFUSES https with no
+  verification option (the upstream freesound code was silently broken by this).
 
 ## Working with the hardware (operational)
 
 - **Build**: `export PATH="$HOME/.espressif/tools/xtensa-esp32-elf/esp-2021r2-patch3-8.4.0/xtensa-esp32-elf/bin:$HOME/.espressif/tools/esp32ulp-elf/2.28.51-esp-20191205/esp32ulp-elf-binutils/bin:$PATH"; export IDF_PATH="$HOME/esp/esp-idf-v4.3"` then `idf.py build -DCMAKE_POLICY_VERSION_MINIMUM=3.5`.
 - **Flash**: port is `/dev/cu.usbserial-3110`; use the esptool invocation with
-  `--flash_size detect`. ALWAYS announce before flashing (it reboots the device)
-  and only flash on Arlo's explicit go — one flash per go.
+  `--flash_size detect`. ALWAYS announce before flashing (it reboots the
+  device). Autonomous flashing is the default during feature iteration; the
+  stricter one-flash-per-explicit-go regime applies when chasing crashes or
+  hardware faults (an unexpected reboot destroys evidence).
 - **Opening the serial port REBOOTS the device** even with rts/dtr deasserted,
   and occasionally drops it into ROM download mode (`boot:0x3 ... waiting for
   download`) — the display freezes on its last frame, looking like a hang.
