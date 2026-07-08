@@ -68,8 +68,6 @@ typedef struct {
     volatile float rate;           // current playback rate (UI display)
     volatile float phase_err;      // current beat phase error (UI display)
     volatile float speed_mult;     // knob7 while synced: x0.5 / x1 / x2, still locked
-    volatile float nudge;          // DJ pitch-bend from a single scrub detent;
-                                    // decays to 0 in deck_process (see deck_nudge)
 
     // DJ filter (knob6): centre = bypass, left = LP sweeping down,
     // right = HP sweeping up. Chamberlin SVF, one per channel.
@@ -95,6 +93,5 @@ int  deck_load_track(const char *name);   // select + start streaming + read sid
 void deck_toggle_play(void);              // play/pause (resumes at the cue point)
 void deck_restart(void);                  // jump to the downbeat
 void deck_seek_beats(int beats);          // grid-snapped scrub (± whole beats)
-void deck_nudge(int dir);                 // momentary pitch bend (± one detent)
 int  deck_analyze_start(void);            // spawn BPM/grid analysis of the track
 void deck_analysis_commit(void);          // adopt an_bpm/an_grid + write sidecar
