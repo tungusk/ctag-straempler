@@ -19,6 +19,7 @@ static const color_t ACCENT = {40, 200, 230};
 
 static char (*s_samples)[24] = NULL;
 static int  s_n_samples = 0, s_sample_idx = 0;
+static int  s_load_ret = M_DECK_SETUP;   // page the load browser returns to
 
 static void refresh_samples(void){
     s_n_samples = sample_list_shared(&s_samples);
@@ -144,7 +145,7 @@ static void live_full_redraw(void){
     draw_posbar();
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:scrub press:play k6:filt k7:x2", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:scrub press:tracks k6:filt k7:x2", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
@@ -170,7 +171,10 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             }
             break;
         }
-        case EV_SHORT_PRESS: deck_toggle_play(); break;
+        case EV_SHORT_PRESS:                         // press = track browser
+            refresh_samples();                       // (TR1/TR2 are the transport)
+            s_load_ret = M_DECK_LIVE;
+            return M_DECK_LOAD;
         case EV_FWD:  deck_seek_beats(+4); break;    // scrub one bar per detent
         case EV_BWD:  deck_seek_beats(-4); break;
         case EV_LONG_PRESS: return M_MAIN;
@@ -249,9 +253,17 @@ static int deck_setup_handler(int it_id, int event, void *ev_data){
     static int pos = 0, sel = 0;
     switch(event){
         case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
-        case EV_TIMER_REPEATING_SLOW:
-            if (dk.an_state == DK_AN_RUNNING || dk.an_state == DK_AN_DONE) setup_redraw(pos, sel);
+        case EV_TIMER_REPEATING_SLOW: {
+            // repaint per tick only while analysis runs (progress %); paint
+            // DONE/FAIL once on the transition — DONE persists after an
+            // analysis, and repainting it every tick strobed the screen
+            static int s_an_drawn = DK_AN_IDLE;
+            if (dk.an_state == DK_AN_RUNNING || dk.an_state != s_an_drawn){
+                s_an_drawn = dk.an_state;
+                setup_redraw(pos, sel);
+            }
             break;
+        }
         case EV_FWD:
             if(sel) setup_adj(pos, +1);
             else pos = (pos + 1) % DK_SETUP_N;
@@ -263,7 +275,7 @@ static int deck_setup_handler(int it_id, int event, void *ev_data){
             setup_redraw(pos, sel);
             break;
         case EV_SHORT_PRESS:
-            if(pos == 0){ refresh_samples(); return M_DECK_LOAD; }
+            if(pos == 0){ refresh_samples(); s_load_ret = M_DECK_SETUP; return M_DECK_LOAD; }
             if(pos == 7){ deck_analyze_start(); setup_redraw(pos, sel); break; }
             sel = !sel; setup_redraw(pos, sel);
             break;
@@ -317,9 +329,9 @@ static int deck_load_handler(int it_id, int event, void *ev_data){
         case EV_BWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + s_n_samples - 1) % s_n_samples; load_redraw(); } break;
         case EV_SHORT_PRESS:
             if(s_n_samples) deck_load_track(s_samples[s_sample_idx]);
-            return M_DECK_SETUP;
+            return s_load_ret;
         case EV_LONG_PRESS:
-            return M_DECK_SETUP;
+            return s_load_ret;
         default: break;
     }
     return 0;
