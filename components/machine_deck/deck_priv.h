@@ -17,7 +17,9 @@
 
 #define DK_RATE        44100
 #define DK_RING_FRAMES (DK_RATE * 8)          // 8 s stereo PSRAM ring (~1.4 MB)
-#define DK_LOW_WATER   (DK_RATE * 2)          // reader refills above this lead
+#define DK_LOW_WATER   (DK_RATE / 3)          // unmute once ~0.33 s is buffered
+                                              // (ring keeps filling to 8 s) —
+                                              // low so seeks/scrubs feel instant
 #define DK_NAME_LEN    24
 
 // analysis envelope: 256-frame hops (~172 Hz) — resolves ~±1 BPM at 120
@@ -51,6 +53,13 @@ typedef struct {
     volatile float rate;           // current playback rate (UI display)
     volatile float phase_err;      // current beat phase error (UI display)
 
+    // DJ filter (knob6): centre = bypass, left = LP sweeping down,
+    // right = HP sweeping up. Chamberlin SVF, one per channel.
+    volatile int filt_cv;          // raw knob (UI display)
+    float flt_f;                   // slewed coefficient
+    float lp_l, bp_l, lp_r, bp_r;  // SVF state
+    volatile int flt_mode;         // 0 off, 1 LP, 2 HP (UI display)
+
     // analysis
     volatile int an_state;         // DK_AN_*
     volatile int an_progress;      // 0..100
@@ -64,7 +73,8 @@ extern const char *const dk_ppb_names[5];
 
 // UI-side (SD-touching; call from UI/background tasks only)
 int  deck_load_track(const char *name);   // select + start streaming + read sidecar
-void deck_toggle_play(void);              // play/pause (restart at grid on play)
+void deck_toggle_play(void);              // play/pause (resumes at the cue point)
 void deck_restart(void);                  // jump to the downbeat
+void deck_seek_beats(int beats);          // grid-snapped scrub (± whole beats)
 int  deck_analyze_start(void);            // spawn BPM/grid analysis of the track
 void deck_analysis_commit(void);          // adopt an_bpm/an_grid + write sidecar
