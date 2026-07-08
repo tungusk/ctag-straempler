@@ -81,6 +81,7 @@ typedef struct {
     // analysis
     volatile int an_state;         // DK_AN_*
     volatile int an_progress;      // 0..100
+    volatile bool an_auto_req;     // auto-analyze queued behind a running one
     volatile float an_bpm;         // result before commit
     volatile uint32_t an_grid;
 } dk_state_t;
