@@ -280,9 +280,15 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
 
     int frames = MACHINE_BLOCK / 2;
     static float last_l = 0, last_r = 0;
+    bool starved = false;
     for (int fno = 0; fno < frames; fno++) {
         uint32_t avail_to = dk.wpos < dk.file_frames ? dk.wpos : dk.file_frames;
         bool can_play = dk.playing && !dk.loading && dk.rpos_i + 1 < avail_to;
+        // mid-track mute with the reader as the limiter = ring underrun;
+        // counted per block into /status so click reports are attributable
+        if (!can_play && dk.playing && !dk.loading && !dk.seek_req &&
+            dk.file_frames && dk.rpos_i + 1 < dk.file_frames)
+            starved = true;
         // declick both edges: gain ramps in on resume; on mute the last
         // sample decays out instead of stepping to zero (each scrub detent
         // used to click — "beeps")
@@ -329,6 +335,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         dk.rpos_f += rate;
         while (dk.rpos_f >= 1.0) { dk.rpos_f -= 1.0; dk.rpos_i++; }
     }
+    if (starved) dk.dbg_starve++;
 
     // clock conditioning: track the channel floor (dips follow instantly,
     // drifts back up slowly), Schmitt relative to it, and feed the detector
