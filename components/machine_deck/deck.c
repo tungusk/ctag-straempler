@@ -174,8 +174,10 @@ static esp_err_t deck_start(void)
     dk.sync = true;
     dk.loop = true;
     dk.clk_src = 7;          // CV8, same convention as glitch
-    dk.ppb_idx = 2;          // 1 pulse per beat
+    dk.ppb_idx = 4;          // 4 pulses per beat — the modular norm (4 PPQN)
     dk.rate = 1.0f;
+    dk.rate_sm = 1.0f;
+    dk.clk_base = 4095;      // floor tracker converges down on first reads
     clock_reset(&dk.clk);
     s_run = true;
     // unpinned: file-reading tasks pinned to core 0 cause WiFi audio clicks
@@ -270,6 +272,10 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     }
     if (rate < 0.25f) rate = 0.25f;
     if (rate > 2.5f) rate = 2.5f;
+    // ~18 ms slew: clock edge jitter shifts the target rate in steps; the
+    // slew turns that into inaudible drift instead of pitch warble
+    dk.rate_sm += 0.08f * (rate - dk.rate_sm);
+    rate = dk.rate_sm;
     dk.rate = rate;
 
     int frames = MACHINE_BLOCK / 2;
@@ -324,9 +330,26 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         while (dk.rpos_f >= 1.0) { dk.rpos_f -= 1.0; dk.rpos_i++; }
     }
 
-    // clock detector runs every frame regardless (it needs the CV stream)
-    uint16_t ccv = io->cv[dk.clk_src & 7];
-    for (int fno = 0; fno < frames; fno++) clock_tick(&dk.clk, ccv);
+    // clock conditioning: track the channel floor (dips follow instantly,
+    // drifts back up slowly), Schmitt relative to it, and feed the detector
+    // a clean synthesized square — works on any channel at any attenuation
+    // scale the detector's sanity gate to the expected PULSE rate — with the
+    // default 20..300 BPM gate a 4 PPQN clock's every interval is rejected
+    // and the BPM is assembled purely from missed-edge garbage
+    float gppb = dk_ppb[dk.ppb_idx];
+    dk.clk.period_min = (uint32_t)(44100.0f * 60.0f / (320.0f * gppb));
+    dk.clk.period_max = (uint32_t)(44100.0f * 60.0f / (15.0f * gppb));
+
+    int ccv = io->cv[dk.clk_src & 7];
+    if (ccv < dk.clk_base) dk.clk_base = ccv;
+    else if (dk.clk_base < 4095) dk.clk_base++;
+    if (!dk.clk_high) {
+        if (ccv >= dk.clk_base + 900) dk.clk_high = true;
+    } else if (ccv < dk.clk_base + 350) {
+        dk.clk_high = false;
+    }
+    uint16_t synth = dk.clk_high ? 4095 : 0;
+    for (int fno = 0; fno < frames; fno++) clock_tick(&dk.clk, synth);
 }
 
 // ---- preset -------------------------------------------------------------------

@@ -12,10 +12,17 @@ typedef struct {
     uint32_t since;          // samples since last rising edge
     uint32_t ring[8];
     int      ring_n;
-    uint32_t period;         // averaged samples per quarter (0 = none)
+    uint32_t period;         // median samples per pulse (0 = none)
     uint32_t idle;           // samples since last edge (lock timeout)
-    float    bpm;
+    float    bpm;            // pulse rate as BPM (divide by PPB yourself)
     bool     locked;
+    // pulse-interval sanity gate. clock_reset() sets 20..300 BPM (the
+    // looper/glitch 1-pulse-per-beat assumption); a machine expecting
+    // faster/slower pulses (e.g. the deck at 4 PPQN) MUST widen these or
+    // every legitimate interval is rejected and the BPM readout is built
+    // from missed-edge garbage.
+    uint32_t period_min;     // samples
+    uint32_t period_max;
 } beatclock_t;
 
 void clock_reset(beatclock_t *c);
