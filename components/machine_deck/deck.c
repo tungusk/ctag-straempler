@@ -343,8 +343,14 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     int ccv = io->cv[dk.clk_src & 7];
     if (ccv < dk.clk_base) dk.clk_base = ccv;
     else if (dk.clk_base < 4095) dk.clk_base++;
+    dk.dbg_since += (uint32_t)frames;
     if (!dk.clk_high) {
-        if (ccv >= dk.clk_base + 900) dk.clk_high = true;
+        if (ccv >= dk.clk_base + 900) {
+            dk.clk_high = true;
+            dk.dbg_edges++;                    // raw fire, pre-gate
+            dk.dbg_iv = dk.dbg_since;
+            dk.dbg_since = 0;
+        }
     } else if (ccv < dk.clk_base + 350) {
         dk.clk_high = false;
     }

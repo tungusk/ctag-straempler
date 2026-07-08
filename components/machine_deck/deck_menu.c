@@ -40,7 +40,14 @@ static int s_last_dbpm = -1;
 // the number that matters, BIG: the tempo actually playing right now
 // (track bpm x current rate = the external tempo when locked)
 static void draw_big_bpm(void){
-    float bpm = dk.track_bpm > 0 ? dk.track_bpm * dk.rate : 0;
+    // locked: show the TARGET tempo (steady) — the instantaneous rate
+    // legitimately wobbles a few % while the PLL corrects phase, which made
+    // the big number dance even with a perfect clock
+    float bpm;
+    if (dk.sync && dk.clk.locked && dk.clk.bpm > 0)
+        bpm = dk.clk.bpm / dk_ppb[dk.ppb_idx] * dk.speed_mult;
+    else
+        bpm = dk.track_bpm > 0 ? dk.track_bpm * dk.rate : 0;
     int d = (int)(bpm * 10.0f + 0.5f);
     if (d == s_last_dbpm) return;
     s_last_dbpm = d;
@@ -160,10 +167,12 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             if (event == EV_TIMER_REPEATING_SLOW){
                 // engine internals through /status (v1) for remote debugging
                 char dbg[32];
-                snprintf(dbg, sizeof(dbg), "%c%c w%lu r%lu f%lu",
-                         dk.playing ? 'P' : 's', dk.loading ? 'L' : '-',
-                         (unsigned long)dk.wpos, (unsigned long)dk.rpos_i,
-                         (unsigned long)dk.file_frames);
+                snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d",
+                         dk.playing ? 'P' : 's',
+                         (unsigned long)dk.dbg_edges,
+                         (unsigned long)(dk.dbg_iv / 44),        // ms between fires
+                         (unsigned long)(dk.clk.period / 44),    // ms accepted period
+                         (int)(dk.phase_err * 100));             // PLL convergence
                 audio_status_set_voices("deck", dbg);
             }
             break;
