@@ -117,10 +117,11 @@ static color_t tbar_bg(void){
 }
 
 static void draw_posbar_frame(void){
-    _bg = tbar_bg();
-    TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, _bg);
+    TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, tbar_bg());
     _fg = (color_t){70, 70, 90};
     TFT_drawRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, _fg);
+    _bg = TFT_BLACK;      // _bg is a shared global — leaking the bar color
+                          // painted the hint line's text background blue
     s_last_barx = -1;
     s_bar_playing = dk.playing;
 }
