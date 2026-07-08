@@ -116,7 +116,13 @@ int deck_load_track(const char *name)
             dk.grid_offset = (uint32_t)j->valuedouble;
         cJSON_Delete(root);
     }
-    dk.an_state = DK_AN_IDLE;
+    if (dk.an_state != DK_AN_RUNNING) dk.an_state = DK_AN_IDLE;
+    if (dk.track_bpm <= 0) {
+        // no cached analysis: analyze now (runs fine alongside playback); if
+        // a previous track's run is still going, queue behind it (menu tick
+        // fires it when the runner exits)
+        if (deck_analyze_start() != 0) dk.an_auto_req = true;
+    }
     return 0;
 }
 

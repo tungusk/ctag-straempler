@@ -28,6 +28,14 @@ static void refresh_samples(void){
         if (strcmp(s_samples[i], dk.track) == 0) { s_sample_idx = i; break; }
 }
 
+// auto-analysis queued behind a still-running previous run (rapid loads)
+static void an_auto_poll(void){
+    if (dk.an_auto_req && dk.an_state != DK_AN_RUNNING){
+        dk.an_auto_req = false;
+        deck_analyze_start();
+    }
+}
+
 // ---- Live -------------------------------------------------------------------
 // Redraw discipline: everything is change-driven. Full-region repaints every
 // timer tick made the whole screen strobe (Arlo, first hardware test).
@@ -70,6 +78,10 @@ static void draw_info(void){
              dk.track_bpm, dk.playing ? (dk.loading ? "BUF" : "PLAY") : "STOP",
              dk.speed_mult == 0.5f ? ".5" : (dk.speed_mult == 2.0f ? "2" : "1"),
              dk.flt_mode == 1 ? "LP" : (dk.flt_mode == 2 ? "HP" : ""));
+    if (dk.an_state == DK_AN_RUNNING){
+        size_t l = strlen(s1);
+        snprintf(s1 + l, sizeof(s1) - l, "  an%d%%", dk.an_progress);
+    }
     if (dk.sync){
         if (dk.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK",
                                     dk.clk.bpm / dk_ppb[dk.ppb_idx]);
@@ -154,6 +166,7 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
         case EV_ENTERED_MENU: live_full_redraw(); break;
         case EV_TIMER_REPEATING_FAST:
         case EV_TIMER_REPEATING_SLOW: {
+            an_auto_poll();
             draw_big_bpm();
             draw_info();
             draw_posbar();
@@ -254,6 +267,7 @@ static int deck_setup_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
         case EV_TIMER_REPEATING_SLOW: {
+            an_auto_poll();
             // repaint per tick only while analysis runs (progress %); paint
             // DONE/FAIL once on the transition — DONE persists after an
             // analysis, and repainting it every tick strobed the screen

@@ -20,14 +20,21 @@
 static const char *TAG = "DECK-AN";
 #define ENV_RATE (44100.0f / DK_HOP)
 
+// the track this run is analysing, snapshotted at start: a new load can
+// race a running analysis, and resolving dk.track at commit time stamped
+// the OLD track's bpm into the NEW track's sidecar
+static char s_an_track[DK_NAME_LEN];
+
 void deck_analysis_commit(void)
 {
     if (dk.an_state != DK_AN_DONE || dk.an_bpm <= 0) return;
-    dk.track_bpm = dk.an_bpm;
-    dk.grid_offset = dk.an_grid;
+    if (strcmp(s_an_track, dk.track) == 0) {   // adopt live only if still loaded
+        dk.track_bpm = dk.an_bpm;
+        dk.grid_offset = dk.an_grid;
+    }
 
     char jp[64];
-    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", dk.track);
+    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", s_an_track);
     cJSON *root = readJSONFileAsCJSON(jp);
     if (!root) root = cJSON_CreateObject();
     cJSON_DeleteItemFromObjectCaseSensitive(root, "bpm");
@@ -37,13 +44,13 @@ void deck_analysis_commit(void)
     char *s = cJSON_Print(root);
     cJSON_Delete(root);
     if (s) { writeJSONFile(jp, s); free(s); }
-    ESP_LOGI(TAG, "%s: %.2f BPM, grid %lu (cached)", dk.track, dk.an_bpm, (unsigned long)dk.an_grid);
+    ESP_LOGI(TAG, "%s: %.2f BPM, grid %lu (cached)", s_an_track, dk.an_bpm, (unsigned long)dk.an_grid);
 }
 
 static void analysis_task(void *pv)
 {
     char path[64];
-    snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", dk.track);
+    snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", s_an_track);
 
     float *env = heap_caps_malloc(DK_ENV_MAX * sizeof(float), MALLOC_CAP_SPIRAM);
     // 16 hops per read (16 KB): 1 KB reads made analysis crawl (~30k SD
@@ -163,6 +170,7 @@ static void analysis_task(void *pv)
 int deck_analyze_start(void)
 {
     if (!dk.track[0] || dk.an_state == DK_AN_RUNNING) return -1;
+    strlcpy(s_an_track, dk.track, sizeof(s_an_track));
     dk.an_state = DK_AN_RUNNING;
     dk.an_progress = 0;
     // unpinned (reads files); modest priority so audio + reader stay smooth
