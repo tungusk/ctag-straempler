@@ -92,12 +92,11 @@ static void analysis_task(void *pv)
         }
         dk.an_progress = (int)((uint64_t)n * 70 / total_hops);
         if (got_hops < hops) break;      // EOF/short read
-        // pace by transport: streaming playback needs the SD-courtesy gap
-        // every chunk, but an idle deck can take the bus at full stride —
-        // 10 ms per 16 KB capped analysis at ~1.6 MB/s, which read as
-        // "stuck at 6%" on long tracks (analysis covers the first ~5 min)
-        if (dk.playing) vTaskDelay(1);
-        else if (((n / AN_CHUNK_HOPS) & 7) == 0) vTaskDelay(1);
+        // the 10 ms gap caps analysis at ~1.6 MB/s (long tracks take a
+        // minute), but it is LOAD-BEARING even when the deck is stopped:
+        // full-stride reads starved the bus and murdered the audio (Arlo,
+        // 2026-07-08). Don't remove it; analysis is slow on purpose.
+        vTaskDelay(1);
     }
     sd_lock_take();
     fclose(f);
