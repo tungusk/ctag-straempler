@@ -6,6 +6,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include <esp_http_server.h>
 #include "menusys.h"
 #include "menu_types.h"
 #include "ui_events.h"
@@ -281,10 +282,15 @@ static void tracker_register_pages(void *menusys){
 static const char *const tracker_main_items[] = {"Live", "Setup"};
 static const int tracker_main_targets[] = {M_TRACKER_LIVE, M_TRACKER_SETUP};
 
+extern const httpd_uri_t tracker_web_uris[];
+extern const int tracker_web_n_uris;
+
 const machine_ui_t tracker_menu_ui = {
     .main_items = tracker_main_items,
     .main_targets = tracker_main_targets,
     .n_main = 2,
     .register_pages = tracker_register_pages,
     .boot_target = M_TRACKER_LIVE,
+    .web_uris = tracker_web_uris,
+    .n_web_uris = 1,
 };
