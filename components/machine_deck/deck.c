@@ -132,8 +132,40 @@ void deck_restart(void)
 
 void deck_toggle_play(void)
 {
-    if (dk.playing) dk.playing = false;
-    else deck_restart();
+    if (dk.playing) { dk.playing = false; return; }
+    if (!dk.track[0]) return;
+    // resume from the current (possibly scrubbed) position — the cue point;
+    // TR1 is the "from the top of the grid" restart
+    uint32_t to = dk.rpos_i;
+    if (to >= dk.file_frames)
+        to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;
+    dk.loading = true;
+    dk.rpos_i = to;
+    dk.rpos_f = 0;
+    dk.seek_to = to;
+    dk.seek_req = true;
+    dk.playing = true;
+}
+
+void deck_seek_beats(int beats)
+{
+    if (!dk.track[0] || !dk.file_frames) return;
+    uint32_t beat_tf = (dk.track_bpm > 20.0f)
+        ? (uint32_t)(60.0f * DK_RATE / dk.track_bpm)
+        : DK_RATE;                              // no grid yet: 1 s steps
+    // snap current position to the nearest grid beat, then step whole beats —
+    // scrubbing during sync'd playback lands phase-true by construction
+    int64_t rel = (int64_t)dk.rpos_i - (int64_t)dk.grid_offset;
+    int64_t idx = (rel >= 0) ? (rel + beat_tf / 2) / beat_tf
+                             : -(((-rel) + beat_tf / 2) / beat_tf);
+    int64_t tgt = (int64_t)dk.grid_offset + (idx + beats) * (int64_t)beat_tf;
+    if (tgt < 0) tgt = 0;
+    if (tgt > (int64_t)dk.file_frames - 1) tgt = (int64_t)dk.file_frames - 1;
+    dk.loading = true;                          // brief mute while the ring refills
+    dk.rpos_i = (uint32_t)tgt;
+    dk.rpos_f = 0;
+    dk.seek_to = (uint32_t)tgt;
+    dk.seek_req = true;                         // playing state stays as-is
 }
 
 // ---- engine -----------------------------------------------------------------
@@ -179,6 +211,28 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     if (pressed & 1) deck_restart();
 
     dk.pitch_cv = io->cv[6];   // knob7 = free-run rate when sync is off
+
+    // DJ filter from knob6: centre dead zone = bypass; left half sweeps a
+    // low-pass down (12 kHz -> 80 Hz), right half a high-pass up (30 Hz ->
+    // 6 kHz). Exponential sweeps; coefficient slewed per block (no zipper).
+    int fcv = io->cv[5];
+    dk.filt_cv = fcv;
+    int mode = 0;
+    float fc = 0;
+    if (fcv < 2048 - 150) {              // LP zone
+        mode = 1;
+        float t = (float)fcv / (2048.0f - 150.0f);          // 1..0 as knob goes left
+        fc = 80.0f * powf(150.0f, t);                       // 80 Hz .. 12 kHz
+    } else if (fcv > 2048 + 150) {       // HP zone
+        mode = 2;
+        float t = (float)(fcv - 2048 - 150) / (4095.0f - 2048.0f - 150.0f);
+        fc = 30.0f * powf(200.0f, t);                       // 30 Hz .. 6 kHz
+    }
+    dk.flt_mode = mode;
+    float f_target = mode ? 2.0f * sinf(3.14159265f * fc / (float)DK_RATE) : 0;
+    if (f_target > 1.2f) f_target = 1.2f;
+    dk.flt_f += 0.2f * (f_target - dk.flt_f);
+    const float q = 0.9f;                // mild resonance, DJ-ish
 
     // playback rate
     float rate = 1.0f;
@@ -230,6 +284,23 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         float fr = (float)dk.rpos_f;
         float l = (float)dk.ring[i0 * 2]     + ((float)dk.ring[i1 * 2]     - (float)dk.ring[i0 * 2])     * fr;
         float r = (float)dk.ring[i0 * 2 + 1] + ((float)dk.ring[i1 * 2 + 1] - (float)dk.ring[i0 * 2 + 1]) * fr;
+        if (mode) {                       // Chamberlin SVF per channel
+            dk.lp_l += dk.flt_f * dk.bp_l;
+            float hi_l = l - dk.lp_l - q * dk.bp_l;
+            dk.bp_l += dk.flt_f * hi_l;
+            l = (mode == 1) ? dk.lp_l : hi_l;
+            dk.lp_r += dk.flt_f * dk.bp_r;
+            float hi_r = r - dk.lp_r - q * dk.bp_r;
+            dk.bp_r += dk.flt_f * hi_r;
+            r = (mode == 1) ? dk.lp_r : hi_r;
+            if (l > 32767) l = 32767;
+            if (l < -32768) l = -32768;
+            if (r > 32767) r = 32767;
+            if (r < -32768) r = -32768;
+        } else {
+            dk.lp_l = l; dk.bp_l = 0;     // park state at the signal: no thump
+            dk.lp_r = r; dk.bp_r = 0;     // when the filter re-engages
+        }
         out[fno * 2]     = ((int32_t)l) << 16;
         out[fno * 2 + 1] = ((int32_t)r) << 16;
         dk.rpos_f += rate;

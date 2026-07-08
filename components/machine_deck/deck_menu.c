@@ -11,6 +11,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "audio.h"
 #include "sample_ram.h"
 #include "deck_priv.h"
 
@@ -28,44 +29,63 @@ static void refresh_samples(void){
 }
 
 // ---- Live -------------------------------------------------------------------
+// Redraw discipline: everything is change-driven. Full-region repaints every
+// timer tick made the whole screen strobe (Arlo, first hardware test).
 static int s_last_beat = -1;
 static int s_last_barx = -1;
+static bool s_beat_lit = false;
+static char s_info1[64] = "", s_info2[64] = "";
 
 static void draw_info(void){
     int fh = TFT_getfontheight();
     int y = fh + 42;
-    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, (fh + 6) * 2, _bg);
-    _fg = TFT_WHITE;
-    char s[64];
-    snprintf(s, sizeof(s), "trk %.1f bpm  %s  rate %d%%",
+    char s1[64], s2[64];
+    snprintf(s1, sizeof(s1), "trk %.1f bpm  %s  rate %d%%  %s",
              dk.track_bpm, dk.playing ? (dk.loading ? "BUF" : "PLAY") : "STOP",
-             (int)(dk.rate * 100));
-    TFT_print(s, 8, y);
+             (int)(dk.rate * 100),
+             dk.flt_mode == 1 ? "LP" : (dk.flt_mode == 2 ? "HP" : ""));
     if (dk.sync){
-        _fg = dk.clk.locked ? (color_t){40, 200, 90} : TFT_LIGHTGREY;
-        if (dk.clk.locked) snprintf(s, sizeof(s), "ext %.1f bpm  LOCK  err %+d%%",
+        if (dk.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK  err %+d%%",
                                     dk.clk.bpm / dk_ppb[dk.ppb_idx], (int)(dk.phase_err * 100));
-        else snprintf(s, sizeof(s), "ext: waiting for clock on CV%d", dk.clk_src + 1);
-        TFT_print(s, 8, y + fh + 6);
+        else snprintf(s2, sizeof(s2), "ext: waiting for clock on CV%d", dk.clk_src + 1);
+    } else s2[0] = 0;
+    if (strcmp(s1, s_info1) != 0){
+        strcpy(s_info1, s1);
+        _bg = TFT_BLACK; TFT_fillRect(0, y, _width, fh + 4, _bg);
+        _fg = TFT_WHITE;
+        TFT_print(s1, 8, y);
+    }
+    if (strcmp(s2, s_info2) != 0){
+        strcpy(s_info2, s2);
+        _bg = TFT_BLACK; TFT_fillRect(0, y + fh + 6, _width, fh + 4, _bg);
+        _fg = dk.clk.locked ? (color_t){40, 200, 90} : TFT_LIGHTGREY;
+        if (s2[0]) TFT_print(s2, 8, y + fh + 6);
     }
 }
 
-static void draw_posbar(void){
+static void draw_posbar_frame(void){
     int y = _height - 46;
     _bg = (color_t){20, 22, 30};
     TFT_fillRect(8, y, _width - 16, 12, _bg);
     _fg = (color_t){70, 70, 90};
     TFT_drawRect(8, y, _width - 16, 12, _fg);
-    if (dk.file_frames){
-        int x = 8 + (int)((uint64_t)dk.rpos_i * (_width - 16) / dk.file_frames);
-        if (x != s_last_barx){
-            TFT_fillRect(x - 1, y + 1, 3, 10, ACCENT);
-            s_last_barx = x;
-        }
-    }
+    s_last_barx = -1;
+}
+
+static void draw_posbar(void){
+    if (!dk.file_frames) return;
+    int y = _height - 46;
+    int x = 9 + (int)((uint64_t)dk.rpos_i * (_width - 20) / dk.file_frames);
+    if (x == s_last_barx) return;
+    if (s_last_barx > 0)                      // erase only the old marker slice
+        TFT_fillRect(s_last_barx - 1, y + 1, 3, 10, (color_t){20, 22, 30});
+    TFT_fillRect(x - 1, y + 1, 3, 10, ACCENT);
+    s_last_barx = x;
 }
 
 static void draw_beat(bool on){
+    if (on == s_beat_lit) return;             // change-driven only
+    s_beat_lit = on;
     int fh = TFT_getfontheight();
     color_t c = on ? BEAT : (color_t){30, 30, 36};
     TFT_fillCircle(_width - 26, fh + 52, 12, c);
@@ -82,15 +102,18 @@ static void live_full_redraw(void){
     snprintf(nm, sizeof(nm), "%.12s", dk.track[0] ? dk.track : "(no track)");
     TFT_print(nm, 8, TFT_getfontheight() + 4);
     cfont = f;
+    s_info1[0] = 0;
+    s_info2[0] = 0;
+    s_beat_lit = true;      // force the first draw_beat(false) to paint
     draw_info();
+    draw_posbar_frame();
     draw_posbar();
     draw_beat(false);
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("press:play/stop  TR1:restart  knob7:rate(free)", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:scrub 1bar  press:play  TR1:restart  knob6:filt", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
     s_last_beat = -1;
-    s_last_barx = -1;
 }
 
 static int deck_live_handler(int it_id, int event, void *ev_data){
@@ -103,14 +126,23 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             if (dk.track_bpm > 20 && dk.playing){
                 uint32_t beat_tf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
                 int beat = (int)(((int64_t)dk.rpos_i - (int64_t)dk.grid_offset) / (int64_t)beat_tf);
-                if (beat != s_last_beat){ draw_beat((beat & 3) == 0 || beat != s_last_beat); s_last_beat = beat; }
+                if (beat != s_last_beat){ draw_beat(true); s_last_beat = beat; }
                 else draw_beat(false);
+            } else draw_beat(false);
+            if (event == EV_TIMER_REPEATING_SLOW){
+                // engine internals through /status (v1) for remote debugging
+                char dbg[32];
+                snprintf(dbg, sizeof(dbg), "%c%c w%lu r%lu f%lu",
+                         dk.playing ? 'P' : 's', dk.loading ? 'L' : '-',
+                         (unsigned long)dk.wpos, (unsigned long)dk.rpos_i,
+                         (unsigned long)dk.file_frames);
+                audio_status_set_voices("deck", dbg);
             }
             break;
         }
         case EV_SHORT_PRESS: deck_toggle_play(); break;
-        case EV_FWD:  dk.grid_offset += DK_RATE / 100; break;   // nudge grid +10 ms
-        case EV_BWD:  if (dk.grid_offset >= DK_RATE / 100) dk.grid_offset -= DK_RATE / 100; break;
+        case EV_FWD:  deck_seek_beats(+4); break;    // scrub one bar per detent
+        case EV_BWD:  deck_seek_beats(-4); break;
         case EV_LONG_PRESS: return M_MAIN;
         default: break;
     }
@@ -118,8 +150,8 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup --------------------------------------------------------------------
-static const char *setup_labels[] = {"Track", "Sync", "Clock Src", "Clock", "Loop", "BPM", "Analyze"};
-#define DK_SETUP_N 7
+static const char *setup_labels[] = {"Track", "Sync", "Clock Src", "Clock", "Loop", "BPM", "Grid Nudge", "Analyze"};
+#define DK_SETUP_N 8
 
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -144,7 +176,8 @@ static void setup_redraw(int pos, int sel){
                 if (dk.track_bpm > 0) snprintf(v, sizeof(v), "%.1f", dk.track_bpm);
                 else snprintf(v, sizeof(v), "?");
                 break;
-            case 6:
+            case 6: snprintf(v, sizeof(v), "%lums", (unsigned long)(dk.grid_offset * 1000 / DK_RATE)); break;
+            case 7:
                 if (dk.an_state == DK_AN_RUNNING) snprintf(v, sizeof(v), "%d%%", dk.an_progress);
                 else if (dk.an_state == DK_AN_DONE) snprintf(v, sizeof(v), "%.1f bpm", dk.an_bpm);
                 else if (dk.an_state == DK_AN_FAIL) snprintf(v, sizeof(v), "FAILED");
@@ -173,6 +206,12 @@ static void setup_adj(int i, int dir){
             dk.track_bpm = b;
             break;
         }
+        case 6: {
+            int32_t g = (int32_t)dk.grid_offset + dir * (DK_RATE / 100);   // ±10 ms
+            if (g < 0) g = 0;
+            dk.grid_offset = (uint32_t)g;
+            break;
+        }
     }
 }
 
@@ -195,7 +234,7 @@ static int deck_setup_handler(int it_id, int event, void *ev_data){
             break;
         case EV_SHORT_PRESS:
             if(pos == 0){ refresh_samples(); return M_DECK_LOAD; }
-            if(pos == 6){ deck_analyze_start(); setup_redraw(pos, sel); break; }
+            if(pos == 7){ deck_analyze_start(); setup_redraw(pos, sel); break; }
             sel = !sel; setup_redraw(pos, sel);
             break;
         case EV_LONG_PRESS: return M_MAIN;
