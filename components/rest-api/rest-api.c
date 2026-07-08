@@ -211,7 +211,10 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
         n = fread(buf, 1, STREAM_CHUNK, f);
         sd_lock_give();
         if (n <= 0) break;
-        httpd_resp_send_chunk(req, buf, n);
+        // a client that disconnects mid-download must abort the stream, or
+        // this loop pumps the rest of the file at a dead socket with the
+        // (single-threaded) httpd wedged and the SD bus busy the whole time
+        if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) break;
         vTaskDelay(1);
     }
     httpd_resp_send_chunk(req, NULL, 0);
