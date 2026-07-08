@@ -163,21 +163,6 @@ void deck_seek_beats(int beats)
     dk.seek_req = true;                         // reader applies rpos; play state stays
 }
 
-// momentary pitch bend from a single (slow) scrub detent — a DJ nudge, not a
-// seek: bumps rate by a small amount that decays back to 0 in deck_process
-// (DK_NUDGE_DECAY). Repeated nudges in the same direction within the decay
-// window stack, clamped, so a few slow clicks in a row bend further/longer.
-#define DK_NUDGE_STEP  0.045f
-#define DK_NUDGE_MAX   0.15f
-void deck_nudge(int dir)
-{
-    if (!dk.track[0]) return;
-    float n = dk.nudge + dir * DK_NUDGE_STEP;
-    if (n >  DK_NUDGE_MAX) n =  DK_NUDGE_MAX;
-    if (n < -DK_NUDGE_MAX) n = -DK_NUDGE_MAX;
-    dk.nudge = n;
-}
-
 // ---- engine -----------------------------------------------------------------
 static esp_err_t deck_start(void)
 {
@@ -285,13 +270,6 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         else if (pc > 2253) rate = 1.0f + (float)(pc - 2253) / 1842.0f;
         else                rate = 0.5f + (float)pc / 1843.0f * 0.5f;
     }
-    // DJ nudge: apply the current pitch-bend on top of the base/locked rate,
-    // then decay it toward 0 — a real detent, not a held control, so it must
-    // fade on its own rather than snap back
-    rate *= (1.0f + dk.nudge);
-    dk.nudge *= 0.9892f;               // ~5% left after ~400 ms at 64-sample blocks
-    if (fabsf(dk.nudge) < 0.001f) dk.nudge = 0;
-
     if (rate < 0.25f) rate = 0.25f;
     if (rate > 2.5f) rate = 2.5f;
     // ~18 ms slew: clock edge jitter shifts the target rate in steps; the

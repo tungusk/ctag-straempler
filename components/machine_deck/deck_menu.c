@@ -14,7 +14,6 @@
 #include "audio.h"
 #include "sample_ram.h"
 #include "deck_priv.h"
-#include "esp_timer.h"
 
 static const color_t ACCENT = {40, 200, 230};
 static const color_t BEAT   = {240, 200, 40};
@@ -151,21 +150,6 @@ static void live_full_redraw(void){
     s_last_beat = -1;
 }
 
-// A fast run of detents (real spinning) still jumps a bar each; a lone or
-// slow detent instead reads as a tiny pitch-bend nudge. Classified purely by
-// the gap since the last detent — no separate "spin" state to fall out of
-// sync with the encoder.
-#define DK_SPIN_GAP_US 130000
-static int64_t s_last_detent_us = 0;
-
-static void deck_scrub_or_nudge(int dir){
-    int64_t now = esp_timer_get_time();
-    bool fast = (now - s_last_detent_us) < DK_SPIN_GAP_US;
-    s_last_detent_us = now;
-    if (fast) deck_seek_beats(dir * 4);   // scrub one bar per detent
-    else      deck_nudge(dir);
-}
-
 static int deck_live_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU: live_full_redraw(); break;
@@ -194,11 +178,8 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             break;
         }
         case EV_SHORT_PRESS: deck_toggle_play(); break;
-        // Fast spin (detents arriving quickly) still scrubs a bar at a time;
-        // a lone/slow detent instead gives a tiny DJ pitch-bend nudge — the
-        // encoder itself decides which by how fast the clicks are coming in
-        case EV_FWD: deck_scrub_or_nudge(+1); break;
-        case EV_BWD: deck_scrub_or_nudge(-1); break;
+        case EV_FWD:  deck_seek_beats(+4); break;    // scrub one bar per detent
+        case EV_BWD:  deck_seek_beats(-4); break;
         case EV_LONG_PRESS: return M_MAIN;
         default: break;
     }
