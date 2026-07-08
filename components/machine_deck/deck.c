@@ -236,11 +236,18 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     uint32_t beat_tf = 0;      // track frames per beat at nominal rate
     if (dk.track_bpm > 20.0f) beat_tf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
     if (dk.sync) {
+        // knob7 = musical speed while synced: half-time / straight / double,
+        // snapped so the lock stays meaningful (continuous rates would slide
+        // off the grid). Free-run (sync off) keeps the continuous knob.
+        float m = 1.0f;
+        if (dk.pitch_cv < 1024) m = 0.5f;
+        else if (dk.pitch_cv > 3072) m = 2.0f;
+        dk.speed_mult = m;
         if (dk.clk.locked && dk.clk.period > 0 && beat_tf > 0) {
             float ppb = dk_ppb[dk.ppb_idx];
             // pulse-level phase lock (works for any mult/div): compare phase
             // within one external pulse against the track's matching segment
-            float seg_tf = (float)beat_tf / ppb;               // track frames per pulse
+            float seg_tf = (float)beat_tf / ppb * m;           // track frames per pulse
             float base = seg_tf / (float)dk.clk.period;        // nominal rate
             float p_ext = (float)dk.clk.since / (float)dk.clk.period;
             if (p_ext > 1.0f) p_ext = 1.0f;
@@ -252,7 +259,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
             rate = base * (1.0f + 0.08f * err);
             dk.phase_err = err;
         } else {
-            rate = 1.0f;       // no clock yet: play straight
+            rate = m;          // no clock yet: play straight (times the speed knob)
         }
     } else {
         // free run: knob7, unity plateau around centre (same feel as glitch)

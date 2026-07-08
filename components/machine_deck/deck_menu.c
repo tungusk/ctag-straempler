@@ -35,14 +35,35 @@ static int s_last_beat = -1;
 static int s_last_barx = -1;
 static bool s_beat_lit = false;
 static char s_info1[64] = "", s_info2[64] = "";
+static int s_last_dbpm = -1;
+
+// the number that matters, BIG: the tempo actually playing right now
+// (track bpm x current rate = the external tempo when locked)
+static void draw_big_bpm(void){
+    float bpm = dk.track_bpm > 0 ? dk.track_bpm * dk.rate : 0;
+    int d = (int)(bpm * 10.0f + 0.5f);
+    if (d == s_last_dbpm) return;
+    s_last_dbpm = d;
+    char s[16];
+    if (d > 0) snprintf(s, sizeof(s), "%d.%d", d / 10, d % 10);
+    else snprintf(s, sizeof(s), "---");
+    Font f = cfont;
+    TFT_setFont(DEJAVU24_FONT, NULL);
+    int bw = 120, bh = TFT_getfontheight() + 4;
+    _bg = TFT_BLACK;
+    TFT_fillRect(_width - bw, 2, bw, bh, _bg);
+    _fg = (dk.sync && dk.clk.locked) ? (color_t){40, 200, 90} : TFT_WHITE;
+    TFT_print(s, _width - TFT_getStringWidth(s) - 8, 4);
+    cfont = f;
+}
 
 static void draw_info(void){
     int fh = TFT_getfontheight();
     int y = fh + 42;
     char s1[64], s2[64];
-    snprintf(s1, sizeof(s1), "trk %.1f bpm  %s  rate %d%%  %s",
+    snprintf(s1, sizeof(s1), "trk %.1f  %s  x%s  %s",
              dk.track_bpm, dk.playing ? (dk.loading ? "BUF" : "PLAY") : "STOP",
-             (int)(dk.rate * 100),
+             dk.speed_mult == 0.5f ? ".5" : (dk.speed_mult == 2.0f ? "2" : "1"),
              dk.flt_mode == 1 ? "LP" : (dk.flt_mode == 2 ? "HP" : ""));
     if (dk.sync){
         if (dk.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK  err %+d%%",
@@ -103,9 +124,11 @@ static void live_full_redraw(void){
     Font f = cfont;
     TFT_setFont(DEJAVU24_FONT, NULL);
     char nm[16];
-    snprintf(nm, sizeof(nm), "%.12s", dk.track[0] ? dk.track : "(no track)");
+    snprintf(nm, sizeof(nm), "%.9s", dk.track[0] ? dk.track : "(none)");
     TFT_print(nm, 8, TFT_getfontheight() + 4);
     cfont = f;
+    s_last_dbpm = -1;
+    draw_big_bpm();
     s_info1[0] = 0;
     s_info2[0] = 0;
     s_beat_lit = true;      // force the first draw_beat(false) to paint
@@ -115,7 +138,7 @@ static void live_full_redraw(void){
     draw_beat(false);
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:scrub  press:play/stop  TR1:go TR2:stop  k6:filt", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:scrub press:play TR1:go TR2:stop k6:filt k7:x2", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
     s_last_beat = -1;
 }
@@ -125,6 +148,7 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
         case EV_ENTERED_MENU: live_full_redraw(); break;
         case EV_TIMER_REPEATING_FAST:
         case EV_TIMER_REPEATING_SLOW: {
+            draw_big_bpm();
             draw_info();
             draw_posbar();
             if (dk.track_bpm > 20 && dk.playing){

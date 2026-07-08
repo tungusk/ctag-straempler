@@ -57,6 +57,7 @@ typedef struct {
     beatclock_t clk;
     volatile float rate;           // current playback rate (UI display)
     volatile float phase_err;      // current beat phase error (UI display)
+    volatile float speed_mult;     // knob7 while synced: x0.5 / x1 / x2, still locked
 
     // DJ filter (knob6): centre = bypass, left = LP sweeping down,
     // right = HP sweeping up. Chamberlin SVF, one per channel.
