@@ -1,0 +1,282 @@
+// Deck engine — SD-streamed track playback, varispeed, phase-locked to the
+// external clock. The reader task owns ALL file I/O; process() only consumes
+// the PSRAM ring and flips seek flags the reader acts on.
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "cJSON.h"
+#include "machine.h"
+#include "audio.h"
+#include "fileio.h"
+#include "sd_lock.h"
+#include "deck_priv.h"
+
+static const char *TAG = "DECK";
+
+dk_state_t dk;
+const float dk_ppb[5] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f};
+const char *const dk_ppb_names[5] = {"1 per 4 beats", "1 per 2 beats", "1 per beat", "2 per beat", "4 per beat"};
+
+static volatile bool s_run = false, s_alive = false;
+static volatile bool s_track_req = false;
+static char s_pending[DK_NAME_LEN];
+
+// ---- reader task ------------------------------------------------------------
+static void reader_task(void *pv)
+{
+    FILE *f = NULL;
+    char cur[DK_NAME_LEN] = "";
+    int16_t *chunk = malloc(4096 * 2 * sizeof(int16_t));   // internal RAM, 16 KB
+    s_alive = true;
+
+    while (s_run) {
+        if (s_track_req) {
+            s_track_req = false;
+            if (f) { sd_lock_take(); fclose(f); sd_lock_give(); f = NULL; }
+            strlcpy(cur, s_pending, sizeof(cur));
+            if (cur[0]) {
+                char path[64];
+                snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", cur);
+                sd_lock_take();
+                f = fopen(path, "rb");
+                if (f) { fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET); dk.file_frames = (uint32_t)(sz / 4); }
+                sd_lock_give();
+                if (!f) { ESP_LOGE(TAG, "open %s failed", path); dk.file_frames = 0; }
+                dk.wpos = 0;
+                dk.rpos_i = 0;
+                dk.rpos_f = 0;
+            }
+        }
+        if (f && dk.seek_req) {
+            dk.seek_req = false;
+            uint32_t to = dk.seek_to;
+            if (to >= dk.file_frames) to = 0;
+            sd_lock_take();
+            fseek(f, (long)to * 4, SEEK_SET);
+            sd_lock_give();
+            dk.wpos = to;             // ring restarts from the seek point
+        }
+        if (f && !s_track_req && !dk.seek_req) {
+            uint32_t lead = dk.wpos - dk.rpos_i;
+            if (dk.wpos < dk.file_frames && lead < DK_RING_FRAMES - 4096) {
+                uint32_t want = dk.file_frames - dk.wpos;
+                if (want > 4096) want = 4096;
+                sd_lock_take();
+                size_t got = fread(chunk, 4, want, f);
+                sd_lock_give();
+                if (got > 0) {
+                    uint32_t w = dk.wpos % DK_RING_FRAMES;
+                    uint32_t first = DK_RING_FRAMES - w;
+                    if (first > got) first = got;
+                    memcpy(dk.ring + w * 2, chunk, first * 4);
+                    if (first < got) memcpy(dk.ring, chunk + first * 2, (got - first) * 4);
+                    dk.wpos += got;
+                }
+                if (dk.loading && (dk.wpos - dk.rpos_i >= DK_LOW_WATER ||
+                                   dk.wpos >= dk.file_frames))
+                    dk.loading = false;
+                continue;              // keep filling without the delay below
+            }
+            if (dk.loading && dk.wpos >= dk.file_frames) dk.loading = false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
+    free(chunk);
+    s_alive = false;
+    vTaskDelete(NULL);
+}
+
+// ---- UI-side controls -------------------------------------------------------
+int deck_load_track(const char *name)
+{
+    dk.playing = false;
+    dk.loading = true;
+    dk.track_bpm = 0;
+    dk.grid_offset = 0;
+    strlcpy(dk.track, name, sizeof(dk.track));
+    strlcpy(s_pending, name, sizeof(s_pending));
+    s_track_req = true;
+
+    // cached analysis from the sidecar, if this track has been analysed before
+    char jp[64];
+    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", name);
+    cJSON *root = readJSONFileAsCJSON(jp);
+    if (root) {
+        cJSON *j;
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, "bpm")) && cJSON_IsNumber(j))
+            dk.track_bpm = (float)j->valuedouble;
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, "grid")) && cJSON_IsNumber(j))
+            dk.grid_offset = (uint32_t)j->valuedouble;
+        cJSON_Delete(root);
+    }
+    dk.an_state = DK_AN_IDLE;
+    return 0;
+}
+
+void deck_restart(void)
+{
+    if (!dk.track[0]) return;
+    dk.loading = true;                    // engine mutes while the ring refills
+    uint32_t to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;
+    dk.rpos_i = to;
+    dk.rpos_f = 0;
+    dk.seek_to = to;
+    dk.seek_req = true;
+    dk.playing = true;
+}
+
+void deck_toggle_play(void)
+{
+    if (dk.playing) dk.playing = false;
+    else deck_restart();
+}
+
+// ---- engine -----------------------------------------------------------------
+static esp_err_t deck_start(void)
+{
+    memset(&dk, 0, sizeof(dk));
+    s_pending[0] = 0;
+    s_track_req = false;
+    dk.ring = heap_caps_malloc((size_t)DK_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    if (!dk.ring) { ESP_LOGE(TAG, "PSRAM ring alloc failed"); return ESP_ERR_NO_MEM; }
+    dk.sync = true;
+    dk.loop = true;
+    dk.clk_src = 7;          // CV8, same convention as glitch
+    dk.ppb_idx = 2;          // 1 pulse per beat
+    dk.rate = 1.0f;
+    clock_reset(&dk.clk);
+    s_run = true;
+    // unpinned: file-reading tasks pinned to core 0 cause WiFi audio clicks
+    xTaskCreate(reader_task, "deck_reader", 4096, NULL, 6, NULL);
+    audio_status_set_voices("deck", "");
+    return ESP_OK;
+}
+
+static void deck_stop(void)
+{
+    dk.playing = false;
+    s_run = false;
+    for (int i = 0; i < 100 && s_alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    free(dk.ring);
+    dk.ring = NULL;
+}
+
+static void deck_process(int32_t out[MACHINE_BLOCK],
+                         const int32_t in[MACHINE_BLOCK],
+                         const machine_io_t *io)
+{
+    if (!dk.ring) return;
+
+    // TR1 falling edge = restart at the downbeat (flags only; reader seeks)
+    static uint8_t prev_trig = 0x03;
+    uint8_t pressed = prev_trig & (~io->trig_level) & 0x03;
+    prev_trig = io->trig_level;
+    if (pressed & 1) deck_restart();
+
+    dk.pitch_cv = io->cv[6];   // knob7 = free-run rate when sync is off
+
+    // playback rate
+    float rate = 1.0f;
+    uint32_t beat_tf = 0;      // track frames per beat at nominal rate
+    if (dk.track_bpm > 20.0f) beat_tf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
+    if (dk.sync) {
+        if (dk.clk.locked && dk.clk.period > 0 && beat_tf > 0) {
+            float ppb = dk_ppb[dk.ppb_idx];
+            // pulse-level phase lock (works for any mult/div): compare phase
+            // within one external pulse against the track's matching segment
+            float seg_tf = (float)beat_tf / ppb;               // track frames per pulse
+            float base = seg_tf / (float)dk.clk.period;        // nominal rate
+            float p_ext = (float)dk.clk.since / (float)dk.clk.period;
+            if (p_ext > 1.0f) p_ext = 1.0f;
+            float p_trk = fmodf((float)((int64_t)dk.rpos_i - (int64_t)dk.grid_offset), seg_tf) / seg_tf;
+            if (p_trk < 0) p_trk += 1.0f;
+            float err = p_ext - p_trk;
+            if (err > 0.5f) err -= 1.0f;
+            if (err < -0.5f) err += 1.0f;
+            rate = base * (1.0f + 0.08f * err);
+            dk.phase_err = err;
+        } else {
+            rate = 1.0f;       // no clock yet: play straight
+        }
+    } else {
+        // free run: knob7, unity plateau around centre (same feel as glitch)
+        int pc = dk.pitch_cv;
+        if (pc >= 1843 && pc <= 2253) rate = 1.0f;
+        else if (pc > 2253) rate = 1.0f + (float)(pc - 2253) / 1842.0f;
+        else                rate = 0.5f + (float)pc / 1843.0f * 0.5f;
+    }
+    if (rate < 0.25f) rate = 0.25f;
+    if (rate > 2.5f) rate = 2.5f;
+    dk.rate = rate;
+
+    int frames = MACHINE_BLOCK / 2;
+    for (int fno = 0; fno < frames; fno++) {
+        uint32_t avail_to = dk.wpos < dk.file_frames ? dk.wpos : dk.file_frames;
+        if (!dk.playing || dk.loading || dk.rpos_i + 1 >= avail_to) {
+            if (dk.playing && !dk.loading && dk.file_frames &&
+                dk.rpos_i + 1 >= dk.file_frames) {
+                if (dk.loop) deck_restart();     // sets flags; reader seeks
+                else dk.playing = false;
+            }
+            continue;                            // out stays pre-zeroed
+        }
+        uint32_t i0 = dk.rpos_i % DK_RING_FRAMES;
+        uint32_t i1 = (i0 + 1) % DK_RING_FRAMES;
+        float fr = (float)dk.rpos_f;
+        float l = (float)dk.ring[i0 * 2]     + ((float)dk.ring[i1 * 2]     - (float)dk.ring[i0 * 2])     * fr;
+        float r = (float)dk.ring[i0 * 2 + 1] + ((float)dk.ring[i1 * 2 + 1] - (float)dk.ring[i0 * 2 + 1]) * fr;
+        out[fno * 2]     = ((int32_t)l) << 16;
+        out[fno * 2 + 1] = ((int32_t)r) << 16;
+        dk.rpos_f += rate;
+        while (dk.rpos_f >= 1.0) { dk.rpos_f -= 1.0; dk.rpos_i++; }
+    }
+
+    // clock detector runs every frame regardless (it needs the CV stream)
+    uint16_t ccv = io->cv[dk.clk_src & 7];
+    for (int fno = 0; fno < frames; fno++) clock_tick(&dk.clk, ccv);
+}
+
+// ---- preset -------------------------------------------------------------------
+static cJSON *deck_preset_save(void)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "track", dk.track);
+    cJSON_AddBoolToObject(o, "sync", dk.sync);
+    cJSON_AddBoolToObject(o, "loop", dk.loop);
+    cJSON_AddNumberToObject(o, "clk_src", dk.clk_src);
+    cJSON_AddNumberToObject(o, "ppb", dk.ppb_idx);
+    return o;
+}
+
+static void deck_preset_load(const cJSON *node)
+{
+    if (!node) return;
+    cJSON *j;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync"))) dk.sync = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop"))) dk.loop = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) dk.clk_src = j->valueint & 7;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
+        dk.ppb_idx = j->valueint;
+        if (dk.ppb_idx < 0) dk.ppb_idx = 0;
+        if (dk.ppb_idx > 4) dk.ppb_idx = 4;
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "track")) && cJSON_IsString(j) && j->valuestring[0])
+        deck_load_track(j->valuestring);         // also restores cached bpm/grid
+}
+
+extern const machine_ui_t deck_menu_ui;
+
+const machine_t machine_deck = {
+    .name = "Deck",
+    .start = deck_start,
+    .stop = deck_stop,
+    .process = deck_process,
+    .preset_save = deck_preset_save,
+    .preset_load = deck_preset_load,
+    .ui = &deck_menu_ui,
+};
