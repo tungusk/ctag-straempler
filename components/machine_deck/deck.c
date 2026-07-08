@@ -117,10 +117,12 @@ int deck_load_track(const char *name)
         cJSON_Delete(root);
     }
     if (dk.an_state != DK_AN_RUNNING) dk.an_state = DK_AN_IDLE;
-    if (dk.track_bpm <= 0) {
-        // no cached analysis: analyze now (runs fine alongside playback); if
-        // a previous track's run is still going, queue behind it (menu tick
-        // fires it when the runner exits)
+    // auto-analyze ONLY when enabled and the sidecar had no bpm — a cached
+    // (or previously analysed) track never re-analyzes automatically
+    if (dk.auto_an && dk.track_bpm <= 0) {
+        // analyze now (runs fine alongside playback); if a previous track's
+        // run is still going, queue behind it (menu tick fires it when the
+        // runner exits)
         if (deck_analyze_start() != 0) dk.an_auto_req = true;
     }
     return 0;
@@ -179,6 +181,7 @@ static esp_err_t deck_start(void)
     if (!dk.ring) { ESP_LOGE(TAG, "PSRAM ring alloc failed"); return ESP_ERR_NO_MEM; }
     dk.sync = true;
     dk.loop = true;
+    dk.auto_an = true;       // auto-analyze unanalyzed tracks on load
     dk.clk_src = 7;          // CV8, same convention as glitch
     dk.ppb_idx = 4;          // 4 pulses per beat — the modular norm (4 PPQN)
     dk.rate = 1.0f;
@@ -378,6 +381,7 @@ static cJSON *deck_preset_save(void)
     cJSON_AddStringToObject(o, "track", dk.track);
     cJSON_AddBoolToObject(o, "sync", dk.sync);
     cJSON_AddBoolToObject(o, "loop", dk.loop);
+    cJSON_AddBoolToObject(o, "auto_an", dk.auto_an);
     cJSON_AddNumberToObject(o, "clk_src", dk.clk_src);
     cJSON_AddNumberToObject(o, "ppb", dk.ppb_idx);
     return o;
@@ -389,6 +393,8 @@ static void deck_preset_load(const cJSON *node)
     cJSON *j;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync"))) dk.sync = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop"))) dk.loop = cJSON_IsTrue(j);
+    // must land before the track restore below so it gates the boot-time load
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "auto_an"))) dk.auto_an = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) dk.clk_src = j->valueint & 7;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
         dk.ppb_idx = j->valueint;

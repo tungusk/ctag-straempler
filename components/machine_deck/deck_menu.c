@@ -197,8 +197,8 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup --------------------------------------------------------------------
-static const char *setup_labels[] = {"Track", "Sync", "Clock Src", "Clock", "Loop", "BPM", "Grid Nudge", "Analyze"};
-#define DK_SETUP_N 8
+static const char *setup_labels[] = {"Track", "Sync", "Clock Src", "Clock", "Loop", "BPM", "Grid Nudge", "Analyze", "Auto BPM"};
+#define DK_SETUP_N 9
 
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -230,6 +230,7 @@ static void setup_redraw(int pos, int sel){
                 else if (dk.an_state == DK_AN_FAIL) snprintf(v, sizeof(v), "FAILED");
                 else snprintf(v, sizeof(v), "press");
                 break;
+            case 8: snprintf(v, sizeof(v), "%s", dk.auto_an ? "ON" : "OFF"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -259,6 +260,7 @@ static void setup_adj(int i, int dir){
             dk.grid_offset = (uint32_t)g;
             break;
         }
+        case 8: dk.auto_an = !dk.auto_an; break;
     }
 }
 

@@ -92,7 +92,12 @@ static void analysis_task(void *pv)
         }
         dk.an_progress = (int)((uint64_t)n * 70 / total_hops);
         if (got_hops < hops) break;      // EOF/short read
-        vTaskDelay(1);                   // let WiFi/audio/reader breathe
+        // pace by transport: streaming playback needs the SD-courtesy gap
+        // every chunk, but an idle deck can take the bus at full stride —
+        // 10 ms per 16 KB capped analysis at ~1.6 MB/s, which read as
+        // "stuck at 6%" on long tracks (analysis covers the first ~5 min)
+        if (dk.playing) vTaskDelay(1);
+        else if (((n / AN_CHUNK_HOPS) & 7) == 0) vTaskDelay(1);
     }
     sd_lock_take();
     fclose(f);
