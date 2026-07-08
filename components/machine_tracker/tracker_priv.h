@@ -1,0 +1,76 @@
+#pragma once
+#include <stdint.h>
+#include <stdbool.h>
+#include "clock.h"
+
+// Tracker — a multi-format module player (MOD/XM/IT/S3M/669/… via libxmp).
+// Architecture mirrors the deck: an unpinned RENDER task owns the libxmp
+// context end-to-end (create/load/render/free) and fills a PSRAM ring;
+// process() only consumes the ring, reads gates, and runs the CV clock
+// detector. No libxmp or SD call ever happens in the audio task.
+
+#define TRK_RATE         44100
+#define TRK_RING_FRAMES  (TRK_RATE * 2)       // 2 s stereo int16 ring (~352 KB PSRAM)
+#define TRK_LOW_WATER    (TRK_RATE / 4)       // unmute once ~0.25 s is buffered
+#define TRK_CHUNK        1024                 // frames per xmp_play_buffer call
+#define TRK_MAX_FILE     (2 * 1024 * 1024)    // reject modules bigger than this
+#define TRK_NAME_LEN     24                   // 8.3 filename incl. extension
+#define TRK_TITLE_LEN    40
+
+enum { TRK_EMPTY = 0, TRK_LOADING, TRK_READY, TRK_FAIL };
+
+typedef struct {
+    // streaming ring (render task writes, process reads)
+    int16_t *ring;                 // PSRAM, TRK_RING_FRAMES * 2
+    volatile uint32_t wpos;        // render write head (frames, absolute)
+    volatile uint32_t rpos;        // play cursor (frames, absolute)
+    volatile bool playing;
+    volatile bool loading;         // render (re)filling after load/seek — process mutes
+
+    // request protocol: UI/audio ONLY set these flags; the render task is the
+    // sole caller of libxmp and the sole writer of wpos/rpos (mirrors the
+    // deck's hard-won seek protocol — concurrent context access = crash).
+    volatile bool load_req;
+    char pending[TRK_NAME_LEN];    // filename (incl. ext) to load
+    volatile bool seek_req;
+    volatile int  seek_pos;        // target pattern-order position
+    volatile bool restart_req;
+
+    // published module snapshot (render task writes after each render)
+    volatile int  state;           // TRK_*
+    char  title[TRK_TITLE_LEN];    // internal module title (fallback: filename)
+    char  fmt[20];                 // e.g. "Protracker", "Fast Tracker II"
+    char  fail_why[24];
+    volatile int  channels;
+    volatile int  cur_pos, cur_pat, cur_row, num_pat;
+    volatile int  time_ms, total_ms;
+    volatile int  mod_bpm;         // module nominal BPM (captured at tf=1.0)
+    volatile int  cur_bpm;         // current effective BPM (frame_info)
+
+    // settings (persisted)
+    char  file[TRK_NAME_LEN];
+    volatile bool loop;
+    volatile bool sync;            // follow the external CV clock
+    volatile bool amiga;           // Amiga (nearest+wide) vs Clean (spline+narrow)
+    volatile int  clk_src;         // CV channel of the clock
+    volatile int  ppb_idx;         // pulses-per-beat index into trk_ppb[]
+    volatile bool sound_dirty;     // menu flipped amiga → render re-applies
+
+    // CV clock (process fills, render reads for sync)
+    beatclock_t clk;
+    int  clk_base;                 // tracked floor of the clock channel
+    bool clk_high;                 // Schmitt state
+    float tf_cur;                  // current tempo factor (render-owned)
+
+    float out_gain;                // declick ramp (0..1)
+    volatile uint32_t dbg_starve;  // blocks muted mid-play: render fell behind
+} trk_state_t;
+
+extern trk_state_t trk;
+extern const float trk_ppb[5];
+extern const char *const trk_ppb_names[5];
+
+// render-task-only libxmp entry (implemented in tracker.c, called by menu)
+int  tracker_list_modules(char (**out)[TRK_NAME_LEN]);   // browser list
+void tracker_request_load(const char *name);
+void tracker_toggle_play(void);
