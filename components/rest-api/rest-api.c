@@ -236,6 +236,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON *j;
     if ((j = cJSON_GetObjectItem(settings, "ssid")))    cJSON_AddStringToObject(out, "ssid", j->valuestring);
     if ((j = cJSON_GetObjectItem(settings, "apikey")))  cJSON_AddStringToObject(out, "apikey", j->valuestring);
+    if ((j = cJSON_GetObjectItem(settings, "hostname"))) cJSON_AddStringToObject(out, "hostname", j->valuestring);
     if ((j = cJSON_GetObjectItem(settings, "tz_shift"))) cJSON_AddNumberToObject(out, "tz_shift", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "txpwr")))   cJSON_AddNumberToObject(out, "txpwr", j->valuedouble);
     // NOTE: password intentionally omitted
@@ -288,6 +289,22 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if ((j = cJSON_GetObjectItem(in, "apikey")) && j->valuestring) {
         cJSON_ReplaceItemInObject(settings, "apikey", cJSON_CreateString(j->valuestring));
         freesoundSetToken(j->valuestring);
+    }
+    // per-device mDNS/DHCP hostname ("<name>.local"); sanitized to RFC-safe
+    if ((j = cJSON_GetObjectItem(in, "hostname")) && j->valuestring) {
+        char hn[33];
+        int w = 0;
+        for (const char *pc = j->valuestring; *pc && w < 32; pc++) {
+            char c = *pc;
+            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') hn[w++] = c;
+            else if (c >= 'A' && c <= 'Z') hn[w++] = c + 32;
+        }
+        hn[w] = 0;
+        if (hn[0]) {
+            cJSON_DeleteItemFromObjectCaseSensitive(settings, "hostname");
+            cJSON_AddStringToObject(settings, "hostname", hn);
+            wifiApplyHostname(hn);
+        }
     }
     // optional WiFi TX power cap in quarter-dBm (8..84) — antenna-less units
     // brown out on full-power TX bursts; applied live and persisted
@@ -501,6 +518,66 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── PUT /bootlogo ────────────────────────────────────────────────────────────
+// Accepts a bootlogo.bmp and writes it to the SD root (read at every boot by
+// ui.c). The browser converts any image to the exact legacy format first;
+// here we just enforce it: 320x240, 24-bit, classic 54-byte header, exact
+// size — the boot-time BMP loader silently shows nothing for anything else.
+
+#define BOOTLOGO_SIZE 230454
+
+static esp_err_t bootlogo_put_handler(httpd_req_t *req)
+{
+    if (req->content_len != BOOTLOGO_SIZE) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Not a 320x240x24 bootlogo BMP");
+        return ESP_FAIL;
+    }
+    char *buf = malloc(4096);
+    if (!buf) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
+
+    sd_lock_take();
+    FILE *f = fopen("/sdcard/bootlogo.bmp", "wb");
+    sd_lock_give();
+    if (!f) { free(buf); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD open failed"); return ESP_FAIL; }
+
+    int remaining = req->content_len, total = 0;
+    bool ok = true;
+    while (remaining > 0) {
+        int r = httpd_req_recv(req, buf, remaining > 4096 ? 4096 : remaining);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (r <= 0) { ok = false; break; }
+        if (total == 0) {
+            // header sanity: 'BM', pixel offset 54, 320x240, 24 bpp, uncompressed
+            if (r < 34 || buf[0] != 'B' || buf[1] != 'M' ||
+                *(uint32_t *)(buf + 10) != 54 ||
+                *(int32_t *)(buf + 18) != 320 || *(int32_t *)(buf + 22) != 240 ||
+                *(uint16_t *)(buf + 28) != 24 || *(uint32_t *)(buf + 30) != 0) {
+                ok = false;
+                break;
+            }
+        }
+        sd_lock_take();
+        size_t w = fwrite(buf, 1, r, f);
+        sd_lock_give();
+        if ((int)w != r) { ok = false; break; }
+        total += r;
+        remaining -= r;
+    }
+    sd_lock_take();
+    fclose(f);
+    if (!ok) remove("/sdcard/bootlogo.bmp");   // don't leave a broken logo behind
+    sd_lock_give();
+    free(buf);
+
+    if (!ok) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid bootlogo upload");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 // ─── teleremote: /remote/* ────────────────────────────────────────────────────
 // Always-on core endpoints (gated by the System→Settings→Remote toggle):
 // encoder events into the UI queue, soft trigger pulses into the audio task,
@@ -662,6 +739,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/settings",   .method = HTTP_POST,   .handler = settings_post_handler },
     { .uri = "/status",     .method = HTTP_GET,    .handler = status_get_handler },
     { .uri = "/drop_sample",.method = HTTP_PUT,    .handler = drop_sample_put_handler },
+    { .uri = "/bootlogo",   .method = HTTP_PUT,    .handler = bootlogo_put_handler },
     { .uri = "/remote/event",  .method = HTTP_POST, .handler = remote_event_handler },
     { .uri = "/remote/trig",   .method = HTTP_POST, .handler = remote_trig_handler },
     { .uri = "/remote/machine",.method = HTTP_POST, .handler = remote_machine_handler },

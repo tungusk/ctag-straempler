@@ -321,4 +321,5 @@ const machine_ui_t looper_menu_ui = {
     .n_main = 2,
     .register_pages = looper_register_pages,
     .main_event = looper_main_event,
+    .boot_target = M_LOOPER_LIVE,
 };

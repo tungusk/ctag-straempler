@@ -415,4 +415,5 @@ const machine_ui_t slicer_menu_ui = {
     .n_main = 2,
     .register_pages = slicer_register_pages,
     .main_event = slicer_main_event,
+    .boot_target = M_SLICER_LIVE,
 };

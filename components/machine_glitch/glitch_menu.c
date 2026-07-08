@@ -175,4 +175,5 @@ const machine_ui_t glitch_menu_ui = {
     .n_main = 2,
     .register_pages = glitch_register_pages,
     .main_event = glitch_main_event,
+    .boot_target = M_GLITCH_LIVE,
 };

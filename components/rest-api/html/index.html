@@ -132,6 +132,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 </div>
 <div class="pane" id="p4">
   <label>Device IP</label><input id="ip" readonly style="opacity:.7">
+  <label>Hostname (this unit = http://&lt;name&gt;.local &#8212; give each Str&#228;mpler its own)</label><input id="sh" maxlength="32" placeholder="ctag-modular">
   <label>WiFi SSID</label><input id="ss">
   <label>WiFi Password (leave blank to keep current)</label><input id="sp" type="password">
   <label>Freesound API Key</label><input id="sa">
@@ -139,6 +140,13 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <button class="btn" onclick="saveSet()">Save</button>
   </div>
   <div class="msg" id="sm"></div>
+  <label style="margin-top:18px">Boot logo (any image &#8212; converted in-browser to the exact 320x240 BMP the module needs)</label>
+  <input type="file" id="blf" accept="image/*" onchange="blPick(this.files[0])">
+  <canvas id="blc" width="320" height="240" style="display:none;border:1px solid #333;margin-top:6px;max-width:100%"></canvas>
+  <div class="row" id="blrow" style="display:none">
+    <button class="btn" onclick="blUpload()">Upload boot logo</button>
+  </div>
+  <div class="msg" id="blm"></div>
 </div>
 <div class="sbar">
   <div class="cv" id="cvb"></div>
@@ -256,6 +264,7 @@ function loadSet(){
   fetch('/settings').then(function(r){return r.json();}).then(function(d){
     document.getElementById('ss').value=d.ssid||'';
     document.getElementById('sa').value=d.apikey||'';
+    document.getElementById('sh').value=d.hostname||'';
   });
   loadSysinfo();
 }
@@ -269,7 +278,7 @@ function loadSysinfo(){
   }).catch(function(){});
 }
 function saveSet(){
-  var body=JSON.stringify({ssid:document.getElementById('ss').value,passwd:document.getElementById('sp').value,apikey:document.getElementById('sa').value});
+  var body=JSON.stringify({ssid:document.getElementById('ss').value,passwd:document.getElementById('sp').value,apikey:document.getElementById('sa').value,hostname:document.getElementById('sh').value});
   fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(function(r){
     var m=document.getElementById('sm');
     m.className='msg '+(r.ok?'ok':'er');
@@ -495,6 +504,46 @@ function updateRemote(d){
     var b=document.getElementById('rmb-'+m);
     if(b)b.className='btn'+(m===d.machine?' cur':'');
   });
+}
+
+function blPick(file){
+  if(!file)return;
+  var img=new Image();
+  img.onload=function(){
+    var c=document.getElementById('blc'),ctx=c.getContext('2d');
+    ctx.fillStyle='#000';ctx.fillRect(0,0,320,240);
+    var s=Math.min(320/img.width,240/img.height);   // letterbox, never stretch
+    var w=Math.round(img.width*s),h=Math.round(img.height*s);
+    ctx.drawImage(img,(320-w)/2,(240-h)/2,w,h);
+    c.style.display='block';
+    document.getElementById('blrow').style.display='flex';
+    document.getElementById('blm').textContent='Preview above is exactly what the module will show.';
+    URL.revokeObjectURL(img.src);
+  };
+  img.src=URL.createObjectURL(file);
+}
+
+function blUpload(){
+  var ctx=document.getElementById('blc').getContext('2d');
+  var id=ctx.getImageData(0,0,320,240).data;
+  var img=320*240*3,buf=new ArrayBuffer(54+img),v=new DataView(buf);
+  v.setUint8(0,0x42);v.setUint8(1,0x4D);            // 'BM'
+  v.setUint32(2,54+img,true);v.setUint32(6,0,true);v.setUint32(10,54,true);
+  v.setUint32(14,40,true);v.setInt32(18,320,true);v.setInt32(22,240,true);
+  v.setUint16(26,1,true);v.setUint16(28,24,true);v.setUint32(30,0,true);
+  v.setUint32(34,img,true);v.setInt32(38,3780,true);v.setInt32(42,3780,true);
+  v.setUint32(46,0,true);v.setUint32(50,0,true);
+  var p=54;
+  for(var y=239;y>=0;y--)for(var x=0;x<320;x++){    // bottom-up BGR rows
+    var i=(y*320+x)*4;
+    v.setUint8(p++,id[i+2]);v.setUint8(p++,id[i+1]);v.setUint8(p++,id[i]);
+  }
+  var m=document.getElementById('blm');
+  m.className='msg';m.textContent='Uploading…';
+  fetch('/bootlogo',{method:'PUT',body:buf}).then(function(r){
+    m.className='msg '+(r.ok?'ok':'er');
+    m.textContent=r.ok?'Boot logo saved to the SD card — shows on next boot!':'Upload failed ('+r.status+')';
+  }).catch(function(){m.className='msg er';m.textContent='Network error';});
 }
 
 function pollStatus(){
