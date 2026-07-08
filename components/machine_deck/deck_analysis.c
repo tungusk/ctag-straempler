@@ -46,7 +46,10 @@ static void analysis_task(void *pv)
     snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", dk.track);
 
     float *env = heap_caps_malloc(DK_ENV_MAX * sizeof(float), MALLOC_CAP_SPIRAM);
-    int16_t *chunk = malloc(DK_HOP * 2 * sizeof(int16_t));   // one hop per read
+    // 16 hops per read (16 KB): 1 KB reads made analysis crawl (~30k SD
+    // round-trips competing with the playback reader for sd_lock)
+    #define AN_CHUNK_HOPS 16
+    int16_t *chunk = malloc(AN_CHUNK_HOPS * DK_HOP * 2 * sizeof(int16_t));
     sd_lock_take();
     FILE *f = fopen(path, "rb");
     long fsize = 0;
@@ -67,18 +70,22 @@ static void analysis_task(void *pv)
     if (total_hops > DK_ENV_MAX) total_hops = DK_ENV_MAX;   // cap ~5 min
     uint32_t n = 0;
     while (n < total_hops) {
+        uint32_t hops = total_hops - n;
+        if (hops > AN_CHUNK_HOPS) hops = AN_CHUNK_HOPS;
         sd_lock_take();
-        size_t got = fread(chunk, 4, DK_HOP, f);
+        size_t got = fread(chunk, 4, hops * DK_HOP, f);
         sd_lock_give();
-        if (got < DK_HOP) break;
-        int32_t acc = 0;
-        for (int i = 0; i < DK_HOP; i++)
-            acc += abs((int)chunk[i * 2]) + abs((int)chunk[i * 2 + 1]);
-        env[n++] = (float)acc;
-        if ((n & 0x3FF) == 0) {
-            dk.an_progress = (int)((uint64_t)n * 70 / total_hops);
-            vTaskDelay(1);           // let WiFi/audio breathe
+        uint32_t got_hops = got / DK_HOP;
+        for (uint32_t h = 0; h < got_hops && n < total_hops; h++) {
+            int32_t acc = 0;
+            const int16_t *p = chunk + h * DK_HOP * 2;
+            for (int i = 0; i < DK_HOP; i++)
+                acc += abs((int)p[i * 2]) + abs((int)p[i * 2 + 1]);
+            env[n++] = (float)acc;
         }
+        dk.an_progress = (int)((uint64_t)n * 70 / total_hops);
+        if (got_hops < hops) break;      // EOF/short read
+        vTaskDelay(1);                   // let WiFi/audio/reader breathe
     }
     sd_lock_take();
     fclose(f);

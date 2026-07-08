@@ -52,13 +52,15 @@ static void reader_task(void *pv)
             }
         }
         if (f && dk.seek_req) {
+            vTaskDelay(pdMS_TO_TICKS(4));       // let the engine park on `loading`
             dk.seek_req = false;
-            uint32_t to = dk.seek_to;
+            uint32_t to = dk.seek_to;           // latest wins if requests raced
             if (to >= dk.file_frames) to = 0;
             sd_lock_take();
             fseek(f, (long)to * 4, SEEK_SET);
             sd_lock_give();
-            dk.wpos = to;             // ring restarts from the seek point
+            dk.wpos = to;                       // ring restarts from the seek point
+            dk.rpos_i = to;                     // reader is the ONLY seek-writer of rpos
         }
         if (f && !s_track_req && !dk.seek_req) {
             uint32_t lead = dk.wpos - dk.rpos_i;
@@ -122,11 +124,8 @@ void deck_restart(void)
 {
     if (!dk.track[0]) return;
     dk.loading = true;                    // engine mutes while the ring refills
-    uint32_t to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;
-    dk.rpos_i = to;
-    dk.rpos_f = 0;
-    dk.seek_to = to;
-    dk.seek_req = true;
+    dk.seek_to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;
+    dk.seek_req = true;                   // reader applies rpos
     dk.playing = true;
 }
 
@@ -140,10 +139,8 @@ void deck_toggle_play(void)
     if (to >= dk.file_frames)
         to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;
     dk.loading = true;
-    dk.rpos_i = to;
-    dk.rpos_f = 0;
     dk.seek_to = to;
-    dk.seek_req = true;
+    dk.seek_req = true;                   // reader applies rpos
     dk.playing = true;
 }
 
@@ -162,10 +159,8 @@ void deck_seek_beats(int beats)
     if (tgt < 0) tgt = 0;
     if (tgt > (int64_t)dk.file_frames - 1) tgt = (int64_t)dk.file_frames - 1;
     dk.loading = true;                          // brief mute while the ring refills
-    dk.rpos_i = (uint32_t)tgt;
-    dk.rpos_f = 0;
     dk.seek_to = (uint32_t)tgt;
-    dk.seek_req = true;                         // playing state stays as-is
+    dk.seek_req = true;                         // reader applies rpos; play state stays
 }
 
 // ---- engine -----------------------------------------------------------------
@@ -204,11 +199,13 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
 {
     if (!dk.ring) return;
 
-    // TR1 falling edge = restart at the downbeat (flags only; reader seeks)
+    // transport gates: TR1 = start/restart at the downbeat, TR2 = stop
+    // (flags only; the reader task does the seeking)
     static uint8_t prev_trig = 0x03;
     uint8_t pressed = prev_trig & (~io->trig_level) & 0x03;
     prev_trig = io->trig_level;
     if (pressed & 1) deck_restart();
+    if (pressed & 2) dk.playing = false;
 
     dk.pitch_cv = io->cv[6];   // knob7 = free-run rate when sync is off
 
@@ -269,15 +266,26 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     dk.rate = rate;
 
     int frames = MACHINE_BLOCK / 2;
+    static float last_l = 0, last_r = 0;
     for (int fno = 0; fno < frames; fno++) {
         uint32_t avail_to = dk.wpos < dk.file_frames ? dk.wpos : dk.file_frames;
-        if (!dk.playing || dk.loading || dk.rpos_i + 1 >= avail_to) {
+        bool can_play = dk.playing && !dk.loading && dk.rpos_i + 1 < avail_to;
+        // declick both edges: gain ramps in on resume; on mute the last
+        // sample decays out instead of stepping to zero (each scrub detent
+        // used to click — "beeps")
+        float gt = can_play ? 1.0f : 0.0f;
+        dk.out_gain += (gt - dk.out_gain) * 0.015f;
+        if (!can_play) {
             if (dk.playing && !dk.loading && dk.file_frames &&
-                dk.rpos_i + 1 >= dk.file_frames) {
+                dk.rpos_i + 1 >= dk.file_frames && !dk.seek_req) {
                 if (dk.loop) deck_restart();     // sets flags; reader seeks
                 else dk.playing = false;
             }
-            continue;                            // out stays pre-zeroed
+            last_l *= 0.94f;
+            last_r *= 0.94f;
+            out[fno * 2]     = ((int32_t)last_l) << 16;
+            out[fno * 2 + 1] = ((int32_t)last_r) << 16;
+            continue;
         }
         uint32_t i0 = dk.rpos_i % DK_RING_FRAMES;
         uint32_t i1 = (i0 + 1) % DK_RING_FRAMES;
@@ -301,8 +309,10 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
             dk.lp_l = l; dk.bp_l = 0;     // park state at the signal: no thump
             dk.lp_r = r; dk.bp_r = 0;     // when the filter re-engages
         }
-        out[fno * 2]     = ((int32_t)l) << 16;
-        out[fno * 2 + 1] = ((int32_t)r) << 16;
+        last_l = l * dk.out_gain;
+        last_r = r * dk.out_gain;
+        out[fno * 2]     = ((int32_t)last_l) << 16;
+        out[fno * 2 + 1] = ((int32_t)last_r) << 16;
         dk.rpos_f += rate;
         while (dk.rpos_f >= 1.0) { dk.rpos_f -= 1.0; dk.rpos_i++; }
     }
