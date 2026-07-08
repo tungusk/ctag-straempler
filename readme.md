@@ -17,6 +17,7 @@ on the [`v09-machines`](../../tree/v09-machines) branch (July 2026).
 | **Granular** | 16-grain cloud over a mono sample |
 | **Glitch** | Live-input stutter/beat-repeat with clock sync |
 | **Drums** | 8-pad CV-triggered drum sampler: routable trigger inputs with floor-tracking detection, per-pad level/pan/decay, CV-select mode |
+| **Deck** | Tempo-syncing track player: streams a long SD sample varispeed, phase-locked to an external CV clock (pulse-level PLL, clock mult/div), with offline BPM + beat-grid detection cached per track. Encoder scrubs by the bar; TR1 restarts at the downbeat, TR2 stops. *(active development)* |
 | **Freesound** | Web-driven freesound.org search + preview download straight into the sample library; direct MP3-URL import |
 
 **Web features** (the module serves its own page):
