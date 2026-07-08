@@ -63,32 +63,36 @@ static void draw_info(void){
     }
 }
 
+// big transport: full-width-ish bar right under the info lines, beat lamp
+// beside it (was a 12px sliver at the bottom — too small to perform with)
+#define TBAR_X 8
+#define TBAR_Y 112
+#define TBAR_H 30
+#define TBAR_W (_width - 64)
+
 static void draw_posbar_frame(void){
-    int y = _height - 46;
     _bg = (color_t){20, 22, 30};
-    TFT_fillRect(8, y, _width - 16, 12, _bg);
+    TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, _bg);
     _fg = (color_t){70, 70, 90};
-    TFT_drawRect(8, y, _width - 16, 12, _fg);
+    TFT_drawRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, _fg);
     s_last_barx = -1;
 }
 
 static void draw_posbar(void){
     if (!dk.file_frames) return;
-    int y = _height - 46;
-    int x = 9 + (int)((uint64_t)dk.rpos_i * (_width - 20) / dk.file_frames);
+    int x = TBAR_X + 2 + (int)((uint64_t)dk.rpos_i * (TBAR_W - 8) / dk.file_frames);
     if (x == s_last_barx) return;
     if (s_last_barx > 0)                      // erase only the old marker slice
-        TFT_fillRect(s_last_barx - 1, y + 1, 3, 10, (color_t){20, 22, 30});
-    TFT_fillRect(x - 1, y + 1, 3, 10, ACCENT);
+        TFT_fillRect(s_last_barx, TBAR_Y + 1, 5, TBAR_H - 2, (color_t){20, 22, 30});
+    TFT_fillRect(x, TBAR_Y + 1, 5, TBAR_H - 2, ACCENT);
     s_last_barx = x;
 }
 
 static void draw_beat(bool on){
     if (on == s_beat_lit) return;             // change-driven only
     s_beat_lit = on;
-    int fh = TFT_getfontheight();
     color_t c = on ? BEAT : (color_t){30, 30, 36};
-    TFT_fillCircle(_width - 26, fh + 52, 12, c);
+    TFT_fillCircle(_width - 28, TBAR_Y + TBAR_H / 2, 15, c);
 }
 
 static void live_full_redraw(void){
@@ -111,7 +115,7 @@ static void live_full_redraw(void){
     draw_beat(false);
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:scrub 1bar  press:play  TR1:restart  knob6:filt", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:scrub  press:play/stop  TR1:go TR2:stop  k6:filt", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
     s_last_beat = -1;
 }

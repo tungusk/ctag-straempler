@@ -37,7 +37,12 @@ typedef struct {
     volatile uint32_t file_frames; // track length
     volatile bool playing;
     volatile bool loading;         // reader (re)filling after seek/track change
-    volatile uint32_t seek_to;     // reader consumes this on seek requests
+    // Seek protocol: requesters (UI task, audio task) ONLY set loading +
+    // seek_to + seek_req. The READER applies them — including writing
+    // rpos_i — after a short settle so the engine has parked on `loading`.
+    // (Concurrent rpos writes from UI scrubs racing the audio task's
+    // loop-restart caused garbage playback + stuck buffering.)
+    volatile uint32_t seek_to;
     volatile bool seek_req;
     char track[DK_NAME_LEN];       // loaded track id ("" = none)
 
@@ -57,6 +62,7 @@ typedef struct {
     // right = HP sweeping up. Chamberlin SVF, one per channel.
     volatile int filt_cv;          // raw knob (UI display)
     float flt_f;                   // slewed coefficient
+    float out_gain;                // declick ramp (0..1) across seeks/stops
     float lp_l, bp_l, lp_r, bp_r;  // SVF state
     volatile int flt_mode;         // 0 off, 1 LP, 2 HP (UI display)
 
