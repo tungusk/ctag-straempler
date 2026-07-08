@@ -55,7 +55,7 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   runs in the audio task once per 64-sample block; no SD/heap/blocking there.
 - **Registry**: `main/machine_registry.c` is the ONLY file outside a machine's
   own component that may name a machine symbol. Registry (selector order):
-  Sampler / Sampler2 / Looper / Slicer / Granular / Glitch / Drums /
+  Sampler / Sampler2 / Looper / Slicer / Granular / Glitch / Drums / Deck /
   Freesound / Stub. **Stub is HIDDEN from the System→Machine selector**
   (skipped by name in `machine_sel_def_handler`, `menu.c`) but stays in the
   registry as fallback + proof target; the selector uses a parallel
@@ -95,6 +95,12 @@ The machines (all working; archives in `bin/`):
   with a Low/Med/High `Sensi` setting (knobs 5/8 halve patched CV); CV-select
   mode: TRIG1/2 fire the pad addressed by a selector CV. Declick ramps +
   retrigger fade; 2x2 pad grid in 4-voice mode, 4x2 in 8-voice; R/G/B hit flash.
+- `machine_deck` ("Deck") — tempo-syncing track player: streams long
+  usr/*.RAW from SD through a PSRAM ring (reader task; process() never
+  touches SD), varispeed playback phase-locked to the external CV clock
+  (pulse-level PLL, so clock mult/div — 1/4..4 pulses per beat — works),
+  offline BPM + beat-grid detection (onset flux autocorrelation) cached as
+  "bpm"/"grid" in the track's JSN sidecar. TR1 = restart at downbeat.
 - `machine_freesound` — silent web-driven utility: freesound search/preview
   download (`/fs/search`, `/fs/get`, `/fs/state`) and direct MP3-URL import
   (`/fs/fetch`), decoding to `usr/` (mono→stereo expand, sidecar). Auth behind
