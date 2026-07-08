@@ -100,7 +100,13 @@ The machines (all working; archives in `bin/`):
   touches SD), varispeed playback phase-locked to the external CV clock
   (pulse-level PLL, so clock mult/div — 1/4..4 pulses per beat — works),
   offline BPM + beat-grid detection (onset flux autocorrelation) cached as
-  "bpm"/"grid" in the track's JSN sidecar. TR1 = restart at downbeat.
+  "bpm"/"grid" in the track's JSN sidecar, AUTO-run on loading an
+  unanalyzed track (coexists with playback; snapshots its track name so a
+  mid-analysis load can't poison the new track's sidecar). TR1 = restart
+  at downbeat, TR2 = stop, encoder press = track browser. Deck audio is
+  legitimately rough ~60 s after boot (ring refill + PLL cold relock) and
+  ~15 s after scrubs — judge audio only after settling (/status v1:
+  healthy = i==p, E≈0, S flat). Archived: bin/deck-v1.
 - `machine_freesound` — silent web-driven utility: freesound search/preview
   download (`/fs/search`, `/fs/get`, `/fs/state`) and direct MP3-URL import
   (`/fs/fetch`), decoding to `usr/` (mono→stereo expand, sidecar). Auth behind
@@ -176,8 +182,10 @@ granular position-CV, glitch grid-align. Original-import machine dropped
   current firmware at that milestone): `v09-dev-stable` (pre-machines),
   `m0-complete`, `sampler2-v1`, `looper-v1`/`looper-v2`, `slicer-v1`,
   `granular-v1`, `glitch-v1`, `sd-hardening-v1` (SD-bus lock + low-memory web
-  fix + IP/disk/download UI). `bin/<name>/flash.sh` returns to any known-good
-  state. Matching dated git tags.
+  fix + IP/disk/download UI), `drums-remote-v1` (drums + freesound + universal
+  upload + teleremote), `deck-v1` (Deck machine + auto-analysis + transport-bar
+  UI + aborted-download httpd fix). `bin/<name>/flash.sh` returns to any
+  known-good state. Matching dated git tags.
 - **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
   (complete repo, `git clone`-able) + a copy of `bin/`. Refresh with
   `git bundle create ~/ctag-straempler-backups/ctag-straempler-$(date +%Y%m%d).bundle --all`.
