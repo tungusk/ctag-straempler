@@ -128,4 +128,5 @@ const machine_ui_t fs_menu_ui = {
     .main_event = fs_main_event,
     .web_uris = fs_web_uris,
     .n_web_uris = 4,
+    .boot_target = M_FS_LIVE,
 };

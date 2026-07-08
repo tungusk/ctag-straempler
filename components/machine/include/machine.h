@@ -40,6 +40,10 @@ typedef struct {
     int n_main;
     void (*register_pages)(void *menusys);       // create the machine's pages
     int  (*main_event)(int event, void *ev_data); // main-screen live area
+    // page to land on after boot/machine switch; 0 = the main menu screen
+    // (machines with a dedicated live view set this to it — the samplers'
+    // home IS the main screen, so they leave it 0)
+    int boot_target;
     // optional web endpoints, served only while this machine is active:
     // points to a const httpd_uri_t[n_web_uris] (kept void* so machine.h
     // doesn't drag httpd types into every machine build). Handlers must only

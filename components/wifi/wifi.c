@@ -147,14 +147,44 @@ int isWiFiConnected(){
 }
 
 
+// per-device hostname from CONFIG.JSN settings.hostname (default ctag-modular).
+// With several Strämplers on one network, identical names fight over
+// <name>.local and mDNS conflict-renaming is flaky — give each unit its own.
+static void get_config_hostname(char *out, size_t len)
+{
+    strlcpy(out, "ctag-modular", len);
+    cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+    if (root != NULL) {
+        cJSON *settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
+        cJSON *h = settings ? cJSON_GetObjectItemCaseSensitive(settings, "hostname") : NULL;
+        if (h != NULL && cJSON_IsString(h) && h->valuestring[0])
+            strlcpy(out, h->valuestring, len);
+        cJSON_Delete(root);
+    }
+}
+
+// live re-apply from the web settings (persisting is the caller's job)
+void wifiApplyHostname(const char *name)
+{
+    if (name && name[0]) {
+        mdns_hostname_set(name);
+        mdns_instance_name_set(name);
+    }
+}
+
 static void start_mdns_service()
 {
+    char host[33];
+    get_config_hostname(host, sizeof(host));
     // initialize mDNS
     ESP_ERROR_CHECK(mdns_init());
     // set mDNS hostname (required if you want to advertise services)
-    ESP_ERROR_CHECK(mdns_hostname_set("ctag-modular"));
-    // set default mDNS instance name
-    ESP_ERROR_CHECK(mdns_instance_name_set("CTAG Strämpler"));
+    ESP_ERROR_CHECK(mdns_hostname_set(host));
+    // instance name = hostname so multiple units are tellable apart in
+    // discovery lists too
+    ESP_ERROR_CHECK(mdns_instance_name_set(host));
+    // DHCP hostname too, so router UIs show the right name (next lease)
+    tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, host);
 
     // structure with TXT records
     mdns_txt_item_t serviceTxtData[3] = {
