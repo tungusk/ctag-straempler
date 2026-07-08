@@ -16,7 +16,6 @@
 #include "deck_priv.h"
 
 static const color_t ACCENT = {40, 200, 230};
-static const color_t BEAT   = {240, 200, 40};
 
 static char (*s_samples)[24] = NULL;
 static int  s_n_samples = 0, s_sample_idx = 0;
@@ -31,9 +30,7 @@ static void refresh_samples(void){
 // ---- Live -------------------------------------------------------------------
 // Redraw discipline: everything is change-driven. Full-region repaints every
 // timer tick made the whole screen strobe (Arlo, first hardware test).
-static int s_last_beat = -1;
 static int s_last_barx = -1;
-static bool s_beat_lit = false;
 static char s_info1[64] = "", s_info2[64] = "";
 static int s_last_dbpm = -1;
 
@@ -73,8 +70,8 @@ static void draw_info(void){
              dk.speed_mult == 0.5f ? ".5" : (dk.speed_mult == 2.0f ? "2" : "1"),
              dk.flt_mode == 1 ? "LP" : (dk.flt_mode == 2 ? "HP" : ""));
     if (dk.sync){
-        if (dk.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK  err %+d%%",
-                                    dk.clk.bpm / dk_ppb[dk.ppb_idx], (int)(dk.phase_err * 100));
+        if (dk.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK",
+                                    dk.clk.bpm / dk_ppb[dk.ppb_idx]);
         else snprintf(s2, sizeof(s2), "ext: waiting for clock on CV%d", dk.clk_src + 1);
     } else s2[0] = 0;
     if (strcmp(s1, s_info1) != 0){
@@ -91,36 +88,40 @@ static void draw_info(void){
     }
 }
 
-// big transport: full-width-ish bar right under the info lines, beat lamp
-// beside it (was a 12px sliver at the bottom — too small to perform with)
+// big transport: full-width bar right under the info lines. The bar's
+// BACKGROUND is the transport state — green while playing, blue while
+// stopped (the separate beat-flash lamp never quite read as "on the beat"
+// visually, so it's gone; this is simpler and unambiguous)
 #define TBAR_X 8
 #define TBAR_Y 112
 #define TBAR_H 30
-#define TBAR_W (_width - 64)
+#define TBAR_W (_width - 16)
+
+static int s_bar_playing = -1;   // -1 forces the first paint
+
+static color_t tbar_bg(void){
+    return dk.playing ? (color_t){25, 120, 50} : (color_t){30, 60, 140};
+}
 
 static void draw_posbar_frame(void){
-    _bg = (color_t){20, 22, 30};
+    _bg = tbar_bg();
     TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, _bg);
     _fg = (color_t){70, 70, 90};
     TFT_drawRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, _fg);
     s_last_barx = -1;
+    s_bar_playing = dk.playing;
 }
 
 static void draw_posbar(void){
+    if ((int)dk.playing != s_bar_playing)     // bar color follows transport state
+        draw_posbar_frame();
     if (!dk.file_frames) return;
     int x = TBAR_X + 2 + (int)((uint64_t)dk.rpos_i * (TBAR_W - 8) / dk.file_frames);
     if (x == s_last_barx) return;
     if (s_last_barx > 0)                      // erase only the old marker slice
-        TFT_fillRect(s_last_barx, TBAR_Y + 1, 5, TBAR_H - 2, (color_t){20, 22, 30});
-    TFT_fillRect(x, TBAR_Y + 1, 5, TBAR_H - 2, ACCENT);
+        TFT_fillRect(s_last_barx, TBAR_Y + 1, 5, TBAR_H - 2, tbar_bg());
+    TFT_fillRect(x, TBAR_Y + 1, 5, TBAR_H - 2, (color_t){235, 235, 235});
     s_last_barx = x;
-}
-
-static void draw_beat(bool on){
-    if (on == s_beat_lit) return;             // change-driven only
-    s_beat_lit = on;
-    color_t c = on ? BEAT : (color_t){30, 30, 36};
-    TFT_fillCircle(_width - 28, TBAR_Y + TBAR_H / 2, 15, c);
 }
 
 static void live_full_redraw(void){
@@ -138,16 +139,13 @@ static void live_full_redraw(void){
     draw_big_bpm();
     s_info1[0] = 0;
     s_info2[0] = 0;
-    s_beat_lit = true;      // force the first draw_beat(false) to paint
     draw_info();
-    draw_posbar_frame();
+    s_bar_playing = -1;      // force the first frame paint
     draw_posbar();
-    draw_beat(false);
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:scrub press:play TR1:go TR2:stop k6:filt k7:x2", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:scrub press:play k6:filt k7:x2", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
-    s_last_beat = -1;
 }
 
 static int deck_live_handler(int it_id, int event, void *ev_data){
@@ -158,21 +156,16 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             draw_big_bpm();
             draw_info();
             draw_posbar();
-            if (dk.track_bpm > 20 && dk.playing){
-                uint32_t beat_tf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
-                int beat = (int)(((int64_t)dk.rpos_i - (int64_t)dk.grid_offset) / (int64_t)beat_tf);
-                if (beat != s_last_beat){ draw_beat(true); s_last_beat = beat; }
-                else draw_beat(false);
-            } else draw_beat(false);
             if (event == EV_TIMER_REPEATING_SLOW){
                 // engine internals through /status (v1) for remote debugging
-                char dbg[32];
-                snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d",
+                char dbg[40];
+                snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d S%lu",
                          dk.playing ? 'P' : 's',
                          (unsigned long)dk.dbg_edges,
                          (unsigned long)(dk.dbg_iv / 44),        // ms between fires
                          (unsigned long)(dk.clk.period / 44),    // ms accepted period
-                         (int)(dk.phase_err * 100));             // PLL convergence
+                         (int)(dk.phase_err * 100),              // PLL convergence
+                         (unsigned long)dk.dbg_starve);          // ring underrun blocks
                 audio_status_set_voices("deck", dbg);
             }
             break;

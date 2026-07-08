@@ -65,6 +65,7 @@ typedef struct {
     volatile uint32_t dbg_edges;
     volatile uint32_t dbg_iv;      // frames between the last two fires
     uint32_t dbg_since;
+    volatile uint32_t dbg_starve;  // blocks muted mid-play: reader fell behind
     volatile float rate;           // current playback rate (UI display)
     volatile float phase_err;      // current beat phase error (UI display)
     volatile float speed_mult;     // knob7 while synced: x0.5 / x1 / x2, still locked
