@@ -127,6 +127,13 @@ machine-settings editor (`/remote/params` = the machine's preset JSON through
 **Roadmap status:** all phases of
 `/Users/arlo/.claude/plans/mighty-percolating-spindle.md` are BUILT and
 hardware-verified (drums, web-URI hook, freesound, import routes, teleremote).
+**Deck roadmap (Arlo, 2026-07-07):** polish the SINGLE Deck first (hw-verify
+sync feel + analysis quality, tune PLL constant / detection) as a dedicated
+full-control machine; THEN build a **separate dual-deck machine** (two
+synced decks + equal-power crossfade on knob6/CV, quantized deck starts)
+cherry-picking the proven parts. Do NOT fold dual into Deck — they stay
+separate machines by design. Resources check out: 2x6s rings ~2.1MB PSRAM,
+SD dual-stream is the classic sampler's proven load.
 Still open: **Sampler3** (deferred fork), Freesound OAuth2, looper overdub,
 granular position-CV, glitch grid-align. Original-import machine dropped
 (machine_sampler already IS the upstream v0.9 engine).
