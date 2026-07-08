@@ -55,6 +55,12 @@ typedef struct {
     volatile int  ppb_idx;         // pulses-per-beat index into dk_ppb[] (mult/div)
     volatile int  pitch_cv;        // knob7 free-rate when sync is off
     beatclock_t clk;
+    // clock-input conditioning: beatclock's fixed thresholds (1500/800 abs)
+    // misfire on attenuated/offset channels (this unit's CV8 caps at ~half);
+    // a floor-tracked Schmitt synthesises a clean square for it instead
+    int  clk_base;                 // tracked floor of the clock channel
+    bool clk_high;                 // Schmitt state
+    float rate_sm;                 // smoothed rate (edge jitter -> no warble)
     volatile float rate;           // current playback rate (UI display)
     volatile float phase_err;      // current beat phase error (UI display)
     volatile float speed_mult;     // knob7 while synced: x0.5 / x1 / x2, still locked
