@@ -21,6 +21,8 @@
 #define TRK_DIR_FAT      "/usr/MODS"
 #define TRK_NAME_LEN     24                   // 8.3 filename incl. extension
 #define TRK_TITLE_LEN    40
+#define TRK_MAX_NAMES    48                   // captured sample/instrument names
+#define TRK_NM_LEN       24                   // per name (libxmp gives up to 31)
 
 enum { TRK_EMPTY = 0, TRK_LOADING, TRK_READY, TRK_FAIL };
 
@@ -46,6 +48,10 @@ typedef struct {
     char  title[TRK_TITLE_LEN];    // internal module title (fallback: filename)
     char  fmt[20];                 // e.g. "Protracker", "Fast Tracker II"
     char  fail_why[24];
+    // sample/instrument names — composers often hide the song's message/credits
+    // here. Captured once at load; read by the UI (scrolled on knob7/CV7).
+    char  names[TRK_MAX_NAMES][TRK_NM_LEN];
+    int   n_names;
     volatile int  channels;
     volatile int  cur_pos, cur_pat, cur_row, num_pat;
     volatile int  time_ms, total_ms;
@@ -57,6 +63,7 @@ typedef struct {
     volatile bool loop;
     volatile bool sync;            // follow the external CV clock
     volatile bool amiga;           // Amiga (nearest+wide) vs Clean (spline+narrow)
+    volatile bool show_text;       // Live page shows the sample-name message panel
     volatile int  clk_src;         // CV channel of the clock
     volatile int  ppb_idx;         // pulses-per-beat index into trk_ppb[]
     volatile bool sound_dirty;     // menu flipped amiga → render re-applies
