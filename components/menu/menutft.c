@@ -88,6 +88,21 @@ void menuTFTPrintMainMenus(const char *const *items, int n){
     }
 }
 
+// A labelled affordance, right-justified on a page's title row (e.g. "System"
+// on a Setup page, "Settings" on the System page). Selecting it (press) is how
+// the hub-less pages reach the next level. Call after the page title.
+void menuTFTPrintAffordance(const char *label, int highlighted){
+    TFT_resetclipwin();   // draw at the very top, unclipped (else it garbles)
+    TFT_setFont(DEFAULT_FONT, NULL);
+    int w = TFT_getStringWidth((char*)label);
+    int x = _width - w - 8;
+    _bg = highlighted ? TFT_CYAN : TFT_BLACK;
+    _fg = highlighted ? TFT_BLACK : (color_t){120, 120, 120};
+    TFT_fillRect(x - 4, 2, w + 8, TFT_getfontheight() + 3, _bg);
+    TFT_print((char*)label, x, 4);
+    _bg = TFT_BLACK;
+}
+
 void menuTFTPrintAbout(){
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     TFT_fillWindow(TFT_BLACK);
