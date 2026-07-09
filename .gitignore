@@ -1,4 +1,5 @@
 build/
+.cache/
 sdkconfig
 sdkconfig.old
 .DS_Store
