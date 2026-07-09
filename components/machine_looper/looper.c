@@ -6,6 +6,7 @@
 #include <math.h>
 #include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "cJSON.h"
@@ -279,6 +280,81 @@ int looper_save_track(int i)
     cJSON_Delete(root);
     if (s) { writeJSONFile(jsn, s); free(s); }
     ESP_LOGI("LOOPER", "saved track %d -> %s (%lu frames)", i, name, (unsigned long)t->len);
+    return 0;
+}
+
+// Bounce all playing tracks down into track 1 (index 0): sum every
+// contributing loop to mono, baking in each track's level and (when the BP
+// filter is on) its bandpass, then clear tracks 2-4 so they're free to overdub
+// on top. Length = the longest contributing loop; shorter loops wrap to fill
+// it (sample-exact when lengths are bar multiples of each other, the normal
+// synced case). Pan is dropped — the destination is a mono track. Runs on the
+// UI task (explicit action). The audio task keeps playing the old mix until we
+// swap; sources are read-only here so concurrent playback is safe.
+int looper_bounce(void)
+{
+    // refuse while any track is capturing — its buf/len/state are in flux
+    for (int i = 0; i < LP_TRACKS; i++)
+        if (lp.tr[i].state == LP_REC || lp.tr[i].state == LP_ARMED) return -2;
+
+    // gather contributing tracks (playing/stopped with content) + the span
+    uint32_t bounce_len = 0;
+    int n_src = 0;
+    for (int i = 0; i < LP_TRACKS; i++) {
+        lp_track_t *t = &lp.tr[i];
+        if (t->len > 0 && (t->state == LP_PLAY || t->state == LP_STOP)) {
+            if (t->len > bounce_len) bounce_len = t->len;
+            n_src++;
+        }
+    }
+    if (n_src == 0 || bounce_len == 0) return -1;
+
+    int16_t *scratch = heap_caps_malloc(bounce_len * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    if (!scratch) return -1;
+
+    // per-track running bandpass state, advanced in playback (wrap) order so
+    // the baked filter tracks what the engine renders at looper.c's play path
+    float bl[LP_TRACKS] = {0}, bb[LP_TRACKS] = {0};
+
+    for (uint32_t j = 0; j < bounce_len; j++) {
+        int32_t acc = 0;
+        for (int i = 0; i < LP_TRACKS; i++) {
+            lp_track_t *t = &lp.tr[i];
+            if (t->len == 0 || !(t->state == LP_PLAY || t->state == LP_STOP)) continue;
+            int32_t raw = t->buf[j % t->len];
+            if (lp.filter_on) {                                    // bandpass SVF
+                bl[i] += t->f * bb[i];
+                float high = (float)raw - bl[i] - t->q * bb[i];
+                bb[i] += t->f * high;
+                raw = (int32_t)bb[i];
+            }
+            acc += (raw * t->vol) >> 8;                            // level
+        }
+        if (acc > 32767) acc = 32767; else if (acc < -32768) acc = -32768;
+        scratch[j] = (int16_t)acc;
+    }
+
+    // swap in: silence all lanes, let the audio task drain a few blocks (it
+    // stops reading a track the frame its state != PLAY), then install the
+    // bounce on track 1 at unity/center and leave 2-4 empty
+    for (int i = 0; i < LP_TRACKS; i++) {
+        lp.tr[i].state = LP_EMPTY;
+        lp.tr[i].len = lp.tr[i].pos = lp.tr[i].target = 0;
+    }
+    vTaskDelay(pdMS_TO_TICKS(5));
+
+    lp_track_t *d = &lp.tr[0];
+    memcpy(d->buf, scratch, bounce_len * sizeof(int16_t));
+    free(scratch);
+    d->len = bounce_len;
+    d->pos = 0;
+    d->vol = 255;                 // unity — the balance is already baked in
+    d->pan = 2048;                // center
+    d->svf_low = d->svf_band = 0.0f;
+    d->state = LP_PLAY;
+
+    ESP_LOGI("LOOPER", "bounced %d track(s) -> track 1 (%lu frames)",
+             n_src, (unsigned long)bounce_len);
     return 0;
 }
 

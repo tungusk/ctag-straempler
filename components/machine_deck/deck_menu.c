@@ -41,6 +41,7 @@ static void an_auto_poll(void){
 // timer tick made the whole screen strobe (Arlo, first hardware test).
 static int s_last_barx = -1;
 static char s_info1[64] = "", s_info2[64] = "";
+static char s_last_track[DK_NAME_LEN] = "";   // detect track changes (e.g. via remote)
 static int s_last_dbpm = -1;
 
 // the number that matters, BIG: the tempo actually playing right now
@@ -149,6 +150,7 @@ static void live_full_redraw(void){
     snprintf(nm, sizeof(nm), "%.9s", dk.track[0] ? dk.track : "(none)");
     TFT_print(nm, 8, TFT_getfontheight() + 4);
     cfont = f;
+    strlcpy(s_last_track, dk.track, sizeof(s_last_track));
     s_last_dbpm = -1;
     draw_big_bpm();
     s_info1[0] = 0;
@@ -168,9 +170,13 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
         case EV_TIMER_REPEATING_FAST:
         case EV_TIMER_REPEATING_SLOW: {
             an_auto_poll();
-            draw_big_bpm();
-            draw_info();
-            draw_posbar();
+            if (strcmp(dk.track, s_last_track) != 0) {   // track changed under us (remote)
+                live_full_redraw();                      // repaints name + resyncs caches
+            } else {
+                draw_big_bpm();
+                draw_info();
+                draw_posbar();
+            }
             if (event == EV_TIMER_REPEATING_SLOW){
                 // engine internals through /status (v1) for remote debugging
                 char dbg[40];

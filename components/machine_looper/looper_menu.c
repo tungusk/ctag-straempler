@@ -211,10 +211,12 @@ static int looper_live_handler(int it_id, int event, void *ev_data){
 
 // ---- Setup page -----------------------------------------------------------
 // Rows 0-2 are edit-in-place values; row 3 (Save) is an action button.
-static const char *setup_labels[] = {"Sync", "Clock Src", "Bars", "Monitor", "BP Filter", "Save Trk"};
-#define SETUP_N 6
+static const char *setup_labels[] = {"Sync", "Clock Src", "Bars", "Monitor", "BP Filter", "Save Trk", "Bounce"};
+#define SETUP_N 7
 #define SETUP_SAVE_ROW 5
+#define SETUP_BOUNCE_ROW 6
 static const char *s_save_msg = "";   // transient result shown on the Save row
+static const char *s_bounce_msg = ""; // transient result shown on the Bounce row
 
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -241,6 +243,8 @@ static void setup_redraw(int pos, int sel){
             case 4: snprintf(v, sizeof(v), "%s", lp.filter_on ? "ON" : "OFF"); break;
             case 5: snprintf(v, sizeof(v), "%s trk %d",
                              s_save_msg[0] ? s_save_msg : "press:", lp.sel + 1); break;
+            case 6: snprintf(v, sizeof(v), "%s",
+                             s_bounce_msg[0] ? s_bounce_msg : "press: all->1"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -249,7 +253,7 @@ static void setup_redraw(int pos, int sel){
 static int looper_setup_handler(int it_id, int event, void *ev_data){
     static int pos = 0, sel = 0;
     switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; s_save_msg = ""; setup_redraw(pos, sel); break;
+        case EV_ENTERED_MENU: pos = 0; sel = 0; s_save_msg = ""; s_bounce_msg = ""; setup_redraw(pos, sel); break;
         case EV_FWD:
             if(sel){
                 if(pos==0) lp.sync_on = !lp.sync_on;
@@ -257,7 +261,7 @@ static int looper_setup_handler(int it_id, int event, void *ev_data){
                 else if(pos==2) { int b = lp.bars * 2; lp.bars = (b > 8) ? 1 : b; }
                 else if(pos==3) lp.monitor = !lp.monitor;
                 else if(pos==4) lp.filter_on = !lp.filter_on;
-            } else { pos = (pos + 1) % SETUP_N; s_save_msg = ""; }
+            } else { pos = (pos + 1) % SETUP_N; s_save_msg = ""; s_bounce_msg = ""; }
             setup_redraw(pos, sel);
             break;
         case EV_BWD:
@@ -267,7 +271,7 @@ static int looper_setup_handler(int it_id, int event, void *ev_data){
                 else if(pos==2) { int b = lp.bars / 2; lp.bars = (b < 1) ? 8 : b; }
                 else if(pos==3) lp.monitor = !lp.monitor;
                 else if(pos==4) lp.filter_on = !lp.filter_on;
-            } else { pos = (pos + SETUP_N - 1) % SETUP_N; s_save_msg = ""; }
+            } else { pos = (pos + SETUP_N - 1) % SETUP_N; s_save_msg = ""; s_bounce_msg = ""; }
             setup_redraw(pos, sel);
             break;
         case EV_SHORT_PRESS:
@@ -275,6 +279,12 @@ static int looper_setup_handler(int it_id, int event, void *ev_data){
                 // action row: write the selected track to the SD library
                 int r = looper_save_track(lp.sel);
                 s_save_msg = (r == 0) ? "SAVED" : "EMPTY";
+                setup_redraw(pos, 0);
+            } else if(pos == SETUP_BOUNCE_ROW){
+                // action row: resample all tracks down into track 1
+                int r = looper_bounce();
+                s_bounce_msg = (r == 0) ? "BOUNCED" : (r == -2) ? "STOP REC" : "EMPTY";
+                if (r == 0) lp.sel = 0;   // the bounce lands on track 1 — focus it
                 setup_redraw(pos, 0);
             } else {
                 sel = !sel; setup_redraw(pos, sel);
