@@ -6,6 +6,7 @@
 #include "freertos/queue.h"
 #include "menusys.h"
 #include "menu_types.h"
+#include "menutft.h"
 #include "ui_events.h"
 #include "tft.h"
 #include "tftspi.h"
@@ -94,7 +95,7 @@ static int gran_live_handler(int it_id, int event, void *ev_data){
             gran_update_marker();
             gran_draw_info();
             break;
-        case EV_LONG_PRESS: return M_MAIN;
+        case EV_LONG_PRESS: return M_GRAN_SETUP;   // toggle Live -> Setup
         default: break;
     }
     return 0;
@@ -119,6 +120,7 @@ static void setup_redraw(int pos, int sel){
     int fh = TFT_getfontheight();
     _fg = TFT_WHITE;
     TFT_print("Granular Setup", 6, 4);
+    menuTFTPrintAffordance("System", pos == -1);
     for (int i = 0; i < GR_SETUP_N; i++){
         int y = fh + 14 + i * (fh + 8);
         _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
@@ -151,20 +153,21 @@ static int gran_setup_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU: pos = 0; sel = 0; refresh_samples(); setup_redraw(pos, sel); break;
         case EV_FWD:
-            if(sel){ if(pos < 4) adj(pos, +1); }
-            else pos = (pos + 1) % GR_SETUP_N;
+            if(sel){ if(pos >= 0 && pos < 4) adj(pos, +1); }
+            else { pos++; if(pos >= GR_SETUP_N) pos = -1; }
             setup_redraw(pos, sel);
             break;
         case EV_BWD:
-            if(sel){ if(pos < 4) adj(pos, -1); }
-            else pos = (pos + GR_SETUP_N - 1) % GR_SETUP_N;
+            if(sel){ if(pos >= 0 && pos < 4) adj(pos, -1); }
+            else { pos--; if(pos < -1) pos = GR_SETUP_N - 1; }
             setup_redraw(pos, sel);
             break;
         case EV_SHORT_PRESS:
+            if(pos == -1) return M_MORE;   // System affordance
             if(pos == 4){ refresh_samples(); return M_GRAN_LOAD; }
             sel = !sel; setup_redraw(pos, sel);
             break;
-        case EV_LONG_PRESS: return M_MAIN;
+        case EV_LONG_PRESS: return M_GRAN_LIVE;   // toggle Setup -> Live
         default: break;
     }
     return 0;

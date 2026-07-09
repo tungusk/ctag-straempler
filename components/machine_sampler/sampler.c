@@ -1342,7 +1342,7 @@ extern cJSON *sampler_preset_save(void);
 extern void sampler_preset_load(const cJSON *node);
 
 const machine_t machine_sampler = {
-    .name = "Sampler",
+    .name = "Sampler0",   // legacy engine, hidden from the selector (Sampler2 is now "Sampler")
     .start = sampler_start,
     .stop = sampler_stop,
     .process = sampler_process,

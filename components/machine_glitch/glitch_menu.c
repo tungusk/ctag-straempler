@@ -5,6 +5,7 @@
 #include "freertos/queue.h"
 #include "menusys.h"
 #include "menu_types.h"
+#include "menutft.h"
 #include "ui_events.h"
 #include "tft.h"
 #include "tftspi.h"
@@ -78,7 +79,7 @@ static int glitch_live_handler(int it_id, int event, void *ev_data){
             if (gl.stutter != s_last_stutter) state_block();
             info_block();   // refresh window/BPM/lock
             break;
-        case EV_LONG_PRESS: return M_MAIN;
+        case EV_LONG_PRESS: return M_GLITCH_SETUP;   // toggle Live -> Setup
         default: break;
     }
     return 0;
@@ -94,6 +95,7 @@ static void setup_redraw(int pos, int sel){
     int fh = TFT_getfontheight();
     _fg = TFT_WHITE;
     TFT_print("Glitch Setup", 6, 4);
+    menuTFTPrintAffordance("System", pos == -1);
     for (int i = 0; i < GL_SETUP_N; i++){
         int y = fh + 16 + i * (fh + 8);
         _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
@@ -132,16 +134,18 @@ static int glitch_setup_handler(int it_id, int event, void *ev_data){
         case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
         case EV_FWD:
             if(sel) gl_adj(pos, +1);
-            else pos = (pos + 1) % GL_SETUP_N;
+            else { pos++; if(pos >= GL_SETUP_N) pos = -1; }
             setup_redraw(pos, sel);
             break;
         case EV_BWD:
             if(sel) gl_adj(pos, -1);
-            else pos = (pos + GL_SETUP_N - 1) % GL_SETUP_N;
+            else { pos--; if(pos < -1) pos = GL_SETUP_N - 1; }
             setup_redraw(pos, sel);
             break;
-        case EV_SHORT_PRESS: sel = !sel; setup_redraw(pos, sel); break;
-        case EV_LONG_PRESS: return M_MAIN;
+        case EV_SHORT_PRESS:
+            if(pos == -1) return M_MORE;   // System affordance
+            sel = !sel; setup_redraw(pos, sel); break;
+        case EV_LONG_PRESS: return M_GLITCH_LIVE;   // toggle Setup -> Live
         default: break;
     }
     return 0;
