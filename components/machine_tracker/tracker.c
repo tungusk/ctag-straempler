@@ -185,6 +185,24 @@ static void do_load(void)
     trk.num_pat  = mi.mod ? mi.mod->len : 0;
     trk.mod_bpm  = mi.mod ? mi.mod->bpm : 0;
 
+    // Capture the sample/instrument name slots — composers frequently spell out
+    // the song's message/credits across them. Prefer instrument names (XM/IT),
+    // fall back to sample names (MOD). Trailing spaces trimmed for tidy display.
+    trk.n_names = 0;
+    if (mi.mod){
+        int use_ins = mi.mod->ins > 0;
+        int cnt = use_ins ? mi.mod->ins : mi.mod->smp;
+        if (cnt > TRK_MAX_NAMES) cnt = TRK_MAX_NAMES;
+        for (int i = 0; i < cnt; i++){
+            const char *nm = use_ins ? mi.mod->xxi[i].name : mi.mod->xxs[i].name;
+            if (!nm) nm = "";
+            strlcpy(trk.names[i], nm, TRK_NM_LEN);
+            for (int e = (int)strlen(trk.names[i]) - 1; e >= 0 && (unsigned char)trk.names[i][e] <= ' '; e--)
+                trk.names[i][e] = 0;
+            trk.n_names++;
+        }
+    }
+
     xmp_start_player(s_ctx, TRK_RATE, 0);
     apply_sound_mode();
     trk.tf_cur = 1.0f;
@@ -384,6 +402,7 @@ static cJSON *tracker_preset_save(void)
     cJSON_AddBoolToObject(o, "loop", trk.loop);
     cJSON_AddBoolToObject(o, "sync", trk.sync);
     cJSON_AddBoolToObject(o, "amiga", trk.amiga);
+    cJSON_AddBoolToObject(o, "show_text", trk.show_text);
     cJSON_AddNumberToObject(o, "clk_src", trk.clk_src);
     cJSON_AddNumberToObject(o, "ppb", trk.ppb_idx);
     return o;
@@ -392,13 +411,14 @@ static cJSON *tracker_preset_save(void)
 static void tracker_preset_load(const cJSON *node)
 {
     // defaults first (also the NULL / other-machine-autosave path)
-    trk.loop = true; trk.sync = false; trk.amiga = true;
+    trk.loop = true; trk.sync = false; trk.amiga = true; trk.show_text = true;
     trk.clk_src = 7; trk.ppb_idx = 4; trk.file[0] = 0;
     if (!node) return;
     cJSON *j;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop")))  trk.loop  = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync")))  trk.sync  = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "amiga"))) trk.amiga = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "show_text"))) trk.show_text = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) trk.clk_src = j->valueint & 7;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
         trk.ppb_idx = j->valueint; if (trk.ppb_idx < 0) trk.ppb_idx = 0; if (trk.ppb_idx > 4) trk.ppb_idx = 4;

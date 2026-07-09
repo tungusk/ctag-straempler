@@ -9,6 +9,7 @@
 #include <esp_http_server.h>
 #include "menusys.h"
 #include "menu_types.h"
+#include "menutft.h"
 #include "ui_events.h"
 #include "tft.h"
 #include "tftspi.h"
@@ -28,7 +29,19 @@ static void refresh_mods(void){
 }
 
 // ---- Live -------------------------------------------------------------------
-static char s_info1[64] = "", s_info2[64] = "";
+// Live layout (320x240, absolute coords — pages resetclipwin before drawing):
+// header, big module title, full module type, status, slim transport bar, then
+// the module "message" panel — the sample/instrument name slots in a small
+// font, scrolled by knob7/CV7 (toggled by trk.show_text; off => blank).
+#define HDR_Y    4
+#define TITLE_Y  22
+#define TYPE_Y   58
+#define STAT_Y   80
+#define BODY_Y   118
+static char s_type[48] = "", s_stat[48] = "";
+static char s_title[TRK_TITLE_LEN] = "";
+static char s_body_sig[32] = "";
+static int  s_body_top = -999;
 static int  s_last_barx = -1;
 static int  s_bar_state = -1;
 
@@ -45,8 +58,8 @@ static const char *state_word(void){
 // position marker. _bg is a shared global — restore it after (hint line was
 // blue-on-blue in the deck until this was fixed).
 #define TBAR_X 8
-#define TBAR_Y 116
-#define TBAR_H 28
+#define TBAR_Y 100
+#define TBAR_H 12
 #define TBAR_W (_width - 16)
 
 static color_t tbar_bg(void){
@@ -75,45 +88,81 @@ static void draw_bar(void){
     s_last_barx = x;
 }
 
-static void draw_info(void){
-    int fh = TFT_getfontheight();
-    int y = fh + 44;
-    char s1[64], s2[64];
-    if (trk.state == TRK_FAIL)
-        snprintf(s1, sizeof(s1), "FAIL: %.20s", trk.fail_why);
-    else
-        snprintf(s1, sizeof(s1), "%.10s %dch  %s  P%02d/%02d",
-                 trk.fmt, trk.channels, state_word(), trk.cur_pos, trk.num_pat);
-    if (trk.sync){
-        if (trk.clk.locked) snprintf(s2, sizeof(s2), "sync %d bpm  LOCK", trk.cur_bpm);
-        else snprintf(s2, sizeof(s2), "sync: waiting CV%d", trk.clk_src + 1);
-    } else s2[0] = 0;
-    if (strcmp(s1, s_info1) != 0){
-        strcpy(s_info1, s1);
-        _bg = TFT_BLACK; TFT_fillRect(0, y, _width, fh + 4, _bg);
-        _fg = (trk.state == TRK_FAIL) ? (color_t){230, 120, 120} : TFT_WHITE;
-        TFT_print(s1, 8, y);
-    }
-    if (strcmp(s2, s_info2) != 0){
-        strcpy(s_info2, s2);
-        _bg = TFT_BLACK; TFT_fillRect(0, y + fh + 6, _width, fh + 4, _bg);
-        _fg = trk.clk.locked ? (color_t){40, 200, 90} : TFT_LIGHTGREY;
-        if (s2[0]) TFT_print(s2, 8, y + fh + 6);
-    }
-}
-
-static char s_last_title[TRK_TITLE_LEN] = "";
 static void draw_title(void){
-    if (strcmp(trk.title, s_last_title) == 0) return;
-    strcpy(s_last_title, trk.title);
+    if (strcmp(trk.title, s_title) == 0) return;
+    strlcpy(s_title, trk.title, sizeof(s_title));
     Font f = cfont;
     TFT_setFont(DEJAVU24_FONT, NULL);
     int bh = TFT_getfontheight();
-    _bg = TFT_BLACK; TFT_fillRect(0, TFT_getfontheight() + 2, _width, bh + 4, _bg);
+    _bg = TFT_BLACK; TFT_fillRect(0, TITLE_Y, _width, bh + 4, _bg);
     _fg = TFT_WHITE;
-    char nm[22];
-    snprintf(nm, sizeof(nm), "%.20s", trk.title[0] ? trk.title : "(none)");
-    TFT_print(nm, 8, TFT_getfontheight() + 4);
+    char nm[24]; snprintf(nm, sizeof(nm), "%.22s", trk.title[0] ? trk.title : "(untitled)");
+    TFT_print(nm, 8, TITLE_Y);
+    cfont = f;
+}
+
+static void draw_info(void){
+    TFT_setFont(DEFAULT_FONT, NULL);
+    int fh = TFT_getfontheight();
+    char ty[48], st[48];
+    if (trk.state == TRK_FAIL){
+        snprintf(ty, sizeof(ty), "FAIL: %.36s", trk.fail_why);
+        st[0] = 0;
+    } else {
+        // full module type on its own line (no longer truncated to 10 chars)
+        snprintf(ty, sizeof(ty), "%s   %d ch", trk.fmt[0] ? trk.fmt : "(unknown)", trk.channels);
+        snprintf(st, sizeof(st), "%s   pat %02d/%02d   %d bpm",
+                 state_word(), trk.cur_pos, trk.num_pat, trk.mod_bpm);
+    }
+    if (strcmp(ty, s_type) != 0){
+        strcpy(s_type, ty);
+        _bg = TFT_BLACK; TFT_fillRect(0, TYPE_Y, _width, fh + 4, _bg);
+        _fg = (trk.state == TRK_FAIL) ? (color_t){230, 120, 120} : (color_t){120, 200, 255};
+        TFT_print(ty, 8, TYPE_Y);
+    }
+    if (strcmp(st, s_stat) != 0){
+        strcpy(s_stat, st);
+        _bg = TFT_BLACK; TFT_fillRect(0, STAT_Y, _width, fh + 4, _bg);
+        _fg = TFT_WHITE; if (st[0]) TFT_print(st, 8, STAT_Y);
+    }
+}
+
+// Module "message" panel: the sample/instrument name slots in a small font,
+// scrolled by knob7/CV7. When trk.show_text is off, the panel stays blank.
+// Redraws only when scroll position or content changes.
+static void draw_body(bool force){
+    Font f = cfont;
+    if (!trk.show_text){
+        if (!force && s_body_top == -1){ cfont = f; return; }   // already blank
+        s_body_top = -1; s_body_sig[0] = 0;
+        _bg = TFT_BLACK; TFT_fillRect(0, BODY_Y, _width, _height - BODY_Y, _bg);
+        cfont = f;
+        return;
+    }
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    int lh = TFT_getfontheight() + 2;
+    int rows = (_height - BODY_Y) / lh; if (rows < 1) rows = 1;
+    int n = trk.n_names;
+    int maxtop = n > rows ? n - rows : 0;
+    int top = 0;
+    if (maxtop > 0){
+        uint16_t cv[8]; audio_get_cv(cv);
+        top = (int)((int64_t)cv[6] * maxtop / 4095);
+        if (top < 0) top = 0;
+        if (top > maxtop) top = maxtop;
+    }
+    char sig[32]; snprintf(sig, sizeof(sig), "N%d.%d:%.10s", n, top, n ? trk.names[0] : "");
+    if (!force && top == s_body_top && strcmp(sig, s_body_sig) == 0){ cfont = f; return; }
+    s_body_top = top; strlcpy(s_body_sig, sig, sizeof(s_body_sig));
+    _bg = TFT_BLACK; TFT_fillRect(0, BODY_Y, _width, _height - BODY_Y, _bg);
+    int y = BODY_Y;
+    for (int i = 0; i < rows && top + i < n; i++){
+        int has = trk.names[top + i][0] != 0;
+        _fg = has ? (color_t){205, 205, 205} : (color_t){60, 60, 60};
+        char ln[40]; snprintf(ln, sizeof(ln), "%2d %.30s", top + i + 1,
+                              has ? trk.names[top + i] : "-");
+        TFT_print(ln, 8, y); y += lh;
+    }
     cfont = f;
 }
 
@@ -121,14 +170,12 @@ static void live_full_redraw(void){
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
-    TFT_print("Tracker", 6, 4);
-    s_last_title[0] = 0; draw_title();
-    s_info1[0] = 0; s_info2[0] = 0; draw_info();
-    s_bar_state = -1; draw_bar();
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:seek press:load TR1:restart TR2:stop", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
+    TFT_print("Tracker", 6, HDR_Y);
+    s_title[0] = 0; draw_title();
+    s_type[0] = 0; s_stat[0] = 0; draw_info();
+    s_bar_state = -1; draw_bar();
+    s_body_sig[0] = 0; s_body_top = -999; draw_body(true);
 }
 
 static int tracker_live_handler(int it_id, int event, void *ev_data){
@@ -139,6 +186,7 @@ static int tracker_live_handler(int it_id, int event, void *ev_data){
             draw_title();
             draw_info();
             draw_bar();
+            draw_body(false);
             if (event == EV_TIMER_REPEATING_SLOW){
                 char dbg[48];
                 snprintf(dbg, sizeof(dbg), "%c %.6s %dch r%d S%lu",
@@ -152,15 +200,15 @@ static int tracker_live_handler(int it_id, int event, void *ev_data){
             return M_TRACKER_LOAD;
         case EV_FWD: if (trk.num_pat > 0){ trk.seek_pos = (trk.cur_pos + 1) % trk.num_pat; trk.seek_req = true; } break;
         case EV_BWD: if (trk.num_pat > 0){ trk.seek_pos = (trk.cur_pos + trk.num_pat - 1) % trk.num_pat; trk.seek_req = true; } break;
-        case EV_LONG_PRESS: return M_MAIN;
+        case EV_LONG_PRESS: return M_TRACKER_SETUP;   // toggle Live -> Setup
         default: break;
     }
     return 0;
 }
 
 // ---- Setup ------------------------------------------------------------------
-static const char *setup_labels[] = {"Module", "Loop", "Sound", "Sync", "Clock Src", "Clock"};
-#define TRK_SETUP_N 6
+static const char *setup_labels[] = {"Module", "Loop", "Sound", "Sync", "Clock Src", "Clock", "Info Text"};
+#define TRK_SETUP_N 7
 
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -168,6 +216,7 @@ static void setup_redraw(int pos, int sel){
     int fh = TFT_getfontheight();
     _fg = TFT_WHITE;
     TFT_print("Tracker Setup", 6, 4);
+    menuTFTPrintAffordance("System", pos == -1);
     for (int i = 0; i < TRK_SETUP_N; i++){
         int y = fh + 16 + i * (fh + 8);
         _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
@@ -182,6 +231,7 @@ static void setup_redraw(int pos, int sel){
             case 3: snprintf(v, sizeof(v), "%s", trk.sync ? "ON" : "OFF"); break;
             case 4: snprintf(v, sizeof(v), "CV%d", trk.clk_src + 1); break;
             case 5: snprintf(v, sizeof(v), "%s", trk_ppb_names[trk.ppb_idx]); break;
+            case 6: snprintf(v, sizeof(v), "%s", trk.show_text ? "ON" : "OFF"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -198,6 +248,7 @@ static void setup_adj(int i, int dir){
         case 3: trk.sync = !trk.sync; break;
         case 4: trk.clk_src = (trk.clk_src + (dir > 0 ? 1 : 7)) & 7; break;
         case 5: trk.ppb_idx += dir; if (trk.ppb_idx < 0) trk.ppb_idx = 0; if (trk.ppb_idx > 4) trk.ppb_idx = 4; break;
+        case 6: trk.show_text = !trk.show_text; break;
     }
 }
 
@@ -206,15 +257,16 @@ static int tracker_setup_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
         case EV_FWD:
-            if (sel) setup_adj(pos, +1); else pos = (pos + 1) % TRK_SETUP_N;
+            if (sel) setup_adj(pos, +1); else { pos++; if (pos >= TRK_SETUP_N) pos = -1; }
             setup_redraw(pos, sel); break;
         case EV_BWD:
-            if (sel) setup_adj(pos, -1); else pos = (pos + TRK_SETUP_N - 1) % TRK_SETUP_N;
+            if (sel) setup_adj(pos, -1); else { pos--; if (pos < -1) pos = TRK_SETUP_N - 1; }
             setup_redraw(pos, sel); break;
         case EV_SHORT_PRESS:
+            if (pos == -1) return M_MORE;   // System affordance
             if (pos == 0){ refresh_mods(); s_load_ret = M_TRACKER_SETUP; return M_TRACKER_LOAD; }
             sel = !sel; setup_redraw(pos, sel); break;
-        case EV_LONG_PRESS: return M_MAIN;
+        case EV_LONG_PRESS: return M_TRACKER_LIVE;   // toggle Setup -> Live
         default: break;
     }
     return 0;
