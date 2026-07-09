@@ -100,6 +100,7 @@ int deck_load_track(const char *name)
     dk.loading = true;
     dk.track_bpm = 0;
     dk.grid_offset = 0;
+    dk.phase_int = 0.0f;                         // new track: fresh PLL integrator
     strlcpy(dk.track, name, sizeof(dk.track));
     strlcpy(s_pending, name, sizeof(s_pending));
     s_track_req = true;
@@ -147,6 +148,7 @@ void deck_toggle_play(void)
     if (to >= dk.file_frames)
         to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;
     dk.loading = true;
+    dk.phase_int = 0.0f;                  // fresh PLL integrator on resume
     dk.seek_to = to;
     dk.seek_req = true;                   // reader applies rpos
     dk.playing = true;
@@ -167,6 +169,7 @@ void deck_seek_beats(int beats)
     if (tgt < 0) tgt = 0;
     if (tgt > (int64_t)dk.file_frames - 1) tgt = (int64_t)dk.file_frames - 1;
     dk.loading = true;                          // brief mute while the ring refills
+    dk.phase_int = 0.0f;                         // phase ref jumped: reset integrator
     dk.seek_to = (uint32_t)tgt;
     dk.seek_req = true;                         // reader applies rpos; play state stays
 }
@@ -210,13 +213,14 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
 {
     if (!dk.ring) return;
 
-    // transport gates: TR1 = start/restart at the downbeat, TR2 = stop
-    // (flags only; the reader task does the seeking)
+    // transport gates: TR1 = start/restart at the downbeat, TR2 = pause/resume
+    // (resume picks up at the paused position — handy for hand-nudging sync).
+    // Flags only; the reader task does the seeking.
     static uint8_t prev_trig = 0x03;
     uint8_t pressed = prev_trig & (~io->trig_level) & 0x03;
     prev_trig = io->trig_level;
     if (pressed & 1) deck_restart();
-    if (pressed & 2) dk.playing = false;
+    if (pressed & 2) deck_toggle_play();
 
     dk.pitch_cv = io->cv[6];   // knob7 = free-run rate when sync is off
 
@@ -267,10 +271,24 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
             float err = p_ext - p_trk;
             if (err > 0.5f) err -= 1.0f;
             if (err < -0.5f) err += 1.0f;
-            rate = base * (1.0f + 0.08f * err);
+            // PI loop filter. The P term (0.08) chases phase fast; the I term
+            // accumulates to cancel the residual frequency error a P-only loop
+            // leaves as slow drift (track_bpm is never exact). Integrator is
+            // clamped to a +/-4% rate-trim band (analysis is within a few %),
+            // which also bounds wind-up. Reset on unlock / seek / load.
+            // LEAKY integrator. The 0.9999 leak bleeds off any slow bias in the
+            // phase measurement (the p_ext clamp above isn't perfectly zero-mean)
+            // so it can't wind up over minutes — that wind-up was the "audio
+            // degrades after a while". Gentle gain (0.0002) so it doesn't hunt,
+            // yet still trims the residual frequency error (drift).
+            dk.phase_int = dk.phase_int * 0.9999f + 0.0002f * err;
+            if (dk.phase_int > 0.04f) dk.phase_int = 0.04f;
+            else if (dk.phase_int < -0.04f) dk.phase_int = -0.04f;
+            rate = base * (1.0f + 0.08f * err + dk.phase_int);
             dk.phase_err = err;
         } else {
             rate = m;          // no clock yet: play straight (times the speed knob)
+            dk.phase_int = 0.0f;   // start each lock from a clean integrator
         }
     } else {
         // free run: knob7, unity plateau around centre (same feel as glitch)
@@ -401,7 +419,11 @@ static void deck_preset_load(const cJSON *node)
         if (dk.ppb_idx < 0) dk.ppb_idx = 0;
         if (dk.ppb_idx > 4) dk.ppb_idx = 4;
     }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "track")) && cJSON_IsString(j) && j->valuestring[0])
+    // only (re)load when the track actually changes — a remote "Apply" that
+    // only touched sync/ppb/clk_src must NOT reload the track (that re-triggers
+    // the ring refill + PLL cold-relock and makes the deck sound like it reset)
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "track")) && cJSON_IsString(j) && j->valuestring[0]
+        && strcmp(j->valuestring, dk.track) != 0)
         deck_load_track(j->valuestring);         // also restores cached bpm/grid
 }
 
