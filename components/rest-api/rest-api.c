@@ -21,6 +21,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <ctype.h>
 
 static const char *TAG = "REST-API";
 static httpd_handle_t server = NULL;
@@ -730,6 +731,188 @@ static void machine_web_apply(const machine_t *m)
         ESP_LOGI(TAG, "%s: %d machine URIs registered", m->name, n_machine_uris);
 }
 
+// ─── tracker module files (usr/MODS) ─────────────────────────────────────────
+// Upload / list / download / delete for tracker modules. These live in the
+// CORE (not the Tracker machine) so they work regardless of the active machine
+// — a module is just a file. Path mirrors tracker_priv.h's TRK_DIR_* (the
+// on-device Module browser reads the same folder).
+#ifndef MIN
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#endif
+#define MOD_DIR_VFS  "/sdcard/usr/MODS"
+#define MOD_DIR_FAT  "/usr/MODS"
+#define MOD_TMP      "/usr/MODS/UPLOAD.TMP"   // atomic-upload scratch (8.3-safe)
+#define MOD_MAX_FILE (2 * 1024 * 1024)
+
+static const char *const MOD_UP_EXTS[] = {
+    "MOD","XM","IT","S3M","669","MTM","OKT","ULT","FAR","MED","DBM","AMF",
+    "PTM","STM","DMF","GDM","IMF","LIQ","MDL","PT3","OXM","DIGI","EMOD",
+};
+static bool mod_ext_ok(const char *e){
+    for (int i = 0; i < (int)(sizeof(MOD_UP_EXTS)/sizeof(MOD_UP_EXTS[0])); i++)
+        if (strcasecmp(e, MOD_UP_EXTS[i]) == 0) return true;
+    return false;
+}
+// reject path traversal / subdirs in a query-supplied filename
+static bool mod_name_safe(const char *n){
+    if (!n[0]) return false;
+    for (const char *p = n; *p; p++) if (*p == '/' || *p == '\\') return false;
+    return strstr(n, "..") == NULL;
+}
+
+// PUT /trk/upload — headers Name (8.3 base, clamped) + Ext; body = raw bytes,
+// stored verbatim (no conversion) to usr/MODS/<NAME>.<EXT>.
+static esp_err_t mod_upload_handler(httpd_req_t *req)
+{
+    char name[16] = "", ext[8] = "";
+    size_t nl = httpd_req_get_hdr_value_len(req, "Name") + 1;
+    if (nl > 1) {
+        char *b = malloc(nl);
+        if (httpd_req_get_hdr_value_str(req, "Name", b, nl) == ESP_OK) {
+            cleanStringSpace(b); b[8] = 0; strlcpy(name, b, sizeof(name));
+        }
+        free(b);
+    }
+    size_t el = httpd_req_get_hdr_value_len(req, "Ext") + 1;
+    if (el > 1) {
+        char *b = malloc(el);
+        if (httpd_req_get_hdr_value_str(req, "Ext", b, el) == ESP_OK) strlcpy(ext, b, sizeof(ext));
+        free(b);
+    }
+    if (!name[0] || !mod_ext_ok(ext)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad name/ext"); return ESP_FAIL;
+    }
+    if (req->content_len == 0 || req->content_len > MOD_MAX_FILE) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Module too big or empty"); return ESP_FAIL;
+    }
+
+    char up[8]; strlcpy(up, ext, sizeof(up));
+    for (char *p = up; *p; p++) *p = toupper((unsigned char)*p);
+    char path[48];
+    snprintf(path, sizeof(path), MOD_DIR_FAT "/%s.%s", name, up);
+
+    // ATOMIC WRITE: stream to a temp file, rename to the real name only after
+    // the full body arrives. A partial/interrupted upload leaves only MOD_TMP
+    // (which no machine loads), so the tracker never sees a truncated module —
+    // truncated modules can crash libxmp. (8.3-safe fixed temp; uploads are
+    // serialized by the single-threaded httpd so there's no collision.)
+    FIL f;
+    sd_lock_take();
+    f_mkdir(MOD_DIR_FAT);                    // ensure the folder exists (ok if present)
+    FRESULT fr = f_open(&f, MOD_TMP, FA_CREATE_ALWAYS | FA_WRITE);
+    sd_lock_give();
+    if (fr != FR_OK) {
+        ESP_LOGE(TAG, "module f_open %s failed (%d)", MOD_TMP, fr);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD open failed"); return ESP_FAIL;
+    }
+
+    char *buf = malloc(4096);
+    int remaining = req->content_len, ret; UINT bw;
+    while (remaining > 0) {
+        if ((ret = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            sd_lock_take(); f_close(&f); f_unlink(MOD_TMP); sd_lock_give();
+            free(buf); return ESP_FAIL;      // drop the partial temp
+        }
+        remaining -= ret;
+        sd_lock_take(); f_write(&f, buf, ret, &bw); sd_lock_give();
+    }
+    sd_lock_take();
+    f_close(&f);
+    f_unlink(path);                          // replace any existing same-named module
+    FRESULT rr = f_rename(MOD_TMP, path);     // publish atomically
+    if (rr != FR_OK) f_unlink(MOD_TMP);
+    sd_lock_give();
+    free(buf);
+    if (rr != FR_OK) {
+        ESP_LOGE(TAG, "module rename %s -> %s failed (%d)", MOD_TMP, path, rr);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD rename failed"); return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "module upload %s (%d bytes)", path, (int)req->content_len);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// GET /trk/list — JSON {"modules":[{"name","size"}...]} from usr/MODS
+static esp_err_t mod_list_handler(httpd_req_t *req)
+{
+    char *out = malloc(4096);
+    if (!out) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
+    int len = snprintf(out, 4096, "{\"modules\":[");
+    sd_lock_take();
+    DIR *d = opendir(MOD_DIR_VFS);
+    if (d) {
+        struct dirent *e; struct stat st; char p[300]; bool first = true;
+        while ((e = readdir(d)) != NULL && len < 4096 - 160) {
+            if (e->d_name[0] == '.') continue;
+            if (strcasecmp(e->d_name, "UPLOAD.TMP") == 0) continue;   // hide upload scratch
+            snprintf(p, sizeof(p), MOD_DIR_VFS "/%s", e->d_name);
+            long sz = (stat(p, &st) == 0) ? (long)st.st_size : 0;
+            len += snprintf(out + len, 4096 - len, "%s{\"name\":\"%s\",\"size\":%ld}",
+                            first ? "" : ",", e->d_name, sz);
+            first = false;
+        }
+        closedir(d);
+    }
+    sd_lock_give();
+    len += snprintf(out + len, 4096 - len, "]}");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, out, len);
+    free(out);
+    return ESP_OK;
+}
+
+// GET /trk/get?name=FOO.MOD — stream a module file back verbatim
+static esp_err_t mod_get_handler(httpd_req_t *req)
+{
+    char name[32];
+    if (!get_query_param(req, "name", name, sizeof(name)) || !mod_name_safe(name)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad name"); return ESP_FAIL;
+    }
+    char path[80];
+    snprintf(path, sizeof(path), MOD_DIR_VFS "/%s", name);
+    sd_lock_take(); FILE *f = fopen(path, "rb"); sd_lock_give();
+    if (!f) { httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found"); return ESP_FAIL; }
+
+    struct stat st; sd_lock_take(); stat(path, &st); sd_lock_give();
+    char len_str[16]; snprintf(len_str, sizeof(len_str), "%ld", (long)st.st_size);
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Length", len_str);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    char *buf = malloc(STREAM_CHUNK);
+    if (!buf) { fclose(f); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
+    int n;
+    for (;;) {
+        sd_lock_take(); n = fread(buf, 1, STREAM_CHUNK, f); sd_lock_give();
+        if (n <= 0) break;
+        if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) break;
+        vTaskDelay(1);
+    }
+    httpd_resp_send_chunk(req, NULL, 0);
+    sd_lock_take(); fclose(f); sd_lock_give();
+    free(buf);
+    return ESP_OK;
+}
+
+// DELETE /trk/delete?name=FOO.MOD
+static esp_err_t mod_delete_handler(httpd_req_t *req)
+{
+    char name[32];
+    if (!get_query_param(req, "name", name, sizeof(name)) || !mod_name_safe(name)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad name"); return ESP_FAIL;
+    }
+    char path[80];
+    snprintf(path, sizeof(path), MOD_DIR_VFS "/%s", name);
+    sd_lock_take(); int r = remove(path); sd_lock_give();
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    if (r == 0) { httpd_resp_sendstr(req, "{}"); return ESP_OK; }
+    httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+    return ESP_FAIL;
+}
+
 // ─── server lifecycle ────────────────────────────────────────────────────────
 
 static httpd_uri_t uris[] = {
@@ -743,6 +926,10 @@ static httpd_uri_t uris[] = {
     { .uri = "/status",     .method = HTTP_GET,    .handler = status_get_handler },
     { .uri = "/drop_sample",.method = HTTP_PUT,    .handler = drop_sample_put_handler },
     { .uri = "/bootlogo",   .method = HTTP_PUT,    .handler = bootlogo_put_handler },
+    { .uri = "/trk/upload", .method = HTTP_PUT,    .handler = mod_upload_handler },
+    { .uri = "/trk/list",   .method = HTTP_GET,    .handler = mod_list_handler },
+    { .uri = "/trk/get",    .method = HTTP_GET,    .handler = mod_get_handler },
+    { .uri = "/trk/delete", .method = HTTP_DELETE, .handler = mod_delete_handler },
     { .uri = "/remote/event",  .method = HTTP_POST, .handler = remote_event_handler },
     { .uri = "/remote/trig",   .method = HTTP_POST, .handler = remote_trig_handler },
     { .uri = "/remote/machine",.method = HTTP_POST, .handler = remote_machine_handler },

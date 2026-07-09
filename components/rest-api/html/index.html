@@ -55,32 +55,41 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 <header>
   <h1>ctag-straempler</h1>
   <div class="tabs">
-    <div class="tab on" id="t0" onclick="tab(0)">Files</div>
+    <div class="tab on" id="t3" onclick="tab(3)">Remote</div>
+    <div class="tab" id="t0" onclick="tab(0)">Files</div>
     <div class="tab" id="t1" onclick="tab(1)">Upload</div>
     <div class="tab" id="t2" onclick="tab(2)">Freesound</div>
-    <div class="tab" id="t3" onclick="tab(3)">Remote</div>
     <div class="tab" id="t4" onclick="tab(4)">Settings</div>
   </div>
 </header>
-<div class="pane on" id="p0">
-  <table>
+<div class="pane" id="p0">
+  <div class="tabs" style="margin-bottom:8px">
+    <div class="tab on" id="ft0" onclick="filesTab(0)">Samples</div>
+    <div class="tab" id="ft1" onclick="filesTab(1)">Modules</div>
+  </div>
+  <table id="ftab">
     <thead><tr><th>Name</th><th>Size</th><th></th></tr></thead>
     <tbody id="ftb"></tbody>
+  </table>
+  <table id="mtab" style="display:none">
+    <thead><tr><th>Name</th><th>Size</th><th></th></tr></thead>
+    <tbody id="modtb"></tbody>
   </table>
 </div>
 <div class="pane" id="p1">
   <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
-    Drop any audio file here (wav/mp3/flac/ogg/m4a &#8594; converted in-browser), or a 16-bit 44.1kHz stereo RAW
+    Drop files here (one or many): audio (wav/mp3/flac/ogg/m4a &#8594; converted), 16-bit 44.1kHz stereo RAW, or <b>tracker modules</b> (MOD/XM/IT/&#8230; &#8594; usr/MODS). Review &amp; rename below, then Upload.
   </div>
-  <input type="file" id="fi" accept="audio/*,.raw,.RAW" style="display:none" onchange="onFile(this.files[0])">
-  <label>Name (max 8 chars)</label><input id="un" maxlength="8" placeholder="Pad123">
-  <label>Description</label><input id="ud" maxlength="128" placeholder="Nice pad">
-  <label>Tags</label><input id="ut" maxlength="32" placeholder="pad, warm">
-  <div class="row" style="margin-top:10px">
-    <button class="btn" onclick="doUpload()">Upload</button>
+  <input type="file" id="fi" multiple accept="audio/*,.raw,.RAW,.mod,.xm,.it,.s3m,.669,.mtm,.okt,.ult,.far,.med,.dbm,.amf,.ptm,.stm,.dmf,.gdm,.imf,.liq,.mdl,.pt3,.oxm,.digi,.emod,.MOD,.XM,.IT,.S3M" style="display:none" onchange="onFiles(this.files)">
+  <div id="batch" style="display:none;margin-top:12px">
+    <div class="row"><b style="flex:1;color:#0af">To upload (<span id="bcount">0</span>)</b>
+      <button class="btn" id="bup" style="flex:0 0 84px" onclick="doBatchUpload()">Upload</button>
+      <button class="btn del" id="bclr" style="flex:0 0 58px" onclick="clearBatch()">Clear</button>
+      <button class="btn del" id="bcancel" style="flex:0 0 72px;display:none" onclick="cancelBatch()">Cancel</button></div>
+    <table style="margin-top:6px"><tbody id="btb"></tbody></table>
+    <progress id="bpr" value="0" max="100" style="display:none"></progress>
+    <div class="msg" id="bm"></div>
   </div>
-  <progress id="pr" value="0" max="100"></progress>
-  <div class="msg" id="um"></div>
 </div>
 <div class="pane" id="p2">
   <div class="msg" id="fsnote">Requires the Freesound machine to be active (System &#8594; Machine) and an API key (Settings tab).</div>
@@ -105,7 +114,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <progress id="fspr" value="0" max="100"></progress>
   <div class="msg" id="fsm"></div>
 </div>
-<div class="pane" id="p3">
+<div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
   <label>Inputs</label>
   <div class="rmon" id="rmon"></div>
@@ -126,7 +135,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <div id="rparams" style="max-width:480px"></div>
   <div class="row">
     <button class="btn" onclick="rpLoad()">Reload settings</button>
-    <button class="btn" onclick="rpApply()">Apply &amp; save</button>
+    <button class="btn" onclick="rpApply()">Apply</button>
   </div>
   <div class="msg" id="rm"></div>
 </div>
@@ -159,7 +168,6 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <span class="vl" id="disk"></span>
 </div>
 <script>
-var fileToUpload=null;
 
 function tab(n){
   for(var i=0;i<5;i++){
@@ -169,6 +177,34 @@ function tab(n){
   if(n===0)loadFiles();
   if(n===3)loadRemote();
   if(n===4)loadSet();
+}
+
+// Files-page sub-tabs: 0 = Samples (usr/*.RAW), 1 = Modules (usr/MODS)
+function filesTab(n){
+  document.getElementById('ft0').className='tab'+(n===0?' on':'');
+  document.getElementById('ft1').className='tab'+(n===1?' on':'');
+  document.getElementById('ftab').style.display=n===0?'':'none';
+  document.getElementById('mtab').style.display=n===1?'':'none';
+  n===0?loadFiles():loadMods();
+}
+
+function loadMods(){
+  var tb=document.getElementById('modtb');
+  fetch('/trk/list').then(function(r){return r.json();}).then(function(d){
+    var h='';
+    (d.modules||[]).forEach(function(m){
+      h+='<tr><td>'+esc(m.name)+'</td><td>'+(m.size?Math.round(m.size/1024)+'KB':'')+'</td><td style="white-space:nowrap">'
+        +'<a class="btn" style="text-decoration:none" href="/trk/get?name='+encodeURIComponent(m.name)+'" download="'+esc(m.name)+'">&#11015;</a> '
+        +'<button class="btn del" onclick="delMod(\''+esc(m.name)+'\')">&#10005;</button></td></tr>';
+    });
+    tb.innerHTML=h||'<tr><td colspan="3" style="color:#555;padding:8px">No modules yet</td></tr>';
+  }).catch(function(){tb.innerHTML='<tr><td colspan="3" class="er">Failed to load</td></tr>';});
+}
+function delMod(name){
+  if(!confirm('Delete '+name+'?'))return;
+  fetch('/trk/delete?name='+encodeURIComponent(name),{method:'DELETE'}).then(function(r){
+    if(r.ok)loadMods();else alert('Delete failed');
+  });
 }
 
 function loadFiles(){
@@ -193,25 +229,19 @@ function del(name){
   });
 }
 
-var rawBlob=null;   // converted 44.1k stereo int16 RAW (null = file sent as-is)
+var MOD_EXTS=['mod','xm','it','s3m','669','mtm','okt','ult','far','med','dbm','amf','ptm','stm','dmf','gdm','imf','liq','mdl','pt3','oxm','digi','emod'];
 
-function onFile(file){
-  fileToUpload=file;rawBlob=null;
-  if(!file)return;
-  var base=file.name.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_]/g,'').substring(0,8);
-  document.getElementById('un').value=base;
-  var um=document.getElementById('um');
-  if(/\.raw$/i.test(file.name)){
-    um.className='msg';
-    um.textContent=file.name+' ('+Math.round(file.size/1024)+'KB, uploaded as-is)';
-    return;
-  }
-  um.className='msg';um.textContent='Decoding '+file.name+'…';
-  file.arrayBuffer().then(function(ab){
+// decode any browser-supported audio to a 44.1k stereo int16 RAW Blob
+var MAX_AUDIO_SECS=600;   // ~10 min — long enough for Deck song tracks
+function convertAudio(file){
+  var ac;
+  return file.arrayBuffer().then(function(ab){
     var AC=window.AudioContext||window.webkitAudioContext;
-    return new AC().decodeAudioData(ab);
+    ac=new AC();
+    return ac.decodeAudioData(ab);
   }).then(function(audio){
-    if(audio.duration>90)throw new Error('too long ('+Math.round(audio.duration)+'s, max 90s)');
+    if(ac){try{ac.close();}catch(e){}}   // free the context (browsers cap ~6 live)
+    if(audio.duration>MAX_AUDIO_SECS)throw new Error('too long ('+Math.round(audio.duration)+'s, max '+MAX_AUDIO_SECS+'s)');
     var frames=Math.ceil(audio.duration*44100);
     var oc=new OfflineAudioContext(2,frames,44100);   // resamples + up/downmixes to stereo
     var src=oc.createBufferSource();
@@ -225,40 +255,122 @@ function onFile(file){
       out[i*2]=l<0?l*32768:l*32767;
       out[i*2+1]=r<0?r*32768:r*32767;
     }
-    rawBlob=new Blob([out.buffer]);
-    um.className='msg ok';
-    um.textContent=file.name+' converted: '+(n/44100).toFixed(1)+'s, '+Math.round(rawBlob.size/1024)+'KB RAW';
-  }).catch(function(e){
-    fileToUpload=null;rawBlob=null;
-    um.className='msg er';
-    um.textContent='Convert failed: '+(e&&e.message?e.message:'not a decodable audio file');
+    return new Blob([out.buffer]);
   });
+}
+
+// ---- batch upload: drop multiple files -> staging list (rename before send) ----
+var curXhr=null,batchCancel=false;
+function putFile(url,headers,body,onprog){
+  return new Promise(function(res,rej){
+    var xhr=new XMLHttpRequest();curXhr=xhr;xhr.open('PUT',url);
+    for(var k in headers)xhr.setRequestHeader(k,headers[k]);
+    if(onprog)xhr.upload.onprogress=function(e){if(e.lengthComputable)onprog(Math.round(e.loaded/e.total*100));};
+    xhr.onload=function(){curXhr=null;xhr.status<300?res():rej(new Error('HTTP '+xhr.status));};
+    xhr.onerror=function(){curXhr=null;rej(new Error('network'));};
+    xhr.onabort=function(){curXhr=null;rej(new Error('cancelled'));};
+    xhr.send(body);
+  });
+}
+var batchFiles=[];   // [{file, name(custom|null), base(sanitized), ext, kind}]
+function fileMeta(file){
+  var m=file.name.match(/\.([^.]+)$/),ext=m?m[1]:'';
+  var base=file.name.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_]/g,'');
+  var kind=(m&&MOD_EXTS.indexOf(ext.toLowerCase())>=0)?'mod':(/\.raw$/i.test(file.name)?'raw':'audio');
+  return {file:file,name:null,base:base,ext:ext,kind:kind};
+}
+function nameOf(b){return b.name||b.base.substring(0,8)||'FILE';}
+function stageBatch(files){
+  batchFiles=Array.prototype.slice.call(files).map(fileMeta);
+  document.getElementById('batch').style.display='block';
+  renderBatch();
+}
+var editIdx=-1;   // batch row being renamed inline (-1 = none)
+function renderBatch(){
+  var tb=document.getElementById('btb'),h='';
+  document.getElementById('bcount').textContent=batchFiles.length;
+  batchFiles.forEach(function(b,i){
+    var nameCell,actCell;
+    if(i===editIdx){   // inline edit box, highlighted in place
+      nameCell='<input id="brn" value="'+esc(nameOf(b))+'" maxlength="8" style="width:84px;padding:2px 4px;background:#000;color:#fff;border:1px solid #0af" '
+        +'onkeydown="if(event.key===\'Enter\')commitRename();else if(event.key===\'Escape\')cancelRename()">';
+      actCell='<button class="btn" onclick="commitRename()">OK</button>';
+    }else{
+      // first 8 chars (what's stored) in white, the truncated tail in grey
+      nameCell=b.name ? '<span style="color:#fff">'+esc(b.name)+'</span>'
+        : '<span style="color:#fff">'+esc(b.base.substring(0,8)||'FILE')+'</span><span style="color:#666">'+esc(b.base.substring(8))+'</span>';
+      actCell='<button class="btn" onclick="renameBatch('+i+')">rename</button> '
+        +'<button class="btn del" onclick="removeBatch('+i+')">&#10005;</button>';
+    }
+    var typ=b.kind==='mod'?('.'+esc(b.ext.toUpperCase())):(b.kind==='raw'?'RAW':'audio&#8594;RAW');
+    h+='<tr><td>'+nameCell+'</td><td style="color:#666">'+typ+'</td><td style="white-space:nowrap">'+actCell+'</td></tr>';
+  });
+  tb.innerHTML=h||'<tr><td colspan="3" style="color:#555;padding:8px">Batch empty</td></tr>';
+  if(editIdx>=0){var el=document.getElementById('brn');if(el){el.focus();el.select();}}
+}
+function renameBatch(i){editIdx=i;renderBatch();}
+function commitRename(){
+  if(editIdx<0)return;
+  var el=document.getElementById('brn');
+  if(el){var v=el.value.replace(/[^a-zA-Z0-9_]/g,'').substring(0,8);batchFiles[editIdx].name=v||null;}
+  editIdx=-1;renderBatch();
+}
+function cancelRename(){editIdx=-1;renderBatch();}
+function removeBatch(i){editIdx=-1;batchFiles.splice(i,1);batchFiles.length?renderBatch():clearBatch();}
+function clearBatch(){editIdx=-1;batchCancel=false;batchFiles=[];document.getElementById('batch').style.display='none';document.getElementById('bm').textContent='';showBatchBtns(true);}
+function showBatchBtns(idle){   // idle = show Upload/Clear; else show Cancel
+  document.getElementById('bup').style.display=idle?'':'none';
+  document.getElementById('bclr').style.display=idle?'':'none';
+  document.getElementById('bcancel').style.display=idle?'none':'';
+}
+function cancelBatch(){batchCancel=true;if(curXhr){try{curXhr.abort();}catch(e){}}}
+function doBatchUpload(){
+  if(!batchFiles.length)return;
+  var pr=document.getElementById('bpr'),bm=document.getElementById('bm'),N=batchFiles.length,i=0,ok=0,fail=0,lastErr='';
+  batchCancel=false;showBatchBtns(false);
+  pr.style.display='block';pr.value=0;
+  function finish(msg,err){
+    pr.style.display='none';pr.value=0;
+    bm.className='msg '+(err?'er':'ok');bm.textContent=msg;
+    showBatchBtns(true);loadFiles();loadMods();
+    if(!err&&!batchCancel)setTimeout(clearBatch,1500);
+  }
+  var okcb=function(){ok++;i++;next();};
+  var failcb=function(e){
+    if(e&&e.message==='cancelled'){next();return;}   // stop (next() sees batchCancel)
+    fail++;lastErr=(e&&e.message)?e.message:'error';i++;next();
+  };
+  var setUp=function(p){pr.value=p;};                 // live upload %
+  function next(){
+    if(batchCancel){finish('Cancelled — '+ok+' uploaded, '+(N-ok)+' skipped',false);return;}
+    if(i>=N){finish('Done: '+ok+' uploaded'+(fail?', '+fail+' failed ('+lastErr+')':''),!!fail);return;}
+    var b=batchFiles[i],name=nameOf(b),pfx=(i+1)+'/'+N+': '+name;
+    bm.className='msg';
+    if(b.kind==='mod'||b.kind==='raw'){
+      pr.value=0;bm.textContent='Uploading '+pfx;
+      putFile(b.kind==='mod'?'/trk/upload':'/drop_sample',b.kind==='mod'?{Name:name,Ext:b.ext}:{Name:name},b.file,setUp).then(okcb,failcb);
+      return;
+    }
+    // audio: decode/resample (no progress events -> indeterminate bar), then upload
+    bm.textContent='Converting '+pfx+'…';
+    pr.removeAttribute('value');
+    convertAudio(b.file).then(function(blob){
+      if(batchCancel)throw new Error('cancelled');   // aborted during convert
+      bm.textContent='Uploading '+pfx+' ('+Math.round(blob.size/1048576)+'MB)';pr.value=0;
+      return putFile('/drop_sample',{Name:name},blob,setUp);
+    }).then(okcb,failcb);
+  }
+  next();
+}
+// dropzone / picker entry: every drop (one file or many) goes to the staging list
+function onFiles(files){
+  if(!files||!files.length)return;
+  stageBatch(files);
 }
 var dz=document.getElementById('dz');
 dz.ondragover=function(e){e.preventDefault();dz.className='dz ov';};
 dz.ondragleave=function(){dz.className='dz';};
-dz.ondrop=function(e){e.preventDefault();dz.className='dz';onFile(e.dataTransfer.files[0]);};
-
-function doUpload(){
-  if(!fileToUpload){alert('Select a file first');return;}
-  var name=document.getElementById('un').value.trim();
-  if(!name){alert('Enter a name');return;}
-  var xhr=new XMLHttpRequest(),pr=document.getElementById('pr'),um=document.getElementById('um');
-  xhr.open('PUT','/drop_sample');
-  xhr.setRequestHeader('Name',name);
-  xhr.setRequestHeader('Description',document.getElementById('ud').value);
-  xhr.setRequestHeader('Tags',document.getElementById('ut').value);
-  pr.style.display='block';pr.value=0;
-  xhr.upload.onprogress=function(e){if(e.lengthComputable)pr.value=Math.round(e.loaded/e.total*100);};
-  xhr.onload=function(){
-    pr.style.display='none';
-    um.className='msg '+(xhr.status<300?'ok':'er');
-    um.textContent=xhr.status<300?'Uploaded! '+name:'Error '+xhr.status;
-    if(xhr.status<300){fileToUpload=null;rawBlob=null;}
-  };
-  xhr.onerror=function(){pr.style.display='none';um.className='msg er';um.textContent='Network error';};
-  xhr.send(rawBlob||fileToUpload);
-}
+dz.ondrop=function(e){e.preventDefault();dz.className='dz';onFiles(e.dataTransfer.files);};
 
 function loadSet(){
   fetch('/settings').then(function(r){return r.json();}).then(function(d){
@@ -377,6 +489,8 @@ function loadRemote(){
 }
 
 var rpData=null;
+var FILE_KEYS=['file','track','sample'];   // preset keys that name a card file
+var rpFileOpts=[];                          // filenames offered in the dropdown
 
 function rpForm(o,path){
   var h='';
@@ -390,7 +504,19 @@ function rpForm(o,path){
       h+='<label style="display:flex;align-items:center;gap:6px;margin:4px 0;color:#aaa">'
         +'<input type="checkbox" style="width:auto" data-rp="'+p+'"'+(v?' checked':'')+'>'+esc(k)+'</label>';
     }else if(typeof v==='number'){
-      h+='<label>'+esc(k)+'</label><input type="number" step="any" data-rp="'+p+'" value="'+v+'">';
+      if(k==='clk_src'){   // stored 0-indexed: 0-7=CV1-8, 8=TR1, 9=TR2
+        var o2='';
+        for(var c=0;c<8;c++)o2+='<option value="'+c+'"'+(c===v?' selected':'')+'>CV'+(c+1)+'</option>';
+        o2+='<option value="8"'+(v===8?' selected':'')+'>TR1</option><option value="9"'+(v===9?' selected':'')+'>TR2</option>';
+        h+='<label>'+esc(k)+'</label><select data-rp="'+p+'">'+o2+'</select>';
+      }else{
+        h+='<label>'+esc(k)+'</label><input type="number" step="any" data-rp="'+p+'" value="'+v+'">';
+      }
+    }else if(FILE_KEYS.indexOf(k)>=0){   // file/track/sample: dropdown of card files
+      var cur=String(v),o4='';
+      if(rpFileOpts.indexOf(cur)<0)o4+='<option value="'+esc(cur)+'" selected>'+esc(cur||'(none)')+'</option>';
+      rpFileOpts.forEach(function(n){o4+='<option'+(n===cur?' selected':'')+'>'+esc(n)+'</option>';});
+      h+='<label>'+esc(k)+'</label><select data-rp="'+p+'">'+o4+'</select>';
     }else{
       h+='<label>'+esc(k)+'</label><input data-rp="'+p+'" value="'+esc(String(v))+'">';
     }
@@ -440,6 +566,7 @@ function rpStep(i,d){
   s.selectedIndex=n;
 }
 
+
 function rpLoad(){
   fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
     if(d.error){document.getElementById('rparams').innerHTML='<div class="msg er">'+esc(d.error)+'</div>';return;}
@@ -450,9 +577,16 @@ function rpLoad(){
         var names=(fd.files||[]).map(function(f){return f.name;}).sort();
         el.innerHTML=rpDrumForm(d,names);
       }).catch(function(){el.innerHTML=rpDrumForm(d,[]);});
-    }else{
-      el.innerHTML=Object.keys(d).length?rpForm(d,''):'<div class="msg">this machine has no settings</div>';
+      return;
     }
+    // populate the file-field dropdown: modules for Tracker, samples otherwise
+    var isMod=(curMach==='Tracker');
+    fetch(isMod?'/trk/list':'/files').then(function(r){return r.json();}).then(function(fd){
+      rpFileOpts=(isMod?(fd.modules||[]).map(function(m){return m.name;})
+                       :(fd.files||[]).map(function(f){return f.name;})).sort();
+    }).catch(function(){rpFileOpts=[];}).then(function(){
+      el.innerHTML=Object.keys(d).length?rpForm(d,''):'<div class="msg">this machine has no settings</div>';
+    });
   }).catch(function(){});
 }
 
@@ -563,7 +697,7 @@ function pollStatus(){
   }).catch(function(){});
 }
 setInterval(pollStatus,500);
-loadFiles();
+tab(3);          // Remote is the default tab
 pollStatus();
 </script>
 </body>
