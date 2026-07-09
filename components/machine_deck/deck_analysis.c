@@ -77,6 +77,10 @@ static void analysis_task(void *pv)
     if (total_hops > DK_ENV_MAX) total_hops = DK_ENV_MAX;   // cap ~5 min
     uint32_t n = 0;
     while (n < total_hops) {
+        // ANALYSE ONLY WHILE STOPPED: pause entirely during playback so we never
+        // touch the SD bus while the ring reader needs it — that contention was
+        // what hurt the audio.
+        while (dk.playing) vTaskDelay(pdMS_TO_TICKS(30));
         uint32_t hops = total_hops - n;
         if (hops > AN_CHUNK_HOPS) hops = AN_CHUNK_HOPS;
         sd_lock_take();
@@ -92,10 +96,8 @@ static void analysis_task(void *pv)
         }
         dk.an_progress = (int)((uint64_t)n * 70 / total_hops);
         if (got_hops < hops) break;      // EOF/short read
-        // the 10 ms gap caps analysis at ~1.6 MB/s (long tracks take a
-        // minute), but it is LOAD-BEARING even when the deck is stopped:
-        // full-stride reads starved the bus and murdered the audio (Arlo,
-        // 2026-07-08). Don't remove it; analysis is slow on purpose.
+        // per-chunk pace (this gap is load-bearing — removing it thrashed
+        // sd_lock/scheduling and made analysis SLOWER, not faster)
         vTaskDelay(1);
     }
     sd_lock_take();
@@ -125,6 +127,7 @@ static void analysis_task(void *pv)
     int best_lag = 0;
     float *rr = malloc((lag_max + 2) * sizeof(float));
     for (int lag = lag_min; lag <= lag_max; lag++) {
+        while (dk.playing) vTaskDelay(pdMS_TO_TICKS(30));   // pause during playback
         float acc = 0;
         for (uint32_t i = 0; i + lag < n; i++) acc += env[i] * env[i + lag];
         acc /= (float)(n - lag);

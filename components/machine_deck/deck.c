@@ -19,6 +19,10 @@ static const char *TAG = "DECK";
 
 dk_state_t dk;
 const float dk_ppb[5] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f};
+
+// smooth SYNC catch-up: drain sync_slew (frames) at a capped per-frame rate bend
+#define SYNC_SLEW_GAIN 0.0006f   // drains ~1667-frame TC once under the cap
+#define SYNC_SLEW_MAX  0.15f     // max +/-15% rate bend (~2.4 semitones), no dropout
 const char *const dk_ppb_names[5] = {"1 per 4 beats", "1 per 2 beats", "1 per beat", "2 per beat", "4 per beat"};
 
 static volatile bool s_run = false, s_alive = false;
@@ -101,6 +105,8 @@ int deck_load_track(const char *name)
     dk.track_bpm = 0;
     dk.grid_offset = 0;
     dk.phase_int = 0.0f;                         // new track: fresh PLL integrator
+    dk.phase_offset = 0.0f;                       // and clear any manual nudge
+    dk.sync_slew = 0.0f;
     strlcpy(dk.track, name, sizeof(dk.track));
     strlcpy(s_pending, name, sizeof(s_pending));
     s_track_req = true;
@@ -133,6 +139,9 @@ void deck_restart(void)
 {
     if (!dk.track[0]) return;
     dk.loading = true;                    // engine mutes while the ring refills
+    dk.phase_offset = 0.0f;               // hard reset-to-cue clears the nudge
+    dk.phase_int = 0.0f;                  // and the loop integrator (phase jumped)
+    dk.sync_slew = 0.0f;                  // and any in-flight SYNC catch-up
     dk.seek_to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;
     dk.seek_req = true;                   // reader applies rpos
     dk.playing = true;
@@ -149,6 +158,7 @@ void deck_toggle_play(void)
         to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;
     dk.loading = true;
     dk.phase_int = 0.0f;                  // fresh PLL integrator on resume
+    dk.sync_slew = 0.0f;
     dk.seek_to = to;
     dk.seek_req = true;                   // reader applies rpos
     dk.playing = true;
@@ -170,8 +180,34 @@ void deck_seek_beats(int beats)
     if (tgt > (int64_t)dk.file_frames - 1) tgt = (int64_t)dk.file_frames - 1;
     dk.loading = true;                          // brief mute while the ring refills
     dk.phase_int = 0.0f;                         // phase ref jumped: reset integrator
+    dk.sync_slew = 0.0f;
     dk.seek_to = (uint32_t)tgt;
     dk.seek_req = true;                         // reader applies rpos; play state stays
+}
+
+// Hard-snap the playback phase so the track grid aligns to the external clock
+// NOW, instead of waiting for the slow loop to pull in. Snaps to the current
+// nudge offset target (keeps phase_offset). Called from the audio task on a TR2
+// long-hold — only float math + a seek request, so it's safe there.
+void deck_sync_now(void)
+{
+    if (!dk.track[0] || !dk.file_frames) return;
+    if (!dk.sync || !dk.clk.locked || dk.clk.period == 0 || dk.track_bpm <= 20.0f) return;
+    uint32_t beat_tf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
+    float seg_tf = (float)beat_tf / dk_ppb[dk.ppb_idx] * dk.speed_mult;   // frames/pulse
+    if (seg_tf < 1.0f) return;
+    float p_ext = (float)dk.clk.since / (float)dk.clk.period;
+    if (p_ext > 1.0f) p_ext = 1.0f;
+    int64_t rel = (int64_t)dk.rpos_i - (int64_t)dk.grid_offset;
+    float p_trk = fmodf((float)rel, seg_tf) / seg_tf;
+    if (p_trk < 0) p_trk += 1.0f;
+    float dphase = (p_ext - dk.phase_offset) - p_trk;   // move to the offset target
+    dphase -= floorf(dphase);                           // wrap to [0,1)
+    if (dphase > 0.5f) dphase -= 1.0f;                  // nearest, no whole-pulse jump
+    // smooth catch-up: shift dphase*seg_tf frames via a brief rate bend applied
+    // in the playback loop — no seek, no ring refill, so no dropout. +ve = play
+    // ahead to catch up; -ve = ease back (play slightly slow). The PLL finishes.
+    dk.sync_slew = dphase * seg_tf;
 }
 
 // ---- engine -----------------------------------------------------------------
@@ -213,14 +249,31 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
 {
     if (!dk.ring) return;
 
-    // transport gates: TR1 = start/restart at the downbeat, TR2 = pause/resume
-    // (resume picks up at the paused position — handy for hand-nudging sync).
-    // Flags only; the reader task does the seeking.
+    // transport gates. TR1 falling edge = reset-to-cue (grid downbeat). TR2:
+    // short tap = play/pause (fires on release); long hold (>0.6s) = SYNC (snap
+    // grid to clock) and the hold suppresses the release-pause. Flags only; the
+    // reader task seeks. prev_trig seeded idle-high so block 1 sees no phantom.
     static uint8_t prev_trig = 0x03;
-    uint8_t pressed = prev_trig & (~io->trig_level) & 0x03;
+    static uint32_t tr2_hold = 0;      // frames TR2 has been held low (0 = up)
+    static bool tr2_synced = false;    // long-hold already fired SYNC this press
+    const uint32_t TR2_LONG = (uint32_t)(0.6f * DK_RATE);
+    const int nfr = MACHINE_BLOCK / 2;
+
+    uint8_t fell = prev_trig & (~io->trig_level) & 0x03;    // 1->0 this block
+    uint8_t rose = (~prev_trig) & io->trig_level & 0x03;    // 0->1 this block
     prev_trig = io->trig_level;
-    if (pressed & 1) deck_restart();
-    if (pressed & 2) deck_toggle_play();
+
+    if (fell & 1) deck_restart();                           // TR1: reset-to-cue
+
+    if (fell & 2) { tr2_hold = nfr; tr2_synced = false; }   // TR2 press begins
+    else if (tr2_hold > 0 && !(io->trig_level & 2)) {       // still held low
+        tr2_hold += nfr;
+        if (!tr2_synced && tr2_hold >= TR2_LONG) { deck_sync_now(); tr2_synced = true; }
+    }
+    if (rose & 2) {                                         // TR2 release
+        if (!tr2_synced && tr2_hold > 0) deck_toggle_play();  // short tap = pause/resume
+        tr2_hold = 0;
+    }
 
     dk.pitch_cv = io->cv[6];   // knob7 = free-run rate when sync is off
 
@@ -268,9 +321,9 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
             if (p_ext > 1.0f) p_ext = 1.0f;
             float p_trk = fmodf((float)((int64_t)dk.rpos_i - (int64_t)dk.grid_offset), seg_tf) / seg_tf;
             if (p_trk < 0) p_trk += 1.0f;
-            float err = p_ext - p_trk;
-            if (err > 0.5f) err -= 1.0f;
-            if (err < -0.5f) err += 1.0f;
+            float err = p_ext - p_trk - dk.phase_offset;   // NUDGE trims the lock point
+            err -= floorf(err);                            // wrap to [0,1)
+            if (err > 0.5f) err -= 1.0f;                    // nearest, in [-0.5,0.5)
             // PI loop filter. The P term (0.08) chases phase fast; the I term
             // accumulates to cancel the residual frequency error a P-only loop
             // leaves as slow drift (track_bpm is never exact). Integrator is
@@ -359,7 +412,13 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         last_r = r * dk.out_gain;
         out[fno * 2]     = ((int32_t)last_l) << 16;
         out[fno * 2 + 1] = ((int32_t)last_r) << 16;
-        dk.rpos_f += rate;
+        // smooth SYNC: bleed the phase correction in as a capped rate bend
+        // (rate stays > 0 since rate>=0.25 and |sl|<=0.15, so no rewind needed)
+        float sl = dk.sync_slew * SYNC_SLEW_GAIN;
+        if (sl > SYNC_SLEW_MAX) sl = SYNC_SLEW_MAX;
+        else if (sl < -SYNC_SLEW_MAX) sl = -SYNC_SLEW_MAX;
+        dk.sync_slew -= sl;
+        dk.rpos_f += rate + sl;
         while (dk.rpos_f >= 1.0) { dk.rpos_f -= 1.0; dk.rpos_i++; }
     }
     if (starved) dk.dbg_starve++;

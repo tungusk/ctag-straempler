@@ -40,7 +40,7 @@ static void an_auto_poll(void){
 // Redraw discipline: everything is change-driven. Full-region repaints every
 // timer tick made the whole screen strobe (Arlo, first hardware test).
 static int s_last_barx = -1;
-static char s_info1[64] = "", s_info2[64] = "";
+static char s_info1[96] = "", s_info2[64] = "";
 static char s_last_track[DK_NAME_LEN] = "";   // detect track changes (e.g. via remote)
 static int s_last_dbpm = -1;
 
@@ -74,15 +74,17 @@ static void draw_big_bpm(void){
 static void draw_info(void){
     int fh = TFT_getfontheight();
     int y = fh + 42;
-    char s1[64], s2[64];
-    snprintf(s1, sizeof(s1), "trk %.1f  %s  x%s  %s",
-             dk.track_bpm, dk.playing ? (dk.loading ? "BUF" : "PLAY") : "STOP",
-             dk.speed_mult == 0.5f ? ".5" : (dk.speed_mult == 2.0f ? "2" : "1"),
-             dk.flt_mode == 1 ? "LP" : (dk.flt_mode == 2 ? "HP" : ""));
-    if (dk.an_state == DK_AN_RUNNING){
-        size_t l = strlen(s1);
-        snprintf(s1 + l, sizeof(s1) - l, "  an%d%%", dk.an_progress);
-    }
+    char s1[96], s2[64];
+    const char *st = dk.playing ? (dk.loading ? "BUF" : "PLAY") : "STOP";
+    const char *sp = dk.speed_mult == 0.5f ? ".5" : (dk.speed_mult == 2.0f ? "2" : "1");
+    const char *fl = dk.flt_mode == 1 ? "LP" : (dk.flt_mode == 2 ? "HP" : "");
+    // while analysing, the tempo slot counts DOWN to done (100->0) in place of
+    // the not-yet-known "0.0" bpm — shown while playing too (frozen, since
+    // analysis pauses during playback) so the pending count stays visible
+    if (dk.an_state == DK_AN_RUNNING)
+        snprintf(s1, sizeof(s1), "trk %d%%  %s  x%s  %s", 100 - dk.an_progress, st, sp, fl);
+    else
+        snprintf(s1, sizeof(s1), "trk %.1f  %s  x%s  %s", dk.track_bpm, st, sp, fl);
     if (dk.sync){
         if (dk.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK",
                                     dk.clk.bpm / dk_ppb[dk.ppb_idx]);
@@ -109,12 +111,21 @@ static void draw_info(void){
 #define TBAR_X 8
 #define TBAR_Y 112
 #define TBAR_H 30
+#define DK_NUDGE_STEP 0.01f   // phase nudge per detent (~1.25ms @ 4PPQN/120bpm)
 #define TBAR_W (_width - 16)
 
-static int s_bar_playing = -1;   // -1 forces the first paint
+static int s_bar_state = -1;   // -1 forces the first paint
 
+static int tbar_state(void){   // 1 = playing, 2 = analyzing (stopped), 0 = idle
+    // playing wins: analysis is paused during playback, so show green not pink
+    return dk.playing ? 1 : (dk.an_state == DK_AN_RUNNING ? 2 : 0);
+}
 static color_t tbar_bg(void){
-    return dk.playing ? (color_t){25, 120, 50} : (color_t){30, 60, 140};
+    switch (tbar_state()){
+        case 2:  return (color_t){210, 70, 150};   // pink: analysis running
+        case 1:  return (color_t){25, 120, 50};    // green: playing
+        default: return (color_t){30, 60, 140};    // blue: stopped
+    }
 }
 
 static void draw_posbar_frame(void){
@@ -124,11 +135,11 @@ static void draw_posbar_frame(void){
     _bg = TFT_BLACK;      // _bg is a shared global — leaking the bar color
                           // painted the hint line's text background blue
     s_last_barx = -1;
-    s_bar_playing = dk.playing;
+    s_bar_state = tbar_state();
 }
 
 static void draw_posbar(void){
-    if ((int)dk.playing != s_bar_playing)     // bar color follows transport state
+    if (tbar_state() != s_bar_state)          // bar color follows transport/analysis
         draw_posbar_frame();
     if (!dk.file_frames) return;
     int x = TBAR_X + 2 + (int)((uint64_t)dk.rpos_i * (TBAR_W - 8) / dk.file_frames);
@@ -156,11 +167,11 @@ static void live_full_redraw(void){
     s_info1[0] = 0;
     s_info2[0] = 0;
     draw_info();
-    s_bar_playing = -1;      // force the first frame paint
+    s_bar_state = -1;        // force the first frame paint
     draw_posbar();
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:scrub press:tracks k6:filt k7:x2", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:scrub/nudge press:tracks TR2hold:sync", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
@@ -195,8 +206,18 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             refresh_samples();                       // (TR1/TR2 are the transport)
             s_load_ret = M_DECK_LIVE;
             return M_DECK_LOAD;
-        case EV_FWD:  deck_seek_beats(+4); break;    // scrub one bar per detent
-        case EV_BWD:  deck_seek_beats(-4); break;
+        case EV_FWD:
+            if (dk.clk.locked && dk.sync) {          // locked+synced: fine phase nudge
+                dk.phase_offset -= DK_NUDGE_STEP;
+                if (dk.phase_offset < 0.0f) dk.phase_offset += 1.0f;
+            } else deck_seek_beats(+4);              // else: one-bar scrub
+            break;
+        case EV_BWD:
+            if (dk.clk.locked && dk.sync) {
+                dk.phase_offset += DK_NUDGE_STEP;
+                if (dk.phase_offset >= 1.0f) dk.phase_offset -= 1.0f;
+            } else deck_seek_beats(-4);
+            break;
         case EV_LONG_PRESS: return M_MAIN;
         default: break;
     }
@@ -351,7 +372,9 @@ static int deck_load_handler(int it_id, int event, void *ev_data){
         case EV_FWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + 1) % s_n_samples; load_redraw(); } break;
         case EV_BWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + s_n_samples - 1) % s_n_samples; load_redraw(); } break;
         case EV_SHORT_PRESS:
-            if(s_n_samples) deck_load_track(s_samples[s_sample_idx]);
+            // re-selecting the loaded track is a no-op (don't reload/re-settle)
+            if(s_n_samples && strcmp(s_samples[s_sample_idx], dk.track) != 0)
+                deck_load_track(s_samples[s_sample_idx]);
             return s_load_ret;
         case EV_LONG_PRESS:
             return s_load_ret;

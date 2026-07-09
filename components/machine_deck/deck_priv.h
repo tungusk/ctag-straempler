@@ -70,6 +70,10 @@ typedef struct {
     volatile float phase_err;      // current beat phase error (UI display)
     volatile float phase_int;      // PLL integrator: nulls residual frequency
                                    // error (imperfect track_bpm) -> no drift
+    volatile float phase_offset;   // NUDGE: manual phase trim the loop locks to
+                                   // (pulse-phase units [0,1); the loop holds it)
+    volatile float sync_slew;      // SYNC catch-up: frames left to shift via a
+                                   // brief rate bend (no seek/dropout); 0 = idle
     volatile float speed_mult;     // knob7 while synced: x0.5 / x1 / x2, still locked
 
     // DJ filter (knob6): centre = bypass, left = LP sweeping down,
@@ -98,5 +102,6 @@ int  deck_load_track(const char *name);   // select + start streaming + read sid
 void deck_toggle_play(void);              // play/pause (resumes at the cue point)
 void deck_restart(void);                  // jump to the downbeat
 void deck_seek_beats(int beats);          // grid-snapped scrub (± whole beats)
+void deck_sync_now(void);                 // hard-snap grid phase to the clock now
 int  deck_analyze_start(void);            // spawn BPM/grid analysis of the track
 void deck_analysis_commit(void);          // adopt an_bpm/an_grid + write sidecar
