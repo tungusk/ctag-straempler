@@ -2,6 +2,7 @@
 #include "sd_lock.h"
 #include <dirent.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -62,6 +63,45 @@ static void createConfigFile(){
     cJSON_Delete(root);
 }
 
+// Boot-time cleanup of incomplete uploads: delete upload scratch (.TMP/.PART)
+// and any zero-byte file left in usr/ or usr/MODS/ by an interrupted upload or
+// power loss. Such files can crash a machine that tries to load them (a
+// truncated module/sample). Runs once at boot, before the audio/wifi tasks
+// exist, so no sd_lock is needed (matches checkSDStructure's other SD calls).
+// Deletes are deferred until after closedir — removing during readdir is unsafe.
+static void sweepDir(const char *dir){
+    DIR *d = opendir(dir);
+    if(!d) return;
+    char victims[16][64];
+    int nv = 0;
+    struct dirent *e;
+    while((e = readdir(d)) != NULL && nv < 16){
+        if(e->d_name[0] == '.') continue;
+        int L = strlen(e->d_name);
+        if(L >= 64) continue;
+        bool tmp = (L >= 4 && strcasecmp(e->d_name + L - 4, ".TMP") == 0) ||
+                   (L >= 5 && strcasecmp(e->d_name + L - 5, ".PART") == 0);
+        bool zero = false;
+        if(!tmp){
+            char p[300]; struct stat s;
+            snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+            zero = (stat(p, &s) == 0 && S_ISREG(s.st_mode) && s.st_size == 0);
+        }
+        if(tmp || zero) strcpy(victims[nv++], e->d_name);
+    }
+    closedir(d);
+    for(int i = 0; i < nv; i++){
+        char p[300]; snprintf(p, sizeof(p), "%s/%s", dir, victims[i]);
+        ESP_LOGW("SD", "sweep: removing incomplete file %s", p);
+        remove(p);
+    }
+}
+
+static void sweepIncompleteFiles(){
+    sweepDir("/sdcard/usr");
+    sweepDir("/sdcard/usr/MODS");
+}
+
 void checkSDStructure(){
     // check if directory structure exists, if not, create
     struct stat st = {0};
@@ -84,9 +124,11 @@ void checkSDStructure(){
     // check if config file exists & has valid structure, else create/rewrite
     if (stat("/sdcard/CONFIG.JSN", &st) == -1 || validateConfig() == -1) {
         ESP_LOGE("SD", "Config not found/invalid");
-        createConfigFile(); 
+        createConfigFile();
     }
 
+    // clear out any incomplete uploads before machines can load them
+    sweepIncompleteFiles();
 }
 
 void repairAudioFileAssigment(int id){

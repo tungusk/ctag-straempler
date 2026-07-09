@@ -6,6 +6,7 @@
 #include <string.h>
 #include <strings.h>
 #include <dirent.h>
+#include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
@@ -24,6 +25,8 @@ const float trk_ppb[5] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f};
 const char *const trk_ppb_names[5] = {"1 per 4 beats", "1 per 2 beats", "1 per beat", "2 per beat", "4 per beat"};
 
 static volatile bool s_run = false, s_alive = false;
+static bool s_logged_play = false;   // one-shot stack-watermark log per load
+static char s_cur_file[TRK_NAME_LEN] = "";   // module currently loaded/requested
 
 // module extensions libxmp can load (subset shown to the browser + accepted by
 // upload). libxmp autodetects the real format from content; the extension is
@@ -52,7 +55,7 @@ static int cmp_name(const void *a, const void *b){ return strcasecmp((const char
 int tracker_list_modules(char (**out)[TRK_NAME_LEN])
 {
     sd_lock_take();
-    DIR *d = opendir("/sdcard/usr");
+    DIR *d = opendir(TRK_DIR_VFS);
     int n = 0;
     if (d) {
         struct dirent *e;
@@ -77,6 +80,7 @@ void tracker_request_load(const char *name)
 {
     strlcpy(trk.file, name, sizeof(trk.file));
     strlcpy(trk.pending, name, sizeof(trk.pending));
+    strlcpy(s_cur_file, name, sizeof(s_cur_file));   // track intended module
     trk.playing = false;
     trk.loading = true;
     trk.state = TRK_LOADING;
@@ -114,7 +118,7 @@ static void apply_sound_mode(void)
 static void *load_file_psram(const char *name, long *out_size)
 {
     char path[80];
-    snprintf(path, sizeof(path), "/sdcard/usr/%s", name);
+    snprintf(path, sizeof(path), TRK_DIR_VFS "/%s", name);
     sd_lock_take();
     FILE *f = fopen(path, "rb");
     long sz = 0;
@@ -158,6 +162,7 @@ static void do_load(void)
     if (s_have_module) { xmp_end_player(s_ctx); xmp_release_module(s_ctx); s_have_module = false; }
     trk.state = TRK_LOADING;
     trk.loading = true;
+    s_logged_play = false;
 
     long sz = 0;
     void *buf = load_file_psram(trk.pending, &sz);
@@ -183,6 +188,9 @@ static void do_load(void)
     xmp_start_player(s_ctx, TRK_RATE, 0);
     apply_sound_mode();
     trk.tf_cur = 1.0f;
+    // stack headroom after the (deepest) load path — verify the 24 KB is enough
+    ESP_LOGI(TAG, "loaded '%s' [%s] %dch; render stack low-water=%u B",
+             trk.title, trk.fmt, trk.channels, uxTaskGetStackHighWaterMark(NULL));
 
     trk.wpos = trk.rpos = 0;
     trk.loading = true;
@@ -252,6 +260,11 @@ static void render_task(void *pv)
             trk.cur_pos = fi.pos; trk.cur_pat = fi.pattern; trk.cur_row = fi.row;
             trk.time_ms = fi.time; trk.total_ms = fi.total_time; trk.cur_bpm = fi.bpm;
             if (trk.wpos - trk.rpos >= TRK_LOW_WATER) trk.loading = false;
+            if (!s_logged_play) {                 // one-shot: stack after first mix
+                s_logged_play = true;
+                ESP_LOGI(TAG, "first play fill; render stack low-water=%u B",
+                         uxTaskGetStackHighWaterMark(NULL));
+            }
             continue;                             // keep filling, no delay
         }
         vTaskDelay(pdMS_TO_TICKS(5));
@@ -274,6 +287,11 @@ static esp_err_t tracker_start(void)
     memset(&trk, 0, sizeof(trk));
     trk.ring = heap_caps_malloc((size_t)TRK_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     if (!trk.ring) { ESP_LOGE(TAG, "PSRAM ring alloc failed"); return ESP_ERR_NO_MEM; }
+    // ensure the module folder exists (harmless if already there); uploads and
+    // the browser both live under it
+    sd_lock_take();
+    mkdir(TRK_DIR_VFS, 0777);
+    sd_lock_give();
     trk.loop = keep_loop; trk.sync = keep_sync; trk.amiga = keep_amiga;
     trk.clk_src = keep_clk; trk.ppb_idx = keep_ppb;
     strlcpy(trk.file, keep_file, sizeof(trk.file));
@@ -288,7 +306,10 @@ static esp_err_t tracker_start(void)
     trk.clk.period_max = TRK_RATE * 60 / 20;
 
     s_run = true;
-    xTaskCreate(render_task, "trk_render", 8192, NULL, 5, NULL);   // unpinned
+    // 32 KB stack: libxmp's loaders overrun the old 8 KB (FreeRTOS
+    // stack-overflow / TCB-clobber crashes). Measured peak ~18.7 KB on a plain
+    // 4ch MOD (load is the deep path); 32 KB leaves headroom for heavier IT/XM.
+    xTaskCreate(render_task, "trk_render", 32768, NULL, 5, NULL);   // unpinned
     audio_status_set_voices("tracker", "");
 
     if (trk.file[0]) tracker_request_load(trk.file);   // restore last module
@@ -383,8 +404,15 @@ static void tracker_preset_load(const cJSON *node)
         trk.ppb_idx = j->valueint; if (trk.ppb_idx < 0) trk.ppb_idx = 0; if (trk.ppb_idx > 4) trk.ppb_idx = 4;
     }
     // file restore happens in start() (needs the render task up) — stash it
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "file")) && cJSON_IsString(j) && j->valuestring[0])
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "file")) && cJSON_IsString(j) && j->valuestring[0]) {
         strlcpy(trk.file, j->valuestring, sizeof(trk.file));
+        // live change via teleremote (render task already running): hot-reload
+        // if the picked module differs from what's loaded. At machine-start
+        // restore the render task isn't up yet (s_run false), so start() does
+        // the initial load and this stays quiet — avoiding a double load.
+        if (s_run && strcmp(trk.file, s_cur_file) != 0)
+            tracker_request_load(trk.file);
+    }
 }
 
 extern const machine_ui_t tracker_menu_ui;

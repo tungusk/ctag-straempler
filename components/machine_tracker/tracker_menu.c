@@ -282,15 +282,12 @@ static void tracker_register_pages(void *menusys){
 static const char *const tracker_main_items[] = {"Live", "Setup"};
 static const int tracker_main_targets[] = {M_TRACKER_LIVE, M_TRACKER_SETUP};
 
-extern const httpd_uri_t tracker_web_uris[];
-extern const int tracker_web_n_uris;
-
+// module upload/list/download/delete now live in the core REST layer
+// (rest-api.c, /trk/*) so they work regardless of the active machine.
 const machine_ui_t tracker_menu_ui = {
     .main_items = tracker_main_items,
     .main_targets = tracker_main_targets,
     .n_main = 2,
     .register_pages = tracker_register_pages,
     .boot_target = M_TRACKER_LIVE,
-    .web_uris = tracker_web_uris,
-    .n_web_uris = 1,
 };
