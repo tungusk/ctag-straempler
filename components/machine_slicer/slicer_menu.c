@@ -7,6 +7,7 @@
 #include "freertos/queue.h"
 #include "menusys.h"
 #include "menu_types.h"
+#include "menutft.h"
 #include "ui_events.h"
 #include "tft.h"
 #include "tftspi.h"
@@ -163,7 +164,7 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
             sl.cmd_fire = 1;            // audition the selected slice
             break;
         case EV_LONG_PRESS:
-            return M_MAIN;
+            return M_SLICER_SETUP;   // toggle Live -> Setup (no hub)
         default: break;
     }
     return 0;
@@ -190,6 +191,7 @@ static void setup_redraw(int pos, int sel){
     int fh = TFT_getfontheight();
     _fg = TFT_WHITE;
     TFT_print("Slicer Setup", 6, 4);
+    menuTFTPrintAffordance("System", pos == -1);
     for (int i = 0; i < SL_SETUP_N; i++){
         int y = fh + 14 + i * (fh + 8);
         _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
@@ -234,7 +236,7 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
                 else if(pos==1) cycle_target(+1);
                 else if(pos==4) sl.auto_on = !sl.auto_on;
                 else if(pos==5) sl.reverse = !sl.reverse;
-            } else pos = (pos + 1) % SL_SETUP_N;
+            } else { pos++; if(pos >= SL_SETUP_N) pos = -1; }
             setup_redraw(pos, sel);
             break;
         case EV_BWD:
@@ -243,10 +245,11 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
                 else if(pos==1) cycle_target(-1);
                 else if(pos==4) sl.auto_on = !sl.auto_on;
                 else if(pos==5) sl.reverse = !sl.reverse;
-            } else pos = (pos + SL_SETUP_N - 1) % SL_SETUP_N;
+            } else { pos--; if(pos < -1) pos = SL_SETUP_N - 1; }
             setup_redraw(pos, sel);
             break;
         case EV_SHORT_PRESS:
+            if(pos == -1) return M_MORE;          // System affordance
             if(pos == 2) return M_SLICER_SENS;   // open the dial-in screen
             if(pos == 3){
                 setup_refresh_samples();
@@ -254,7 +257,7 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
             }
             sel = !sel; s_msg[0] = 0; setup_redraw(pos, sel);
             break;
-        case EV_LONG_PRESS: return M_MAIN;
+        case EV_LONG_PRESS: return M_SLICER_LIVE;   // toggle Setup -> Live
         default: break;
     }
     return 0;

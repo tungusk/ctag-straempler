@@ -92,6 +92,7 @@ void menuTFTPrintMainMenus(const char *const *items, int n){
 // on a Setup page, "Settings" on the System page). Selecting it (press) is how
 // the hub-less pages reach the next level. Call after the page title.
 void menuTFTPrintAffordance(const char *label, int highlighted){
+    Font save = cfont;    // save/restore font so a dirty cfont can't garble us
     TFT_resetclipwin();   // draw at the very top, unclipped (else it garbles)
     TFT_setFont(DEFAULT_FONT, NULL);
     int w = TFT_getStringWidth((char*)label);
@@ -101,6 +102,7 @@ void menuTFTPrintAffordance(const char *label, int highlighted){
     TFT_fillRect(x - 4, 2, w + 8, TFT_getfontheight() + 3, _bg);
     TFT_print((char*)label, x, 4);
     _bg = TFT_BLACK;
+    cfont = save;
 }
 
 void menuTFTPrintAbout(){

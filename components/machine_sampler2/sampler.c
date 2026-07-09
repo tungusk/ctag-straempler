@@ -1395,7 +1395,7 @@ extern cJSON *s2_sampler_preset_save(void);
 extern void s2_sampler_preset_load(const cJSON *node);
 
 const machine_t s2_machine_sampler = {
-    .name = "Sampler2",
+    .name = "Sampler",
     .start = sampler_start,
     .stop = sampler_stop,
     .process = sampler_process,

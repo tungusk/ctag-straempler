@@ -155,10 +155,11 @@ static void sys_row(int i){
     bool sel = (i == s_sys_pos);
     _bg = sel ? (color_t){10, 18, 56} : TFT_BLACK;
     TFT_fillRect(0, y0, _width, SYS_RH, _bg);
-    TFT_setFont(sel ? DEJAVU18_FONT : DEFAULT_FONT, NULL);
+    Font save = cfont;                     // save/restore font cleanly (the
+    TFT_setFont(sel ? DEJAVU18_FONT : DEFAULT_FONT, NULL);   // per-row switch
     _fg = sel ? TFT_CYAN : (active ? (color_t){40, 200, 90} : TFT_WHITE);
     TFT_print((char*)s_sys_names[i], 18, y0 + (SYS_RH - TFT_getfontheight()) / 2);
-    TFT_setFont(DEFAULT_FONT, NULL);
+    cfont = save;                          // was leaving cfont dirty -> garble)
 }
 
 static void system_full_redraw(void){
@@ -187,6 +188,7 @@ static int more_def_handler(int it_id, int event, void* event_data){
             s_sys_n = 0;
             for(int i = 0; machine_registry[i] != NULL && s_sys_n < 16; i++){
                 if(strcmp(machine_registry[i]->name, "Stub") == 0) continue;
+                if(strcmp(machine_registry[i]->name, "Sampler0") == 0) continue;   // legacy sampler hidden
                 s_sys_machines[s_sys_n] = machine_registry[i];
                 s_sys_names[s_sys_n] = machine_registry[i]->name;
                 s_sys_n++;
