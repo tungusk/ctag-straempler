@@ -12,6 +12,7 @@ void menuTFTPrintMenu(const char** items, const int* n_items);
 void menuTFTPrintMenuH(const char** items, const int* n_items);
 void menuTFTPrintMenuHSpaced(const char** items, const int* n_items);
 void menuTFTPrintMainMenus(const char *const *items, int n);
+void menuTFTPrintAffordance(const char *label, int highlighted);
 void menuTFTPrintAbout();
 
 

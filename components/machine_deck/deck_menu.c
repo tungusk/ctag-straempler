@@ -7,6 +7,7 @@
 #include "freertos/queue.h"
 #include "menusys.h"
 #include "menu_types.h"
+#include "menutft.h"
 #include "ui_events.h"
 #include "tft.h"
 #include "tftspi.h"
@@ -218,7 +219,7 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
                 if (dk.phase_offset >= 1.0f) dk.phase_offset -= 1.0f;
             } else deck_seek_beats(-4);
             break;
-        case EV_LONG_PRESS: return M_MAIN;
+        case EV_LONG_PRESS: return M_DECK_SETUP;   // toggle Live -> Setup (no hub)
         default: break;
     }
     return 0;
@@ -234,6 +235,7 @@ static void setup_redraw(int pos, int sel){
     int fh = TFT_getfontheight();
     _fg = TFT_WHITE;
     TFT_print("Deck Setup", 6, 4);
+    menuTFTPrintAffordance("System", pos == -1);   // top-right; pos -1 = System selected
     for (int i = 0; i < DK_SETUP_N; i++){
         int y = fh + 14 + i * (fh + 7);
         _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
@@ -310,20 +312,21 @@ static int deck_setup_handler(int it_id, int event, void *ev_data){
         }
         case EV_FWD:
             if(sel) setup_adj(pos, +1);
-            else pos = (pos + 1) % DK_SETUP_N;
+            else { pos++; if(pos >= DK_SETUP_N) pos = -1; }    // past bottom -> System
             setup_redraw(pos, sel);
             break;
         case EV_BWD:
             if(sel) setup_adj(pos, -1);
-            else pos = (pos + DK_SETUP_N - 1) % DK_SETUP_N;
+            else { pos--; if(pos < -1) pos = DK_SETUP_N - 1; } // past System -> bottom
             setup_redraw(pos, sel);
             break;
         case EV_SHORT_PRESS:
+            if(pos == -1) return M_MORE;                       // System affordance
             if(pos == 0){ refresh_samples(); s_load_ret = M_DECK_SETUP; return M_DECK_LOAD; }
             if(pos == 7){ deck_analyze_start(); setup_redraw(pos, sel); break; }
             sel = !sel; setup_redraw(pos, sel);
             break;
-        case EV_LONG_PRESS: return M_MAIN;
+        case EV_LONG_PRESS: return M_DECK_LIVE;   // toggle Setup -> Live (no hub)
         default: break;
     }
     return 0;

@@ -39,8 +39,6 @@ static void autosave_kick(void);
 static xQueueHandle s_ev_queue = NULL;
 
 // core menu labels (machine-independent pages)
-static const char* more_menus[] = {"Machine", "Settings", "About"};
-static const int n_more_menus = 3;
 static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "IP"};
 static const int n_settings_menus = 6;
 
@@ -129,7 +127,7 @@ static int about_def_handler(int it_id, int event, void* event_data){
         case EV_LONG_PRESS:
             //mountSDStorage();
             menuTFTFlushMenuDataRect();
-            return M_MORE;
+            return M_SETTINGS;   // About nests inside Settings now
             break;
         default:
             break;
@@ -138,37 +136,86 @@ static int about_def_handler(int it_id, int event, void* event_data){
     return 0; // remain in current menu
 }
 
-static int more_def_handler(int it_id, int event, void* event_data){
-    const int menu_states[] = {M_MACHINE_SEL, M_SETTINGS, M_ABOUT};
-    const int states = sizeof(menu_states)/sizeof(int);
-    static int menu_state_current = 0;
+static void menuSwitchMachine(const machine_t *m);   // defined below
 
+// System (M_MORE): the machine list itself, with a "Settings" affordance
+// top-right. pos == -1 selects Settings; 0..n-1 select a machine to switch to.
+static const char *s_sys_names[16];
+static const machine_t *s_sys_machines[16];
+static int s_sys_n = 0;
+static int s_sys_pos = 0;   // -1 = Settings affordance
+#define SYS_RH 21           // fixed row height (fits DEJAVU18 for the selected)
+
+// paint a single machine row at its current selection state (fixed height so
+// the bigger selected font causes no layout shift, and incremental repaints
+// don't flicker)
+static void sys_row(int i){
+    int y0 = 26 + i * SYS_RH;   // clear of the title/affordance row
+    bool active = (s_sys_machines[i] == machine_active());
+    bool sel = (i == s_sys_pos);
+    _bg = sel ? (color_t){10, 18, 56} : TFT_BLACK;
+    TFT_fillRect(0, y0, _width, SYS_RH, _bg);
+    TFT_setFont(sel ? DEJAVU18_FONT : DEFAULT_FONT, NULL);
+    _fg = sel ? TFT_CYAN : (active ? (color_t){40, 200, 90} : TFT_WHITE);
+    TFT_print((char*)s_sys_names[i], 18, y0 + (SYS_RH - TFT_getfontheight()) / 2);
+    TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+static void system_full_redraw(void){
+    TFT_resetclipwin();
+    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
+    TFT_setFont(DEFAULT_FONT, NULL);
+    _fg = TFT_WHITE;
+    TFT_print("Machines", 6, 3);
+    menuTFTPrintAffordance("Settings", s_sys_pos == -1);
+    for(int i = 0; i < s_sys_n; i++) sys_row(i);
+}
+
+// incremental: repaint only the rows that changed -> no flash. Only touch the
+// affordance when the selection actually crosses into/out of it (else it
+// flickers fg/bg on every detent).
+static void system_nav(int old){
+    if(old >= 0 && old < s_sys_n) sys_row(old);
+    if(s_sys_pos >= 0 && s_sys_pos < s_sys_n) sys_row(s_sys_pos);
+    if(old == -1 || s_sys_pos == -1)
+        menuTFTPrintAffordance("Settings", s_sys_pos == -1);
+}
+
+static int more_def_handler(int it_id, int event, void* event_data){
     switch(event){
         case EV_ENTERED_MENU:
-            menuTFTPrintMenu(more_menus, &n_more_menus);
-            menuTFTSelectMenuItem(&menu_state_current, 0, more_menus, &n_more_menus);
+            s_sys_n = 0;
+            for(int i = 0; machine_registry[i] != NULL && s_sys_n < 16; i++){
+                if(strcmp(machine_registry[i]->name, "Stub") == 0) continue;
+                s_sys_machines[s_sys_n] = machine_registry[i];
+                s_sys_names[s_sys_n] = machine_registry[i]->name;
+                s_sys_n++;
+            }
+            s_sys_pos = 0;
+            for(int i = 0; i < s_sys_n; i++) if(s_sys_machines[i] == machine_active()){ s_sys_pos = i; break; }
+            system_full_redraw();
             break;
-        case EV_FWD:
-            menu_state_current++;
-            if(menu_state_current >= states) menu_state_current = 0;
-            menuTFTSelectMenuItem(&menu_state_current, 0, more_menus, &n_more_menus);
+        case EV_FWD: {
+            int old = s_sys_pos; s_sys_pos++; if(s_sys_pos >= s_sys_n) s_sys_pos = -1; system_nav(old);
             break;
-        case EV_BWD:
-            menu_state_current--;
-            if(menu_state_current < 0) menu_state_current = states - 1;
-            menuTFTSelectMenuItem(&menu_state_current, 0, more_menus, &n_more_menus);
+        }
+        case EV_BWD: {
+            int old = s_sys_pos; s_sys_pos--; if(s_sys_pos < -1) s_sys_pos = s_sys_n - 1; system_nav(old);
             break;
+        }
         case EV_SHORT_PRESS:
-            return menu_states[menu_state_current];
-            break;
-        case EV_LONG_PRESS:
+            if(s_sys_pos == -1) return M_SETTINGS;
+            if(s_sys_machines[s_sys_pos] != machine_active())
+                menuSwitchMachine(s_sys_machines[s_sys_pos]);
+            return 0;   // machine switch re-enters via the UI rebind
+        case EV_LONG_PRESS: {
             menuTFTFlushMenuDataRect();
-            return M_MAIN;
-            break;
+            const machine_ui_t *mui = machine_ui();
+            return (mui && mui->boot_target) ? mui->boot_target : M_MAIN;
+        }
         default:
             break;
     }
-    
     return 0; // remain in current menu
 }
 
@@ -240,6 +287,11 @@ static int settings_def_handler(int it_id, int event, void* event_data){
     switch(event){
         case EV_ENTERED_MENU:
             selected = 0;
+            TFT_resetclipwin();
+            _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
+            TFT_setFont(DEFAULT_FONT, NULL);
+            _fg = TFT_WHITE; TFT_print("Settings", 6, 3);
+            menuTFTPrintAffordance("About", menu_pos == -1);   // About nests here
             menuTFTPrintMenu(settings_menus, &n_settings_menus);
             menuTFTSelectMenuItem(&menu_pos, 0, settings_menus, &n_settings_menus);
             if(_state_json != NULL)cfgData = (cJSON*) _state_json;
@@ -259,9 +311,11 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             break;
         case EV_FWD:
             if(!selected){
+                int old = menu_pos;
                 menu_pos++;
-                if(menu_pos >= items) menu_pos = 0;
+                if(menu_pos >= items) menu_pos = -1;   // past bottom -> About
                 menuTFTSelectMenuItem(&menu_pos, 0, settings_menus, &n_settings_menus);
+                if(old == -1 || menu_pos == -1){ TFT_resetclipwin(); menuTFTPrintAffordance("About", menu_pos == -1); }
             }else if(menu_items[menu_pos] == SID_REMOTE){
                 remote_on = !remote_on;
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
@@ -272,9 +326,11 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             break;
         case EV_BWD:
             if(!selected){
+                int old = menu_pos;
                 menu_pos--;
-                if(menu_pos < 0) menu_pos = items - 1;
+                if(menu_pos < -1) menu_pos = items - 1;   // past About -> bottom
                 menuTFTSelectMenuItem(&menu_pos, 0, settings_menus, &n_settings_menus);
+                if(old == -1 || menu_pos == -1){ TFT_resetclipwin(); menuTFTPrintAffordance("About", menu_pos == -1); }
             }else if(menu_items[menu_pos] == SID_REMOTE){
                 remote_on = !remote_on;
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
@@ -284,6 +340,7 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             }
             break;
         case EV_SHORT_PRESS:
+            if(menu_pos == -1) return M_ABOUT;   // About affordance
             if(menu_items[menu_pos] != SID_TIMEZONE && menu_items[menu_pos] != SID_REMOTE){
                 _state_json = (void*) cfgData;
                 _state_data = (void*) &menu_pos;
