@@ -66,7 +66,7 @@ static void ui_ev_loop(void* pvParams)
                     gettimeofday(&lastBtnEv, NULL);
                     btn_state = EV_ENC1_BT_DWN;
                     btn_serviced = 0;
-                    setTimerSingleShot(500, ui_ev_queue);       
+                    setTimerSingleShot(500, ui_ev_queue);
                     break;
                 case EV_ENC1_BT_UP:
                     last = timeval_durationBeforeNow(&lastBtnEv);
@@ -76,7 +76,12 @@ static void ui_ev_loop(void* pvParams)
                     btn_state = EV_ENC1_BT_UP;
                     if(!btn_serviced){
                         btn_serviced = 1;
-                        menuProcessEvent(EV_SHORT_PRESS, NULL);
+                        // Fall back to duration at release: if the 500 ms one-shot
+                        // timer was delayed (its service task is low priority and
+                        // can be starved by WiFi), a genuine hold would otherwise
+                        // be mis-serviced as a short press. Measure the real hold.
+                        if(last >= 500) menuProcessEvent(EV_LONG_PRESS, NULL);
+                        else            menuProcessEvent(EV_SHORT_PRESS, NULL);
                     }
                     break;
                 case EV_TIMER_ONE_SHOT:

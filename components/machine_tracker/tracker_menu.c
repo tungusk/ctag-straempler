@@ -45,6 +45,7 @@ static int  s_body_top = -999;
 static int  s_last_barx = -1;
 static int  s_bar_state = -1;
 static int  s_bar_loop  = -1;
+static int  s_last_loopa = -1, s_last_loopb = -1;
 
 static const char *state_word(void){
     switch (trk.state){
@@ -75,6 +76,7 @@ static void draw_bar_frame(void){
     TFT_drawRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, _fg);
     _bg = TFT_BLACK;
     s_last_barx = -1;
+    s_last_loopa = -1; s_last_loopb = -1;
     s_bar_state = trk.playing ? 1 : 0;
     s_bar_loop  = trk.loop_engage ? 1 : 0;
 }
@@ -82,6 +84,18 @@ static void draw_bar_frame(void){
 static void draw_bar(void){
     if ((trk.playing ? 1 : 0) != s_bar_state ||
         (trk.loop_engage ? 1 : 0) != s_bar_loop) draw_bar_frame();
+    if (trk.loop_engage){
+        // show the loop window as a bright band on the (pink) bar — the start
+        // point moves it with knob6, the length resizes it with knob7
+        int a = TBAR_X + 2 + trk.loop_a_pm * (TBAR_W - 8) / 1000;
+        int b = TBAR_X + 2 + trk.loop_b_pm * (TBAR_W - 8) / 1000;
+        if (b < a + 3) b = a + 3;
+        if (a == s_last_loopa && b == s_last_loopb) return;
+        TFT_fillRect(TBAR_X + 1, TBAR_Y + 1, TBAR_W - 2, TBAR_H - 2, tbar_bg());
+        TFT_fillRect(a, TBAR_Y + 1, b - a, TBAR_H - 2, (color_t){245, 225, 235});
+        s_last_loopa = a; s_last_loopb = b;
+        return;
+    }
     if (trk.total_ms <= 0) return;
     int frac = (int)((int64_t)trk.time_ms * (TBAR_W - 8) / trk.total_ms);
     int x = TBAR_X + 2 + frac;
@@ -346,9 +360,12 @@ static int tracker_load_handler(int it_id, int event, void *ev_data){
         case EV_FWD: if (s_n_mods){ s_mod_idx = (s_mod_idx + 1) % s_n_mods; load_redraw(); } break;
         case EV_BWD: if (s_n_mods){ s_mod_idx = (s_mod_idx + s_n_mods - 1) % s_n_mods; load_redraw(); } break;
         case EV_SHORT_PRESS:
-            if (s_n_mods) tracker_request_load(s_mods[s_mod_idx]);
+            // pressing the already-loaded track just exits (no reload); a
+            // different track loads. Either way we leave the browser.
+            if (s_n_mods && strcmp(s_mods[s_mod_idx], trk.file) != 0)
+                tracker_request_load(s_mods[s_mod_idx]);
             return s_load_ret;
-        case EV_LONG_PRESS: return s_load_ret;
+        case EV_LONG_PRESS: return s_load_ret;   // cancel — exit without loading
         default: break;
     }
     return 0;

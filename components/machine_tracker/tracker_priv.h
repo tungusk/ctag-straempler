@@ -80,6 +80,8 @@ typedef struct {
     volatile int  loop_pos_cv;     // CV6 raw 0..4095 → position block across the song
     volatile int  loop_start_ord;  // render-published window origin (UI): order...
     volatile int  loop_start_row;  //  ...and row within it
+    volatile int  loop_a_pm;       // loop window start as per-mille of the song (bar)
+    volatile int  loop_b_pm;       // loop window end as per-mille of the song (bar)
     // order-list map (built at load) so the loop window can span patterns
     uint16_t order_rows[TRK_MAX_ORDERS];   // rows per order position
     uint32_t order_step0[TRK_MAX_ORDERS];  // cumulative absolute step at each order

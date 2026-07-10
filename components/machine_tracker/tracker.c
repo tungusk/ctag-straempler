@@ -282,16 +282,14 @@ static void render_task(void *pv)
     uint32_t loop_prev_start = 0xFFFFFFFFu;  // last window start (detect a move)
     uint32_t loop_prev_len   = 0;   // last window length (detect a resize)
     bool     loop_resync = false;   // window moved/resized → jump at next step
+    int      last_norm_row = -1;    // row tracking for the quantized scrub seek
 
     while (s_run) {
         if (trk.load_req) { trk.load_req = false; do_load(); continue; }
 
-        if (s_have_module && trk.seek_req) {
-            trk.seek_req = false;
-            trk.loop_engage = false;                // an explicit seek cancels the loop
-            xmp_set_position(s_ctx, trk.seek_pos);
-            ring_flush();
-        }
+        // a scrub (encoder) request exits loop mode; the reposition itself is
+        // applied on a row boundary in the play path below so it doesn't click
+        if (s_have_module && trk.seek_req && trk.loop_engage) trk.loop_engage = false;
         if (s_have_module && trk.restart_req) {
             trk.restart_req = false;
             trk.loop_engage = false;
@@ -360,6 +358,8 @@ static void render_task(void *pv)
                 abs_to_or(lstart, &lo, &lr);
                 trk.loop_start_ord = lo;
                 trk.loop_start_row = lr;
+                trk.loop_a_pm = (int)((uint64_t)lstart * 1000 / total);
+                trk.loop_b_pm = (int)((uint64_t)lend   * 1000 / total);
                 // window moved OR resized (knobs/engage) → re-anchor at the next
                 // step boundary — makes both position AND length changes instant
                 if (lstart != loop_prev_start || (uint32_t)len != loop_prev_len) {
@@ -401,6 +401,15 @@ static void render_task(void *pv)
                 if (r < 0) trk.playing = false;       // module ended (loop off)
                 else       ring_write(s_scratch, TRK_CHUNK);
                 xmp_get_frame_info(s_ctx, &fi);
+                // apply a pending scrub on the next BEAT (every 4th step) so the
+                // jump lands in time; an immediate mid-row reposition clicks
+                if (trk.seek_req && last_norm_row >= 0 && fi.row != last_norm_row
+                    && (fi.row % 4) == 0) {
+                    trk.seek_req = false;
+                    xmp_set_position(s_ctx, trk.seek_pos);
+                    ring_flush();
+                }
+                last_norm_row = fi.row;
             }
 
             trk.cur_pos = fi.pos; trk.cur_pat = fi.pattern; trk.cur_row = fi.row;
