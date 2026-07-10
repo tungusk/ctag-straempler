@@ -222,6 +222,8 @@ static void live_full_redraw(void){
 }
 
 static int tracker_live_handler(int it_id, int event, void *ev_data){
+    static int  scrub_target = -1;
+    static bool scrub_pending = false, scrub_moved = false;
     switch(event){
         case EV_ENTERED_MENU: live_full_redraw(); break;
         case EV_TIMER_REPEATING_FAST:
@@ -230,6 +232,13 @@ static int tracker_live_handler(int it_id, int event, void *ev_data){
             draw_info();
             draw_bar();
             draw_body(false);
+            // commit a pattern scrub only once the encoder has SETTLED (no new
+            // detent for a tick); jumping on every detent mid-scrub is choppy.
+            // The engine then applies it on the next beat.
+            if (scrub_pending){
+                if (scrub_moved) scrub_moved = false;
+                else { trk.seek_pos = scrub_target; trk.seek_req = true; scrub_pending = false; }
+            }
             if (event == EV_TIMER_REPEATING_SLOW){
                 char dbg[48];
                 snprintf(dbg, sizeof(dbg), "%c %.6s %dch r%d S%lu",
@@ -241,8 +250,20 @@ static int tracker_live_handler(int it_id, int event, void *ev_data){
         case EV_SHORT_PRESS:
             refresh_mods(); s_load_ret = M_TRACKER_LIVE;
             return M_TRACKER_LOAD;
-        case EV_FWD: if (trk.num_pat > 0){ trk.seek_pos = (trk.cur_pos + 1) % trk.num_pat; trk.seek_req = true; } break;
-        case EV_BWD: if (trk.num_pat > 0){ trk.seek_pos = (trk.cur_pos + trk.num_pat - 1) % trk.num_pat; trk.seek_req = true; } break;
+        case EV_FWD:
+            if (trk.num_pat > 0){
+                if (!scrub_pending) scrub_target = trk.cur_pos;
+                scrub_target = (scrub_target + 1) % trk.num_pat;
+                scrub_pending = true; scrub_moved = true;
+            }
+            break;
+        case EV_BWD:
+            if (trk.num_pat > 0){
+                if (!scrub_pending) scrub_target = trk.cur_pos;
+                scrub_target = (scrub_target + trk.num_pat - 1) % trk.num_pat;
+                scrub_pending = true; scrub_moved = true;
+            }
+            break;
         case EV_LONG_PRESS: return M_TRACKER_SETUP;   // toggle Live -> Setup
         default: break;
     }
