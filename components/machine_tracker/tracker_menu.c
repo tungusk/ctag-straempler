@@ -169,30 +169,16 @@ static void draw_body(bool force){
     int n = trk.n_names;
     int maxtop = n > rows ? n - rows : 0;
 
-    // knob7/CV7 scrolls the list — but NOT while looping (there CV7 = loop
-    // length), and a freshly loaded module starts at line 1 until the user
-    // actually grabs the knob (so the initial view isn't wherever CV7 sits).
-    static int  scroll_latch = 0;
-    static int  cv7_base = -1;
-    static char content_sig[24] = "";
+    // knob7/CV7 scrolls the list — but only in the TOP HALF of its range (the
+    // lower half rests at line 1), and NOT while looping (there CV7 = loop len).
     uint16_t cv[8]; audio_get_cv(cv);
-    char csig[24]; snprintf(csig, sizeof(csig), "%d:%.16s", n, n ? trk.names[0] : "");
-    if (strcmp(csig, content_sig) != 0){          // new module → back to line 1
-        strlcpy(content_sig, csig, sizeof(content_sig));
-        scroll_latch = 0;
-        cv7_base = cv[6];
-    }
     int top = 0;
     if (trk.loop_engage){
         top = s_body_top >= 0 ? s_body_top : 0;   // hold position while looping
-    } else if (maxtop > 0){
-        int d = (int)cv[6] - cv7_base; if (d < 0) d = -d;
-        if (!scroll_latch && d > 150) scroll_latch = 1;
-        if (scroll_latch){
-            top = (int)((int64_t)cv[6] * maxtop / 4095);
-            if (top < 0) top = 0;
-            if (top > maxtop) top = maxtop;
-        }
+    } else if (maxtop > 0 && cv[6] > 2048){
+        top = (int)((int64_t)(cv[6] - 2048) * maxtop / (4095 - 2048));
+        if (top < 0) top = 0;
+        if (top > maxtop) top = maxtop;
     }
     char sig[32]; snprintf(sig, sizeof(sig), "N%d.%d:%.10s", n, top, n ? trk.names[0] : "");
     if (!force && top == s_body_top && strcmp(sig, s_body_sig) == 0){ cfont = f; return; }

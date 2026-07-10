@@ -283,6 +283,8 @@ static void render_task(void *pv)
     uint32_t loop_prev_len   = 0;   // last window length (detect a resize)
     bool     loop_resync = false;   // window moved/resized → jump at next step
     int      last_norm_row = -1;    // row tracking for the quantized scrub seek
+    uint32_t loop_anchor_abs = 0;   // absolute step where the loop engaged
+    int      cv6_engage = 0;        // CV6 at engage — position is relative to it
 
     while (s_run) {
         if (trk.load_req) { trk.load_req = false; do_load(); continue; }
@@ -307,6 +309,20 @@ static void render_task(void *pv)
                 struct xmp_frame_info fi; xmp_get_frame_info(s_ctx, &fi);
                 loop_engage_ms = fi.time;
                 loop_anchor_w  = trk.wpos;
+                // the loop grabs the CURRENT playing position; CV6 only shifts it
+                // when the knob is actually turned (delta from its value at engage)
+                loop_anchor_abs = (fi.pos >= 0 && fi.pos < trk.n_orders)
+                                ? trk.order_step0[fi.pos] + (uint32_t)fi.row : 0;
+                cv6_engage = trk.loop_pos_cv;
+                loop_prev_start = 0xFFFFFFFFu;
+                // seed the UI loop band at the engage position so it doesn't flash
+                // a stale spot for a frame before the first loop render updates it
+                {
+                    uint32_t tot = trk.total_steps ? trk.total_steps : 1;
+                    int ll = trk.loop_len > 0 ? trk.loop_len : 1;
+                    trk.loop_a_pm = (int)((uint64_t)loop_anchor_abs * 1000 / tot);
+                    trk.loop_b_pm = (int)((uint64_t)(loop_anchor_abs + ll) * 1000 / tot);
+                }
                 trk.loop_engage = true;
             } else {
                 trk.loop_engage = false;
@@ -349,9 +365,16 @@ static void render_task(void *pv)
                 if ((uint32_t)len > total) len = (int)total;
                 uint32_t nblk = total / (uint32_t)len;
                 if (nblk < 1) nblk = 1;
-                uint32_t blk = (uint32_t)trk.loop_pos_cv * nblk / 4096;
-                if (blk >= nblk) blk = nblk - 1;
-                uint32_t lstart = blk * (uint32_t)len;
+                // window start = the engage position, shifted by how far CV6 has
+                // moved since engage — ONE loop-length (block) per ~128 CV counts,
+                // so a nudge advances by the loop length (not a song-scaled jump).
+                // Unmoved CV6 => stays put.
+                int base_blk = (int)(loop_anchor_abs / (uint32_t)len);
+                int cv_delta = ((int)trk.loop_pos_cv - cv6_engage) / 128;
+                int blk = base_blk + cv_delta;
+                if (blk < 0) blk = 0;
+                if (blk >= (int)nblk) blk = (int)nblk - 1;
+                uint32_t lstart = (uint32_t)blk * (uint32_t)len;
                 uint32_t lend = lstart + (uint32_t)len;
                 if (lend > total) lend = total;
                 int lo, lr;
@@ -401,13 +424,24 @@ static void render_task(void *pv)
                 if (r < 0) trk.playing = false;       // module ended (loop off)
                 else       ring_write(s_scratch, TRK_CHUNK);
                 xmp_get_frame_info(s_ctx, &fi);
-                // apply a pending scrub on the next BEAT (every 4th step) so the
-                // jump lands in time; an immediate mid-row reposition clicks
+                // apply a pending scrub at the end of the current BAR (every 16th
+                // step is a bar boundary), landing on the step that CONTINUES the
+                // groove: same row phase as where we left (wrapped into the target
+                // pattern) — which at a bar line is itself bar-aligned.
                 if (trk.seek_req && last_norm_row >= 0 && fi.row != last_norm_row
-                    && (fi.row % 4) == 0) {
+                    && (fi.row % 16) == 0) {
                     trk.seek_req = false;
                     xmp_set_position(s_ctx, trk.seek_pos);
-                    ring_flush();
+                    int tgt_rows = (trk.seek_pos >= 0 && trk.seek_pos < trk.n_orders)
+                                 ? trk.order_rows[trk.seek_pos] : 0;
+                    if (tgt_rows > 0) {
+                        int land = fi.row % tgt_rows;
+                        if (land > 0) xmp_set_row(s_ctx, land);
+                    }
+                    // NO ring_flush: the render is ~0.5 s ahead, so the ring still
+                    // holds the tail of the current bar. Flushing would DROP it
+                    // (cutting the bar short); instead we let it play out and the
+                    // target lands right after, seamlessly on the bar line.
                 }
                 last_norm_row = fi.row;
             }
