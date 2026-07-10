@@ -121,6 +121,7 @@ void menuTFTPrintAbout(){
     TFT_print("v0.9 contributors: ", 4, TFT_Y);
     TFT_print("Arlo Fishman", 4, TFT_Y);
     TFT_print("Claude (Anthropic)", 4, TFT_Y);
+    TFT_resetclipwin();   // clip is shared global state — leaking it garbles the title-bar affordance
 }
 
 
@@ -208,6 +209,7 @@ void menuTFTSelectMenuItem(int* activeSlot, int selected, const char** items, co
         TFT_drawRect(2, y, TFT_getStringWidth((char*)items[i]) + 4, h + 3 , _bg);
         y += h + 3;
     }
+    TFT_resetclipwin();   // clip is shared global state — leaking it garbles the title-bar affordance
 }
 
 void menuTFTSelectMenuItemH(int* activeSlot, int selected, const char** items, const int* n_items){
@@ -229,6 +231,7 @@ void menuTFTSelectMenuItemH(int* activeSlot, int selected, const char** items, c
         TFT_drawRect(x, 0, w+8, TFT_getfontheight()+8, _bg);
         x += w + 8;
     }
+    TFT_resetclipwin();
 }
 
 void menuTFTSelectMenuItemHSpaced(int* activeSlot, int selected, const char** items, const int* n_items){
@@ -250,8 +253,9 @@ void menuTFTSelectMenuItemHSpaced(int* activeSlot, int selected, const char** it
         w = TFT_getStringWidth((char*)items[i]);
         x_offset = (x_incr/2) -  (w/2) - 4;
         TFT_drawRect(x1 + x_offset, 0, w+8, TFT_getfontheight()+8, _bg);
-        x1 += x_incr;   
-    }  
+        x1 += x_incr;
+    }
+    TFT_resetclipwin();
 }
 
 void menuTFTSelectMainMenu(int active, int select, const char *const *items, int n){

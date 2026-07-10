@@ -313,11 +313,10 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             break;
         case EV_FWD:
             if(!selected){
-                int old = menu_pos;
                 menu_pos++;
                 if(menu_pos >= items) menu_pos = -1;   // past bottom -> About
                 menuTFTSelectMenuItem(&menu_pos, 0, settings_menus, &n_settings_menus);
-                if(old == -1 || menu_pos == -1){ TFT_resetclipwin(); menuTFTPrintAffordance("About", menu_pos == -1); }
+                menuTFTPrintAffordance("About", menu_pos == -1);
             }else if(menu_items[menu_pos] == SID_REMOTE){
                 remote_on = !remote_on;
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
@@ -328,11 +327,10 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             break;
         case EV_BWD:
             if(!selected){
-                int old = menu_pos;
                 menu_pos--;
                 if(menu_pos < -1) menu_pos = items - 1;   // past About -> bottom
                 menuTFTSelectMenuItem(&menu_pos, 0, settings_menus, &n_settings_menus);
-                if(old == -1 || menu_pos == -1){ TFT_resetclipwin(); menuTFTPrintAffordance("About", menu_pos == -1); }
+                menuTFTPrintAffordance("About", menu_pos == -1);
             }else if(menu_items[menu_pos] == SID_REMOTE){
                 remote_on = !remote_on;
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
