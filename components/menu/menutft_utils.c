@@ -43,6 +43,7 @@ void menuTFTFlush(int multiplier, color_t* color){
 void menuTFTFlushMenuDataRect(){
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     TFT_fillWindow(TFT_BLACK);
+    TFT_resetclipwin();   // clip is shared global state — never leak it
 }
 
 int menuTFTGetCharPos(char* str, int pos){

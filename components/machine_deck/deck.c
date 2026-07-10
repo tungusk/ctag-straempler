@@ -34,7 +34,9 @@ static void reader_task(void *pv)
 {
     FILE *f = NULL;
     char cur[DK_NAME_LEN] = "";
-    int16_t *chunk = malloc(4096 * 2 * sizeof(int16_t));   // internal RAM, 16 KB
+    // DMA-capable internal RAM per the SD house rule (with CAPS_ALLOC plain
+    // malloc is internal anyway; explicit caps guard against config drift)
+    int16_t *chunk = heap_caps_malloc(4096 * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
     s_alive = true;
 
     while (s_run) {

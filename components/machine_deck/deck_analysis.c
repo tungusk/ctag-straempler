@@ -85,9 +85,15 @@ static void analysis_task(void *pv)
 
     float *env = heap_caps_malloc(DK_ENV_MAX * sizeof(float), MALLOC_CAP_SPIRAM);
     // 16 hops per read (16 KB): 1 KB reads made analysis crawl (~30k SD
-    // round-trips competing with the playback reader for sd_lock)
+    // round-trips competing with the playback reader for sd_lock).
+    // DMA-capable internal RAM per the SD house rule (with CAPS_ALLOC plain
+    // malloc is internal anyway, but be explicit). NB the "analysis crawl"
+    // (fread 30 ms idle -> ~900 ms while the deck is in active use, measured
+    // via the heartbeat buckets) is NOT buffer placement — root cause still
+    // open; see the bucket logs. Idle-speed analysis is ~2.25 min / 4.5 min
+    // track and reads dominate (~31 ms per 16 KB through the VFS path).
     #define AN_CHUNK_HOPS 16
-    int16_t *chunk = malloc(AN_CHUNK_HOPS * DK_HOP * 2 * sizeof(int16_t));
+    int16_t *chunk = heap_caps_malloc(AN_CHUNK_HOPS * DK_HOP * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
     sd_lock_take();
     FILE *f = fopen(path, "rb");
     long fsize = 0;
@@ -107,6 +113,8 @@ static void analysis_task(void *pv)
     uint32_t total_hops = (uint32_t)(fsize / 4 / DK_HOP);
     if (total_hops > DK_ENV_MAX) total_hops = DK_ENV_MAX;   // cap ~5 min
     uint32_t n = 0;
+    // where does chunk time go? (ticks; printed per heartbeat, then reset)
+    uint32_t tk_lock = 0, tk_read = 0, tk_rest = 0, tk_last = xTaskGetTickCount();
     while (n < total_hops) {
         // ANALYSE ONLY WHILE STOPPED: pause entirely during playback so we never
         // touch the SD bus while the ring reader needs it — that contention was
@@ -114,9 +122,16 @@ static void analysis_task(void *pv)
         while (dk.playing) vTaskDelay(pdMS_TO_TICKS(30));
         uint32_t hops = total_hops - n;
         if (hops > AN_CHUNK_HOPS) hops = AN_CHUNK_HOPS;
+        uint32_t t0 = xTaskGetTickCount();
         sd_lock_take();
+        uint32_t t1 = xTaskGetTickCount();
         size_t got = fread(chunk, 4, hops * DK_HOP, f);
+        uint32_t t2 = xTaskGetTickCount();
         sd_lock_give();
+        tk_lock += t1 - t0;
+        tk_read += t2 - t1;
+        tk_rest += t0 - tk_last;
+        tk_last = t2;
         uint32_t got_hops = got / DK_HOP;
         for (uint32_t h = 0; h < got_hops && n < total_hops; h++) {
             int32_t acc = 0;
@@ -126,10 +141,15 @@ static void analysis_task(void *pv)
             env[n++] = (float)acc;
         }
         dk.an_progress = (int)((uint64_t)n * 70 / total_hops);
-        if ((n & 4095) < AN_CHUNK_HOPS)                    // ~every 256 chunks
-            ESP_LOGI(TAG, "env %lu/%lu hops (%.1f s)", (unsigned long)n,
-                     (unsigned long)total_hops,
-                     (double)(xTaskGetTickCount() * portTICK_PERIOD_MS) / 1000.0);
+        if ((n & 4095) < AN_CHUNK_HOPS) {                  // ~every 256 chunks
+            ESP_LOGI(TAG, "env %lu/%lu hops (%.1f s) lock %lu read %lu rest %lu ms",
+                     (unsigned long)n, (unsigned long)total_hops,
+                     (double)(xTaskGetTickCount() * portTICK_PERIOD_MS) / 1000.0,
+                     (unsigned long)(tk_lock * portTICK_PERIOD_MS),
+                     (unsigned long)(tk_read * portTICK_PERIOD_MS),
+                     (unsigned long)(tk_rest * portTICK_PERIOD_MS));
+            tk_lock = tk_read = tk_rest = 0;
+        }
         if (got_hops < hops) break;      // EOF/short read
         // per-chunk pace (this gap is load-bearing — removing it thrashed
         // sd_lock/scheduling and made analysis SLOWER, not faster)

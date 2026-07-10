@@ -39,6 +39,7 @@ void menuTFTPrintMenu(const char** items, const int* n_items){
         TFT_print((char *)items[i], x, 3 + (TFT_getfontheight() + 3) *_cur_row);
         _cur_row++;
     }
+    TFT_resetclipwin();
 }
 
 void menuTFTPrintMenuH(const char** items, const int* n_items){
@@ -53,6 +54,7 @@ void menuTFTPrintMenuH(const char** items, const int* n_items){
         TFT_print((char *)items[i], x, 4);
         x += w + 8;
     }
+    TFT_resetclipwin();
 }
 
 void menuTFTPrintMenuHSpaced(const char** items, const int* n_items){
@@ -68,7 +70,8 @@ void menuTFTPrintMenuHSpaced(const char** items, const int* n_items){
         int x_offset = (x_incr/2) -  w/2;
         TFT_print((char *)items[i], x1 + x_offset, y);
         x1 += x_incr;
-    }    
+    }
+    TFT_resetclipwin();
 }
 
 // nav bar background (dark blue)
@@ -152,6 +155,7 @@ void menuTFTPrintSettings(const cJSON *data){
             _cur_row++;
         }
     }
+    TFT_resetclipwin();
 }
 
 
@@ -171,6 +175,7 @@ void menuTFTPrintIP(const char** items, const int* n_items){
         if(strcasecmp(items[i], "IP") == 0) row = i;
     }
     TFT_print(ip, x + _width/2, 3 + (TFT_getfontheight() + 3) * row);
+    TFT_resetclipwin();
 }
 
 void menuTFTPrintInputMenu(char* title){
@@ -180,6 +185,7 @@ void menuTFTPrintInputMenu(char* title){
     _bg = TFT_BLACK;
     TFT_X = 3;
     TFT_print(title, TFT_X, 4);
+    TFT_resetclipwin();
 }
 
 
@@ -358,6 +364,7 @@ void menuTFTPrintTimezone(const char** items, const int* n_items, int *shift){
     menuTFTFlushValue(abs(*shift), _cur_row, negpos_conditions, &negpos_cond_size, &_bg);
     (*shift >= 0) ? sprintf(buf, "CET+%d",*shift) : sprintf(buf, "CET%d",*shift);
     TFT_print(buf, x + _width/2, 3 + (TFT_getfontheight() + 3) *_cur_row);
+    TFT_resetclipwin();
 }
 
 void menuTFTPrintRemote(const char** items, const int* n_items, int *on){
@@ -371,6 +378,7 @@ void menuTFTPrintRemote(const char** items, const int* n_items, int *on){
     int y = 3 + (TFT_getfontheight() + 3) * row;
     TFT_fillRect(x + _width/2, y, _width/2 - x - 4, TFT_getfontheight() + 2, _bg);
     TFT_print(*on ? "ON" : "OFF", x + _width/2, y);
+    TFT_resetclipwin();
 }
 
 
@@ -498,6 +506,7 @@ void menuTFTPrintInputError(char* s){
     _fg = TFT_RED;
     _bg = TFT_BLACK;
     TFT_print(str, CENTER, CENTER);
+    TFT_resetclipwin();
 }
 
 void menuTFTClearListItem(int* activeSlot){
@@ -519,7 +528,8 @@ void menuTFTClearListItem(int* activeSlot){
         x = x_incr*2;
     }            
         
-    TFT_fillRect(x, y_draw - 4, x_incr-1, TFT_getfontheight() + 4, _bg);     
+    TFT_fillRect(x, y_draw - 4, x_incr-1, TFT_getfontheight() + 4, _bg);
+    TFT_resetclipwin();
 }
 
 void menuTFTResetTextWrap(){
