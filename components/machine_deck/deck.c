@@ -113,6 +113,7 @@ int deck_load_track(const char *name)
 
     // cached analysis from the sidecar, if this track has been analysed before
     char jp[64];
+    int dver = 0;                    // sidecar analysis version (missing = v1)
     snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", name);
     cJSON *root = readJSONFileAsCJSON(jp);
     if (root) {
@@ -121,12 +122,15 @@ int deck_load_track(const char *name)
             dk.track_bpm = (float)j->valuedouble;
         if ((j = cJSON_GetObjectItemCaseSensitive(root, "grid")) && cJSON_IsNumber(j))
             dk.grid_offset = (uint32_t)j->valuedouble;
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, "dver")) && cJSON_IsNumber(j))
+            dver = j->valueint;
         cJSON_Delete(root);
     }
     if (dk.an_state != DK_AN_RUNNING) dk.an_state = DK_AN_IDLE;
-    // auto-analyze ONLY when enabled and the sidecar had no bpm — a cached
-    // (or previously analysed) track never re-analyzes automatically
-    if (dk.auto_an && dk.track_bpm <= 0) {
+    // auto-analyze when enabled and the sidecar had no bpm OR carries a
+    // pre-ladder (v1) result — the library upgrades itself one load at a
+    // time; a current (dver >= 2) track never re-analyzes automatically
+    if (dk.auto_an && (dk.track_bpm <= 0 || dver < 2)) {
         // analyze now (runs fine alongside playback); if a previous track's
         // run is still going, queue behind it (menu tick fires it when the
         // runner exits)

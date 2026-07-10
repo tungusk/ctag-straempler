@@ -1,9 +1,13 @@
 // Deck offline analysis — estimate a track's BPM and beat-grid offset.
 // Onset envelope (256-frame hops, ~172 Hz) -> half-wave-rectified flux ->
 // autocorrelation over the 60..190 BPM lag range (80..165 preferred) with
-// parabolic peak refinement -> grid phase by folding onsets into one beat.
-// Results are committed to dk.track_bpm/grid_offset and cached in the
-// track's JSN sidecar so each file is analysed once.
+// harmonic disambiguation, parabolic refinement, and a long-lag refinement
+// ladder (re-peak at 8/64/256 beats: each rung divides the +/-0.5-lag
+// quantization by k, reaching ~0.003 BPM at 120) -> grid phase by folding
+// onsets into one beat with sub-bin interpolation. Results are committed to
+// dk.track_bpm/grid_offset and cached in the track's JSN sidecar (v2:
+// "dver"/"conf"; the PLL cannot see track-BPM error — p_trk derives from the
+// same seg_tf — so the audible lock quality is set entirely here).
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -37,19 +41,46 @@ void deck_analysis_commit(void)
     snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", s_an_track);
     cJSON *root = readJSONFileAsCJSON(jp);
     if (!root) root = cJSON_CreateObject();
+    // sidecar v2: "dver" versions the analysis (missing = v1 -> auto-upgrade
+    // on load), "conf" = ACF peak salience. Reserved for a future tempo-map:
+    // "anchors": [[frame, beat_index], ...] — readers must ignore it unknown.
     cJSON_DeleteItemFromObjectCaseSensitive(root, "bpm");
     cJSON_DeleteItemFromObjectCaseSensitive(root, "grid");
+    cJSON_DeleteItemFromObjectCaseSensitive(root, "dver");
+    cJSON_DeleteItemFromObjectCaseSensitive(root, "conf");
     cJSON_AddNumberToObject(root, "bpm", dk.an_bpm);
     cJSON_AddNumberToObject(root, "grid", (double)dk.an_grid);
+    cJSON_AddNumberToObject(root, "dver", 2);
+    cJSON_AddNumberToObject(root, "conf", (double)dk.an_conf);
     char *s = cJSON_Print(root);
     cJSON_Delete(root);
     if (s) { writeJSONFile(jp, s); free(s); }
-    ESP_LOGI(TAG, "%s: %.2f BPM, grid %lu (cached)", s_an_track, dk.an_bpm, (unsigned long)dk.an_grid);
+    ESP_LOGI(TAG, "%s: %.4f BPM (conf %.2f), grid %lu (cached)", s_an_track, dk.an_bpm, dk.an_conf, (unsigned long)dk.an_grid);
+}
+
+// one ACF evaluation at an arbitrary lag (pauses while the deck plays —
+// same rule as the main sweep)
+static float acf_at(const float *env, uint32_t n, uint32_t lag)
+{
+    while (dk.playing) vTaskDelay(pdMS_TO_TICKS(30));
+    if (lag == 0 || lag >= n) return 0;
+    float acc = 0;
+    for (uint32_t i = 0; i + lag < n; i++) acc += env[i] * env[i + lag];
+    return acc / (float)(n - lag);
+}
+
+static int cmp_float(const void *a, const void *b)
+{
+    float d = *(const float *)a - *(const float *)b;
+    return d > 0 ? 1 : (d < 0 ? -1 : 0);
 }
 
 static void analysis_task(void *pv)
 {
     char path[64];
+    ESP_LOGI(TAG, "analysis start: %s (heap %u, largest %u)", s_an_track,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", s_an_track);
 
     float *env = heap_caps_malloc(DK_ENV_MAX * sizeof(float), MALLOC_CAP_SPIRAM);
@@ -95,11 +126,17 @@ static void analysis_task(void *pv)
             env[n++] = (float)acc;
         }
         dk.an_progress = (int)((uint64_t)n * 70 / total_hops);
+        if ((n & 4095) < AN_CHUNK_HOPS)                    // ~every 256 chunks
+            ESP_LOGI(TAG, "env %lu/%lu hops (%.1f s)", (unsigned long)n,
+                     (unsigned long)total_hops,
+                     (double)(xTaskGetTickCount() * portTICK_PERIOD_MS) / 1000.0);
         if (got_hops < hops) break;      // EOF/short read
         // per-chunk pace (this gap is load-bearing — removing it thrashed
         // sd_lock/scheduling and made analysis SLOWER, not faster)
         vTaskDelay(1);
     }
+    ESP_LOGI(TAG, "envelope done: %lu hops (%.1f s)", (unsigned long)n,
+             (double)(xTaskGetTickCount() * portTICK_PERIOD_MS) / 1000.0);
     sd_lock_take();
     fclose(f);
     sd_lock_give();
@@ -135,9 +172,56 @@ static void analysis_task(void *pv)
         float bpm = ENV_RATE * 60.0f / lag;
         float w = (bpm >= 80 && bpm <= 165) ? 1.0f : 0.7f;
         if (acc * w > best) { best = acc * w; best_lag = lag; }
-        dk.an_progress = 70 + (lag - lag_min) * 25 / (lag_max - lag_min);
-        if ((lag & 7) == 0) vTaskDelay(1);
+        dk.an_progress = 70 + (lag - lag_min) * 20 / (lag_max - lag_min);
+        if ((lag & 7) == 0) {
+            ESP_LOGI(TAG, "acf lag %d/%d (%.1f s)", lag, lag_max,
+                     (double)(xTaskGetTickCount() * portTICK_PERIOD_MS) / 1000.0);
+            vTaskDelay(1);
+        }
     }
+    ESP_LOGI(TAG, "coarse done, harmonic check");
+
+    // 3b) harmonic disambiguation: a strong half-beat pulse can park the raw
+    // peak at half/double the true beat lag. The true beat lag also scores
+    // at its double, a spurious one doesn't: score = acf(c) + 0.5*acf(2c).
+    {
+        int cands[3];
+        int nc = 0;
+        cands[nc++] = best_lag;
+        if (best_lag / 2 >= lag_min) cands[nc++] = best_lag / 2;
+        if (best_lag * 2 <= lag_max) cands[nc++] = best_lag * 2;
+        float sc_best = -1;
+        int chosen = best_lag;
+        for (int ci = 0; ci < nc; ci++) {
+            int c = cands[ci];
+            // snap onto the local rr peak — integer halving can land 1 off
+            while (c > lag_min && rr[c - 1] > rr[c]) c--;
+            while (c < lag_max && rr[c + 1] > rr[c]) c++;
+            float a2 = (2 * c <= lag_max) ? rr[2 * c] : acf_at(env, n, 2 * c);
+            float bpmc = ENV_RATE * 60.0f / c;
+            float w = (bpmc >= 80 && bpmc <= 165) ? 1.0f : 0.7f;
+            float sc = w * (rr[c] + 0.5f * a2);
+            if (sc > sc_best) { sc_best = sc; chosen = c; }
+        }
+        best_lag = chosen;
+    }
+
+    // 3c) peak salience -> confidence: a clean constant tempo shows one
+    // dominant ACF peak; warped/rubato material flattens it out
+    float conf = 0;
+    {
+        int nl = lag_max - lag_min + 1;
+        float *srt = malloc(nl * sizeof(float));
+        if (srt) {
+            memcpy(srt, rr + lag_min, nl * sizeof(float));
+            qsort(srt, nl, sizeof(float), cmp_float);
+            if (rr[best_lag] > 0) conf = 1.0f - srt[nl / 2] / rr[best_lag];
+            if (conf < 0) conf = 0;
+            if (conf > 1) conf = 1;
+            free(srt);
+        }
+    }
+
     r_best = rr[best_lag];
     r_prev = best_lag > lag_min ? rr[best_lag - 1] : r_best;
     r_next = best_lag < lag_max ? rr[best_lag + 1] : r_best;
@@ -149,10 +233,45 @@ static void analysis_task(void *pv)
     if (shift > 0.5f) shift = 0.5f;
     if (shift < -0.5f) shift = -0.5f;
     float lag_f = (float)best_lag + shift;
-    float bpm = ENV_RATE * 60.0f / lag_f;
 
-    // 4) grid phase: fold onsets into one beat period, strongest bin wins
-    float P = lag_f;
+    // 3d) long-lag refinement ladder: re-find the ACF peak at k beats and
+    // divide the +/-0.5-lag quantization by k (k=256 -> ~0.003 BPM at 120).
+    // No second file pass — works on the envelope already in PSRAM. The PLL
+    // can't correct track-BPM error (it locks the model grid, and p_trk is
+    // derived from the same model), so playback slips audio-vs-clock at
+    // exactly the analysis residual: this ladder is the tempo-tightness fix.
+    double L = lag_f;
+    static const int ks[3] = { 8, 64, 256 };
+    for (int ki = 0; ki < 3; ki++) {
+        int k = ks[ki];
+        double center_f = (double)k * L;
+        if (center_f > (double)n * 0.5) break;   // not enough overlap left
+        int center = (int)(center_f + 0.5);
+        float rv[17];
+        float rb = -1;
+        int lb = center;
+        for (int d = -8; d <= 8; d++) {
+            rv[d + 8] = acf_at(env, n, (uint32_t)(center + d));
+            if (rv[d + 8] > rb) { rb = rv[d + 8]; lb = center + d; }
+            if ((d & 7) == 0) vTaskDelay(1);
+        }
+        int bi = lb - center + 8;
+        float rp = bi > 0 ? rv[bi - 1] : rb;
+        float rn = bi < 16 ? rv[bi + 1] : rb;
+        float dn = rp - 2 * rb + rn;
+        float sh = (dn != 0) ? 0.5f * (rp - rn) / dn : 0;
+        if (sh > 0.5f) sh = 0.5f;
+        if (sh < -0.5f) sh = -0.5f;
+        L = ((double)lb + sh) / (double)k;
+        dk.an_progress = 90 + (ki + 1) * 7 / 3;
+    }
+    float bpm = ENV_RATE * 60.0f / (float)L;
+
+    // 4) grid phase: fold onsets into one beat period (using the final
+    // refined period — a 0.003% error smears ~1 hop over 5 min), strongest
+    // bin wins; circular parabolic interpolation between bins takes the
+    // anchor from ~P/64 (~8 ms at 120) to ~1-2 ms
+    float P = (float)L;
     int BINS = 64;
     float acc_bin[64] = {0};
     for (uint32_t i = 0; i < n; i++) {
@@ -161,27 +280,43 @@ static void analysis_task(void *pv)
     }
     int bb = 0;
     for (int b = 1; b < BINS; b++) if (acc_bin[b] > acc_bin[bb]) bb = b;
-    float phase_env = ((float)bb + 0.5f) / BINS * P;          // env samples
+    float ap = acc_bin[(bb + BINS - 1) % BINS];
+    float an2 = acc_bin[(bb + 1) % BINS];
+    float dnb = ap - 2 * acc_bin[bb] + an2;
+    float shb = (dnb != 0) ? 0.5f * (ap - an2) / dnb : 0;
+    if (shb > 0.5f) shb = 0.5f;
+    if (shb < -0.5f) shb = -0.5f;
+    float phase_env = ((float)bb + 0.5f + shb) / BINS * P;    // env samples
+    if (phase_env < 0) phase_env += P;
     uint32_t grid = (uint32_t)(phase_env * DK_HOP);           // audio frames
 
     heap_caps_free(env);
     dk.an_bpm = bpm;
     dk.an_grid = grid;
+    dk.an_conf = conf;
     dk.an_progress = 100;
     dk.an_state = DK_AN_DONE;
     deck_analysis_commit();          // adopt + cache in the sidecar
-    ESP_LOGI(TAG, "detected %.2f BPM (lag %.2f), grid %lu frames", bpm, lag_f, (unsigned long)grid);
+    ESP_LOGI(TAG, "detected %.4f BPM (lag %.4f, conf %.2f), grid %lu frames (stack low-water %u B)",
+             bpm, L, conf, (unsigned long)grid, (unsigned)uxTaskGetStackHighWaterMark(NULL));
     vTaskDelete(NULL);
 }
 
 int deck_analyze_start(void)
 {
-    if (!dk.track[0] || dk.an_state == DK_AN_RUNNING) return -1;
+    if (!dk.track[0]) return -1;
+    if (dk.an_state == DK_AN_RUNNING) {
+        ESP_LOGW(TAG, "analyze_start: already running (%s)", s_an_track);
+        return -1;
+    }
     strlcpy(s_an_track, dk.track, sizeof(s_an_track));
     dk.an_state = DK_AN_RUNNING;
     dk.an_progress = 0;
     // unpinned (reads files); modest priority so audio + reader stay smooth
     if (xTaskCreate(analysis_task, "deck_an", 6144, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "analyze_start: xTaskCreate FAILED (heap %u, largest %u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         dk.an_state = DK_AN_FAIL;
         return -1;
     }

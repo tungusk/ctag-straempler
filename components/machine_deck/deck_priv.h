@@ -91,6 +91,7 @@ typedef struct {
     volatile bool an_auto_req;     // auto-analyze queued behind a running one
     volatile float an_bpm;         // result before commit
     volatile uint32_t an_grid;
+    volatile float an_conf;        // ACF peak salience 0..1 (1 - median/peak)
 } dk_state_t;
 
 extern dk_state_t dk;
