@@ -13,7 +13,9 @@ Usage: make_clicktrack.py [outdir]           # writes CLK120.RAW, CLK1234.RAW
 import math, struct, sys
 
 SR = 44100
-DUR_S = 180              # ~3 min: exercises the deck's full analysis window
+DUR_S = 270              # ~4.5 min: long enough for the k=256 refinement rung
+                         # (needs 256 beats in half the track) and still under
+                         # the deck's 5-min analysis cap
 
 def render(bpm, path):
     frames_per_beat = SR * 60.0 / bpm

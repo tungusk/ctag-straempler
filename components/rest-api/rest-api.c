@@ -181,7 +181,11 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
     }
 
     char path[72];
-    snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
+    size_t nl = strlen(name);
+    if (nl > 4 && strcasecmp(name + nl - 4, ".JSN") == 0)
+        snprintf(path, sizeof(path), "/sdcard/usr/%s", name);   // sidecar inspection
+    else
+        snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
     sd_lock_take();
     FILE *f = fopen(path, "rb");
     sd_lock_give();
