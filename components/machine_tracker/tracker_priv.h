@@ -23,6 +23,7 @@
 #define TRK_TITLE_LEN    40
 #define TRK_MAX_NAMES    48                   // captured sample/instrument names
 #define TRK_NM_LEN       24                   // per name (libxmp gives up to 31)
+#define TRK_MAX_ORDERS   256                  // order-list map for cross-pattern loop
 
 enum { TRK_EMPTY = 0, TRK_LOADING, TRK_READY, TRK_FAIL };
 
@@ -67,6 +68,23 @@ typedef struct {
     volatile int  clk_src;         // CV channel of the clock
     volatile int  ppb_idx;         // pulses-per-beat index into trk_ppb[]
     volatile bool sound_dirty;     // menu flipped amiga → render re-applies
+
+    // --- sequence loop ("loop mode": a live step-region loop, PO/KO-II style) ---
+    // process() sets loop_len/loop_pos_cv from CV7/CV6 and raises loop_toggle_req
+    // on a TR2 edge; the render task owns loop_engage + the transition (snapshot
+    // on engage, xmp_seek_time to the phantom position on release).
+    volatile bool loop_engage;     // loop mode active
+    volatile bool loop_toggle_req; // TR2 edge → render flips loop_engage
+    volatile bool loop_freeze;     // release: freeze (resume at loop) vs keep-running (setting)
+    volatile int  loop_len;        // window length in steps/rows (CV7 selector)
+    volatile int  loop_pos_cv;     // CV6 raw 0..4095 → position block across the song
+    volatile int  loop_start_ord;  // render-published window origin (UI): order...
+    volatile int  loop_start_row;  //  ...and row within it
+    // order-list map (built at load) so the loop window can span patterns
+    uint16_t order_rows[TRK_MAX_ORDERS];   // rows per order position
+    uint32_t order_step0[TRK_MAX_ORDERS];  // cumulative absolute step at each order
+    int      n_orders;
+    uint32_t total_steps;          // sum of all order rows = song length in steps
 
     // CV clock (process fills, render reads for sync)
     beatclock_t clk;

@@ -44,6 +44,7 @@ static char s_body_sig[32] = "";
 static int  s_body_top = -999;
 static int  s_last_barx = -1;
 static int  s_bar_state = -1;
+static int  s_bar_loop  = -1;
 
 static const char *state_word(void){
     switch (trk.state){
@@ -64,6 +65,7 @@ static const char *state_word(void){
 
 static color_t tbar_bg(void){
     if (trk.state == TRK_FAIL) return (color_t){120, 40, 40};
+    if (trk.loop_engage)       return (color_t){150, 45, 95};   // pink = loop mode
     return trk.playing ? (color_t){25, 120, 50} : (color_t){30, 60, 140};
 }
 
@@ -74,10 +76,12 @@ static void draw_bar_frame(void){
     _bg = TFT_BLACK;
     s_last_barx = -1;
     s_bar_state = trk.playing ? 1 : 0;
+    s_bar_loop  = trk.loop_engage ? 1 : 0;
 }
 
 static void draw_bar(void){
-    if ((trk.playing ? 1 : 0) != s_bar_state) draw_bar_frame();
+    if ((trk.playing ? 1 : 0) != s_bar_state ||
+        (trk.loop_engage ? 1 : 0) != s_bar_loop) draw_bar_frame();
     if (trk.total_ms <= 0) return;
     int frac = (int)((int64_t)trk.time_ms * (TBAR_W - 8) / trk.total_ms);
     int x = TBAR_X + 2 + frac;
@@ -111,8 +115,13 @@ static void draw_info(void){
     } else {
         // full module type on its own line (no longer truncated to 10 chars)
         snprintf(ty, sizeof(ty), "%s   %d ch", trk.fmt[0] ? trk.fmt : "(unknown)", trk.channels);
-        snprintf(st, sizeof(st), "%s   pat %02d/%02d   %d bpm",
-                 state_word(), trk.cur_pos, trk.num_pat, trk.mod_bpm);
+        if (trk.loop_engage)
+            snprintf(st, sizeof(st), "LOOP  %d step%s  @ %02d:%02d",
+                     trk.loop_len, trk.loop_len > 1 ? "s" : "",
+                     trk.loop_start_ord, trk.loop_start_row);
+        else
+            snprintf(st, sizeof(st), "%s   pat %02d/%02d   %d bpm",
+                     state_word(), trk.cur_pos, trk.num_pat, trk.mod_bpm);
     }
     if (strcmp(ty, s_type) != 0){
         strcpy(s_type, ty);
@@ -123,7 +132,8 @@ static void draw_info(void){
     if (strcmp(st, s_stat) != 0){
         strcpy(s_stat, st);
         _bg = TFT_BLACK; TFT_fillRect(0, STAT_Y, _width, fh + 4, _bg);
-        _fg = TFT_WHITE; if (st[0]) TFT_print(st, 8, STAT_Y);
+        _fg = trk.loop_engage ? (color_t){235, 120, 175} : TFT_WHITE;
+        if (st[0]) TFT_print(st, 8, STAT_Y);
     }
 }
 
@@ -144,12 +154,31 @@ static void draw_body(bool force){
     int rows = (_height - BODY_Y) / lh; if (rows < 1) rows = 1;
     int n = trk.n_names;
     int maxtop = n > rows ? n - rows : 0;
+
+    // knob7/CV7 scrolls the list — but NOT while looping (there CV7 = loop
+    // length), and a freshly loaded module starts at line 1 until the user
+    // actually grabs the knob (so the initial view isn't wherever CV7 sits).
+    static int  scroll_latch = 0;
+    static int  cv7_base = -1;
+    static char content_sig[24] = "";
+    uint16_t cv[8]; audio_get_cv(cv);
+    char csig[24]; snprintf(csig, sizeof(csig), "%d:%.16s", n, n ? trk.names[0] : "");
+    if (strcmp(csig, content_sig) != 0){          // new module → back to line 1
+        strlcpy(content_sig, csig, sizeof(content_sig));
+        scroll_latch = 0;
+        cv7_base = cv[6];
+    }
     int top = 0;
-    if (maxtop > 0){
-        uint16_t cv[8]; audio_get_cv(cv);
-        top = (int)((int64_t)cv[6] * maxtop / 4095);
-        if (top < 0) top = 0;
-        if (top > maxtop) top = maxtop;
+    if (trk.loop_engage){
+        top = s_body_top >= 0 ? s_body_top : 0;   // hold position while looping
+    } else if (maxtop > 0){
+        int d = (int)cv[6] - cv7_base; if (d < 0) d = -d;
+        if (!scroll_latch && d > 150) scroll_latch = 1;
+        if (scroll_latch){
+            top = (int)((int64_t)cv[6] * maxtop / 4095);
+            if (top < 0) top = 0;
+            if (top > maxtop) top = maxtop;
+        }
     }
     char sig[32]; snprintf(sig, sizeof(sig), "N%d.%d:%.10s", n, top, n ? trk.names[0] : "");
     if (!force && top == s_body_top && strcmp(sig, s_body_sig) == 0){ cfont = f; return; }
@@ -207,8 +236,8 @@ static int tracker_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup ------------------------------------------------------------------
-static const char *setup_labels[] = {"Module", "Loop", "Sound", "Sync", "Clock Src", "Clock", "Info Text"};
-#define TRK_SETUP_N 7
+static const char *setup_labels[] = {"Module", "Loop", "Sound", "Sync", "Clock Src", "Clock", "Info Text", "Loop Freeze"};
+#define TRK_SETUP_N 8
 
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -232,6 +261,7 @@ static void setup_redraw(int pos, int sel){
             case 4: snprintf(v, sizeof(v), "CV%d", trk.clk_src + 1); break;
             case 5: snprintf(v, sizeof(v), "%s", trk_ppb_names[trk.ppb_idx]); break;
             case 6: snprintf(v, sizeof(v), "%s", trk.show_text ? "ON" : "OFF"); break;
+            case 7: snprintf(v, sizeof(v), "%s", trk.loop_freeze ? "ON" : "OFF"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -249,6 +279,7 @@ static void setup_adj(int i, int dir){
         case 4: trk.clk_src = (trk.clk_src + (dir > 0 ? 1 : 7)) & 7; break;
         case 5: trk.ppb_idx += dir; if (trk.ppb_idx < 0) trk.ppb_idx = 0; if (trk.ppb_idx > 4) trk.ppb_idx = 4; break;
         case 6: trk.show_text = !trk.show_text; break;
+        case 7: trk.loop_freeze = !trk.loop_freeze; break;
     }
 }
 
