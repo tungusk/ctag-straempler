@@ -32,8 +32,9 @@ static void refresh_samples(void){
 // auto-analysis queued behind a still-running previous run (rapid loads)
 static void an_auto_poll(void){
     if (dk.an_auto_req && dk.an_state != DK_AN_RUNNING){
-        dk.an_auto_req = false;
-        deck_analyze_start();
+        // clear the request only on a successful start — a transient
+        // task-create failure used to eat the request and kill auto forever
+        if (deck_analyze_start() == 0) dk.an_auto_req = false;
     }
 }
 

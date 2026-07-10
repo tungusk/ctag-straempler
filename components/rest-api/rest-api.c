@@ -94,6 +94,9 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     DIR *d = opendir("/sdcard/usr");
     sd_lock_give();
     bool first = true;
+    bool dead = false;   // client hung up mid-stream — stop sending (same
+                         // disease as the /files/raw abort fix: a dead socket
+                         // must not keep the worker pumping chunks at it)
     if (d) {
         for (;;) {
             // grab the SD bus only for the readdir step, release between entries
@@ -129,10 +132,11 @@ static esp_err_t files_get_handler(httpd_req_t *req)
             char *os = cJSON_PrintUnformatted(o);
             cJSON_Delete(o);
             if (os) {
-                if (!first) httpd_resp_send_chunk(req, ",", 1);
-                httpd_resp_send_chunk(req, os, HTTPD_RESP_USE_STRLEN);
+                if (!first && httpd_resp_send_chunk(req, ",", 1) != ESP_OK) dead = true;
+                if (!dead && httpd_resp_send_chunk(req, os, HTTPD_RESP_USE_STRLEN) != ESP_OK) dead = true;
                 free(os);
                 first = false;
+                if (dead) break;
             }
         }
         sd_lock_take();
@@ -140,6 +144,7 @@ static esp_err_t files_get_handler(httpd_req_t *req)
         sd_lock_give();
     }
 
+    if (dead) return ESP_FAIL;             // socket gone — no trailer to send
     httpd_resp_send_chunk(req, "]}", HTTPD_RESP_USE_STRLEN);
     httpd_resp_send_chunk(req, NULL, 0);   // end of stream
     return ESP_OK;
@@ -450,15 +455,19 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     }
     remaining = req->content_len;
 
+    int timeouts = 0;
     while (remaining > 0) {
         if ((ret = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0) {
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            // bounded timeout retries: a client that silently vanished used to
+            // spin this loop forever, wedging the worker with the file open
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 4) continue;
             sd_lock_take();
             f_close(&raw_file); f_unlink(file_name);
             sd_lock_give();
             free(buf); cJSON_Delete(root);
             return ESP_FAIL;
         }
+        timeouts = 0;
         total += ret; remaining -= ret;
         if (ret > 0) {
             sd_lock_take();
