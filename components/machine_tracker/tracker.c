@@ -203,6 +203,29 @@ static void do_load(void)
         }
     }
 
+    // Build the order-list step map so the loop window can span patterns:
+    // order_step0[o] = absolute step (row) at which order o begins.
+    trk.n_orders = 0;
+    trk.total_steps = 0;
+    if (mi.mod){
+        struct xmp_module *m = mi.mod;
+        int len = m->len; if (len > TRK_MAX_ORDERS) len = TRK_MAX_ORDERS;
+        uint32_t acc = 0;
+        for (int o = 0; o < len; o++){
+            int pat = m->xxo[o];
+            if (pat == XMP_MARK_SKIP || pat == XMP_MARK_END) break;   // stop at end/skip
+            int rows = (pat < m->pat && m->xxp && m->xxp[pat]) ? m->xxp[pat]->rows : 64;
+            if (rows < 1) rows = 1;
+            trk.order_rows[o]  = (uint16_t)rows;
+            trk.order_step0[o] = acc;
+            acc += rows;
+            trk.n_orders++;
+        }
+        trk.total_steps = acc;
+    }
+    trk.loop_engage = false;        // a fresh module starts in normal play
+    trk.loop_toggle_req = false;
+
     xmp_start_player(s_ctx, TRK_RATE, 0);
     apply_sound_mode();
     trk.tf_cur = 1.0f;
@@ -224,57 +247,162 @@ static void ring_flush(void)                    // drop buffered audio, refill
     trk.wpos = trk.rpos = 0;
 }
 
+// copy nf stereo int16 frames from src into the PSRAM ring at wpos (wrapping)
+static void ring_write(const int16_t *src, int nf)
+{
+    uint32_t w = trk.wpos % TRK_RING_FRAMES;
+    uint32_t first = TRK_RING_FRAMES - w;
+    if (first > (uint32_t)nf) first = nf;
+    memcpy(trk.ring + w * 2, src, first * 4);
+    if (first < (uint32_t)nf)
+        memcpy(trk.ring, src + first * 2, (nf - first) * 4);
+    trk.wpos += nf;
+}
+
+// map an absolute step (row index across the whole order list) → (order, row)
+static void abs_to_or(uint32_t astep, int *order, int *row)
+{
+    int o = 0;
+    while (o < trk.n_orders && astep >= trk.order_step0[o] + trk.order_rows[o]) o++;
+    if (o >= trk.n_orders) o = trk.n_orders > 0 ? trk.n_orders - 1 : 0;
+    *order = o;
+    uint32_t base = trk.order_step0[o];
+    *row = (int)(astep > base ? astep - base : 0);
+    if (trk.order_rows[o] && *row >= trk.order_rows[o]) *row = trk.order_rows[o] - 1;
+}
+
 static void render_task(void *pv)
 {
     s_ctx = xmp_create_context();
     s_have_module = false;
     s_alive = true;
 
+    int      loop_engage_ms = 0;    // module time captured when the loop engaged
+    uint32_t loop_anchor_w  = 0;    // wpos at engage (frames rendered = real time)
+    uint32_t loop_prev_start = 0xFFFFFFFFu;  // last window start (detect a move)
+    uint32_t loop_prev_len   = 0;   // last window length (detect a resize)
+    bool     loop_resync = false;   // window moved/resized → jump at next step
+
     while (s_run) {
         if (trk.load_req) { trk.load_req = false; do_load(); continue; }
 
         if (s_have_module && trk.seek_req) {
             trk.seek_req = false;
+            trk.loop_engage = false;                // an explicit seek cancels the loop
             xmp_set_position(s_ctx, trk.seek_pos);
             ring_flush();
         }
         if (s_have_module && trk.restart_req) {
             trk.restart_req = false;
+            trk.loop_engage = false;
             xmp_restart_module(s_ctx);
             ring_flush();
         }
+        // TR2 loop toggle. Engage: snapshot the current module time + write
+        // pointer. Release: jump to the phantom position (where linear playback
+        // would be now = engage_time + real time elapsed) so the song resumes as
+        // if it had never looped. xmp_seek_time maps through the module's own
+        // sequence timing, so multi-pattern + position-jump effects are handled.
+        if (s_have_module && trk.loop_toggle_req) {
+            trk.loop_toggle_req = false;
+            if (!trk.loop_engage) {
+                struct xmp_frame_info fi; xmp_get_frame_info(s_ctx, &fi);
+                loop_engage_ms = fi.time;
+                loop_anchor_w  = trk.wpos;
+                trk.loop_engage = true;
+            } else {
+                trk.loop_engage = false;
+                if (!trk.loop_freeze) {
+                    // keeps-running: jump to where linear playback would be now
+                    int elapsed_ms = (int)((int64_t)(trk.wpos - loop_anchor_w) * 1000 / TRK_RATE);
+                    xmp_seek_time(s_ctx, loop_engage_ms + elapsed_ms);
+                    ring_flush();
+                }
+                // freeze mode: leave the position at the loop, playback continues
+            }
+        }
         if (s_have_module && trk.sound_dirty) apply_sound_mode();
 
-        bool room = (trk.wpos - trk.rpos) < (TRK_RING_FRAMES - TRK_CHUNK);
+        // Keep the render only modestly ahead of playback: a deep buffer meant
+        // loop edits took "a couple of plays" to be heard. ~0.5 s normally,
+        // ~0.25 s while looping so position/length changes land almost at once.
+        // (Module is fully in PSRAM — no SD latency needs a big read-ahead.)
+        uint32_t fill_ahead = trk.loop_engage ? (uint32_t)(TRK_RATE / 4)
+                                              : (uint32_t)(TRK_RATE / 2);
+        bool room = (trk.wpos - trk.rpos) < fill_ahead;
         if (trk.playing && trk.state == TRK_READY && s_have_module && room) {
-            // sync: rate-match the module tempo to the external clock via the
-            // tempo factor (pitch-preserving). Slew so clock jitter drifts
-            // instead of warbling. Nominal factor 1.0 when unsynced/unlocked.
-            if (trk.sync && trk.clk.locked && trk.clk.bpm > 0 && trk.mod_bpm > 0) {
-                float ext_beat = trk.clk.bpm / trk_ppb[trk.ppb_idx];
-                float tgt = ext_beat / (float)trk.mod_bpm;   // module runs at mod_bpm; scale toward ext
-                if (tgt < 0.5f) tgt = 0.5f;
-                if (tgt > 2.0f) tgt = 2.0f;
-                trk.tf_cur += 0.05f * (tgt - trk.tf_cur);
-            } else {
-                trk.tf_cur += 0.05f * (1.0f - trk.tf_cur);
-            }
-            xmp_set_tempo_factor(s_ctx, trk.tf_cur);
-
-            int r = xmp_play_buffer(s_ctx, s_scratch, TRK_CHUNK * 4, trk.loop ? 0 : 1);
-            if (r < 0) {                          // module ended (loop off)
-                trk.playing = false;
-            } else {
-                uint32_t w = trk.wpos % TRK_RING_FRAMES;
-                uint32_t first = TRK_RING_FRAMES - w;
-                if (first > TRK_CHUNK) first = TRK_CHUNK;
-                memcpy(trk.ring + w * 2, s_scratch, first * 4);
-                if (first < TRK_CHUNK)
-                    memcpy(trk.ring, s_scratch + first * 2, (TRK_CHUNK - first) * 4);
-                trk.wpos += TRK_CHUNK;
-            }
             struct xmp_frame_info fi;
-            xmp_get_frame_info(s_ctx, &fi);
+
+            if (trk.loop_engage) {
+                // Loop mode: render ONE tick at a time so we can wrap exactly on
+                // a row boundary. The window spans the whole order list (absolute
+                // steps) so it can cross patterns; read live from CV7 (length) +
+                // CV6 (position across the song). No external clock, nominal tempo.
+                trk.tf_cur += 0.05f * (1.0f - trk.tf_cur);
+                xmp_set_tempo_factor(s_ctx, trk.tf_cur);
+                xmp_play_frame(s_ctx);
+                xmp_get_frame_info(s_ctx, &fi);
+                ring_write((const int16_t *)fi.buffer, fi.buffer_size / 4);
+
+                int spd = fi.speed > 0 ? fi.speed : 6;
+                uint32_t total = trk.total_steps > 0 ? trk.total_steps : 1;
+                int len = trk.loop_len;
+                if (len < 1) len = 1;
+                if ((uint32_t)len > total) len = (int)total;
+                uint32_t nblk = total / (uint32_t)len;
+                if (nblk < 1) nblk = 1;
+                uint32_t blk = (uint32_t)trk.loop_pos_cv * nblk / 4096;
+                if (blk >= nblk) blk = nblk - 1;
+                uint32_t lstart = blk * (uint32_t)len;
+                uint32_t lend = lstart + (uint32_t)len;
+                if (lend > total) lend = total;
+                int lo, lr;
+                abs_to_or(lstart, &lo, &lr);
+                trk.loop_start_ord = lo;
+                trk.loop_start_row = lr;
+                // window moved OR resized (knobs/engage) → re-anchor at the next
+                // step boundary — makes both position AND length changes instant
+                if (lstart != loop_prev_start || (uint32_t)len != loop_prev_len) {
+                    loop_resync = true;
+                    loop_prev_start = lstart;
+                    loop_prev_len   = (uint32_t)len;
+                }
+                uint32_t cur_abs = (fi.pos >= 0 && fi.pos < trk.n_orders)
+                                 ? trk.order_step0[fi.pos] + (uint32_t)fi.row : 0;
+                // relocate ONLY on a row boundary — jumping mid-row while a knob
+                // sweeps produces a burst of sub-row note fragments ("catch up")
+                if (fi.frame >= spd - 1) {
+                    if (loop_resync || cur_abs + 1 >= lend ||
+                        cur_abs < lstart || cur_abs >= lend) {
+                        // set_row alone within the current order preserves replay
+                        // speed; set_position resets it — only re-seat on a real
+                        // cross-pattern move
+                        if (lo != fi.pos) xmp_set_position(s_ctx, lo);
+                        xmp_set_row(s_ctx, lr);
+                        loop_resync = false;
+                    }
+                }
+            } else {
+                // sync: rate-match the module tempo to the external clock via the
+                // tempo factor (pitch-preserving). Slew so clock jitter drifts
+                // instead of warbling. Nominal factor 1.0 when unsynced/unlocked.
+                if (trk.sync && trk.clk.locked && trk.clk.bpm > 0 && trk.mod_bpm > 0) {
+                    float ext_beat = trk.clk.bpm / trk_ppb[trk.ppb_idx];
+                    float tgt = ext_beat / (float)trk.mod_bpm;   // module runs at mod_bpm; scale toward ext
+                    if (tgt < 0.5f) tgt = 0.5f;
+                    if (tgt > 2.0f) tgt = 2.0f;
+                    trk.tf_cur += 0.05f * (tgt - trk.tf_cur);
+                } else {
+                    trk.tf_cur += 0.05f * (1.0f - trk.tf_cur);
+                }
+                xmp_set_tempo_factor(s_ctx, trk.tf_cur);
+
+                int r = xmp_play_buffer(s_ctx, s_scratch, TRK_CHUNK * 4, trk.loop ? 0 : 1);
+                if (r < 0) trk.playing = false;       // module ended (loop off)
+                else       ring_write(s_scratch, TRK_CHUNK);
+                xmp_get_frame_info(s_ctx, &fi);
+            }
+
             trk.cur_pos = fi.pos; trk.cur_pat = fi.pattern; trk.cur_row = fi.row;
             trk.time_ms = fi.time; trk.total_ms = fi.total_time; trk.cur_bpm = fi.bpm;
             if (trk.wpos - trk.rpos >= TRK_LOW_WATER) trk.loading = false;
@@ -316,6 +444,7 @@ static esp_err_t tracker_start(void)
     if (trk.ppb_idx < 0 || trk.ppb_idx > 4) trk.ppb_idx = 4;
     trk.clk_base = 4095;
     trk.tf_cur = 1.0f;
+    trk.loop_len = 4;               // sane until process() reads CV7
     trk.state = TRK_EMPTY;
     clock_reset(&trk.clk);
     // widen the clock gate for multi-PPQN pulses (deck lesson): the default
@@ -348,12 +477,28 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
 {
     if (!trk.ring) return;
 
-    // transport gates: TR1 = restart at the top, TR2 = stop
+    // transport gates: TR1 = play/stop, TR2 = loop-mode toggle
     static uint8_t prev_trig = 0x03;
     uint8_t pressed = prev_trig & (~io->trig_level) & 0x03;
     prev_trig = io->trig_level;
-    if (pressed & 1) { trk.restart_req = true; trk.playing = true; }
-    if (pressed & 2) trk.playing = false;
+    if (pressed & 1) trk.playing = !trk.playing;
+    if (pressed & 2) trk.loop_toggle_req = true;
+
+    // loop window from CV: CV7 (idx 6) = length selector, CV6 (idx 5) = position.
+    // Deadband the raw CVs so ADC noise can't jitter length/position — otherwise
+    // the loop resizes/relocates every block and retriggers constantly.
+    static const int loop_len_tbl[6] = {1, 2, 4, 8, 16, 32};
+    static int cv_len_h = -1, cv_pos_h = -1;
+    int cv_len = io->cv[6], cv_pos = io->cv[5];
+    if (cv_len_h < 0) cv_len_h = cv_len;
+    if (cv_pos_h < 0) cv_pos_h = cv_pos;
+    if (cv_len - cv_len_h > 60 || cv_len_h - cv_len > 60) cv_len_h = cv_len;
+    if (cv_pos - cv_pos_h > 60 || cv_pos_h - cv_pos > 60) cv_pos_h = cv_pos;
+    int li = cv_len_h * 6 / 4096;
+    if (li < 0) li = 0;
+    if (li > 5) li = 5;
+    trk.loop_len = loop_len_tbl[li];
+    trk.loop_pos_cv = cv_pos_h;
 
     int frames = MACHINE_BLOCK / 2;
     static int16_t last_l = 0, last_r = 0;
@@ -403,6 +548,7 @@ static cJSON *tracker_preset_save(void)
     cJSON_AddBoolToObject(o, "sync", trk.sync);
     cJSON_AddBoolToObject(o, "amiga", trk.amiga);
     cJSON_AddBoolToObject(o, "show_text", trk.show_text);
+    cJSON_AddBoolToObject(o, "loop_freeze", trk.loop_freeze);
     cJSON_AddNumberToObject(o, "clk_src", trk.clk_src);
     cJSON_AddNumberToObject(o, "ppb", trk.ppb_idx);
     return o;
@@ -412,6 +558,7 @@ static void tracker_preset_load(const cJSON *node)
 {
     // defaults first (also the NULL / other-machine-autosave path)
     trk.loop = true; trk.sync = false; trk.amiga = true; trk.show_text = true;
+    trk.loop_freeze = false;
     trk.clk_src = 7; trk.ppb_idx = 4; trk.file[0] = 0;
     if (!node) return;
     cJSON *j;
@@ -419,6 +566,7 @@ static void tracker_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync")))  trk.sync  = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "amiga"))) trk.amiga = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "show_text"))) trk.show_text = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop_freeze"))) trk.loop_freeze = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) trk.clk_src = j->valueint & 7;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
         trk.ppb_idx = j->valueint; if (trk.ppb_idx < 0) trk.ppb_idx = 0; if (trk.ppb_idx > 4) trk.ppb_idx = 4;
