@@ -46,6 +46,20 @@ static char s_info1[96] = "", s_info2[64] = "";
 static char s_last_track[DK_NAME_LEN] = "";   // detect track changes (e.g. via remote)
 static int s_last_dbpm = -1;
 
+// display-side smoothing of the measured external bpm: clock edges are
+// quantized to the 64-frame audio block (~1.45 ms), so the raw per-pulse
+// figure dances a few tenths even on a crystal-steady clock. EMA over the
+// display ticks, snapping through on a real tempo change (>2 bpm).
+static float ext_bpm_disp(void){
+    static float ema = 0;
+    float x = dk.clk.bpm / dk_ppb[dk.ppb_idx];
+    if (!dk.clk.locked || x <= 0) { ema = 0; return x; }
+    float d = x - ema;
+    if (ema <= 0 || d > 2.0f || d < -2.0f) ema = x;
+    else ema += 0.2f * d;
+    return ema;
+}
+
 // the number that matters, BIG: the tempo actually playing right now
 // (track bpm x current rate = the external tempo when locked)
 static void draw_big_bpm(void){
@@ -54,7 +68,7 @@ static void draw_big_bpm(void){
     // the big number dance even with a perfect clock
     float bpm;
     if (dk.sync && dk.clk.locked && dk.clk.bpm > 0)
-        bpm = dk.clk.bpm / dk_ppb[dk.ppb_idx] * dk.speed_mult;
+        bpm = ext_bpm_disp() * dk.speed_mult;
     else
         bpm = dk.track_bpm > 0 ? dk.track_bpm * dk.rate : 0;
     int d = (int)(bpm * 10.0f + 0.5f);
@@ -80,16 +94,16 @@ static void draw_info(void){
     const char *st = dk.playing ? (dk.loading ? "BUF" : "PLAY") : "STOP";
     const char *sp = dk.speed_mult == 0.5f ? ".5" : (dk.speed_mult == 2.0f ? "2" : "1");
     const char *fl = dk.flt_mode == 1 ? "LP" : (dk.flt_mode == 2 ? "HP" : "");
-    // while analysing, the tempo slot counts DOWN to done (100->0) in place of
-    // the not-yet-known "0.0" bpm — shown while playing too (frozen, since
-    // analysis pauses during playback) so the pending count stays visible
+    // while analysing, the tempo slot shows analysis progress counting UP
+    // ("an 16%"), matching the Setup row — shown while playing too (frozen,
+    // since analysis pauses during playback) so the pending state stays visible
     if (dk.an_state == DK_AN_RUNNING)
-        snprintf(s1, sizeof(s1), "trk %d%%  %s  x%s  %s", 100 - dk.an_progress, st, sp, fl);
+        snprintf(s1, sizeof(s1), "ana %d%%  %s  x%s  %s", dk.an_progress, st, sp, fl);
     else
         snprintf(s1, sizeof(s1), "trk %.1f  %s  x%s  %s", dk.track_bpm, st, sp, fl);
     if (dk.sync){
         if (dk.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK",
-                                    dk.clk.bpm / dk_ppb[dk.ppb_idx]);
+                                    ext_bpm_disp());
         else snprintf(s2, sizeof(s2), "ext: waiting for clock on CV%d", dk.clk_src + 1);
     } else s2[0] = 0;
     if (strcmp(s1, s_info1) != 0){
