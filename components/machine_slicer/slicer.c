@@ -30,7 +30,7 @@ static void recompute_grid(int n)
 // computed once on load (compute_envelope); pick_transients re-runs cheaply on
 // sensitivity/count changes so the dial-in screen is responsive.
 #define SL_WIN     512
-#define SL_MAXCAND 96
+#define SL_MAXCAND 192   // 2x the pool so 128 transient slices aren't starved
 static float    s_env[SL_MAX_FRAMES / SL_WIN + 2];
 static uint32_t s_nwin = 0;
 
@@ -101,8 +101,12 @@ static void pick_transients(int target)
 static void recompute_slices(void)
 {
     if (sl.len == 0) { sl.n_slices = 1; sl.slice_pt[0] = 0; sl.slice_pt[1] = 0; return; }
-    if (sl.transient_mode) pick_transients(sl.slice_target);   // uses cached envelope
-    else                   recompute_grid(sl.slice_target);
+    if (sl.ot_active && sl.ot_present && sl.ot_n > 0) {        // Octatrack sidecar
+        memcpy(sl.slice_pt, sl.ot_pt, (size_t)(sl.ot_n + 1) * sizeof(uint32_t));
+        sl.n_slices = sl.ot_n;
+    }
+    else if (sl.transient_mode) pick_transients(sl.slice_target);  // cached envelope
+    else                        recompute_grid(sl.slice_target);
     if (sl.sel >= sl.n_slices) sl.sel = sl.n_slices - 1;
 }
 
@@ -260,6 +264,10 @@ int slicer_load(const char *name)
     sl.sample[sizeof(sl.sample) - 1] = 0;
     compute_peaks();
     compute_envelope();     // onset envelope for transient detection
+    // Octatrack sidecar: if usr/<name>.OT exists its chops auto-apply
+    int otn = slicer_parse_ot(name, sl.len, sl.ot_pt, SL_OT_SLICES + 1);
+    sl.ot_n = otn > 0 ? otn : 0;
+    sl.ot_present = sl.ot_active = (otn > 0);
     recompute_slices();     // (re)build slice boundaries for the new sample
     sl.cur = 0;
     sl.sel = 0;

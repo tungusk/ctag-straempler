@@ -782,7 +782,9 @@ static esp_err_t mod_upload_handler(httpd_req_t *req)
     if (nl > 1) {
         char *b = malloc(nl);
         if (httpd_req_get_hdr_value_str(req, "Name", b, nl) == ESP_OK) {
-            cleanStringSpace(b); b[8] = 0; strlcpy(name, b, sizeof(name));
+            cleanStringSpace(b);
+            if (nl > 9) b[8] = 0;                    // 8.3 clamp (b may be shorter)
+            strlcpy(name, b, sizeof(name));
         }
         free(b);
     }
@@ -842,6 +844,65 @@ static esp_err_t mod_upload_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD rename failed"); return ESP_FAIL;
     }
     ESP_LOGI(TAG, "module upload %s (%d bytes)", path, (int)req->content_len);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// PUT /drop_ot — header Name = sample basename; body = an Octatrack .ot
+// slice sidecar (832 bytes), stored VERBATIM as usr/<NAME>.OT. The slicer
+// auto-applies it the next time that sample loads. Bounded timeout retries
+// and atomic temp+rename like the module upload.
+#define OT_TMP "/usr/OT_UP.TMP"
+static esp_err_t drop_ot_put_handler(httpd_req_t *req)
+{
+    char name[24] = "";   // matches sample-id length (usr/<name>.RAW pairing)
+    size_t nl = httpd_req_get_hdr_value_len(req, "Name") + 1;
+    if (nl > 1) {
+        char *b = malloc(nl);
+        if (httpd_req_get_hdr_value_str(req, "Name", b, nl) == ESP_OK) {
+            cleanStringSpace(b); strlcpy(name, b, sizeof(name));   // strlcpy truncates
+        }
+        free(b);
+    }
+    if (!name[0] || !mod_name_safe(name)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad name"); return ESP_FAIL;
+    }
+    if (req->content_len != 832) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, ".ot must be 832 bytes"); return ESP_FAIL;
+    }
+
+    char path[48];
+    snprintf(path, sizeof(path), "/usr/%s.OT", name);
+    FIL f;
+    sd_lock_take();
+    FRESULT fr = f_open(&f, OT_TMP, FA_CREATE_ALWAYS | FA_WRITE);
+    sd_lock_give();
+    if (fr != FR_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD open failed"); return ESP_FAIL;
+    }
+    char buf[832];
+    int remaining = req->content_len, ret, timeouts = 0; UINT bw;
+    while (remaining > 0) {
+        if ((ret = httpd_req_recv(req, buf, MIN(remaining, (int)sizeof(buf)))) <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 4) continue;
+            sd_lock_take(); f_close(&f); f_unlink(OT_TMP); sd_lock_give();
+            return ESP_FAIL;
+        }
+        timeouts = 0;
+        remaining -= ret;
+        sd_lock_take(); f_write(&f, buf, ret, &bw); sd_lock_give();
+    }
+    sd_lock_take();
+    f_close(&f);
+    f_unlink(path);
+    FRESULT rr = f_rename(OT_TMP, path);
+    if (rr != FR_OK) f_unlink(OT_TMP);
+    sd_lock_give();
+    if (rr != FR_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD rename failed"); return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "ot upload %s", path);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
@@ -940,6 +1001,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/drop_sample",.method = HTTP_PUT,    .handler = drop_sample_put_handler },
     { .uri = "/bootlogo",   .method = HTTP_PUT,    .handler = bootlogo_put_handler },
     { .uri = "/trk/upload", .method = HTTP_PUT,    .handler = mod_upload_handler },
+    { .uri = "/drop_ot",    .method = HTTP_PUT,    .handler = drop_ot_put_handler },
     { .uri = "/trk/list",   .method = HTTP_GET,    .handler = mod_list_handler },
     { .uri = "/trk/get",    .method = HTTP_GET,    .handler = mod_get_handler },
     { .uri = "/trk/delete", .method = HTTP_DELETE, .handler = mod_delete_handler },

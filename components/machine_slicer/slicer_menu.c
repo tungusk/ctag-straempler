@@ -3,6 +3,7 @@
 // only when the playing or selected slice changes, so it stays flicker-free.
 #include <stdio.h>
 #include <string.h>
+#include <esp_http_server.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "menusys.h"
@@ -200,7 +201,8 @@ static void setup_redraw(int pos, int sel){
         TFT_print((char*)setup_labels[i], 8, y);
         char v[24];
         switch(i){
-            case 0: snprintf(v, sizeof(v), "%s", sl.transient_mode ? "Transient" : "Grid"); break;
+            case 0: snprintf(v, sizeof(v), "%s", sl.ot_active ? "OT"
+                                : (sl.transient_mode ? "Transient" : "Grid")); break;
             case 1:
                 if(sl.slice_target == 0) snprintf(v, sizeof(v), "Auto");
                 else { snprintf(v, sizeof(v), "%d", sl.slice_target); }
@@ -216,10 +218,21 @@ static void setup_redraw(int pos, int sel){
 }
 
 static void cycle_target(int dir){
-    int n = sl.slice_target;   // Auto(0) -> 8 -> 16 -> 32 -> Auto
-    if (dir > 0) { if(n == 0) n = 8; else if(n >= 32) n = 0; else n *= 2; }
-    else         { if(n == 0) n = 32; else if(n <= 8) n = 0; else n /= 2; }
+    int n = sl.slice_target;   // Auto(0) -> 8 -> 16 -> 32 -> 64 -> 128 -> Auto
+    if (dir > 0) { if(n == 0) n = 8; else if(n >= 128) n = 0; else n *= 2; }
+    else         { if(n == 0) n = 128; else if(n <= 8) n = 0; else n /= 2; }
     sl.slice_target = n;
+    sl.ot_active = false;      // dialing a count = leaving OT mode
+    slicer_reslice();
+}
+
+static void cycle_mode(int dir){
+    // Grid -> Transient -> OT (offered only when a .ot sidecar was found)
+    int m = sl.ot_active ? 2 : (sl.transient_mode ? 1 : 0);
+    int nmodes = sl.ot_present ? 3 : 2;
+    m = (m + (dir > 0 ? 1 : nmodes - 1)) % nmodes;
+    sl.ot_active = (m == 2);
+    sl.transient_mode = (m == 1);
     slicer_reslice();
 }
 
@@ -232,7 +245,7 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
             break;
         case EV_FWD:
             if(sel){
-                if(pos==0)      { sl.transient_mode = !sl.transient_mode; slicer_reslice(); }
+                if(pos==0)      cycle_mode(+1);
                 else if(pos==1) cycle_target(+1);
                 else if(pos==4) sl.auto_on = !sl.auto_on;
                 else if(pos==5) sl.reverse = !sl.reverse;
@@ -241,7 +254,7 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
             break;
         case EV_BWD:
             if(sel){
-                if(pos==0)      { sl.transient_mode = !sl.transient_mode; slicer_reslice(); }
+                if(pos==0)      cycle_mode(-1);
                 else if(pos==1) cycle_target(-1);
                 else if(pos==4) sl.auto_on = !sl.auto_on;
                 else if(pos==5) sl.reverse = !sl.reverse;
@@ -412,6 +425,8 @@ static int slicer_main_event(int event, void *ev_data){
 static const char *const slicer_main_items[] = {"Live", "Setup"};
 static const int slicer_main_targets[] = {M_SLICER_LIVE, M_SLICER_SETUP};
 
+extern const httpd_uri_t slicer_web_uris[];
+
 const machine_ui_t slicer_menu_ui = {
     .main_items = slicer_main_items,
     .main_targets = slicer_main_targets,
@@ -419,4 +434,6 @@ const machine_ui_t slicer_menu_ui = {
     .register_pages = slicer_register_pages,
     .main_event = slicer_main_event,
     .boot_target = M_SLICER_LIVE,
+    .web_uris = slicer_web_uris,
+    .n_web_uris = 1,
 };

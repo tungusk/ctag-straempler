@@ -11,7 +11,8 @@
 #define SL_MAX_SECS   12
 #define SL_MAX_FRAMES (SL_RATE * SL_MAX_SECS)   // stereo frames cap
 #define SL_PEAKS      300                       // waveform display columns
-#define SL_MAX_SLICES 32
+#define SL_MAX_SLICES 128
+#define SL_OT_SLICES  64                        // Elektron .ot format limit
 
 typedef struct {
     int16_t *buf;                 // PSRAM interleaved stereo L,R, SL_MAX_FRAMES*2
@@ -39,6 +40,12 @@ typedef struct {
     uint32_t s_start, s_end;      // current slice bounds (frames)
     float   inc;                  // pitch increment (frames per output sample)
 
+    // Octatrack .ot sidecar slices (usr/<sample>.OT, auto-detected on load)
+    uint32_t ot_pt[SL_OT_SLICES + 1];  // boundary frames from the .ot
+    int      ot_n;                     // slice count from the .ot (0 = none)
+    volatile bool ot_present;          // a valid .ot exists for this sample
+    volatile bool ot_active;           // slices currently come from the .ot
+
     // one-shot commands from UI (engine consumes)
     volatile uint8_t cmd_fire;    // fire sel slice
     volatile uint8_t cmd_advance; // fire sel, then step sel to next
@@ -56,3 +63,11 @@ int slicer_load(const char *name);
 void slicer_reslice(void);
 // list usr/*.RAW ids into out[][], returns count (<= max)
 int slicer_list_samples(char out[][24], int max);
+
+// Octatrack .ot sidecar I/O (slicer_ot.c, UI/httpd task only)
+// parse usr/<name>.OT: scaled slice-start boundaries into out_pt[0..n]
+// (n+1 entries, last = sample_len); returns n slices, 0/-1 = none/invalid
+int slicer_parse_ot(const char *name, uint32_t sample_len, uint32_t *out_pt, int max_pts);
+// build an Octatrack-compatible 832-byte .ot image from the CURRENT slices
+// (bpm for the tempo field; <=0 uses 120). -1 if no sample or >64 slices.
+int slicer_build_ot(uint8_t out[832], float bpm);
