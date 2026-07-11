@@ -19,6 +19,7 @@ void clock_reset(beatclock_t *c)
     c->locked = false;
     c->period_min = PERIOD_MIN;
     c->period_max = PERIOD_MAX;
+    c->split_run = 0;
 }
 
 bool clock_tick(beatclock_t *c, uint16_t cv)
@@ -29,8 +30,25 @@ bool clock_tick(beatclock_t *c, uint16_t cv)
 
     bool high = c->prev_high ? (cv > CLK_LO) : (cv > CLK_HI);
     if (high && !c->prev_high) {
-        if (c->since >= c->period_min && c->since <= c->period_max) {
-            c->ring[c->ring_n % CLK_RING] = c->since;
+        uint32_t iv = c->since;
+        // octave guard: a ~2x interval is almost always ONE MISSED EDGE
+        // (marginal pulse capture), and believing it halves the tempo — and
+        // any rate slaved to it (the deck audibly cut to half speed). Split
+        // it as two pulses instead. Escape hatch: 8 consecutive doubles =
+        // the artist really halved the tempo, adopt it.
+        if (c->locked && c->period &&
+            iv > c->period + c->period / 2 && iv < (c->period * 5) / 2) {
+            if (++c->split_run >= 8) {
+                c->ring_n = 0;               // real tempo change: restart ring
+                c->split_run = 0;
+            } else {
+                iv /= 2;
+            }
+        } else {
+            c->split_run = 0;
+        }
+        if (iv >= c->period_min && iv <= c->period_max) {
+            c->ring[c->ring_n % CLK_RING] = iv;
             c->ring_n++;
             int n = c->ring_n < CLK_RING ? c->ring_n : CLK_RING;
             // MEDIAN, not mean: one missed/doubled edge no longer poisons

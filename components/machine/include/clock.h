@@ -23,6 +23,7 @@ typedef struct {
     // from missed-edge garbage.
     uint32_t period_min;     // samples
     uint32_t period_max;
+    uint8_t  split_run;      // consecutive ~2x intervals split as missed edges
 } beatclock_t;
 
 void clock_reset(beatclock_t *c);
