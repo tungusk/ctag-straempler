@@ -52,11 +52,19 @@ static int s_last_dbpm = -1;
 // display ticks, snapping through on a real tempo change (>2 bpm).
 static float ext_bpm_disp(void){
     static float ema = 0;
+    static uint32_t last_tk = 0;
     float x = dk.clk.bpm / dk_ppb[dk.ppb_idx];
     if (!dk.clk.locked || x <= 0) { ema = 0; return x; }
     float d = x - ema;
-    if (ema <= 0 || d > 2.0f || d < -2.0f) ema = x;
-    else ema += 0.2f * d;
+    if (ema <= 0 || d > 2.0f || d < -2.0f) { ema = x; return ema; }  // real tempo change: snap
+    // advance at most 4x/s — this runs from BOTH bpm draws on BOTH timer
+    // rates, which multiplied the effective alpha and left the display jumpy
+    uint32_t tk = xTaskGetTickCount();
+    if (tk - last_tk >= pdMS_TO_TICKS(250)) {
+        last_tk = tk;
+        ema += 0.08f * d;    // ~3 s settle; raw edge jitter (~±0.35 bpm from
+                             // 1.45 ms block quantization) smooths to ~±0.05
+    }
     return ema;
 }
 
