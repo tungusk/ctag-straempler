@@ -30,6 +30,15 @@ bool clock_tick(beatclock_t *c, uint16_t cv)
 
     bool high = c->prev_high ? (cv > CLK_LO) : (cv > CLK_HI);
     if (high && !c->prev_high) {
+        // spurious-edge guard: an edge well inside the locked period is
+        // bounce/crosstalk, not a pulse. Ignore it entirely — and keep
+        // counting, so the TRUE next edge still measures a full interval
+        // (a raw i106 against a 122 ms clock pulled the median down and
+        // audibly wobbled the deck's rate)
+        if (c->locked && c->period && c->since < (c->period * 3) / 5) {
+            c->prev_high = high;
+            return false;
+        }
         uint32_t iv = c->since;
         // octave guard: a ~2x interval is almost always ONE MISSED EDGE
         // (marginal pulse capture), and believing it halves the tempo — and
