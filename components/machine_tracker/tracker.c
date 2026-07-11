@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <math.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
@@ -423,6 +424,28 @@ static void render_task(void *pv)
                     // xmp_set_tempo_factor is a TIME multiplier (bigger = slower),
                     // bench-verified inverted 2026-07-11 — so the ratio is mod/ext
                     float tgt = (float)trk.mod_bpm / ext_beat;
+                    // PHASE PULL: rate-matching alone lets the row grid float
+                    // against the pulses — also steer rows ONTO the clock.
+                    // The audible position trails the render position by the
+                    // ring lead, so subtract it (in beats; 4 rows = 1 beat by
+                    // tracker convention). Compare in PULSE phase (like the
+                    // deck) so clock mult/div keeps working.
+                    if (trk.ph_speed > 0 && trk.clk.period > 0) {
+                        float beat_fr = 44100.0f * 60.0f / ext_beat;
+                        float ph_r = ((float)(trk.ph_row & 3)
+                                      + (float)trk.ph_frame / (float)trk.ph_speed) * 0.25f;
+                        float lead_b = (float)(trk.wpos - trk.rpos) / beat_fr;
+                        float p_trk = (ph_r - lead_b) * trk_ppb[trk.ppb_idx];
+                        p_trk -= floorf(p_trk);
+                        float p_ext = (float)trk.clk.since / (float)trk.clk.period;
+                        if (p_ext > 1.0f) p_ext = 1.0f;
+                        float err = p_ext - p_trk;          // >0: rows behind the clock
+                        if (err > 0.5f)  err -= 1.0f;
+                        if (err < -0.5f) err += 1.0f;
+                        if (err > 0.3f)  err = 0.3f;        // bounded pull (~15% bend max)
+                        if (err < -0.3f) err = -0.3f;
+                        tgt *= (1.0f - 0.5f * err);         // behind -> smaller factor = faster
+                    }
                     if (tgt < 0.5f) tgt = 0.5f;
                     if (tgt > 2.0f) tgt = 2.0f;
                     trk.tf_cur += 0.05f * (tgt - trk.tf_cur);
@@ -459,6 +482,7 @@ static void render_task(void *pv)
 
             trk.cur_pos = fi.pos; trk.cur_pat = fi.pattern; trk.cur_row = fi.row;
             trk.time_ms = fi.time; trk.total_ms = fi.total_time; trk.cur_bpm = fi.bpm;
+            trk.ph_row = fi.row; trk.ph_frame = fi.frame; trk.ph_speed = fi.speed;
             if (trk.wpos - trk.rpos >= TRK_LOW_WATER) trk.loading = false;
             if (!s_logged_play) {                 // one-shot: stack after first mix
                 s_logged_play = true;

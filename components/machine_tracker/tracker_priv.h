@@ -93,6 +93,8 @@ typedef struct {
     int  clk_base;                 // tracked floor of the clock channel
     bool clk_high;                 // Schmitt state
     float tf_cur;                  // current tempo factor (render-owned)
+    int   ph_row, ph_frame, ph_speed;  // last rendered row/tick position
+                                       // (render-owned; feeds the sync phase pull)
 
     float out_gain;                // declick ramp (0..1)
     volatile uint32_t dbg_starve;  // blocks muted mid-play: render fell behind

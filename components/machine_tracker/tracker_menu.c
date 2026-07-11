@@ -129,13 +129,21 @@ static void draw_info(void){
     } else {
         // full module type on its own line (no longer truncated to 10 chars)
         snprintf(ty, sizeof(ty), "%s   %d ch", trk.fmt[0] ? trk.fmt : "(unknown)", trk.channels);
-        if (trk.loop_engage)
-            snprintf(st, sizeof(st), "LOOP  %d step%s  @ %02d:%02d",
-                     trk.loop_len, trk.loop_len > 1 ? "s" : "",
-                     trk.loop_start_ord, trk.loop_start_row);
+        // bpm slot: when clock-synced and locked, show the EXTERNAL tempo the
+        // module is actually following, tagged EXT — the sync-is-live indicator
+        char bs[16];
+        if (trk.sync && trk.clk.locked && trk.clk.bpm > 0)
+            snprintf(bs, sizeof(bs), "%d bpm EXT",
+                     (int)(trk.clk.bpm / trk_ppb[trk.ppb_idx] + 0.5f));
         else
-            snprintf(st, sizeof(st), "%s   pat %02d/%02d   %d bpm",
-                     state_word(), trk.cur_pos, trk.num_pat, trk.mod_bpm);
+            snprintf(bs, sizeof(bs), "%d bpm", trk.mod_bpm);
+        if (trk.loop_engage)
+            snprintf(st, sizeof(st), "LOOP  %d step%s  @ %02d:%02d  %s",
+                     trk.loop_len, trk.loop_len > 1 ? "s" : "",
+                     trk.loop_start_ord, trk.loop_start_row, bs);
+        else
+            snprintf(st, sizeof(st), "%s   pat %02d/%02d   %s",
+                     state_word(), trk.cur_pos, trk.num_pat, bs);
     }
     if (strcmp(ty, s_type) != 0){
         strcpy(s_type, ty);
