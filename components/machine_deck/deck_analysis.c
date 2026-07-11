@@ -17,6 +17,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "cJSON.h"
+#include "ff.h"
 #include "fileio.h"
 #include "sd_lock.h"
 #include "deck_priv.h"
@@ -62,7 +63,7 @@ void deck_analysis_commit(void)
 // same rule as the main sweep)
 static float acf_at(const float *env, uint32_t n, uint32_t lag)
 {
-    while (dk.playing) vTaskDelay(pdMS_TO_TICKS(30));
+    while (dk.playing || dk.loading) vTaskDelay(pdMS_TO_TICKS(30));
     if (lag == 0 || lag >= n) return 0;
     float acc = 0;
     for (uint32_t i = 0; i + lag < n; i++) acc += env[i] * env[i + lag];
@@ -81,7 +82,10 @@ static void analysis_task(void *pv)
     ESP_LOGI(TAG, "analysis start: %s (heap %u, largest %u)", s_an_track,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", s_an_track);
+    // raw FatFS (bare path, like the ring reader): the buffered VFS fread
+    // path measured ~31 ms per 16 KB idle and stretched to ~900 ms while the
+    // module was in active use — the raw path is both faster and immune
+    snprintf(path, sizeof(path), "usr/%s.RAW", s_an_track);
 
     float *env = heap_caps_malloc(DK_ENV_MAX * sizeof(float), MALLOC_CAP_SPIRAM);
     // 16 hops per read (16 KB): 1 KB reads made analysis crawl (~30k SD
@@ -94,14 +98,19 @@ static void analysis_task(void *pv)
     // track and reads dominate (~31 ms per 16 KB through the VFS path).
     #define AN_CHUNK_HOPS 16
     int16_t *chunk = heap_caps_malloc(AN_CHUNK_HOPS * DK_HOP * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
-    sd_lock_take();
-    FILE *f = fopen(path, "rb");
+    FIL *f = malloc(sizeof(FIL));    // FatFS handle off the 6 KB task stack
     long fsize = 0;
-    if (f) { fseek(f, 0, SEEK_END); fsize = ftell(f); fseek(f, 0, SEEK_SET); }
-    sd_lock_give();
-    if (!env || !chunk || !f) {
+    bool open_ok = false;
+    if (f) {
+        sd_lock_take();
+        open_ok = (f_open(f, path, FA_READ) == FR_OK);
+        if (open_ok) fsize = (long)f_size(f);
+        sd_lock_give();
+    }
+    if (!env || !chunk || !open_ok) {
         ESP_LOGE(TAG, "analysis setup failed");
-        if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
+        if (open_ok) { sd_lock_take(); f_close(f); sd_lock_give(); }
+        free(f);
         free(chunk);
         if (env) heap_caps_free(env);
         dk.an_state = DK_AN_FAIL;
@@ -119,20 +128,21 @@ static void analysis_task(void *pv)
         // ANALYSE ONLY WHILE STOPPED: pause entirely during playback so we never
         // touch the SD bus while the ring reader needs it — that contention was
         // what hurt the audio.
-        while (dk.playing) vTaskDelay(pdMS_TO_TICKS(30));
+        while (dk.playing || dk.loading) vTaskDelay(pdMS_TO_TICKS(30));
         uint32_t hops = total_hops - n;
         if (hops > AN_CHUNK_HOPS) hops = AN_CHUNK_HOPS;
         uint32_t t0 = xTaskGetTickCount();
         sd_lock_take();
         uint32_t t1 = xTaskGetTickCount();
-        size_t got = fread(chunk, 4, hops * DK_HOP, f);
+        UINT br = 0;
+        FRESULT frr = f_read(f, chunk, hops * DK_HOP * 4, &br);
         uint32_t t2 = xTaskGetTickCount();
         sd_lock_give();
         tk_lock += t1 - t0;
         tk_read += t2 - t1;
         tk_rest += t0 - tk_last;
         tk_last = t2;
-        uint32_t got_hops = got / DK_HOP;
+        uint32_t got_hops = (frr == FR_OK) ? br / 4 / DK_HOP : 0;
         for (uint32_t h = 0; h < got_hops && n < total_hops; h++) {
             int32_t acc = 0;
             const int16_t *p = chunk + h * DK_HOP * 2;
@@ -158,8 +168,9 @@ static void analysis_task(void *pv)
     ESP_LOGI(TAG, "envelope done: %lu hops (%.1f s)", (unsigned long)n,
              (double)(xTaskGetTickCount() * portTICK_PERIOD_MS) / 1000.0);
     sd_lock_take();
-    fclose(f);
+    f_close(f);
     sd_lock_give();
+    free(f);
     free(chunk);
 
     if (n < (uint32_t)(ENV_RATE * 10)) {         // need at least ~10 s
@@ -184,7 +195,7 @@ static void analysis_task(void *pv)
     int best_lag = 0;
     float *rr = malloc((lag_max + 2) * sizeof(float));
     for (int lag = lag_min; lag <= lag_max; lag++) {
-        while (dk.playing) vTaskDelay(pdMS_TO_TICKS(30));   // pause during playback
+        while (dk.playing || dk.loading) vTaskDelay(pdMS_TO_TICKS(30));   // pause during playback + ring refill
         float acc = 0;
         for (uint32_t i = 0; i + lag < n; i++) acc += env[i] * env[i + lag];
         acc /= (float)(n - lag);
