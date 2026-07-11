@@ -351,8 +351,17 @@ static void render_task(void *pv)
                 // Loop mode: render ONE tick at a time so we can wrap exactly on
                 // a row boundary. The window spans the whole order list (absolute
                 // steps) so it can cross patterns; read live from CV7 (length) +
-                // CV6 (position across the song). No external clock, nominal tempo.
-                trk.tf_cur += 0.05f * (1.0f - trk.tf_cur);
+                // CV6 (position across the song). Tempo-syncs like normal play
+                // (the loop rides the external clock too).
+                if (trk.sync && trk.clk.locked && trk.clk.bpm > 0 && trk.mod_bpm > 0) {
+                    float ext_beat = trk.clk.bpm / trk_ppb[trk.ppb_idx];
+                    float tgt = (float)trk.mod_bpm / ext_beat;   // time factor: mod/ext
+                    if (tgt < 0.5f) tgt = 0.5f;
+                    if (tgt > 2.0f) tgt = 2.0f;
+                    trk.tf_cur += 0.05f * (tgt - trk.tf_cur);
+                } else {
+                    trk.tf_cur += 0.05f * (1.0f - trk.tf_cur);
+                }
                 xmp_set_tempo_factor(s_ctx, trk.tf_cur);
                 xmp_play_frame(s_ctx);
                 xmp_get_frame_info(s_ctx, &fi);
@@ -411,7 +420,9 @@ static void render_task(void *pv)
                 // instead of warbling. Nominal factor 1.0 when unsynced/unlocked.
                 if (trk.sync && trk.clk.locked && trk.clk.bpm > 0 && trk.mod_bpm > 0) {
                     float ext_beat = trk.clk.bpm / trk_ppb[trk.ppb_idx];
-                    float tgt = ext_beat / (float)trk.mod_bpm;   // module runs at mod_bpm; scale toward ext
+                    // xmp_set_tempo_factor is a TIME multiplier (bigger = slower),
+                    // bench-verified inverted 2026-07-11 — so the ratio is mod/ext
+                    float tgt = (float)trk.mod_bpm / ext_beat;
                     if (tgt < 0.5f) tgt = 0.5f;
                     if (tgt > 2.0f) tgt = 2.0f;
                     trk.tf_cur += 0.05f * (tgt - trk.tf_cur);
