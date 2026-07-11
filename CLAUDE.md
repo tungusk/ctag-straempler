@@ -106,7 +106,14 @@ The machines (all working; archives in `bin/`):
   at downbeat, TR2 = stop, encoder press = track browser. Deck audio is
   legitimately rough ~60 s after boot (ring refill + PLL cold relock) and
   ~15 s after scrubs — judge audio only after settling (/status v1:
-  healthy = i==p, E≈0, S flat). Archived: bin/deck-v1.
+  healthy = i==p, E≈0, S flat). Tempo v2 (2026-07-10): analysis is EXACT
+  (precision ladder: harmonic check + long-lag re-peak + sub-bin grid,
+  ±0.0005 BPM on reference clicks, conf metric in sidecar v2 dver/conf,
+  v1 tracks auto-upgrade on load) and FAST (raw-FatFS reads, ~1 min/track,
+  full 5-min cap ~2 min; yields to playback AND ring refills). Lock
+  instrument-verified: 90% of beats ±7 ms, +1.2 ms/min slip
+  (tools/analyze_drift.py + tools/make_clicktrack.py are the rig).
+  Archived: bin/deck-v2 (deck-v1 = pre-precision baseline).
 - `machine_freesound` — silent web-driven utility: freesound search/preview
   download (`/fs/search`, `/fs/get`, `/fs/state`) and direct MP3-URL import
   (`/fs/fetch`), decoding to `usr/` (mono→stereo expand, sidecar). Auth behind
@@ -184,8 +191,11 @@ granular position-CV, glitch grid-align. Original-import machine dropped
   `granular-v1`, `glitch-v1`, `sd-hardening-v1` (SD-bus lock + low-memory web
   fix + IP/disk/download UI), `drums-remote-v1` (drums + freesound + universal
   upload + teleremote), `deck-v1` (Deck machine + auto-analysis + transport-bar
-  UI + aborted-download httpd fix). `bin/<name>/flash.sh` returns to any
-  known-good state. Matching dated git tags.
+  UI + aborted-download httpd fix), `tracker-v1`/`tracker-loop-v1` (libxmp
+  module player + KO-II sequence loop + bar scrub), `deck-v2` (exact+fast
+  tempo analysis, measured lock, clip-window/corner + httpd abort fixes).
+  `bin/<name>/flash.sh` returns to any known-good state. Matching dated
+  git tags.
 - **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
   (complete repo, `git clone`-able) + a copy of `bin/`. Refresh with
   `git bundle create ~/ctag-straempler-backups/ctag-straempler-$(date +%Y%m%d).bundle --all`.
