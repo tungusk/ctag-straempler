@@ -59,7 +59,10 @@ void *_fb_state = NULL;
 
 // handler has format caller_id, caller_name, caller_item data, event, event data
 static int timer_handler(int it_id, int event, void* event_data){
-    menuTFTPrintRecordIndicator();
+    // nav-bar REC indicator ONLY on the hub page: every other page owns its
+    // top-right corner (the "About"/"System" affordance) and this tick was
+    // blanking it with MENUBAR_BG twice a second — the "uneven corner" bug
+    if (it_id == M_MAIN) menuTFTPrintRecordIndicator();
     if (it_id == M_MAIN) {
         const machine_t *m = machine_active();
         if (m && m->ui && m->ui->main_event)
