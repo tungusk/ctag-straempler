@@ -249,9 +249,12 @@ static void reader_task(void *pv)
                 }
                 v->pos = 0; v->rpos_i = 0;      // engine is parked (head_valid false)
                 v->loading = false;
-                if (v->autoplay) {              // fresh take: loop immediately
-                    v->autoplay = false;
-                    if (v->name[0]) v->playing = true;
+                if (v->autoplay) {              // fresh take: loop immediately —
+                    v->autoplay = false;        // or, clock-synced, come in ON a
+                    if (v->name[0]) {           // pulse at the in-phase offset
+                        if (s3.rec_synced && s3.clk.locked) v->sync_start_req = true;
+                        else v->playing = true;
+                    }
                 }
                 worked = true;
                 continue;
@@ -698,6 +701,7 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
     }
 
     // ---- clock-synced capture bookkeeping (audio-task-owned) ----------------
+    s3.post_stop_frames += (uint32_t)frames;   // free-runs; reset at synced stop
     if (recording_is_active()) {
         s3.rec_frames += (uint32_t)frames;
         if (edge) {
@@ -707,6 +711,7 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
             if (s3.rec_stop_wait && (s3.rec_pulses % 4) == 0) {
                 recording_finish();                    // stop ON the whole beat
                 s3.rec_stop_wait = false;
+                s3.post_stop_frames = 0;               // phase ref for sync re-entry
                 if (s3.clk.locked && s3.clk.bpm > 0) {
                     s3.rec_bpm = s3.clk.bpm / 4.0f;    // pulse rate -> beat bpm
                     s3.rec_stamp_req = true;           // reader amends the sidecar
@@ -717,7 +722,26 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
             recording_finish();                        // clock died mid-wait
             s3.rec_stop_wait = false;
         }
-    } else if (s3.rec_wait_vid >= 0) {
+    }
+
+    // synced re-entry: a fresh clock-synced take starts ON a pulse, its play
+    // position offset by the frames elapsed since the stop edge — the loop
+    // comes in exactly in phase, however long the save/load took
+    for (int i = 0; i < S3_NVOICES; i++) {
+        s3_voice_t *v = &s3.v[i];
+        if (!v->sync_start_req) continue;
+        if (!s3.clk.locked) {                          // clock gone: just start
+            v->pos = 0;
+            v->playing = true;
+            v->sync_start_req = false;
+        } else if (edge && v->play_len) {
+            v->pos = (double)(s3.post_stop_frames % v->play_len);
+            v->playing = true;
+            v->sync_start_req = false;
+        }
+    }
+
+    if (!recording_is_active() && s3.rec_wait_vid >= 0) {
         if (edge && s3.clk.locked) {
             recording_trigger();                       // start ON the pulse:
             s3.rec_synced = true;                      // downbeat = frame 0

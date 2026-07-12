@@ -65,6 +65,9 @@ typedef struct {
     volatile bool load_req;          // assign `pending` to this voice
     volatile bool autoplay;          // start playing once the load lands
                                      // (fresh takes loop immediately)
+    volatile bool sync_start_req;    // start ON the next clock pulse, offset
+                                     // by the elapsed save/load time so the
+                                     // loop comes in IN PHASE with the clock
     char pending[S3_NAME_LEN];
     volatile bool window_req;        // trim/reverse changed: rebuild head+stream
     volatile bool retrig_req;        // gate: restart stream fill at head end
@@ -118,6 +121,8 @@ typedef struct {
     volatile uint32_t rec_first_pulse; // frame of the first pulse (unsynced start)
     volatile float rec_bpm;          // beat bpm latched at finish (0 = no stamp)
     volatile bool rec_stamp_req;     // reader: amend the sidecar after pickup
+    volatile uint32_t post_stop_frames; // frames since the synced stop edge —
+                                     // the phase offset for sync_start_req
 } s3_state_t;
 
 extern s3_state_t s3;
