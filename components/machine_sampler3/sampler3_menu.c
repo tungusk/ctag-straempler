@@ -173,7 +173,7 @@ static void live_full_redraw(void){
     {   // selected voice as a BIG corner numeral
         Font f = cfont;
         TFT_setFont(DEJAVU24_FONT, NULL);
-        char hdr[4];
+        char hdr[16];
         snprintf(hdr, sizeof(hdr), "%d", s_voice_sel + 1);
         TFT_print(hdr, _width - TFT_getStringWidth(hdr) - 8, 2);
         cfont = f;
