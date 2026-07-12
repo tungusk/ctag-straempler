@@ -12,6 +12,7 @@ void recording_start(int vid);  // vid: which voice slot to auto-load into after
 void recording_stop(void);
 bool recording_is_active(void);
 void recording_push(const int32_t *samples);
+uint32_t recording_get_drops(void);  // capture chunks lost to a full queue
 
 // Clock-synced capture (sampler3): prepare opens the file and parks the
 // writer so the actual start costs nothing; trigger/finish are bare atomic
