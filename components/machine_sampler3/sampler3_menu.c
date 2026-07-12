@@ -170,9 +170,14 @@ static void live_full_redraw(void){
     _bg = TFT_BLACK; _fg = TFT_WHITE;
     TFT_print("Sampler", 6, 4);
     _fg = ACCENT;
-    char hdr[24];
-    snprintf(hdr, sizeof(hdr), "V%d", s_voice_sel + 1);
-    TFT_print(hdr, _width - TFT_getStringWidth(hdr) - 8, 4);
+    {   // selected voice as a BIG corner numeral
+        Font f = cfont;
+        TFT_setFont(DEJAVU24_FONT, NULL);
+        char hdr[4];
+        snprintf(hdr, sizeof(hdr), "%d", s_voice_sel + 1);
+        TFT_print(hdr, _width - TFT_getStringWidth(hdr) - 8, 2);
+        cfont = f;
+    }
     s_banner_state = -1;
     s_last_sel = s_voice_sel;
     for (int i = 0; i < S3_NVOICES; i++) { s_lane_state[i] = -1; draw_lane(i, true); }
