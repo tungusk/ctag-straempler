@@ -20,6 +20,8 @@ typedef struct {
 } rec_chunk_t;
 
 static atomic_bool rec_active = ATOMIC_VAR_INIT(false);
+static atomic_bool rec_prepared = ATOMIC_VAR_INIT(false);
+static atomic_bool rec_cancel = ATOMIC_VAR_INIT(false);
 static atomic_bool rec_load_pending = ATOMIC_VAR_INIT(false);
 static bool rec_enabled = true;
 static trig_func_t trig_func[2] = {TRIG_FUNC_VOICE, TRIG_FUNC_VOICE};
@@ -82,6 +84,25 @@ static void rec_writer_task(void *pvParams)
     if (f == NULL) {
         ESP_LOGE(TAG, "Could not open %s for writing", fname);
         atomic_store(&rec_active, false);
+        atomic_store(&rec_prepared, false);
+        rec_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+    ESP_LOGI(TAG, "Recording prepared: %s", fname);
+
+    // park until the trigger (a clock pulse, via recording_trigger) or a
+    // cancel (disarm before any capture — delete the empty file)
+    while (!atomic_load(&rec_active) && !atomic_load(&rec_cancel))
+        vTaskDelay(pdMS_TO_TICKS(5));
+    if (atomic_load(&rec_cancel)) {
+        atomic_store(&rec_cancel, false);
+        sd_lock_take();
+        fclose(f);
+        remove(fname);
+        sd_lock_give();
+        ESP_LOGI(TAG, "Prepared recording cancelled: %s", fname);
+        atomic_store(&rec_prepared, false);
         rec_task_handle = NULL;
         vTaskDelete(NULL);
         return;
@@ -133,6 +154,7 @@ static void rec_writer_task(void *pvParams)
         atomic_store(&rec_load_pending, true);
     }
 
+    atomic_store(&rec_prepared, false);
     rec_task_handle = NULL;
     vTaskDelete(NULL);
 }
@@ -152,17 +174,47 @@ static bool rec_arm_monitor = true;
 void recording_set_arm_monitor(bool en) { rec_arm_monitor = en; }
 bool recording_get_arm_monitor(void)    { return rec_arm_monitor; }
 
-void recording_start(int vid)
+void recording_prepare(int vid)
 {
     if (!rec_enabled) return;
-    if (atomic_load(&rec_active)) return;
+    if (atomic_load(&rec_prepared) || atomic_load(&rec_active)) return;
     if (rec_task_handle != NULL) return;
     if (rec_queue == NULL) return;
     rec_target_vid = vid;
     xQueueReset(rec_queue);
-    atomic_store(&rec_active, true);
+    atomic_store(&rec_cancel, false);
+    atomic_store(&rec_prepared, true);
     xTaskCreate(rec_writer_task, "rec_writer", 4096, NULL, 18, &rec_task_handle);
-    ESP_LOGI(TAG, "Recording started for vid=%d", vid);
+    ESP_LOGI(TAG, "Recording prepared for vid=%d", vid);
+}
+
+bool recording_is_prepared(void)
+{
+    return atomic_load(&rec_prepared);
+}
+
+// audio-task safe: bare atomic stores, no logs/SD/allocation
+void recording_trigger(void)
+{
+    if (atomic_load(&rec_prepared)) atomic_store(&rec_active, true);
+}
+
+void recording_finish(void)
+{
+    atomic_store(&rec_active, false);
+}
+
+void recording_cancel_prepared(void)
+{
+    if (atomic_load(&rec_prepared) && !atomic_load(&rec_active))
+        atomic_store(&rec_cancel, true);
+}
+
+void recording_start(int vid)
+{
+    recording_prepare(vid);
+    recording_trigger();
+    if (atomic_load(&rec_active)) ESP_LOGI(TAG, "Recording started for vid=%d", vid);
 }
 
 void recording_stop(void)
