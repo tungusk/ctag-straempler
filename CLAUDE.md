@@ -193,9 +193,11 @@ granular position-CV, glitch grid-align. Original-import machine dropped
   upload + teleremote), `deck-v1` (Deck machine + auto-analysis + transport-bar
   UI + aborted-download httpd fix), `tracker-v1`/`tracker-loop-v1` (libxmp
   module player + KO-II sequence loop + bar scrub), `deck-v2` (exact+fast
-  tempo analysis, measured lock, clip-window/corner + httpd abort fixes).
-  `bin/<name>/flash.sh` returns to any known-good state. Matching dated
-  git tags.
+  tempo analysis, measured lock, clip-window/corner + httpd abort fixes),
+  `tracker-sync-v1` (clock detector octave+ghost guards, tracker external
+  sync w/ tick-based phase servo, slicer .ot import/export, deck raw-read
+  analysis). `bin/<name>/flash.sh` returns to any known-good state.
+  Matching dated git tags.
 - **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
   (complete repo, `git clone`-able) + a copy of `bin/`. Refresh with
   `git bundle create ~/ctag-straempler-backups/ctag-straempler-$(date +%Y%m%d).bundle --all`.
