@@ -39,16 +39,20 @@ static void refresh_samples(void){
 // ---- Live ---------------------------------------------------------------------
 // change-driven redraws only (full-region repaints strobe — deck lesson)
 
-// big lanes: DEJAVU24 name + a tall bar whose BACKGROUND is the state —
-// blue idle, green playing, yellow armed, red recording (the deck's
-// "bar color IS the transport" lesson, doubled)
-#define LANE_Y(i)   (26 + (i) * 66)
-#define LANE_BAR_H  24
-#define BANNER_Y    162
+// side-by-side voice PANELS mirroring the physical layout (Arlo): left =
+// track 1, right = track 2. The panel BACKGROUND is the state — blue idle,
+// green playing, yellow armed, red recording; the focused panel gets a
+// white border; a light marker sweeps the panel floor for position.
+#define PANEL_Y     24
+#define PANEL_H     136
+#define PANEL_BAR_H 14
+#define BANNER_Y    168
 
 static int s_lane_barx[S3_NVOICES] = {-1, -1};
 static char s_lane_line[S3_NVOICES][48] = {{0}, {0}};
 static int s_lane_state[S3_NVOICES] = {-1, -1};
+static int s_lane_sel[S3_NVOICES] = {-1, -1};
+static int s_lane_wf[S3_NVOICES] = {-1, -1};
 static int s_banner_state = -1;
 static int s_last_sel = -1;
 
@@ -69,52 +73,69 @@ static color_t lane_bg(int st){
 
 static void draw_lane(int i, bool full){
     s3_voice_t *v = &s3.v[i];
-    int y = LANE_Y(i);
+    int pw = _width / 2 - 6;                 // panel width
+    int px = (i == 0) ? 4 : _width / 2 + 2;  // left / right panel
     int st = lane_state(i);
+    bool sel = (i == s_voice_sel);
     char line[48];
-    snprintf(line, sizeof(line), "%.11s %s%s%s",
-             v->name[0] ? v->name : "(empty)",
-             v->playmode == S3_MODE_LOOP ? "LP" : "1S",
-             v->reverse ? "R" : "",
-             i == s_voice_sel ? "\x01" : "");     // \x01 = selection slot marker
-    if (full || strcmp(line, s_lane_line[i]) != 0){
+    snprintf(line, sizeof(line), "%.11s|%s%s", v->name[0] ? v->name : "-",
+             v->playmode == S3_MODE_LOOP ? "LP" : "1S", v->reverse ? "R" : "");
+
+    bool repaint = full || st != s_lane_state[i] || sel != (s_lane_sel[i] == 1) ||
+                   strcmp(line, s_lane_line[i]) != 0 ||
+                   (v->wf_valid ? 1 : 0) != s_lane_wf[i];
+    if (repaint){
+        s_lane_state[i] = st;
+        s_lane_sel[i] = sel ? 1 : 0;
+        s_lane_wf[i] = v->wf_valid ? 1 : 0;
         strcpy(s_lane_line[i], line);
+        color_t bg = lane_bg(st);
+        TFT_fillRect(px, PANEL_Y, pw, PANEL_H, bg);
+        _fg = sel ? TFT_WHITE : (color_t){70, 70, 90};
+        TFT_drawRect(px, PANEL_Y, pw, PANEL_H, _fg);
+        if (sel) TFT_drawRect(px + 1, PANEL_Y + 1, pw - 2, PANEL_H - 2, _fg);
+        // big track numeral
         Font f = cfont;
         TFT_setFont(DEJAVU24_FONT, NULL);
-        int bfh = TFT_getfontheight();
-        _bg = TFT_BLACK;
-        TFT_fillRect(0, y, _width, bfh + 2, _bg);
-        _fg = (i == s_voice_sel) ? TFT_WHITE : TFT_LIGHTGREY;
-        char nm[48];
-        snprintf(nm, sizeof(nm), "%.11s %s%s",
-                 v->name[0] ? v->name : "(empty)",
-                 v->playmode == S3_MODE_LOOP ? "LP" : "1S",
-                 v->reverse ? "R" : "");
-        TFT_print(nm, 6, y);
-        if (i == s_voice_sel){                    // selection marker, RIGHT side
-            _fg = ACCENT;
-            TFT_print("<", _width - TFT_getStringWidth("<") - 6, y);
-        }
+        char num[8];
+        snprintf(num, sizeof(num), "%d", i + 1);
+        _bg = bg;
+        _fg = TFT_WHITE;
+        TFT_print(num, px + 8, PANEL_Y + 8);
         cfont = f;
-        s_lane_barx[i] = -1;
-    }
-    // tall state-colored bar
-    int by = y + 28;
-    if (st != s_lane_state[i] || s_lane_barx[i] < 0){
-        s_lane_state[i] = st;
-        TFT_fillRect(6, by, _width - 12, LANE_BAR_H, lane_bg(st));
-        _fg = (color_t){70, 70, 90};
-        TFT_drawRect(6, by, _width - 12, LANE_BAR_H, _fg);
+        // name + mode, wrapped small under the numeral
+        _fg = sel ? TFT_WHITE : TFT_LIGHTGREY;
+        char nm[16], md[12];
+        snprintf(nm, sizeof(nm), "%.12s", v->name[0] ? v->name : "(empty)");
+        snprintf(md, sizeof(md), "%s%s", v->playmode == S3_MODE_LOOP ? "LOOP" : "1SHOT",
+                 v->reverse ? " REV" : "");
+        TFT_print(nm, px + 8, PANEL_Y + 44);
+        TFT_print(md, px + 8, PANEL_Y + 64);
+        const char *stn = st == 3 ? "REC" : st == 2 ? "ARMED" : st == 1 ? "PLAY" : "";
+        if (stn[0]) TFT_print((char*)stn, px + 8, PANEL_Y + 84);
+        // waveform thumbnail strip (playback order — reversed in reverse mode)
+        if (v->wf_valid){
+            int wy = PANEL_Y + 96, wh = 22;
+            int wx = px + 4, ww = pw - 8;
+            color_t wc = {225, 225, 225};
+            for (int c = 0; c < ww; c++){
+                int h = (int)v->wf[(c * S3_WF_W) / ww] * wh / 255;
+                if (h < 1) h = 1;
+                TFT_fillRect(wx + c, wy + (wh - h) / 2, 1, h, wc);
+            }
+        }
         _bg = TFT_BLACK;
         s_lane_barx[i] = -1;
     }
+    // position marker along the panel floor
     if (v->play_len){
-        int x = 8 + (int)((uint64_t)(v->rpos_i < v->play_len ? v->rpos_i : v->play_len)
-                          * (_width - 20) / v->play_len);
+        int by = PANEL_Y + PANEL_H - PANEL_BAR_H - 3;
+        int x = px + 3 + (int)((uint64_t)(v->rpos_i < v->play_len ? v->rpos_i : v->play_len)
+                               * (pw - 10) / v->play_len);
         if (x != s_lane_barx[i]){
             if (s_lane_barx[i] > 0)
-                TFT_fillRect(s_lane_barx[i], by + 1, 5, LANE_BAR_H - 2, lane_bg(st));
-            TFT_fillRect(x, by + 1, 5, LANE_BAR_H - 2, (color_t){235, 235, 235});
+                TFT_fillRect(s_lane_barx[i], by, 4, PANEL_BAR_H, lane_bg(st));
+            TFT_fillRect(x, by, 4, PANEL_BAR_H, (color_t){235, 235, 235});
             s_lane_barx[i] = x;
         }
     }

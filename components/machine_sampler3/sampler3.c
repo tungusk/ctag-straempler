@@ -120,6 +120,26 @@ static void rebuild_head(s3_voice_t *v, s3_reader_voice_t *rv, int16_t *stage)
     v->wpos = got;              // ring restarts empty right after the head
     rv->stream_p = got;
     v->head_valid = true;
+
+    // waveform thumbnail: one small decimated pass in playback order (so
+    // reverse mode draws reversed). ~144 seek+peek reads — cheap, and only
+    // on load/window change.
+    v->wf_valid = false;
+    for (int c = 0; c < S3_WF_W; c++) {
+        uint32_t p = (uint32_t)((uint64_t)c * v->play_len / S3_WF_W);
+        uint32_t want = v->play_len - p;
+        if (want > 128) want = 128;
+        uint32_t got_c = want ? read_playback_frames(v, rv->f, p, want, stage, stage) : 0;
+        int peak = 0;
+        for (uint32_t k = 0; k < got_c * 2; k++) {
+            int s = stage[k];
+            if (s < 0) s = -s;
+            if (s > peak) peak = s;
+        }
+        v->wf[c] = (uint8_t)(peak >> 7);
+        if ((c & 15) == 15) vTaskDelay(1);   // SD courtesy gap
+    }
+    v->wf_valid = true;
 }
 
 static void reader_task(void *pv)
