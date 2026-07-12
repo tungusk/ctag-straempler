@@ -89,6 +89,8 @@ typedef struct {
 typedef struct {
     s3_voice_t v[S3_NVOICES];
     volatile bool monitor;           // pass line-in through while armed+stopped
+    volatile bool arm_mutes;         // arming a track mutes its playback
+                                     // (sampler2 inheritance; toggleable)
     // recording UI state (mirrors the core recording service)
     volatile int  arm_target;        // -1 none, 0/1 = voice armed for recording
     volatile bool save_failed;       // last take failed to save (UI banner)

@@ -396,6 +396,7 @@ static esp_err_t s3_start(void)
 {
     memset(&s3, 0, sizeof(s3));
     s3.monitor = true;
+    s3.arm_mutes = true;     // sampler2 inheritance: arm = mute track, cue input
     s3.arm_target = -1;
     for (int i = 0; i < S3_NVOICES; i++) {
         s3_voice_t *v = &s3.v[i];
@@ -558,7 +559,10 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
 
     for (int i = 0; i < S3_NVOICES; i++) {
         s3_voice_t *v = &s3.v[i];
-        bool muted = rec_active && rec_vid == i;
+        // recording target is always muted; an ARMED track mutes too when
+        // arm_mutes is on (sampler2 behavior: arm = cue the input instead)
+        bool muted = (rec_active && rec_vid == i) ||
+                     (s3.arm_mutes && recording_get_trig_func(i) == TRIG_FUNC_RECORD);
 
         // rate = CV6/7 through-zero speed (when assigned) x optional 1V/oct.
         // Speed curve (Arlo): knob center = unity; CW half sweeps to +150%;
@@ -714,6 +718,7 @@ static cJSON *s3_preset_save(void)
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "s3v", 2);       // schema version gate
     cJSON_AddBoolToObject(o, "monitor", s3.monitor);
+    cJSON_AddBoolToObject(o, "arm_mutes", s3.arm_mutes);
     cJSON_AddNumberToObject(o, "clk_src", s3.clk_src);
     cJSON *va = cJSON_CreateArray();
     cJSON_AddItemToObject(o, "voices", va);
@@ -746,6 +751,7 @@ static void s3_preset_load(const cJSON *node)
         return;
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor"))) s3.monitor = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "arm_mutes"))) s3.arm_mutes = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j))
         s3.clk_src = j->valueint & 7;
     cJSON *va = cJSON_GetObjectItemCaseSensitive(node, "voices");
