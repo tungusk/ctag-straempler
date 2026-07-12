@@ -24,6 +24,8 @@ typedef struct {
     uint32_t period_min;     // samples
     uint32_t period_max;
     uint8_t  split_run;      // consecutive ~2x intervals split as missed edges
+    uint8_t  ghost_run;      // consecutive raw edges at ~half period (faster-clock escape)
+    uint32_t since_raw;      // frames since the previous RAW edge (accept or not)
 } beatclock_t;
 
 void clock_reset(beatclock_t *c);
