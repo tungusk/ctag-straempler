@@ -43,8 +43,8 @@ static void refresh_samples(void){
 // track 1, right = track 2. The panel BACKGROUND is the state — blue idle,
 // green playing, yellow armed, red recording; the focused panel gets a
 // white border; a light marker sweeps the panel floor for position.
-#define PANEL_Y     24
-#define PANEL_H     172                   // fill the vertical space
+#define PANEL_Y     30                    // clears the corner tempo (+2px pad)
+#define PANEL_H     166                   // fill the vertical space
 #define PANEL_BAR_H 24                    // thick: it carries the state color
 #define BANNER_Y    202
 static const color_t PANEL_BG = {14, 14, 20};   // calm; only the bar is loud
