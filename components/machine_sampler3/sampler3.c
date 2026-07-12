@@ -275,10 +275,14 @@ static void reader_task(void *pv)
                 worked = true;
             }
 
-            // top up the ring: playback-order frames [head_frames..play_len),
-            // throttled so the window stays within one ring of the play cursor
+            // top up the ring: playback-order frames [head_frames..play_len).
+            // Throttle bound is one chunk TIGHTER than the consumer's frame_ok
+            // margin (RING - CHUNK): with both at the same bound, a full ring
+            // put the play cursor exactly on the reject line — cursor froze,
+            // freezing the throttle, muting the voice for good ~3.9s into any
+            // long sample (the "short gate"/cutout + runaway starve counts).
             uint32_t lead = v->wpos - v->rpos_i;
-            if (rv[i].stream_p < v->play_len && lead < S3_RING_FRAMES - S3_CHUNK_FRAMES) {
+            if (rv[i].stream_p < v->play_len && lead < S3_RING_FRAMES - 2 * S3_CHUNK_FRAMES) {
                 uint32_t want = v->play_len - rv[i].stream_p;
                 if (want > S3_CHUNK_FRAMES) want = S3_CHUNK_FRAMES;
                 uint32_t got = read_playback_frames(v, rv[i].f, rv[i].stream_p, want, stage, stage);
@@ -516,12 +520,19 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                     else recording_finish();
                 }
             } else if (v->name[0] && v->head_valid) {
-                // retrigger: instant from the head cache; reader restarts the stream
-                v->pos = 0;
-                v->playing = true;
-                if (v->play_len > v->head_frames) {
-                    v->loading = true;         // parks ring reads until refilled
-                    v->retrig_req = true;
+                if (v->playing) {
+                    // gate toggles: press while playing = pause (also makes the
+                    // arm-hold graceful — its initial press quiets the track
+                    // instead of blasting a retrigger)
+                    v->playing = false;
+                } else {
+                    // trigger: instant from the head cache; reader restarts the stream
+                    v->pos = 0;
+                    v->playing = true;
+                    if (v->play_len > v->head_frames) {
+                        v->loading = true;     // parks ring reads until refilled
+                        v->retrig_req = true;
+                    }
                 }
             }
         } else if (low && hold[i] > 0) {
@@ -671,6 +682,20 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
     }
     uint16_t synth = s3.clk_high ? 4095 : 0;
     for (int fno = 0; fno < frames; fno++) clock_tick(&s3.clk, synth);
+
+    // ghost guard for the SYNC edges: AC-coupled pulse sources (a sound
+    // card can't hold DC) ring on the pulse tail and refire the Schmitt;
+    // the detector gates those internally, but the raw `edge` used for
+    // synced start/stop must too, or takes land ghost-quantized (measured
+    // +83.6 ms on a 12-beat take). Accept an edge only ≥3/4 of a locked
+    // period after the last accepted one.
+    static uint32_t edge_since = 0;
+    if (edge_since < (uint32_t)1 << 30) edge_since += (uint32_t)frames;
+    if (edge) {
+        uint32_t ep = s3.clk.period;
+        if (ep != 0 && edge_since < ep - ep / 4) edge = false;   // ghost
+        else edge_since = 0;
+    }
 
     // ---- clock-synced capture bookkeeping (audio-task-owned) ----------------
     if (recording_is_active()) {
