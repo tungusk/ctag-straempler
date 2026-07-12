@@ -1020,6 +1020,11 @@ static httpd_handle_t start_webserver(void)
     config.core_id         = 0;
     config.task_priority   = 5;
     config.max_uri_handlers = N_URIS + 2 + MAX_MACHINE_URIS;
+    // abandoned sockets (aborted polls, vanished clients) used to pile up
+    // until all ~7 session slots were dead and every new connection got RST
+    // ("REST died" while the firmware ran fine). Purge the LRU session
+    // instead of refusing the connection.
+    config.lru_purge_enable = true;
 
     ESP_LOGI(TAG, "Starting server on port %d", config.server_port);
     if (httpd_start(&server, &config) != ESP_OK) {
