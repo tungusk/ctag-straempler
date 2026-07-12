@@ -45,8 +45,9 @@ static void refresh_samples(void){
 // white border; a light marker sweeps the panel floor for position.
 #define PANEL_Y     24
 #define PANEL_H     136
-#define PANEL_BAR_H 14
+#define PANEL_BAR_H 24                    // thick: it carries the state color
 #define BANNER_Y    168
+static const color_t PANEL_BG = {14, 14, 20};   // calm; only the bar is loud
 
 static int s_lane_barx[S3_NVOICES] = {-1, -1};
 static char s_lane_line[S3_NVOICES][48] = {{0}, {0}};
@@ -89,8 +90,7 @@ static void draw_lane(int i, bool full){
         s_lane_sel[i] = sel ? 1 : 0;
         s_lane_wf[i] = v->wf_valid ? 1 : 0;
         strcpy(s_lane_line[i], line);
-        color_t bg = lane_bg(st);
-        TFT_fillRect(px, PANEL_Y, pw, PANEL_H, bg);
+        TFT_fillRect(px, PANEL_Y, pw, PANEL_H, PANEL_BG);
         _fg = sel ? TFT_WHITE : (color_t){70, 70, 90};
         TFT_drawRect(px, PANEL_Y, pw, PANEL_H, _fg);
         if (sel) TFT_drawRect(px + 1, PANEL_Y + 1, pw - 2, PANEL_H - 2, _fg);
@@ -99,7 +99,7 @@ static void draw_lane(int i, bool full){
         TFT_setFont(DEJAVU24_FONT, NULL);
         char num[8];
         snprintf(num, sizeof(num), "%d", i + 1);
-        _bg = bg;
+        _bg = PANEL_BG;
         _fg = TFT_WHITE;
         TFT_print(num, px + 8, PANEL_Y + 8);
         cfont = f;
@@ -115,7 +115,7 @@ static void draw_lane(int i, bool full){
         if (stn[0]) TFT_print((char*)stn, px + 8, PANEL_Y + 84);
         // waveform thumbnail strip (playback order — reversed in reverse mode)
         if (v->wf_valid){
-            int wy = PANEL_Y + 96, wh = 22;
+            int wy = PANEL_Y + 86, wh = 18;
             int wx = px + 4, ww = pw - 8;
             color_t wc = {225, 225, 225};
             for (int c = 0; c < ww; c++){
@@ -124,18 +124,21 @@ static void draw_lane(int i, bool full){
                 TFT_fillRect(wx + c, wy + (wh - h) / 2, 1, h, wc);
             }
         }
+        // the STATE lives here: a thick colored playbar at the panel floor
+        TFT_fillRect(px + 3, PANEL_Y + PANEL_H - PANEL_BAR_H - 4,
+                     pw - 6, PANEL_BAR_H, lane_bg(st));
         _bg = TFT_BLACK;
         s_lane_barx[i] = -1;
     }
-    // position marker along the panel floor
+    // position marker inside the colored playbar
     if (v->play_len){
-        int by = PANEL_Y + PANEL_H - PANEL_BAR_H - 3;
-        int x = px + 3 + (int)((uint64_t)(v->rpos_i < v->play_len ? v->rpos_i : v->play_len)
-                               * (pw - 10) / v->play_len);
+        int by = PANEL_Y + PANEL_H - PANEL_BAR_H - 4;
+        int x = px + 4 + (int)((uint64_t)(v->rpos_i < v->play_len ? v->rpos_i : v->play_len)
+                               * (pw - 12) / v->play_len);
         if (x != s_lane_barx[i]){
             if (s_lane_barx[i] > 0)
-                TFT_fillRect(s_lane_barx[i], by, 4, PANEL_BAR_H, lane_bg(st));
-            TFT_fillRect(x, by, 4, PANEL_BAR_H, (color_t){235, 235, 235});
+                TFT_fillRect(s_lane_barx[i], by + 1, 4, PANEL_BAR_H - 2, lane_bg(st));
+            TFT_fillRect(x, by + 1, 4, PANEL_BAR_H - 2, (color_t){235, 235, 235});
             s_lane_barx[i] = x;
         }
     }
