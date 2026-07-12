@@ -44,9 +44,9 @@ static void refresh_samples(void){
 // green playing, yellow armed, red recording; the focused panel gets a
 // white border; a light marker sweeps the panel floor for position.
 #define PANEL_Y     24
-#define PANEL_H     136
+#define PANEL_H     172                   // fill the vertical space
 #define PANEL_BAR_H 24                    // thick: it carries the state color
-#define BANNER_Y    168
+#define BANNER_Y    202
 static const color_t PANEL_BG = {14, 14, 20};   // calm; only the bar is loud
 
 static int s_lane_barx[S3_NVOICES] = {-1, -1};
@@ -114,9 +114,10 @@ static void draw_lane(int i, bool full){
         TFT_print(md, px + 8, PANEL_Y + 64);
         const char *stn = st == 3 ? "REC" : st == 2 ? "ARMED" : st == 1 ? "PLAY" : "";
         if (stn[0]) TFT_print((char*)stn, px + 8, PANEL_Y + 84);
-        // waveform thumbnail strip (playback order — reversed in reverse mode)
+        // waveform thumbnail strip (playback order — reversed in reverse mode),
+        // clear of the state text above and the playbar below
         if (v->wf_valid){
-            int wy = PANEL_Y + 86, wh = 18;
+            int wy = PANEL_Y + 106, wh = 30;
             int wx = px + 4, ww = pw - 8;
             color_t wc = {225, 225, 225};
             for (int c = 0; c < ww; c++){
