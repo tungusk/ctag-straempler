@@ -57,6 +57,34 @@ static int s_lane_wf[S3_NVOICES] = {-1, -1};
 static int s_lane_native[S3_NVOICES] = {-1, -1};
 static int s_banner_state = -1;
 static int s_last_sel = -1;
+static int s_last_dbpm = -1;
+
+// external clock tempo, BIG in the top-right corner (green = locked; blank
+// when no clock). EMA-smoothed: clock edges are block-quantized, so the raw
+// per-pulse figure dances a few tenths (deck lesson); snaps on real changes.
+static void draw_clock_bpm(void){
+    float bpm = 0;
+    if (s3.clk.locked && s3.clk.bpm > 0) bpm = s3.clk.bpm / 4.0f;   // 4 ppb
+    static float ema = 0;
+    if (bpm <= 0) ema = 0;
+    else if (ema <= 0 || bpm - ema > 2.0f || ema - bpm > 2.0f) ema = bpm;
+    else ema += 0.08f * (bpm - ema);
+    int d = ema > 0 ? (int)(ema * 10.0f + 0.5f) : 0;
+    if (d == s_last_dbpm) return;
+    s_last_dbpm = d;
+    Font f = cfont;
+    TFT_setFont(DEJAVU24_FONT, NULL);
+    int bw = 110, bh = TFT_getfontheight() + 4;
+    _bg = TFT_BLACK;
+    TFT_fillRect(_width - bw, 0, bw, bh, _bg);
+    if (d > 0){
+        char s[16];
+        snprintf(s, sizeof(s), "%d.%d", d / 10, d % 10);
+        _fg = (color_t){40, 200, 90};
+        TFT_print(s, _width - TFT_getStringWidth(s) - 8, 2);
+    }
+    cfont = f;
+}
 
 static int lane_state(int i){
     if (recording_is_active() && recording_get_target_vid() == i) return 3;  // recording
@@ -210,15 +238,8 @@ static void live_full_redraw(void){
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
     TFT_print("Sampler", 6, 4);
-    _fg = ACCENT;
-    {   // selected voice as a BIG corner numeral
-        Font f = cfont;
-        TFT_setFont(DEJAVU24_FONT, NULL);
-        char hdr[16];
-        snprintf(hdr, sizeof(hdr), "%d", s_voice_sel + 1);
-        TFT_print(hdr, _width - TFT_getStringWidth(hdr) - 8, 2);
-        cfont = f;
-    }
+    s_last_dbpm = -1;           // corner = external clock tempo (panels carry
+    draw_clock_bpm();           // their own numerals now)
     s_banner_state = -1;
     s_last_sel = s_voice_sel;
     for (int i = 0; i < S3_NVOICES; i++) { s_lane_state[i] = -1; draw_lane(i, true); }
@@ -236,6 +257,7 @@ static int s3_live_handler(int it_id, int event, void *ev_data){
         case EV_TIMER_REPEATING_SLOW:
             if (s_last_sel != s_voice_sel) { live_full_redraw(); break; }
             for (int i = 0; i < S3_NVOICES; i++) draw_lane(i, false);
+            draw_clock_bpm();
             draw_banner();
             if (event == EV_TIMER_REPEATING_SLOW){
                 char dbg[48];
