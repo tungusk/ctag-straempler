@@ -27,6 +27,7 @@
 #define S3_RING_FRAMES (S3_RATE * 4)      // 4 s stereo ring (~706 KB PSRAM)
 #define S3_NAME_LEN    24
 #define S3_NVOICES     2
+#define S3_WF_W        144                // waveform thumbnail columns
 
 enum { S3_MODE_ONESHOT = 0, S3_MODE_LOOP };
 // CV6/7 per-voice destination (the seed of a small mod matrix — crop-point
@@ -85,6 +86,10 @@ typedef struct {
     float out_gain;                  // declick ramp
     float last_l, last_r;            // decay-mute tail
     int   cv_floor;                  // floor tracker for the 1V/oct jack
+    // -- waveform thumbnail (reader builds at load/window change; playback-
+    //    order, so reverse mode shows it reversed for free) -------------------
+    uint8_t wf[S3_WF_W];             // per-column peak, 0..255
+    volatile bool wf_valid;
     // -- diagnostics ----------------------------------------------------------
     volatile uint32_t dbg_starve;    // blocks starved mid-play (reader behind)
 } s3_voice_t;
