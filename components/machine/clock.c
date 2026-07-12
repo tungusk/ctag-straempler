@@ -41,11 +41,17 @@ bool clock_tick(beatclock_t *c, uint16_t cv)
         // Raw cadence must be tracked separately from the accumulated
         // interval: ghosted edges don't reset `since`, so accept/ghost
         // alternate and an interval-based run counter never fires.
+        // window covers ANY sustained cadence well under the lock — not just
+        // ~half. A dense clock (8 PPQ) caught mid-plug can mis-lock at 4x+
+        // the true period; true pulses then arrive at QUARTER cadence, under
+        // the old half-only window, and the spurious guard ate them forever
+        // (120 bpm in, 30 shown). Lower bound period/12 still excludes
+        // AC-ringing ghosts (a few ms against a full period).
         uint32_t raw = c->since_raw;
         c->since_raw = 0;
         if (c->locked && c->period &&
-            raw > (c->period * 2) / 5 && raw < (c->period * 3) / 5) {
-            if (++c->ghost_run >= 6) {         // ~0.75 s of half-period edges
+            raw > c->period / 12 && raw < (c->period * 3) / 5) {
+            if (++c->ghost_run >= 6) {         // sustained too-fast cadence
                 c->ring_n = 0;                 // full unlock: relock at the
                 c->period = 0;                 // true cadence within 2 pulses
                 c->locked = false;
@@ -125,12 +131,25 @@ void clockin_set_ppb(clockin_t *ci, float ppb)
 {
     if (ppb < 0.25f) ppb = 0.25f;
     if (ppb > 24.0f) ppb = 24.0f;
+    bool changed = (ppb != ci->ppb);
     ci->ppb = ppb;
     // pulse-rate sanity gate scaled from the beat range (15..320 bpm) —
     // with the default 20..300 gate a fast clock's every legitimate
     // interval is rejected and the BPM is assembled from missed edges
     ci->clk.period_min = (uint32_t)(CLK_RATE * 60.0f / (320.0f * ppb));
     ci->clk.period_max = (uint32_t)(CLK_RATE * 60.0f / (15.0f * ppb));
+    // a PPQ change is a deliberate moment: drop any lock built under the
+    // old convention and relock clean (2 pulses) instead of letting the
+    // guards defend a stale period against the new pulse density
+    if (changed) {
+        ci->clk.ring_n = 0;
+        ci->clk.period = 0;
+        ci->clk.locked = false;
+        ci->clk.bpm = 0.0f;
+        ci->clk.ghost_run = 0;
+        ci->clk.split_run = 0;
+        ci->edge_since = 1u << 30;
+    }
 }
 
 void clockin_reset(clockin_t *ci, float ppb)
