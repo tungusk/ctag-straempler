@@ -354,9 +354,10 @@ static void render_task(void *pv)
                 // steps) so it can cross patterns; read live from CV7 (length) +
                 // CV6 (position across the song). Tempo-syncs like normal play
                 // (the loop rides the external clock too).
-                if (trk.sync && trk.clk.locked && trk.clk.bpm > 0 && trk.mod_bpm > 0) {
+                int lb = trk.cur_bpm > 0 ? trk.cur_bpm : trk.mod_bpm;
+                if (trk.sync && trk.clk.locked && trk.clk.bpm > 0 && lb > 0) {
                     float ext_beat = trk.clk.bpm / trk_ppb[trk.ppb_idx];
-                    float tgt = (float)trk.mod_bpm / ext_beat;   // time factor: mod/ext
+                    float tgt = (float)lb / ext_beat;   // time factor: live mod bpm / ext
                     if (tgt < 0.5f) tgt = 0.5f;
                     if (tgt > 2.0f) tgt = 2.0f;
                     trk.tf_cur += 0.05f * (tgt - trk.tf_cur);
@@ -419,21 +420,26 @@ static void render_task(void *pv)
                 // sync: rate-match the module tempo to the external clock via the
                 // tempo factor (pitch-preserving). Slew so clock jitter drifts
                 // instead of warbling. Nominal factor 1.0 when unsynced/unlocked.
-                if (trk.sync && trk.clk.locked && trk.clk.bpm > 0 && trk.mod_bpm > 0) {
+                int live_bpm = trk.cur_bpm > 0 ? trk.cur_bpm : trk.mod_bpm;
+                if (trk.sync && trk.clk.locked && trk.clk.bpm > 0 && live_bpm > 0) {
                     float ext_beat = trk.clk.bpm / trk_ppb[trk.ppb_idx];
                     // xmp_set_tempo_factor is a TIME multiplier (bigger = slower),
-                    // bench-verified inverted 2026-07-11 — so the ratio is mod/ext
-                    float tgt = (float)trk.mod_bpm / ext_beat;
+                    // bench-verified inverted 2026-07-11 — so the ratio is mod/ext.
+                    // LIVE bpm, not load-time: IT songs change tempo mid-song and
+                    // a stale ratio makes the servo fight the module.
+                    float tgt = (float)live_bpm / ext_beat;
                     // PHASE PULL: rate-matching alone lets the row grid float
                     // against the pulses — also steer rows ONTO the clock.
-                    // The audible position trails the render position by the
-                    // ring lead, so subtract it (in beats; 4 rows = 1 beat by
-                    // tracker convention). Compare in PULSE phase (like the
-                    // deck) so clock mult/div keeps working.
+                    // Beat phase is measured in TICKS (24 ticks = 1 beat holds
+                    // for every speed: MOD speed 6 x 4 rows = IT speed 3 x 8
+                    // rows) — a row-based phase breaks on IT modules. The
+                    // audible position trails the render by the ring lead, so
+                    // subtract it. Compare in PULSE phase (like the deck) so
+                    // clock mult/div keeps working.
                     if (trk.ph_speed > 0 && trk.clk.period > 0) {
                         float beat_fr = 44100.0f * 60.0f / ext_beat;
-                        float ph_r = ((float)(trk.ph_row & 3)
-                                      + (float)trk.ph_frame / (float)trk.ph_speed) * 0.25f;
+                        float ph_r = fmodf((float)trk.ph_row * (float)trk.ph_speed
+                                           + (float)trk.ph_frame, 24.0f) / 24.0f;
                         float lead_b = (float)(trk.wpos - trk.rpos) / beat_fr;
                         float p_trk = (ph_r - lead_b) * trk_ppb[trk.ppb_idx];
                         p_trk -= floorf(p_trk);
