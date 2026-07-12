@@ -2,6 +2,7 @@
 #include "fileio.h"
 #include "sd_lock.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -13,7 +14,14 @@
 #define TAG "REC"
 
 #define REC_CHUNK_SAMPLES 64
-#define REC_QUEUE_DEPTH 8
+// ~6 s of capture buffering (PSRAM-backed static queue). The old depth of 8
+// (5.8 ms!) dropped chunks — SILENTLY, at LOGD — whenever the sampler's
+// reader held the SD bus longer than a block: every take recorded next to a
+// streaming loop was perforated with clicks, worst at the take's end where
+// the stamp write + head rebuild + auto-load pile onto the bus.
+#define REC_QUEUE_DEPTH 1024
+#define REC_BATCH 32               // chunks per fwrite: one sd_lock cycle per
+                                   // 4 KB instead of per 128 B
 
 typedef struct {
     int32_t samples[REC_CHUNK_SAMPLES];
@@ -26,9 +34,12 @@ static atomic_bool rec_load_pending = ATOMIC_VAR_INIT(false);
 static bool rec_enabled = true;
 static trig_func_t trig_func[2] = {TRIG_FUNC_VOICE, TRIG_FUNC_VOICE};
 static QueueHandle_t rec_queue = NULL;
+static StaticQueue_t rec_queue_struct;
+static uint8_t *rec_queue_store = NULL;
 static TaskHandle_t rec_task_handle = NULL;
 static int rec_target_vid = 0;
 static char rec_last_fname[48] = {0};
+static volatile uint32_t rec_drops = 0;   // dropped capture chunks (visible!)
 
 static void write_rec_jsn(const char *raw_path)
 {
@@ -112,28 +123,41 @@ static void rec_writer_task(void *pvParams)
     rec_chunk_t chunk;
     bool write_err = false;
     size_t chunks_written = 0;
-    while (atomic_load(&rec_active) || uxQueueMessagesWaiting(rec_queue) > 0) {
-        if (xQueueReceive(rec_queue, &chunk, pdMS_TO_TICKS(100)) != pdTRUE)
-            continue;
-
-        // Convert stereo 32-bit I2S (left-justified 24-bit) to 16-bit packed RAW:
-        // bits[15:0]=L, bits[31:16]=R
-        int32_t packed[REC_CHUNK_SAMPLES / 2];
-        for (int i = 0; i < REC_CHUNK_SAMPLES / 2; i++) {
-            int16_t l = (int16_t)(chunk.samples[i * 2]     >> 16);
-            int16_t r = (int16_t)(chunk.samples[i * 2 + 1] >> 16);
-            packed[i] = (int32_t)(((uint32_t)(uint16_t)r << 16) | (uint16_t)l);
+    // batch converter buffer: one fwrite (and one sd_lock cycle) per
+    // REC_BATCH chunks instead of per chunk — the per-128-B lock churn made
+    // capture lose every contention fight with the sampler's reader
+    static int32_t batch[(REC_CHUNK_SAMPLES / 2) * REC_BATCH];
+    int bn = 0;
+    while (atomic_load(&rec_active) || uxQueueMessagesWaiting(rec_queue) > 0 || bn > 0) {
+        bool got = (xQueueReceive(rec_queue, &chunk, pdMS_TO_TICKS(100)) == pdTRUE);
+        if (got) {
+            // Convert stereo 32-bit I2S (left-justified 24-bit) to 16-bit
+            // packed RAW: bits[15:0]=L, bits[31:16]=R
+            int32_t *dst = &batch[(REC_CHUNK_SAMPLES / 2) * bn];
+            for (int i = 0; i < REC_CHUNK_SAMPLES / 2; i++) {
+                int16_t l = (int16_t)(chunk.samples[i * 2]     >> 16);
+                int16_t r = (int16_t)(chunk.samples[i * 2 + 1] >> 16);
+                dst[i] = (int32_t)(((uint32_t)(uint16_t)r << 16) | (uint16_t)l);
+            }
+            bn++;
         }
-        sd_lock_take();
-        size_t n = fwrite(packed, sizeof(int32_t), REC_CHUNK_SAMPLES / 2, f);
-        sd_lock_give();
-        if (n != REC_CHUNK_SAMPLES / 2) {
-            // full card / IO error: stop consuming, keep what we have
-            write_err = true;
-            atomic_store(&rec_active, false);
-            break;
+        // flush on a full batch, on queue-idle timeout, or at stream end
+        bool ending = !atomic_load(&rec_active) &&
+                      uxQueueMessagesWaiting(rec_queue) == 0;
+        if (bn > 0 && (bn >= REC_BATCH || !got || ending)) {
+            size_t words = (size_t)(REC_CHUNK_SAMPLES / 2) * bn;
+            sd_lock_take();
+            size_t n = fwrite(batch, sizeof(int32_t), words, f);
+            sd_lock_give();
+            if (n != words) {
+                // full card / IO error: stop consuming, keep what we have
+                write_err = true;
+                atomic_store(&rec_active, false);
+                break;
+            }
+            chunks_written += bn;
+            bn = 0;
         }
-        chunks_written++;
     }
 
     sd_lock_take();
@@ -161,7 +185,15 @@ static void rec_writer_task(void *pvParams)
 
 void recording_init(void)
 {
-    rec_queue = xQueueCreate(REC_QUEUE_DEPTH, sizeof(rec_chunk_t));
+    // deep capture queue lives in PSRAM (a static queue with internal-RAM
+    // storage this size would eat the heap); items are memcpy'd, PSRAM is fine
+    rec_queue_store = heap_caps_malloc((size_t)REC_QUEUE_DEPTH * sizeof(rec_chunk_t),
+                                       MALLOC_CAP_SPIRAM);
+    if (rec_queue_store)
+        rec_queue = xQueueCreateStatic(REC_QUEUE_DEPTH, sizeof(rec_chunk_t),
+                                       rec_queue_store, &rec_queue_struct);
+    else
+        rec_queue = xQueueCreate(64, sizeof(rec_chunk_t));   // degraded fallback
     if (rec_queue == NULL)
         ESP_LOGE(TAG, "Failed to create recording queue");
 }
@@ -264,5 +296,11 @@ void recording_push(const int32_t *samples)
     rec_chunk_t chunk;
     memcpy(chunk.samples, samples, sizeof(chunk.samples));
     if (xQueueSend(rec_queue, &chunk, 0) != pdTRUE)
-        ESP_LOGD(TAG, "rec queue full, dropping chunk");
+        rec_drops++;               // counted, surfaced via /status — a drop
+                                   // is a click IN THE FILE, never silent
+}
+
+uint32_t recording_get_drops(void)
+{
+    return rec_drops;
 }
