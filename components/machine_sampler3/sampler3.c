@@ -505,11 +505,13 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
     static bool hold_fired[S3_NVOICES];
     static bool rec_started_this_press[S3_NVOICES];
     static uint32_t since_fell[S3_NVOICES];   // frames since the PREVIOUS press
-    static bool rapid_press[S3_NVOICES];      // press arrived mid-sequence
+    static uint32_t prev_gap[S3_NVOICES] = {(uint32_t)1 << 30, (uint32_t)1 << 30};
+    static bool rapid_press[S3_NVOICES];      // press arrived mid-SEQUENCE
     const uint32_t HOLD_ARM = S3_RATE;        // ~1 s
-    // sequencer guard: a press following another within this window can NEVER
-    // arm — sequenced gates (long, repeating) were tripping the hold gesture,
-    // and every other note became an accidental take that overwrote the track
+    // sequencer guard: only a press with TWO OR MORE predecessors inside this
+    // window is "mid-sequence" and can never arm. A single recent press (you
+    // triggered, now you hold to arm — the live move) stays armable; sustained
+    // gate streams (a sequencer's long repeating notes) stay locked out.
     const uint32_t RAPID_WIN = (uint32_t)(2.5f * S3_RATE);
 
     for (int i = 0; i < S3_NVOICES; i++) {
@@ -517,7 +519,8 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         bool low = !(io->trig_level & (1 << i));
         if (since_fell[i] < RAPID_WIN) since_fell[i] += (uint32_t)frames;
         if (fell & (1 << i)) {
-            rapid_press[i] = since_fell[i] < RAPID_WIN;
+            rapid_press[i] = since_fell[i] < RAPID_WIN && prev_gap[i] < RAPID_WIN;
+            prev_gap[i] = since_fell[i];
             since_fell[i] = 0;
             hold[i] = (uint32_t)frames;
             hold_fired[i] = false;
