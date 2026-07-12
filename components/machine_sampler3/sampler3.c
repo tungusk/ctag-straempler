@@ -604,13 +604,20 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         // Plateaus at unity and zero make both dependable knob targets.
         float rate = 1.0f;
         if (v->cv67_dest == S3_CV67_SPEED) {
+            // sticky unity: a wide dead zone in knob counts around centre,
+            // each side rescaled from the plateau edge (no value jump)
+            const int DZ = 180;
             int pc = io->cv[5 + i];             // CV6 -> voice 1, CV7 -> voice 2
-            if (pc >= 2048) rate = 1.0f + 0.5f * (float)(pc - 2048) / 2047.0f;
-            else            rate = -1.0f + 2.0f * (float)pc / 2048.0f;
-            if (rate > 0.96f && rate < 1.04f) rate = 1.0f;
-            if (rate > -0.04f && rate < 0.04f) rate = 0.0f;
+            if (pc >= 2048 - DZ && pc <= 2048 + DZ)
+                rate = 1.0f;
+            else if (pc > 2048 + DZ)
+                rate = 1.0f + 0.5f * (float)(pc - 2048 - DZ) / (float)(2047 - DZ);
+            else
+                rate = -1.0f + 2.0f * (float)pc / (float)(2048 - DZ);
+            if (rate > -0.04f && rate < 0.04f) rate = 0.0f;   // dependable stop
         }
         if (v->v1oct) rate *= s3_keyboard_pitch(io->cv[i]);   // ch1/2 jacks
+        v->cur_rate = rate;                     // UI: native-speed badge
 
         float lg = (v->pan <= 0) ? 1.0f : 1.0f - v->pan;
         float rg = (v->pan >= 0) ? 1.0f : 1.0f + v->pan;

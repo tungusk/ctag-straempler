@@ -54,6 +54,7 @@ static char s_lane_line[S3_NVOICES][48] = {{0}, {0}};
 static int s_lane_state[S3_NVOICES] = {-1, -1};
 static int s_lane_sel[S3_NVOICES] = {-1, -1};
 static int s_lane_wf[S3_NVOICES] = {-1, -1};
+static int s_lane_native[S3_NVOICES] = {-1, -1};
 static int s_banner_state = -1;
 static int s_last_sel = -1;
 
@@ -129,6 +130,21 @@ static void draw_lane(int i, bool full){
                      pw - 6, PANEL_BAR_H, lane_bg(st));
         _bg = TFT_BLACK;
         s_lane_barx[i] = -1;
+        s_lane_native[i] = -1;      // badge redraws after a full repaint
+    }
+    // native-speed badge: "1:1" pops top-right while the knob sits at unity
+    {
+        int nat = (v->cur_rate == 1.0f) ? 1 : 0;
+        if (nat != s_lane_native[i]){
+            s_lane_native[i] = nat;
+            _bg = PANEL_BG;
+            TFT_fillRect(px + pw - 40, PANEL_Y + 6, 36, TFT_getfontheight() + 2, PANEL_BG);
+            if (nat){
+                _fg = ACCENT;
+                TFT_print("1:1", px + pw - 36, PANEL_Y + 8);
+            }
+            _bg = TFT_BLACK;
+        }
     }
     // position marker inside the colored playbar
     if (v->play_len){

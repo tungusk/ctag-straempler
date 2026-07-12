@@ -83,6 +83,7 @@ typedef struct {
     volatile float level;            // 0..1
     volatile float pan;              // -1..1
     // -- engine-local ---------------------------------------------------------
+    volatile float cur_rate;         // effective rate this block (UI badge)
     float out_gain;                  // declick ramp
     float last_l, last_r;            // decay-mute tail
     int   cv_floor;                  // floor tracker for the 1V/oct jack
