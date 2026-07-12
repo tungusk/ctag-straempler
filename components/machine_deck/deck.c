@@ -327,7 +327,18 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
             if (p_ext > 1.0f) p_ext = 1.0f;
             float p_trk = fmodf((float)((int64_t)dk.rpos_i - (int64_t)dk.grid_offset), seg_tf) / seg_tf;
             if (p_trk < 0) p_trk += 1.0f;
-            float err = p_ext - p_trk - dk.phase_offset;   // NUDGE trims the lock point
+            // fixed-TIME lock lead: the output chain lands beats a constant
+            // ~10.5 ms late (I2S/DAC latency + block-quantized edge capture +
+            // grid-anchor bias — measured +10.6 ms median, std 4 ms, over 480
+            // beats). Lead the target by the same amount, expressed in pulse
+            // phase so it tracks any clock rate. Bench sign check 2026-07-12.
+            // constant tuned empirically by capture (cmd 10.5 -> +4.6 ms,
+            // cmd 18.5 -> -9.5 ms; zero-crossing ~13 ms). The between-settle
+            // baseline wanders ±3-5 ms, so exact zero is a moving target —
+            // this centers it (musically dead-on)
+            #define DK_LAG_LEAD_FR (0.0131f * 44100.0f)
+            float lead = DK_LAG_LEAD_FR / (float)dk.clk.period;
+            float err = p_ext - p_trk - dk.phase_offset + lead;   // NUDGE trims the lock point
             err -= floorf(err);                            // wrap to [0,1)
             if (err > 0.5f) err -= 1.0f;                    // nearest, in [-0.5,0.5)
             // PI loop filter. The P term (0.08) chases phase fast; the I term
