@@ -88,16 +88,24 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   change touching core or the registry.
 
 The machines (all working; archives in `bin/`):
-- `machine_sampler3` ("Sampler") — two-voice sampler REBUILT on the deck
-  architecture (2026-07-12): one unpinned reader task owns all SD I/O;
-  per-voice 1s PSRAM head-cache (instant gate retrig + loop wrap) + 4s
-  ring in playback-order frame space (engine is direction-agnostic; the
-  reader maps reverse). Gate-triggered one-shot/loop, reverse, start/len
-  trim, level/pan, per-voice pitch source OFF / 1V-oct(ch1/2) / PB-speed
-  (CV6/7), explicit Record page + ARM/REC banner, auto-pickup of finished
-  recordings (reader-side, never in process()), version-gated autosave
-  (s3v:1 — a foreign "Sampler" blob loads defaults, not garbage). Lean
-  core by design; ADSR/delay/CV-matrix/crop deferred to v2.
+- `machine_sampler3` ("Sampler") — two-voice clock-time LOOP RECORDER
+  rebuilt on the deck architecture (2026-07-12): one unpinned reader task
+  owns all SD I/O; per-voice 1s PSRAM head-cache (instant gate retrig) +
+  4s ring in playback-order frame space (reader maps reverse). CROP
+  windows are sampler2-style START+LENGTH, engine-side cursor math
+  (CV-rate performable, no head rebuild): modes OFF / FREE / QUANT
+  (points snap to whole beats of the take's bpm stamp). CV MATRIX:
+  per-voice Speed/Start/Length, each assigned any of CV1..8 (ch1/2
+  floor-trimmed; all reads median-of-5 conditioned — WiFi ADC spikes).
+  WINDOWED STREAMING: while looping, the stream is capped past the window
+  so the ring keeps it — wraps are seamless cursor math with a ~6ms seam
+  crossfade; full-file wraps prefetch the rewind under the playing head;
+  a starved-cursor self-heal (+150ms sledgehammer) re-fires the seek
+  protocol, wedge-proof. No pitch/v-oct by design (that's the future
+  instrument-sampler machine). Internal clock (Record page, 40-240 bpm)
+  drives the whole synced-record workflow without an external clock.
+  Explicit Record page + ARM/REC banner (Live encoder turn disarms),
+  auto-pickup of finished recordings, version-gated autosave (s3v:2).
 - `machine_sampler2` ("Sampler2", HIDDEN) — legacy `s2_`-prefixed fork:
   crop mode, signed CV matrix amounts, CV-addressable start/length.
   Patched 2026-07-12 (deferred auto-load, DMA-capable SD buffers, no
@@ -169,7 +177,7 @@ separate machines by design. Resources check out: 2x6s rings ~2.1MB PSRAM,
 SD dual-stream is the classic sampler's proven load.
 Still open: Freesound OAuth2, looper overdub, granular position-CV, glitch
 grid-align, sampler2 removal (gated on sampler3's full hardware verdict),
-sampler3 v2 features (ADSR, delay, CV matrix, crop, web upload-to-track).
+sampler3 v2 leftovers (ADSR, delay, web upload-to-track; CV matrix + crop SHIPPED 2026-07-12).
 Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
 
 ## Web UI / REST

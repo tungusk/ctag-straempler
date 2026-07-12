@@ -30,23 +30,38 @@
 #define S3_WF_W        144                // waveform thumbnail columns
 
 enum { S3_MODE_ONESHOT = 0, S3_MODE_LOOP };
-// CV6/7 per-voice destination (the seed of a small mod matrix — crop-point
-// destinations join when the crop playmode lands). SPEED = through-zero
-// varispeed: knob center = unity, CCW sweeps down through 0 into reverse
-// (clamped at -100%), CW up to +150% (Arlo's curve, 2026-07-12).
-enum { S3_CV67_OFF = 0, S3_CV67_SPEED };
+// crop behavior: OFF bypasses the window entirely; FREE = continuous
+// points; QUANT snaps both points to whole beats of the take's stamped
+// tempo (falls back to FREE behavior when the sample has no bpm)
+enum { S3_CROP_OFF = 0, S3_CROP_FREE, S3_CROP_QUANT };
+// CV matrix: each destination below carries its own source assignment
+// (-1 = off, 0..7 = CV1..CV8) so Speed + Start + End can all be modulated
+// at once. SPEED = through-zero varispeed (center unity, CCW through 0
+// into reverse to -100%, CW +150%). START/END drive the CROP points: crop
+// lives in the ENGINE (pure cursor math, CV-rate performable — no head
+// rebuild, no SD, no menu repaint). No 1V/oct here by design: this machine
+// is a clock-time loop recorder; instrument-style pitch playback (v/oct,
+// ADSR, effects) is a separate future machine.
 
 typedef struct {
     // -- assignment (reader-owned once load_req is raised) ------------------
     char name[S3_NAME_LEN];          // loaded sample id ("" = unloaded)
     volatile uint32_t file_frames;   // whole file length (frames)
-    // -- playback window (UI writes; reader snapshots into play_* on reload) --
-    volatile float start_pct;        // trim window start 0..1
-    volatile float len_pct;          // trim window length 0..1 (of remainder)
-    volatile bool  reverse;
-    // reader's applied window (playback-order space is built from these)
-    volatile uint32_t play_start;    // file frame of window start
-    volatile uint32_t play_len;      // window length in frames
+    volatile bool  reverse;          // reader-side (chunks reversed on read)
+    // reader streams the WHOLE file; crop is engine-side (below)
+    volatile uint32_t play_start;    // 0 (kept for the reverse file mapping)
+    volatile uint32_t play_len;      // == file_frames
+    // -- CROP (engine-side, playback-order fractions of play_len; UI or the
+    //    CV assignment writes these, the audio task only reads). Sampler2
+    //    semantics: the params are START + LENGTH — start slides the WHOLE
+    //    window (length preserved); when the end hits EOF the length gives
+    //    way, and comes back as start retreats -------------------------------
+    volatile float crop_start;       // 0..~0.98
+    volatile float crop_len;         // window length, 0.02..1
+    volatile float ui_cs, ui_ce;     // EFFECTIVE window this block (incl. CV),
+                                     // published by the engine for the UI shade
+    volatile float ui_cs_min, ui_cs_max;   // jitter meter: per-interval extremes
+                                     // (menu reads + resets each slow tick)
     // -- buffers + cursors (deck protocol: reader owns wpos + seek-writes of
     //    rpos; audio task owns rpos during playback; volatile is enough for
     //    aligned 32-bit cursors on this core pair) --------------------------
@@ -70,29 +85,53 @@ typedef struct {
                                      // by the elapsed save/load time so the
                                      // loop comes in IN PHASE with the clock
     char pending[S3_NAME_LEN];
-    volatile bool window_req;        // trim/reverse changed: rebuild head+stream
-    volatile bool retrig_req;        // gate: restart stream fill at head end
+    volatile bool window_req;        // reverse changed: rebuild head+stream
+    volatile bool retrig_req;        // restart stream fill at seek_frame
+    volatile uint32_t seek_frame;    // stream target (playback-order) — crop
+                                     // starts beyond the head land here
+    volatile uint32_t stream_cap;    // engine: don't stream past this frame
+                                     // (0 = to EOF). Looping a crop window
+                                     // must not race ahead and EVICT the
+                                     // window from the ring — capped, the
+                                     // window stays resident and wraps are
+                                     // pure cursor math (seamless)
     // -- transport (audio-task-owned; loading is set by requesters and
     //    cleared by the reader, deck protocol) ------------------------------
     volatile bool playing;
     volatile bool loading;           // stream (re)filling; ring reads parked
     volatile int  playmode;          // S3_MODE_*
     // -- params (UI-owned, audio reads) --------------------------------------
-    volatile bool  v1oct;            // ch1/2 keyboard pitch multiplies the rate
-    volatile int   cv67_dest;        // S3_CV67_* (CV6 -> voice 1, CV7 -> voice 2)
+    volatile int   src_speed;        // CV source per destination: -1 off,
+    volatile int   src_start;        // 0..7 = CV1..CV8 (knobs 6/7 are the
+    volatile int   src_len;          // fully-good knob+jack channels)
+    volatile int   crop_mode;        // S3_CROP_*
+    volatile float bpm;              // take tempo (sidecar stamp; 0 = unknown)
     volatile float level;            // 0..1
     volatile float pan;              // -1..1
     // -- engine-local ---------------------------------------------------------
     volatile float cur_rate;         // effective rate this block (UI badge)
     float out_gain;                  // declick ramp
     float last_l, last_r;            // decay-mute tail
-    int   cv_floor;                  // floor tracker for the 1V/oct jack
+    float cs_sm, ln_sm;              // slewed start/length: raw ADC noise made
+                                     // the window jitter ~10s of ms on long
+                                     // takes and re-snapped the playhead to
+                                     // the start every few blocks
+    int   q_cs, q_ln;                // QUANT: adopted start beat + length in
+                                     // beats (hysteresis so noise can't
+                                     // flutter between adjacent beats)
+    uint32_t last_cs_f;              // window-motion detector: a fast start
+    int   cs_moving;                 // sweep holds off unbuffered seeks (one
+                                     // seek when it lands, not a storm)
+    uint32_t starve_run;             // consecutive starved blocks — a run
+                                     // past ~150ms force-seeks (wedge-proof)
     // -- waveform thumbnail (reader builds at load/window change; playback-
     //    order, so reverse mode shows it reversed for free) -------------------
     uint8_t wf[S3_WF_W];             // per-column peak, 0..255
     volatile bool wf_valid;
     // -- diagnostics ----------------------------------------------------------
     volatile uint32_t dbg_starve;    // blocks starved mid-play (reader behind)
+    volatile uint32_t dbg_heal;      // self-heal seeks fired (audio task)
+    volatile uint32_t dbg_retrig;    // retrig/seek requests consumed (reader)
 } s3_voice_t;
 
 typedef struct {
@@ -111,7 +150,20 @@ typedef struct {
     beatclock_t clk;
     int  clk_base;                   // floor tracker of the clock channel
     bool clk_high;                   // Schmitt state
+    // ch1/2 idle ~21% up the scale by analog design (1V/oct jacks) — floor
+    // trackers so matrix reads from them span the full range when patched
+    int  cv12_floor[2];
+    // per-channel median-of-5 conditioning: WiFi-burst ADC spikes (±80
+    // counts on an idle knob) punch through slew and hysteresis — a median
+    // eats impulses without lagging sustained moves
+    uint16_t cv_hist[8][5];
+    uint8_t  cv_hp;
+    uint16_t cv_med[8];
     volatile int clk_src;            // CV channel index (default 7 = CV8)
+    // internal clock: drives the synced-record workflow when no external
+    // clock is locked (external always wins). 0 = off. 4 ppb, like ext.
+    volatile float int_bpm;
+    uint32_t int_since;              // frames since the last internal pulse
 
     // clock-synced capture (audio-task-owned; reader consumes stamp_req).
     // With a locked clock: capture STARTS on a pulse (downbeat = frame 0)
@@ -135,6 +187,6 @@ extern s3_state_t s3;
 
 // UI-side (SD-touching or flag-setting; call from UI/menu tasks only)
 void s3_load_sample(int vid, const char *name);  // browse-assign (sets load_req)
-void s3_set_window(int vid, float start_pct, float len_pct, bool reverse);
+void s3_set_reverse(int vid, bool reverse);      // reader rebuilds head+stream
 void s3_toggle_arm(int vid);                     // explicit arm from the Record page
 int  s3_list_samples(char (**names)[S3_NAME_LEN]); // usr/*.RAW browser list

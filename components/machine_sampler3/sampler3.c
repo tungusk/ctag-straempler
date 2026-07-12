@@ -32,25 +32,11 @@ static volatile int  s_arm_vid = 0;
 static volatile bool s_rec_abort_req = false;  // hold during a take: stop+disarm+discard
 static volatile bool s_discard_next = false;   // eat the aborted take's auto-pickup
 
-// semitone table, unison at [12] — same hardware-tuned mapping as sampler2
-// (1424..2599 window, 49 ADC counts per semitone, clamped to +/-1 octave)
-static const float s3_pitch_lut[25] = {
-    0.500000f, 0.529732f, 0.561231f, 0.594604f, 0.629961f, 0.667420f, 0.707107f, 0.749154f,
-    0.793701f, 0.840896f, 0.890899f, 0.943874f, 1.000000f, 1.059463f, 1.122462f, 1.189207f,
-    1.259921f, 1.334840f, 1.414214f, 1.498307f, 1.587401f, 1.681793f, 1.781797f, 1.887749f,
-    2.0f
-};
-static inline float s3_keyboard_pitch(uint16_t cv)
-{
-    if (cv <= 1426) return s3_pitch_lut[0];
-    if (cv >= 2599) return s3_pitch_lut[24];
-    return s3_pitch_lut[(cv - 1424) / 49];
-}
-
 // ---- reader task -------------------------------------------------------------
 
 #define S3_CHUNK_FRAMES 4096
 #define S3_LOW_WATER    (S3_RATE / 4)     // unmute once 0.25 s is buffered
+#define S3_XFADE_FRAMES 256               // loop-seam crossfade (~6 ms)
 
 typedef struct {
     FILE *f;
@@ -98,13 +84,11 @@ static uint32_t read_playback_frames(s3_voice_t *v, FILE *f, uint32_t p,
 static void rebuild_head(s3_voice_t *v, s3_reader_voice_t *rv, int16_t *stage)
 {
     v->head_valid = false;
-    uint32_t start = (uint32_t)(v->start_pct * (float)v->file_frames);
-    if (start >= v->file_frames) start = v->file_frames ? v->file_frames - 1 : 0;
-    uint32_t len = (uint32_t)(v->len_pct * (float)(v->file_frames - start));
-    if (len < 64 && v->file_frames > start) len = v->file_frames - start > 64 ? 64 : v->file_frames - start;
-    v->play_start = start;
-    v->play_len = len;
-    uint32_t hf = len < S3_HEAD_FRAMES ? len : S3_HEAD_FRAMES;
+    // the reader always streams the WHOLE file; crop is engine-side cursor
+    // math (CV-performable — never lands back here)
+    v->play_start = 0;
+    v->play_len = v->file_frames;
+    uint32_t hf = v->play_len < S3_HEAD_FRAMES ? v->play_len : S3_HEAD_FRAMES;
     uint32_t got = 0;
     // head is PSRAM: stream through the DMA stage in chunks
     while (got < hf) {
@@ -265,6 +249,21 @@ static void reader_task(void *pv)
                         rv[i].f = f;
                         strlcpy(v->name, v->pending, S3_NAME_LEN);
                         rebuild_head(v, &rv[i], stage);
+                        // take tempo from the sidecar (every load path lands
+                        // here: browse, preset restore, record pickup) — the
+                        // QUANT crop mode snaps its points to these beats
+                        v->bpm = 0;
+                        char jp[64];
+                        snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", v->name);
+                        cJSON *root = readJSONFileAsCJSON(jp);
+                        if (root) {
+                            cJSON *jb = cJSON_GetObjectItemCaseSensitive(root, "bpm");
+                            if (jb && cJSON_IsNumber(jb) && jb->valuedouble > 20.0)
+                                v->bpm = (float)jb->valuedouble;
+                            cJSON_Delete(root);
+                        }
+                        v->q_cs = 0;            // fresh beat indices for QUANT
+                        v->q_ln = 1 << 20;      // clamps down to the take length
                     }
                 }
                 v->pos = 0; v->rpos_i = 0;      // engine is parked (head_valid false)
@@ -272,7 +271,8 @@ static void reader_task(void *pv)
                 if (v->autoplay) {              // fresh take: loop immediately —
                     v->autoplay = false;        // or, clock-synced, come in ON a
                     if (v->name[0]) {           // pulse at the in-phase offset
-                        if (s3.rec_synced && s3.clk.locked) v->sync_start_req = true;
+                        if (s3.rec_synced && (s3.clk.locked || s3.int_bpm > 0.5f))
+                            v->sync_start_req = true;
                         else v->playing = true;
                     }
                 }
@@ -292,8 +292,14 @@ static void reader_task(void *pv)
 
             if (v->retrig_req) {
                 v->retrig_req = false;
-                v->wpos = v->head_frames;      // stream restarts right after the head
-                rv[i].stream_p = v->head_frames;
+                v->dbg_retrig++;
+                // stream restarts at the seek target (crop starts beyond the
+                // head land mid-file; plain retrigs land right after the head)
+                uint32_t tgt = v->seek_frame;
+                if (tgt < v->head_frames) tgt = v->head_frames;
+                if (tgt > v->play_len) tgt = v->play_len;
+                rv[i].stream_p = tgt;
+                v->wpos = tgt;
                 if (v->play_len <= v->head_frames) v->loading = false;  // RAM-resident
                 worked = true;
             }
@@ -304,10 +310,22 @@ static void reader_task(void *pv)
             // put the play cursor exactly on the reject line — cursor froze,
             // freezing the throttle, muting the voice for good ~3.9s into any
             // long sample (the "short gate"/cutout + runaway starve counts).
-            uint32_t lead = v->wpos - v->rpos_i;
-            if (rv[i].stream_p < v->play_len && lead < S3_RING_FRAMES - 2 * S3_CHUNK_FRAMES) {
-                uint32_t want = v->play_len - rv[i].stream_p;
-                if (want > S3_CHUNK_FRAMES) want = S3_CHUNK_FRAMES;
+            // a crop-CV sweep can park the cursor BEYOND wpos; unsigned
+            // subtraction then reads as "ring overfull" and freezes the fill
+            // (the deadlock family again). Clamp: cursor ahead = no lead.
+            uint32_t lead = (v->wpos > v->rpos_i) ? v->wpos - v->rpos_i : 0;
+            // stream limit: the engine caps the fill just past a looping
+            // crop window so the ring KEEPS the window (seamless wraps)
+            uint32_t cap = v->stream_cap;
+            uint32_t limit = (cap && cap < v->play_len) ? cap : v->play_len;
+            uint32_t want = (rv[i].stream_p < limit) ? limit - rv[i].stream_p : 0;
+            if (want > S3_CHUNK_FRAMES) want = S3_CHUNK_FRAMES;
+            // no dribble reads: sub-chunk toppers are only worth the SD
+            // round-trip when they FINISH the file — a moving cap edge is
+            // already covered by its 2-chunk margin
+            if (want && want < 1024 && rv[i].stream_p + want < v->play_len)
+                want = 0;
+            if (want && lead < S3_RING_FRAMES - 2 * S3_CHUNK_FRAMES) {
                 uint32_t got = read_playback_frames(v, rv[i].f, rv[i].stream_p, want, stage, stage);
                 if (got > 0) {
                     uint32_t w = rv[i].stream_p % S3_RING_FRAMES;
@@ -319,9 +337,12 @@ static void reader_task(void *pv)
                     v->wpos = rv[i].stream_p;
                     worked = true;
                 }
-                if (v->loading && (v->wpos - v->rpos_i >= S3_LOW_WATER || v->wpos >= v->play_len))
+                uint32_t buffered = (v->wpos > v->rpos_i) ? v->wpos - v->rpos_i : 0;
+                if (v->loading && (buffered >= S3_LOW_WATER || v->wpos + 1024 >= limit))
                     v->loading = false;
-            } else if (v->loading && v->wpos >= v->play_len) {
+            } else if (v->loading && v->wpos + 1024 >= limit) {
+                // a windowed refill smaller than LOW_WATER still completes;
+                // "within the dribble margin of the cap" counts as done
                 v->loading = false;
             }
         }
@@ -347,20 +368,15 @@ void s3_load_sample(int vid, const char *name)
     v->load_req = true;
 }
 
-void s3_set_window(int vid, float start_pct, float len_pct, bool reverse)
+void s3_set_reverse(int vid, bool reverse)
 {
     if (vid < 0 || vid >= S3_NVOICES) return;
     s3_voice_t *v = &s3.v[vid];
-    if (start_pct < 0) start_pct = 0;
-    if (start_pct > 0.99f) start_pct = 0.99f;
-    if (len_pct < 0.01f) len_pct = 0.01f;
-    if (len_pct > 1.0f) len_pct = 1.0f;
-    v->start_pct = start_pct;
-    v->len_pct = len_pct;
+    if (v->reverse == reverse) return;
     v->reverse = reverse;
     if (v->name[0]) {
         v->loading = true;
-        v->window_req = true;      // reader rebuilds head + stream
+        v->window_req = true;      // reader rebuilds head + stream (reversed)
     }
 }
 
@@ -435,11 +451,22 @@ static esp_err_t s3_start(void)
             return ESP_ERR_NO_MEM;
         }
         v->level = 1.0f;
-        v->len_pct = 1.0f;
-        v->v1oct = false;
-        v->cv67_dest = S3_CV67_SPEED;    // speed-on-knob is how this machine works
+        v->crop_start = 0;
+        v->crop_len = 1.0f;
+        v->ui_cs = 0;
+        v->ui_ce = 1.0f;
+        v->src_speed = 5 + i;            // CV6/CV7: speed-on-knob is how this
+        v->src_start = -1;               // machine works (the good knobs)
+        v->src_len = -1;
+        v->crop_mode = S3_CROP_FREE;
+        v->cs_sm = 0;
+        v->ln_sm = 1.0f;
+        v->ui_cs_min = 1.0f;             // jitter meter: extremes converge in
+        v->ui_cs_max = 0;
+        v->q_cs = 0;
+        v->q_ln = 1 << 20;               // clamps down to the take length
         v->playmode = S3_MODE_LOOP;      // preset feel (Arlo): loops by default
-        v->cv_floor = 4095;
+        s3.cv12_floor[i] = 4095;         // converge down on first reads
     }
     s3.clk_src = 7;                      // CV8, same convention as deck/glitch
     s3.clk_base = 4095;                  // floor tracker converges down
@@ -485,6 +512,25 @@ static inline bool s3_frame_ok(const s3_voice_t *v, uint32_t f, bool resident)
     return (v->wpos - f) <= (S3_RING_FRAMES - S3_CHUNK_FRAMES);
 }
 
+// matrix CV read — from the MEDIAN-conditioned snapshot (WiFi-burst ADC
+// spikes of ±80 counts punched through slew + hysteresis: jumpy crop
+// points). ch1/2 (1V/oct jacks) idle ~21% up the scale by analog design —
+// rescale from the tracked floor so a patched mod source spans the full
+// 0..4095 range instead of starting a fifth of the way up.
+static inline int s3_mod_read(const machine_io_t *io, int src)
+{
+    (void)io;
+    int c = s3.cv_med[src & 7];
+    if ((src & 7) < 2) {
+        int fl = s3.cv12_floor[src & 7];
+        if (fl > 3800) return 0;              // tracker not converged / dead ch
+        c = (int)((int32_t)(c - fl) * 4095 / (4095 - fl));
+        if (c < 0) c = 0;
+        if (c > 4095) c = 4095;
+    }
+    return c;
+}
+
 static void s3_process(int32_t out[MACHINE_BLOCK],
                        const int32_t in[MACHINE_BLOCK],
                        const machine_io_t *io)
@@ -494,6 +540,28 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
 
     uint8_t fell = prev_trig & (~io->trig_level) & 0x03;
     prev_trig = io->trig_level;
+
+    // ch1/2 floor trackers: dips follow instantly, drift back up slowly
+    // (the deck clk_base pattern)
+    for (int c = 0; c < 2; c++) {
+        int cv = io->cv[c];
+        if (cv < s3.cv12_floor[c]) s3.cv12_floor[c] = cv;
+        else if (s3.cv12_floor[c] < 4095) s3.cv12_floor[c]++;
+    }
+
+    // median-of-5 CV conditioning: one snapshot per block for all matrix
+    // reads. Impulse spikes (WiFi bursts) vanish; sustained knob moves lag
+    // by two blocks (~3 ms) — imperceptible.
+    for (int c = 0; c < 8; c++) {
+        s3.cv_hist[c][s3.cv_hp] = io->cv[c];
+        uint16_t m[5];
+        memcpy(m, s3.cv_hist[c], sizeof(m));
+        for (int a = 0; a < 4; a++)              // tiny insertion sort
+            for (int b = a + 1; b < 5; b++)
+                if (m[b] < m[a]) { uint16_t t = m[a]; m[a] = m[b]; m[b] = t; }
+        s3.cv_med[c] = m[2];
+    }
+    s3.cv_hp = (s3.cv_hp + 1) % 5;
 
     // Gate workflow (Arlo, 2026-07-12): press triggers the voice as usual;
     // HOLD ~1 s while idle = arm the track. Armed: press = start recording,
@@ -530,9 +598,10 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                 // a locked clock, start lands ON the next pulse and stop on
                 // the next whole beat (loop-ready lengths); free-run acts now.
                 // trigger/finish are bare atomics — audio-task safe.
+                bool clk_ok = s3.clk.locked || s3.int_bpm > 0.5f;
                 if (!recording_is_active()) {
                     rec_started_this_press[i] = true;
-                    if (s3.clk.locked) {
+                    if (clk_ok) {
                         s3.rec_wait_vid = i;          // start on the next pulse
                     } else {
                         recording_trigger();
@@ -542,7 +611,7 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                         s3.rec_first_pulse = 0;
                     }
                 } else {
-                    if (s3.clk.locked) s3.rec_stop_wait = true;   // stop on the beat
+                    if (clk_ok) s3.rec_stop_wait = true;   // stop on the beat
                     else recording_finish();
                 }
             } else if (v->name[0] && v->head_valid) {
@@ -552,11 +621,18 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                     // instead of blasting a retrigger)
                     v->playing = false;
                 } else {
-                    // trigger: instant from the head cache; reader restarts the stream
-                    v->pos = 0;
+                    // trigger from the crop start (last block's effective crop;
+                    // instant when it's in the head, a resident sample, OR
+                    // still sitting in the ring's trailing window)
+                    uint32_t cs_f = (uint32_t)(v->ui_cs * (float)v->play_len);
+                    v->pos = cs_f;
                     v->playing = true;
-                    if (v->play_len > v->head_frames) {
+                    bool resident = (v->play_len <= v->head_frames + S3_RING_FRAMES) &&
+                                    v->wpos >= v->play_len;
+                    if (v->play_len > v->head_frames &&
+                        !s3_frame_ok(v, cs_f, resident)) {
                         v->loading = true;     // parks ring reads until refilled
+                        v->seek_frame = cs_f;  // reader clamps below head_frames
                         v->retrig_req = true;
                     }
                 }
@@ -601,16 +677,16 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         bool muted = (rec_active && rec_vid == i) ||
                      (s3.arm_mutes && recording_get_trig_func(i) == TRIG_FUNC_RECORD);
 
-        // rate = CV6/7 through-zero speed (when assigned) x optional 1V/oct.
+        // rate = through-zero speed from the assigned CV (matrix source).
         // Speed curve (Arlo): knob center = unity; CW half sweeps to +150%;
         // CCW half sweeps down THROUGH ZERO into reverse, clamped at -100%.
         // Plateaus at unity and zero make both dependable knob targets.
         float rate = 1.0f;
-        if (v->cv67_dest == S3_CV67_SPEED) {
+        if (v->src_speed >= 0) {
+            int pc = s3_mod_read(io, v->src_speed);
             // sticky unity: a wide dead zone in knob counts around centre,
             // each side rescaled from the plateau edge (no value jump)
             const int DZ = 180;
-            int pc = io->cv[5 + i];             // CV6 -> voice 1, CV7 -> voice 2
             if (pc >= 2048 - DZ && pc <= 2048 + DZ)
                 rate = 1.0f;
             else if (pc > 2048 + DZ)
@@ -619,8 +695,77 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                 rate = -1.0f + 2.0f * (float)pc / (float)(2048 - DZ);
             if (rate > -0.04f && rate < 0.04f) rate = 0.0f;   // dependable stop
         }
-        if (v->v1oct) rate *= s3_keyboard_pitch(io->cv[i]);   // ch1/2 jacks
         v->cur_rate = rate;                     // UI: native-speed badge
+
+        // effective CROP this block: stored params, overridden live by any
+        // assigned CV (performable — pure math, nothing touches the reader).
+        // Sampler2 semantics: START + LENGTH. Start slides the WHOLE window,
+        // length rides along; at EOF the length gives way (and comes back as
+        // start retreats). Speed/Start/Length each have their own CV source.
+        float cs = 0, ln = 1.0f;
+        if (v->crop_mode != S3_CROP_OFF) {
+            cs = v->crop_start;
+            ln = v->crop_len;
+            if (v->src_start >= 0) cs = (float)s3_mod_read(io, v->src_start) / 4095.0f * 0.98f;
+            if (v->src_len >= 0)   ln = 0.02f + (float)s3_mod_read(io, v->src_len) / 4095.0f * 0.98f;
+        }
+        // slew: raw ADC noise jitters the window by 10s of ms on long takes —
+        // jumpy crop shading, and the start noise kept re-snapping the
+        // playhead ("plays a couple clicks and starts over")
+        v->cs_sm += 0.05f * (cs - v->cs_sm);
+        v->ln_sm += 0.05f * (ln - v->ln_sm);
+        cs = v->cs_sm;
+        ln = v->ln_sm;
+        float ce;
+        // tempo-QUANTIZED crop: start and length snap to whole beats of the
+        // take's stamped tempo. Adopted indices move only when the continuous
+        // value clearly leaves the current beat (0.6-beat hysteresis).
+        if (v->crop_mode == S3_CROP_QUANT && v->bpm > 20.0f && v->play_len) {
+            float bf = 60.0f * 44100.0f / v->bpm;        // frames per beat
+            float nb = (float)v->play_len / bf;          // beats in the take
+            if (nb >= 2.0f) {
+                int nbi = (int)(nb + 0.5f);
+                float cb = cs * nb, lb = ln * nb;        // continuous beats
+                if (cb - (float)v->q_cs > 0.6f || (float)v->q_cs - cb > 0.6f)
+                    v->q_cs = (int)(cb + 0.5f);
+                if (lb - (float)v->q_ln > 0.6f || (float)v->q_ln - lb > 0.6f)
+                    v->q_ln = (int)(lb + 0.5f);
+                if (v->q_cs < 0) v->q_cs = 0;
+                if (v->q_cs > nbi - 1) v->q_cs = nbi - 1;
+                if (v->q_ln < 1) v->q_ln = 1;
+                if (v->q_ln > nbi) v->q_ln = nbi;
+                cs = (float)v->q_cs / nb;
+                ln = (float)v->q_ln / nb;
+            }
+        }
+        ce = cs + ln;
+        if (ce > 1.0f) ce = 1.0f;               // length gives way at EOF
+        if (cs > ce - 0.02f) cs = ce - 0.02f;
+        if (cs < 0) cs = 0;
+        v->ui_cs = cs;                          // UI shades from these
+        v->ui_ce = ce;
+        if (cs < v->ui_cs_min) v->ui_cs_min = cs;   // jitter meter extremes
+        if (cs > v->ui_cs_max) v->ui_cs_max = cs;
+        // windowed streaming: while LOOPing, cap the stream just past the
+        // window — the reader must not race to EOF and evict the very window
+        // from the ring (that forced a seek+mute at every wrap). Full-file
+        // windows and small (residency-bound) samples stream uncapped.
+        // CHUNK-quantized: the slewed window edge creeps a few frames per
+        // block, and a raw cap turned that into thousands of dribble SD
+        // reads per second (SD-bus thrash = mid-playback clicks + starved
+        // WiFi/httpd tasks).
+        if (v->play_len > v->head_frames + S3_RING_FRAMES &&
+            v->playmode == S3_MODE_LOOP) {
+            uint32_t cap = (uint32_t)(ce * (float)v->play_len) + 2 * S3_CHUNK_FRAMES;
+            cap = ((cap + S3_CHUNK_FRAMES - 1) / S3_CHUNK_FRAMES) * S3_CHUNK_FRAMES;
+            v->stream_cap = cap;
+        } else {
+            v->stream_cap = 0;
+        }
+        uint32_t cs_f = (uint32_t)(cs * (float)v->play_len);
+        uint32_t ce_f = (uint32_t)(ce * (float)v->play_len);
+        if (ce_f > v->play_len) ce_f = v->play_len;
+        if (ce_f < cs_f + 64) ce_f = (cs_f + 64 <= v->play_len) ? cs_f + 64 : v->play_len;
 
         float lg = (v->pan <= 0) ? 1.0f : 1.0f - v->pan;
         float rg = (v->pan >= 0) ? 1.0f : 1.0f + v->pan;
@@ -633,34 +778,91 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         bool resident = (v->play_len <= v->head_frames + S3_RING_FRAMES) &&
                         v->wpos >= v->play_len;
 
+        // window-motion detector: while a fast start sweep is in flight, an
+        // unbuffered snap must NOT seek every block (seek + 0.25s refill +
+        // window moved on = one long mute for the whole sweep). Hold off;
+        // the landing fires one clean seek. Slow sweeps (LFO) stay "still".
+        {
+            uint32_t d = (cs_f > v->last_cs_f) ? cs_f - v->last_cs_f
+                                               : v->last_cs_f - cs_f;
+            v->last_cs_f = cs_f;
+            if (d > (v->play_len >> 10)) v->cs_moving = 24;    // ~35 ms hold
+            else if (v->cs_moving) v->cs_moving--;
+        }
+
+        // loop-seam crossfade length: the last xf frames of the window blend
+        // into its first xf frames (takes are beat-exact but not amplitude-
+        // matched at the seam — the raw splice clicked every wrap once the
+        // wraps went gapless)
+        uint32_t xf = S3_XFADE_FRAMES;
+        if (ce_f > cs_f && xf > (ce_f - cs_f) / 4) xf = (ce_f - cs_f) / 4;
+        if (xf < 8) xf = 0;
+
         bool starved = false;
         for (int fno = 0; fno < frames; fno++) {
-            // window edges first: forward end wraps (loop) or stops (one-shot);
-            // reverse start wraps-to-end only when the whole window is resident
+            // CROP edges first: forward end wraps (loop) or stops (one-shot);
+            // reverse start wraps-to-end only when the whole window is resident.
+            // KEY: a wrap/snap whose target is still in the ring (it holds ~4s
+            // behind the stream head) is pure cursor math — NO seek, NO gap.
+            // Crop windows within ring reach loop and slide seamlessly.
             if (v->playing && v->head_valid) {
-                if (rate >= 0 && v->pos >= (double)v->play_len - 1.0) {
+                if (rate >= 0 && v->pos >= (double)ce_f - 1.0) {
                     if (v->playmode == S3_MODE_LOOP) {
-                        v->pos = 0;
-                        if (!resident && v->play_len > v->head_frames) {
+                        if (v->play_len > v->head_frames &&
+                            !s3_frame_ok(v, cs_f, resident)) {
+                            v->pos = (double)cs_f;
                             v->loading = true;
+                            v->seek_frame = cs_f;
                             v->retrig_req = true;
+                        } else {
+                            // crossfade already blended in [cs, cs+xf):
+                            // continue right after it — no double-hearing
+                            v->pos = (double)(cs_f + xf);
+                            // PREFETCH: wrap landed in the HEAD but the ring
+                            // is stale (still holds the pre-wrap tail) —
+                            // rewind the stream NOW, while the head plays,
+                            // so the handoff at head-end is seamless. No
+                            // `loading`: audio never stops.
+                            if (v->play_len > v->head_frames &&
+                                cs_f + xf + 2048 < v->head_frames &&
+                                !s3_frame_ok(v, v->head_frames, resident) &&
+                                !v->retrig_req) {
+                                v->seek_frame = v->head_frames;
+                                v->retrig_req = true;
+                            }
                         }
                     } else {
                         v->playing = false;
                     }
-                } else if (rate < 0 && v->pos <= 0) {
+                } else if (rate < 0 && v->pos <= (double)cs_f) {
                     if (v->playmode == S3_MODE_LOOP && resident)
-                        v->pos = (double)v->play_len - 1.001;
-                    // else: park at 0 until the knob comes back positive
+                        v->pos = (double)ce_f - 1.001;
+                    // else: park at the crop start till the knob comes back
+                }
+                // crop start swept above the cursor (live performance): snap
+                // in — but only past a 1%-of-take hysteresis band, so residual
+                // point wobble can't hold the playhead hostage at the start
+                if (v->playmode == S3_MODE_LOOP && rate > 0 &&
+                    v->pos < (double)cs_f - (double)v->play_len / 100.0) {
+                    if (s3_frame_ok(v, cs_f, resident)) {
+                        v->pos = (double)cs_f;             // buffered: instant
+                    } else if (!v->cs_moving && v->play_len > v->head_frames) {
+                        v->pos = (double)cs_f;             // landed: one seek
+                        v->loading = true;
+                        v->seek_frame = cs_f;
+                        v->retrig_req = true;
+                    }
+                    // else: sweep in flight over unbuffered ground — keep
+                    // playing what we have; the landing snaps us in
                 }
             }
             uint32_t p = (uint32_t)(v->pos < 0 ? 0 : v->pos);
             bool have = s3_frame_ok(v, p, resident) && s3_frame_ok(v, p + 1, resident) &&
-                        (p + 1) < v->play_len;
+                        (p + 1) < ce_f;
             bool can_play = v->playing && !muted && v->head_valid &&
                             rate != 0.0f && have;
             if (v->playing && !muted && v->head_valid && !have && !v->loading &&
-                (p + 1) < v->play_len)
+                (p + 1) < ce_f)
                 starved = true;
             float gt = can_play ? 1.0f : 0.0f;
             v->out_gain += (gt - v->out_gain) * 0.015f;
@@ -675,16 +877,71 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
             s3_fetch(v, p, &l0, &r0);
             s3_fetch(v, p + 1, &l1, &r1);
             float fr = (float)(v->pos - (double)p);
-            float l = (l0 + (l1 - l0) * fr) * lg * v->out_gain;
-            float r = (r0 + (r1 - r0) * fr) * rg * v->out_gain;
+            float lraw = l0 + (l1 - l0) * fr;
+            float rraw = r0 + (r1 - r0) * fr;
+            // loop-seam crossfade: inside the fade zone blend the incoming
+            // window start in (pure buffered reads — the capped stream keeps
+            // the whole window in RAM)
+            if (v->playmode == S3_MODE_LOOP && rate > 0 && xf &&
+                p >= ce_f - xf && p < ce_f) {
+                uint32_t p2 = cs_f + (p - (ce_f - xf));
+                if (s3_frame_ok(v, p2, resident) &&
+                    s3_frame_ok(v, p2 + 1, resident)) {
+                    float m0, n0, m1, n1;
+                    s3_fetch(v, p2, &m0, &n0);
+                    s3_fetch(v, p2 + 1, &m1, &n1);
+                    float k = (float)(ce_f - p) / (float)xf;   // 1 -> 0
+                    lraw = lraw * k + (m0 + (m1 - m0) * fr) * (1.0f - k);
+                    rraw = rraw * k + (n0 + (n1 - n0) * fr) * (1.0f - k);
+                }
+            }
+            float l = lraw * lg * v->out_gain;
+            float r = rraw * rg * v->out_gain;
             v->last_l = l;
             v->last_r = r;
             mix_l[fno] += l;
             mix_r[fno] += r;
             v->pos += rate;
+            if (rate < 0 && v->pos < (double)cs_f) v->pos = (double)cs_f;
             if (v->pos < 0) v->pos = 0;
         }
         if (starved) v->dbg_starve++;
+        // self-heal a teleported cursor. Sampler2 kept the playhead inside
+        // the crop zone by snapping it back; here the STREAM must follow the
+        // snap too — a crop-CV sweep that lands the cursor outside the
+        // buffered window otherwise starves the voice forever (no loop wrap
+        // ever fires the seek, and the reader's lead froze — the deadlock
+        // family). One shot: loading parks the engine until the refill lands.
+        if (starved && !v->loading && !v->retrig_req &&
+            v->play_len > v->head_frames) {
+            uint32_t p = (uint32_t)(v->pos < 0 ? 0 : v->pos);
+            // the interpolator needs p AND p+1 — gate on the frame that's
+            // actually MISSING. (p parked on the LAST head frame with a
+            // stale ring wedged forever: p itself was fine, p+1 wasn't,
+            // and a p-based gate never fired. Off by one, 189k starves.)
+            uint32_t miss = !s3_frame_ok(v, p, resident) ? p : p + 1;
+            bool ahead  = miss >= v->wpos + S3_CHUNK_FRAMES;   // teleport, not a crawl
+            bool behind = v->wpos > miss &&
+                          (v->wpos - miss) > (S3_RING_FRAMES - S3_CHUNK_FRAMES);
+            if (miss >= v->head_frames && (ahead || behind)) {
+                v->loading = true;
+                v->seek_frame = p;          // reader clamps up to head_frames
+                v->retrig_req = true;
+                v->dbg_heal++;
+            }
+            // sledgehammer: ANY starve that persists ~150ms is a wedge some
+            // gate above failed to classify — seek to the cursor regardless
+            v->starve_run++;
+            if (v->starve_run > 100 && !v->retrig_req) {
+                v->loading = true;
+                v->seek_frame = p;
+                v->retrig_req = true;
+                v->starve_run = 0;
+                v->dbg_heal++;
+            }
+        } else if (!starved) {
+            v->starve_run = 0;
+        }
         // per-block integer mirror for the reader's throttle + the UI bar
         v->rpos_i = (uint32_t)(v->pos < 0 ? 0 : v->pos);
     }
@@ -730,6 +987,24 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         else edge_since = 0;
     }
 
+    // internal clock: when no external clock is locked (external always wins),
+    // a settable-BPM metronome supplies the sync pulses — the whole synced
+    // workflow (quantized takes, tempo stamp, in-phase re-entry) works
+    // standalone. 4 pulses per beat, like the external convention.
+    bool ext_lock = s3.clk.locked;
+    bool int_on = !ext_lock && s3.int_bpm > 0.5f;
+    bool clk_ok = ext_lock || int_on;
+    if (int_on) {
+        uint32_t ip = (uint32_t)(44100.0f * 60.0f / (s3.int_bpm * 4.0f));
+        s3.int_since += (uint32_t)frames;
+        if (s3.int_since >= ip) {
+            s3.int_since -= ip;
+            edge = true;                       // internal pulse
+        }
+    } else {
+        s3.int_since = 0;
+    }
+
     // ---- clock-synced capture bookkeeping (audio-task-owned) ----------------
     s3.post_stop_frames += (uint32_t)frames;   // free-runs; reset at synced stop
     if (recording_is_active()) {
@@ -742,13 +1017,15 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                 recording_finish();                    // stop ON the whole beat
                 s3.rec_stop_wait = false;
                 s3.post_stop_frames = 0;               // phase ref for sync re-entry
-                if (s3.clk.locked && s3.clk.bpm > 0) {
-                    s3.rec_bpm = s3.clk.bpm / 4.0f;    // pulse rate -> beat bpm
+                float bpm = ext_lock && s3.clk.bpm > 0 ? s3.clk.bpm / 4.0f
+                          : int_on ? s3.int_bpm : 0;
+                if (bpm > 0) {
+                    s3.rec_bpm = bpm;
                     s3.rec_stamp_req = true;           // reader amends the sidecar
                 }
             }
         }
-        if (s3.rec_stop_wait && !s3.clk.locked) {
+        if (s3.rec_stop_wait && !clk_ok) {
             recording_finish();                        // clock died mid-wait
             s3.rec_stop_wait = false;
         }
@@ -756,30 +1033,34 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
 
     // synced re-entry: a fresh clock-synced take starts ON a pulse, its play
     // position offset by the frames elapsed since the stop edge — the loop
-    // comes in exactly in phase, however long the save/load took
+    // comes in exactly in phase, however long the save/load took. Position
+    // maps into the CROP window (fresh takes default to the full sample).
     for (int i = 0; i < S3_NVOICES; i++) {
         s3_voice_t *v = &s3.v[i];
         if (!v->sync_start_req) continue;
-        if (!s3.clk.locked) {                          // clock gone: just start
-            v->pos = 0;
+        uint32_t cs_f = (uint32_t)(v->ui_cs * (float)v->play_len);
+        uint32_t ce_f = (uint32_t)(v->ui_ce * (float)v->play_len);
+        uint32_t L = (ce_f > cs_f) ? ce_f - cs_f : (v->play_len ? v->play_len : 1);
+        if (!clk_ok) {                                 // clock gone: just start
+            v->pos = (double)cs_f;
             v->playing = true;
             v->sync_start_req = false;
         } else if (edge && v->play_len) {
-            v->pos = (double)(s3.post_stop_frames % v->play_len);
+            v->pos = (double)(cs_f + (s3.post_stop_frames % L));
             v->playing = true;
             v->sync_start_req = false;
         }
     }
 
     if (!recording_is_active() && s3.rec_wait_vid >= 0) {
-        if (edge && s3.clk.locked) {
+        if (edge && clk_ok) {
             recording_trigger();                       // start ON the pulse:
             s3.rec_synced = true;                      // downbeat = frame 0
             s3.rec_frames = 0;
             s3.rec_pulses = 0;
             s3.rec_first_pulse = 0;
             s3.rec_wait_vid = -1;
-        } else if (!s3.clk.locked) {
+        } else if (!clk_ok) {
             recording_trigger();                       // clock died: free-run now
             s3.rec_synced = false;
             s3.rec_frames = 0;
@@ -799,6 +1080,7 @@ static cJSON *s3_preset_save(void)
     cJSON_AddBoolToObject(o, "monitor", s3.monitor);
     cJSON_AddBoolToObject(o, "arm_mutes", s3.arm_mutes);
     cJSON_AddNumberToObject(o, "clk_src", s3.clk_src);
+    cJSON_AddNumberToObject(o, "int_bpm", s3.int_bpm);
     cJSON *va = cJSON_CreateArray();
     cJSON_AddItemToObject(o, "voices", va);
     for (int i = 0; i < S3_NVOICES; i++) {
@@ -807,10 +1089,12 @@ static cJSON *s3_preset_save(void)
         cJSON_AddStringToObject(vo, "name", v->name);
         cJSON_AddNumberToObject(vo, "mode", v->playmode);
         cJSON_AddBoolToObject(vo, "rev", v->reverse);
-        cJSON_AddNumberToObject(vo, "start", v->start_pct);
-        cJSON_AddNumberToObject(vo, "len", v->len_pct);
-        cJSON_AddBoolToObject(vo, "v1oct", v->v1oct);
-        cJSON_AddNumberToObject(vo, "cv67", v->cv67_dest);
+        cJSON_AddNumberToObject(vo, "cs", v->crop_start);
+        cJSON_AddNumberToObject(vo, "cl", v->crop_len);
+        cJSON_AddNumberToObject(vo, "m_sp", v->src_speed);
+        cJSON_AddNumberToObject(vo, "m_st", v->src_start);
+        cJSON_AddNumberToObject(vo, "m_ln", v->src_len);
+        cJSON_AddNumberToObject(vo, "cm", v->crop_mode);
         cJSON_AddNumberToObject(vo, "level", v->level);
         cJSON_AddNumberToObject(vo, "pan", v->pan);
         cJSON_AddItemToArray(va, vo);
@@ -833,6 +1117,10 @@ static void s3_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "arm_mutes"))) s3.arm_mutes = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j))
         s3.clk_src = j->valueint & 7;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "int_bpm")) && cJSON_IsNumber(j)) {
+        float b = (float)j->valuedouble;
+        s3.int_bpm = (b >= 40.0f && b <= 240.0f) ? b : 0;
+    }
     cJSON *va = cJSON_GetObjectItemCaseSensitive(node, "voices");
     for (int i = 0; i < S3_NVOICES; i++) {
         cJSON *vo = va ? cJSON_GetArrayItem(va, i) : NULL;
@@ -841,17 +1129,45 @@ static void s3_preset_load(const cJSON *node)
         if ((j = cJSON_GetObjectItemCaseSensitive(vo, "mode")) && cJSON_IsNumber(j))
             v->playmode = j->valueint == S3_MODE_LOOP ? S3_MODE_LOOP : S3_MODE_ONESHOT;
         if ((j = cJSON_GetObjectItemCaseSensitive(vo, "rev"))) v->reverse = cJSON_IsTrue(j);
-        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "start")) && cJSON_IsNumber(j)) {
+        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "cs")) && cJSON_IsNumber(j)) {
             float s = (float)j->valuedouble;
-            v->start_pct = (s < 0 || s > 0.99f) ? 0 : s;
+            v->crop_start = (s < 0 || s > 0.98f) ? 0 : s;
         }
-        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "len")) && cJSON_IsNumber(j)) {
+        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "cl")) && cJSON_IsNumber(j)) {
             float l = (float)j->valuedouble;
-            v->len_pct = (l < 0.01f || l > 1.0f) ? 1.0f : l;
+            v->crop_len = (l < 0.02f || l > 1.0f) ? 1.0f : l;
+        } else if ((j = cJSON_GetObjectItemCaseSensitive(vo, "ce")) && cJSON_IsNumber(j)) {
+            // pre-start+length blob: end point converts to a length
+            float l = (float)j->valuedouble - v->crop_start;
+            v->crop_len = (l < 0.02f || l > 1.0f) ? 1.0f : l;
         }
-        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "v1oct"))) v->v1oct = cJSON_IsTrue(j);
-        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "cv67")) && cJSON_IsNumber(j))
-            v->cv67_dest = (j->valueint == S3_CV67_OFF) ? S3_CV67_OFF : S3_CV67_SPEED;
+        // matrix sources (-1 off / 0..7). A pre-matrix v2 blob carries the
+        // legacy single-dest "cv67" key instead — migrate it to the slot it
+        // used to drive (source was fixed at CV6/CV7 per voice back then).
+        bool have_matrix = false;
+        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "m_sp")) && cJSON_IsNumber(j)) {
+            v->src_speed = (j->valueint >= 0 && j->valueint <= 7) ? j->valueint : -1;
+            have_matrix = true;
+        }
+        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "m_st")) && cJSON_IsNumber(j))
+            v->src_start = (j->valueint >= 0 && j->valueint <= 7) ? j->valueint : -1;
+        if (((j = cJSON_GetObjectItemCaseSensitive(vo, "m_ln")) && cJSON_IsNumber(j)) ||
+            ((j = cJSON_GetObjectItemCaseSensitive(vo, "m_en")) && cJSON_IsNumber(j)))
+            v->src_len = (j->valueint >= 0 && j->valueint <= 7) ? j->valueint : -1;
+        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "cm")) && cJSON_IsNumber(j))
+            v->crop_mode = (j->valueint >= 0 && j->valueint <= 2) ? j->valueint
+                                                                  : S3_CROP_FREE;
+        if (!have_matrix &&
+            (j = cJSON_GetObjectItemCaseSensitive(vo, "cv67")) && cJSON_IsNumber(j)) {
+            v->src_speed = -1;
+            v->src_start = -1;
+            v->src_len = -1;
+            switch (j->valueint) {
+                case 1: v->src_speed = 5 + i; break;
+                case 2: v->src_start = 5 + i; break;
+                case 3: v->src_len   = 5 + i; break;
+            }
+        }
         if ((j = cJSON_GetObjectItemCaseSensitive(vo, "level")) && cJSON_IsNumber(j)) {
             float lv = (float)j->valuedouble;
             v->level = (lv < 0 || lv > 1.0f) ? 1.0f : lv;
