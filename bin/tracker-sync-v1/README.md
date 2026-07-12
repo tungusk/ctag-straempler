@@ -1,9 +1,21 @@
-# tracker-sync-v1
+# tracker-sync-v1 (v1.1 refresh)
 
 The clock-hardening + tracker-sync milestone: every tempo-following machine
 now survives dirty clock signals, and the Tracker locks to the external
-clock for the first time. Snapshot of commit `cf95860` (tag
-`tracker-sync-v1-20260711`). Flash with `./flash.sh [PORT]`.
+clock for the first time. **v1.1 refresh = commit `a1aa234`** (tag
+`tracker-sync-v1.1-20260712`; originally cut at `cf95860`). Flash with
+`./flash.sh [PORT]`.
+
+## v1.1 refresh (measurement-session night)
+
+- **Deck lock, final numbers: beats land +2.0 ms from the pulse, 1.08 ms
+  std, 100% within ±7 ms** (240-beat capture) — fixed-time lock lead
+  (13.1 ms commanded) tuned by two-channel capture.
+- Detector lock-chain fixed: lower-middle median (median-of-2 took the
+  LARGER interval — one missed boot pulse crowned a half-tempo lock the
+  ghost guard then cemented) + faster-clock escape via raw edge cadence
+  (rate-ups relock in ~0.75 s instead of deadlocking).
+- /status v1 debug gains g/L/n (ghost-run / locked / ring-fill).
 
 ## New since deck-v2
 

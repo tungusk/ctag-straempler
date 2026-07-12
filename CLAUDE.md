@@ -55,8 +55,10 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   runs in the audio task once per 64-sample block; no SD/heap/blocking there.
 - **Registry**: `main/machine_registry.c` is the ONLY file outside a machine's
   own component that may name a machine symbol. Registry (selector order):
-  Sampler / Sampler2 / Looper / Slicer / Granular / Glitch / Drums / Deck /
-  Freesound / Stub. **Stub is HIDDEN from the System→Machine selector**
+  Sampler0 / Sampler / Looper / Slicer / Granular / Glitch / Drums / Deck /
+  Tracker / Freesound / Stub. (Display names: "Sampler" = the extended
+  engine in machine_sampler2; "Sampler0" = the frozen original in
+  machine_sampler.) **Stub is HIDDEN from the System→Machine selector**
   (skipped by name in `machine_sel_def_handler`, `menu.c`) but stays in the
   registry as fallback + proof target; the selector uses a parallel
   `machines[]` array so the hidden entry doesn't desync the on-screen index.
