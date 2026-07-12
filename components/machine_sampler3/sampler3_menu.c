@@ -365,8 +365,8 @@ static int s3_load_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Record ---------------------------------------------------------------------
-static const char *rec_labels[] = {"Arm V1", "Arm V2", "Monitor"};
-#define S3_REC_N 3
+static const char *rec_labels[] = {"Arm V1", "Arm V2", "Monitor", "Arm mutes"};
+#define S3_REC_N 4
 
 static void rec_redraw(int pos){
     TFT_resetclipwin();
@@ -382,7 +382,8 @@ static void rec_redraw(int pos){
         TFT_print((char*)rec_labels[i], 8, y);
         char val[24];
         if (i < 2) snprintf(val, sizeof(val), "%s", s3.arm_target == i ? "ARMED" : "-");
-        else snprintf(val, sizeof(val), "%s", s3.monitor ? "ON" : "OFF");
+        else if (i == 2) snprintf(val, sizeof(val), "%s", s3.monitor ? "ON" : "OFF");
+        else snprintf(val, sizeof(val), "%s", s3.arm_mutes ? "ON" : "OFF");
         if (i < 2 && s3.arm_target == i) _fg = COL_ARM;
         TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
     }
@@ -417,7 +418,8 @@ static int s3_rec_handler(int it_id, int event, void *ev_data){
         case EV_BWD: pos = (pos + S3_REC_N - 1) % S3_REC_N; rec_redraw(pos); break;
         case EV_SHORT_PRESS:
             if (pos < 2) s3_toggle_arm(pos);
-            else s3.monitor = !s3.monitor;
+            else if (pos == 2) s3.monitor = !s3.monitor;
+            else s3.arm_mutes = !s3.arm_mutes;
             rec_redraw(pos);
             break;
         case EV_LONG_PRESS: return M_S3_LIVE;
