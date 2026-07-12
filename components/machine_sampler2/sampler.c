@@ -41,6 +41,7 @@
 #define BIT_VOICE0_RETRIG 0x08
 #define BIT_VOICE1_RETRIG 0x10
 #define BIT_CONTROL_DATA 0x04
+#define BIT_REC_AUTOLOAD 0x20
 #define SAMPLE_RATE 44100
 #define FRACTION_MASK 0x1ff
 #define DELAY_MAX_LENGTH_MS 1500.0
@@ -228,6 +229,44 @@ static void file_reader_task_2(void *pvParams)
     }
 }
 
+// recording auto-load handoff: sampler_process() (audio task) only records the
+// request and notifies; file_manipulation_task applies it. The old in-process()
+// path did cJSON + f_open + first f_read inside the audio callback and raced
+// the file reader tasks over the FIL handles → LoadStoreError panic on every
+// record-stop (captured on hw 2026-07-12).
+static volatile int s_autoload_vid = 0;
+static char s_autoload_fname[48];
+
+static void apply_rec_autoload(void)
+{
+    int load_vid = s_autoload_vid;
+    const char *load_fname = s_autoload_fname;
+    ESP_LOGI("REC", "Auto-loading %s into voice %d", load_fname, load_vid);
+    cJSON *cfg = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+    if (cfg) {
+        cJSON *slots = cJSON_GetObjectItem(cfg, "slots");
+        cJSON *slot = slots ? cJSON_GetArrayItem(slots, load_vid) : NULL;
+        if (slot) {
+            // derive FatFS path: strip "/sdcard" VFS prefix
+            const char *fatfs_path = load_fname;
+            if (strncmp(load_fname, "/sdcard", 7) == 0) fatfs_path = load_fname + 7;
+            // derive display name: basename without .RAW
+            const char *slash = strrchr(fatfs_path, '/');
+            const char *base = slash ? slash + 1 : fatfs_path;
+            char id[48];
+            int blen = strlen(base);
+            if (blen >= 4 && strcasecmp(base + blen - 4, ".RAW") == 0) blen -= 4;
+            snprintf(id, sizeof(id), "%.*s", blen, base);
+            cJSON_ReplaceItemInObjectCaseSensitive(slot, "name", cJSON_CreateString(id));
+            cJSON_ReplaceItemInObjectCaseSensitive(slot, "file", cJSON_CreateString(fatfs_path));
+            char *cfg_str = cJSON_Print(cfg);
+            if (cfg_str) { writeJSONFile("/sdcard/CONFIG.JSN", cfg_str); free(cfg_str); }
+        }
+        cJSON_Delete(cfg);
+    }
+    s2_assignAudioFiles();
+}
+
 static void file_manipulation_task(void *pvParams)
 {
     uint32_t uxBits;
@@ -254,6 +293,11 @@ static void file_manipulation_task(void *pvParams)
         if (uxBits & BIT_VOICE_1_TRIG)
         {
             s2_refill_first_buf(&voice[1].playback_engine, &audio_buffers[3], &audio_files[1], &file_mutex[1]);
+        }
+
+        if (uxBits & BIT_REC_AUTOLOAD)
+        {
+            apply_rec_autoload();
         }
     }
 }
@@ -1160,6 +1204,10 @@ static void sampler_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
                 continue;
             }
 
+            // no file loaded (failed open / empty slot) — nothing to trigger
+            if (audio_files[vid].fsize == 0)
+                continue;
+
             // action
             if(event == EV_TRG_DOWN)
             {
@@ -1186,34 +1234,14 @@ static void sampler_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
             }
         }
 
-        // auto-load completed recording into the voice slot
+        // auto-load completed recording into the voice slot — deferred to
+        // file_manipulation_task (no SD/cJSON in the audio task)
         {
             int load_vid; char load_fname[48];
             if (recording_poll_load(&load_vid, load_fname)) {
-                ESP_LOGI("REC", "Auto-loading %s into voice %d", load_fname, load_vid);
-                cJSON *cfg = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
-                if (cfg) {
-                    cJSON *slots = cJSON_GetObjectItem(cfg, "slots");
-                    cJSON *slot = slots ? cJSON_GetArrayItem(slots, load_vid) : NULL;
-                    if (slot) {
-                        // derive FatFS path: strip "/sdcard" VFS prefix
-                        const char *fatfs_path = load_fname;
-                        if (strncmp(load_fname, "/sdcard", 7) == 0) fatfs_path = load_fname + 7;
-                        // derive display name: basename without .RAW
-                        const char *slash = strrchr(fatfs_path, '/');
-                        const char *base = slash ? slash + 1 : fatfs_path;
-                        char id[48];
-                        int blen = strlen(base);
-                        if (blen >= 4 && strcasecmp(base + blen - 4, ".RAW") == 0) blen -= 4;
-                        snprintf(id, sizeof(id), "%.*s", blen, base);
-                        cJSON_ReplaceItemInObjectCaseSensitive(slot, "name", cJSON_CreateString(id));
-                        cJSON_ReplaceItemInObjectCaseSensitive(slot, "file", cJSON_CreateString(fatfs_path));
-                        char *cfg_str = cJSON_Print(cfg);
-                        if (cfg_str) { writeJSONFile("/sdcard/CONFIG.JSN", cfg_str); free(cfg_str); }
-                    }
-                    cJSON_Delete(cfg);
-                }
-                s2_assignAudioFiles();
+                s_autoload_vid = load_vid;
+                strlcpy(s_autoload_fname, load_fname, sizeof(s_autoload_fname));
+                xTaskNotify(s2_file_manipulation_task_handle, BIT_REC_AUTOLOAD, eSetBits);
             }
         }
 
@@ -1444,14 +1472,21 @@ void s2_assignAudioFiles()
 
                         
 
-                        // open file 
+                        // open file
                         strcpy(audio_files[i].fname, filename);
                         fr = f_open(&audio_files[i].fil, audio_files[i].fname, FA_READ);
                         if (fr)
                         {
-                            ESP_LOGE("AUDIO", "Error opening file %s", audio_files[i].fname);
+                            // missing/unreadable file = voice stays unloaded;
+                            // never abort() — a bad CONFIG.JSN slot or failed
+                            // recording must not reboot the whole box
+                            ESP_LOGE("AUDIO", "Error opening file %s (fr=%d) — voice %d unloaded", audio_files[i].fname, fr, i);
                             repairAudioFileAssigment(i);
-                            abort();
+                            audio_files[i].fname[0] = '\0';
+                            audio_files[i].fsize = 0;
+                            sd_lock_give();
+                            xSemaphoreGive(file_mutex[i]);
+                            continue;
                         }
 
                         // enable fastseek on file
@@ -1513,7 +1548,11 @@ static void initAudioStructs()
     bzero(voice_fifos, sizeof(fifo_t) * 2);
     for (int i = 0; i < 6; i++)
     {
-        audio_buffers[i].buf = heap_caps_calloc(SD_BUF_SZ, 1, MALLOC_CAP_INTERNAL);
+        // MALLOC_CAP_DMA, not bare INTERNAL: the allocator may serve INTERNAL
+        // from 32-bit-only IRAM, and FatFS's byte-wise mem_cpy into an IRAM
+        // buffer is a LoadStoreError panic (bit us 2026-07-12; worse as
+        // internal RAM pressure grew). SD reads land here — DMA rule applies.
+        audio_buffers[i].buf = heap_caps_calloc(SD_BUF_SZ, 1, MALLOC_CAP_DMA);
         if (audio_buffers[i].buf == NULL)
         {
             ESP_LOGE("AUDIO", "Failed allocating audio buffer %d", i);
@@ -1549,7 +1588,7 @@ static void initAudioStructs()
         s2_init_filter(voice[i].lowpass_filter, lowpass);
         s2_init_filter(voice[i].highpass_filter, highpass);
         s2_init_fade(&voice[i]);
-        s2_fifo_init(&voice_fifos[i], (int32_t *)heap_caps_calloc(BUF_SZ + 1, sizeof(int32_t), MALLOC_CAP_INTERNAL), BUF_SZ + 1);
+        s2_fifo_init(&voice_fifos[i], (int32_t *)heap_caps_calloc(BUF_SZ + 1, sizeof(int32_t), MALLOC_CAP_DMA), BUF_SZ + 1);
     }
 
     bzero(s2_controlData, sizeof(unsigned int) * 8);
