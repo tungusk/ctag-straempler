@@ -72,11 +72,11 @@ static void draw_lane(int i, bool full){
     int y = LANE_Y(i);
     int st = lane_state(i);
     char line[48];
-    snprintf(line, sizeof(line), "%s%.11s %s%s",
-             i == s_voice_sel ? ">" : " ",
+    snprintf(line, sizeof(line), "%.11s %s%s%s",
              v->name[0] ? v->name : "(empty)",
              v->playmode == S3_MODE_LOOP ? "LP" : "1S",
-             v->reverse ? "R" : "");
+             v->reverse ? "R" : "",
+             i == s_voice_sel ? "\x01" : "");     // \x01 = selection slot marker
     if (full || strcmp(line, s_lane_line[i]) != 0){
         strcpy(s_lane_line[i], line);
         Font f = cfont;
@@ -85,7 +85,16 @@ static void draw_lane(int i, bool full){
         _bg = TFT_BLACK;
         TFT_fillRect(0, y, _width, bfh + 2, _bg);
         _fg = (i == s_voice_sel) ? TFT_WHITE : TFT_LIGHTGREY;
-        TFT_print(line, 6, y);
+        char nm[48];
+        snprintf(nm, sizeof(nm), "%.11s %s%s",
+                 v->name[0] ? v->name : "(empty)",
+                 v->playmode == S3_MODE_LOOP ? "LP" : "1S",
+                 v->reverse ? "R" : "");
+        TFT_print(nm, 6, y);
+        if (i == s_voice_sel){                    // selection marker, RIGHT side
+            _fg = ACCENT;
+            TFT_print("<", _width - TFT_getStringWidth("<") - 6, y);
+        }
         cfont = f;
         s_lane_barx[i] = -1;
     }
