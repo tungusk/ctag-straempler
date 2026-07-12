@@ -89,6 +89,8 @@ static void rec_writer_task(void *pvParams)
     ESP_LOGI(TAG, "Recording to %s", fname);
 
     rec_chunk_t chunk;
+    bool write_err = false;
+    size_t chunks_written = 0;
     while (atomic_load(&rec_active) || uxQueueMessagesWaiting(rec_queue) > 0) {
         if (xQueueReceive(rec_queue, &chunk, pdMS_TO_TICKS(100)) != pdTRUE)
             continue;
@@ -102,19 +104,34 @@ static void rec_writer_task(void *pvParams)
             packed[i] = (int32_t)(((uint32_t)(uint16_t)r << 16) | (uint16_t)l);
         }
         sd_lock_take();
-        fwrite(packed, sizeof(int32_t), REC_CHUNK_SAMPLES / 2, f);
+        size_t n = fwrite(packed, sizeof(int32_t), REC_CHUNK_SAMPLES / 2, f);
         sd_lock_give();
+        if (n != REC_CHUNK_SAMPLES / 2) {
+            // full card / IO error: stop consuming, keep what we have
+            write_err = true;
+            atomic_store(&rec_active, false);
+            break;
+        }
+        chunks_written++;
     }
 
     sd_lock_take();
-    fclose(f);
+    int close_err = fclose(f);
     sd_lock_give();
-    ESP_LOGI(TAG, "Recording saved: %s", fname);
-    write_rec_jsn(fname);
 
-    // Signal the audio task to load this file into the target voice slot
-    memcpy(rec_last_fname, fname, sizeof(rec_last_fname) - 1);
-    atomic_store(&rec_load_pending, true);
+    if (write_err || close_err != 0 || chunks_written == 0) {
+        // do NOT signal auto-load — a truncated/empty file must never be
+        // handed to the machine as a fresh recording
+        ESP_LOGE(TAG, "Recording save FAILED: %s (write_err=%d close_err=%d chunks=%u)",
+                 fname, (int)write_err, close_err, (unsigned)chunks_written);
+    } else {
+        ESP_LOGI(TAG, "Recording saved: %s", fname);
+        write_rec_jsn(fname);
+
+        // Signal the machine to load this file into the target voice slot
+        memcpy(rec_last_fname, fname, sizeof(rec_last_fname) - 1);
+        atomic_store(&rec_load_pending, true);
+    }
 
     rec_task_handle = NULL;
     vTaskDelete(NULL);
