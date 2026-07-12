@@ -1,5 +1,4 @@
 #include "machine.h"
-#include "machine_sampler.h"
 #include "machine_sampler3.h"
 #include "machine_looper.h"
 #include "machine_slicer.h"
@@ -10,8 +9,8 @@
 #include "machine_deck.h"
 #include "machine_tracker.h"
 
-// declared bare: machine_sampler2.h drags the fork's whole type universe,
-// which collides with machine_sampler.h's copy inside a single TU
+// declared bare: machine_sampler2.h drags the legacy fork's whole type
+// universe into any TU that includes it
 extern const machine_t s2_machine_sampler;
 
 // Machines shipped in this firmware, in selector order. This file is the ONLY
@@ -21,7 +20,6 @@ extern const machine_t s2_machine_sampler;
 extern const machine_t machine_stub;   // main/machine_stub.c
 
 const machine_t *const machine_registry[] = {
-    &machine_sampler,        // "Sampler0" — frozen original (removal pending)
     &s2_machine_sampler,     // "Sampler2" — HIDDEN fallback until sampler3 is hw-verified
     &machine_sampler3,       // "Sampler" — the deck-architecture rebuild
     &machine_looper,

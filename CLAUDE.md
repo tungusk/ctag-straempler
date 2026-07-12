@@ -55,13 +55,18 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   runs in the audio task once per 64-sample block; no SD/heap/blocking there.
 - **Registry**: `main/machine_registry.c` is the ONLY file outside a machine's
   own component that may name a machine symbol. Registry (selector order):
-  Sampler0 / Sampler / Looper / Slicer / Granular / Glitch / Drums / Deck /
-  Tracker / Freesound / Stub. (Display names: "Sampler" = the extended
-  engine in machine_sampler2; "Sampler0" = the frozen original in
-  machine_sampler.) **Stub is HIDDEN from the System→Machine selector**
-  (skipped by name in `machine_sel_def_handler`, `menu.c`) but stays in the
-  registry as fallback + proof target; the selector uses a parallel
-  `machines[]` array so the hidden entry doesn't desync the on-screen index.
+  Sampler2 / Sampler / Looper / Slicer / Granular / Glitch / Drums / Deck /
+  Tracker / Freesound / Stub. (Display names: "Sampler" = the deck-pattern
+  rebuild in machine_sampler3; "Sampler2" = the legacy `s2_` fork in
+  machine_sampler2, kept as a fallback until sampler3 has a full hardware
+  verdict, then scheduled for removal. The frozen original machine_sampler
+  ["Sampler0"] was deleted 2026-07-12 — upstream v0.9 remains available via
+  git history and bin/ archives.) **Stub AND Sampler2 are HIDDEN from the
+  System→Machine selector** (skipped by name in both selector paths in
+  `menu.c`; Sampler2 stays reachable via the web Remote tab's machine
+  switch) but stay in the registry as fallback + proof target; the selector
+  uses a parallel `machines[]` array so hidden entries don't desync the
+  on-screen index.
 - **Machine web URIs**: a machine may publish REST endpoints served only while
   it is active (`machine_ui_t.web_uris` = `const httpd_uri_t[]`); the core
   registers/unregisters them on switch via `machine_set_web_cb()`
@@ -83,9 +88,22 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   change touching core or the registry.
 
 The machines (all working; archives in `bin/`):
-- `machine_sampler` — classic, byte-identical, frozen fallback
-- `machine_sampler2` — `s2_`-prefixed fork: crop mode, signed CV matrix
-  amounts, CV-addressable start/length, min-loop guard
+- `machine_sampler3` ("Sampler") — two-voice sampler REBUILT on the deck
+  architecture (2026-07-12): one unpinned reader task owns all SD I/O;
+  per-voice 1s PSRAM head-cache (instant gate retrig + loop wrap) + 4s
+  ring in playback-order frame space (engine is direction-agnostic; the
+  reader maps reverse). Gate-triggered one-shot/loop, reverse, start/len
+  trim, level/pan, per-voice pitch source OFF / 1V-oct(ch1/2) / PB-speed
+  (CV6/7), explicit Record page + ARM/REC banner, auto-pickup of finished
+  recordings (reader-side, never in process()), version-gated autosave
+  (s3v:1 — a foreign "Sampler" blob loads defaults, not garbage). Lean
+  core by design; ADSR/delay/CV-matrix/crop deferred to v2.
+- `machine_sampler2` ("Sampler2", HIDDEN) — legacy `s2_`-prefixed fork:
+  crop mode, signed CV matrix amounts, CV-addressable start/length.
+  Patched 2026-07-12 (deferred auto-load, DMA-capable SD buffers, no
+  abort-on-missing-file) but retains at least one residual race (WDT
+  panic-in-panic minutes into record sessions) — fallback only, removal
+  pending sampler3's full hardware verdict.
 - `machine_looper` — 4-track clock-synced RAM looper, save-to-library, per-track BP filter
 - `machine_slicer` — one stereo sample, grid OR transient slicing + a
   sensitivity dial-in screen
@@ -149,9 +167,10 @@ synced decks + equal-power crossfade on knob6/CV, quantized deck starts)
 cherry-picking the proven parts. Do NOT fold dual into Deck — they stay
 separate machines by design. Resources check out: 2x6s rings ~2.1MB PSRAM,
 SD dual-stream is the classic sampler's proven load.
-Still open: **Sampler3** (deferred fork), Freesound OAuth2, looper overdub,
-granular position-CV, glitch grid-align. Original-import machine dropped
-(machine_sampler already IS the upstream v0.9 engine).
+Still open: Freesound OAuth2, looper overdub, granular position-CV, glitch
+grid-align, sampler2 removal (gated on sampler3's full hardware verdict),
+sampler3 v2 features (ADSR, delay, CV matrix, crop, web upload-to-track).
+Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
 
 ## Web UI / REST
 
