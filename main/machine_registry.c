@@ -1,5 +1,6 @@
 #include "machine.h"
 #include "machine_sampler.h"
+#include "machine_sampler3.h"
 #include "machine_looper.h"
 #include "machine_slicer.h"
 #include "machine_granular.h"
@@ -20,8 +21,9 @@ extern const machine_t s2_machine_sampler;
 extern const machine_t machine_stub;   // main/machine_stub.c
 
 const machine_t *const machine_registry[] = {
-    &machine_sampler,
-    &s2_machine_sampler,
+    &machine_sampler,        // "Sampler0" — frozen original (removal pending)
+    &s2_machine_sampler,     // "Sampler2" — HIDDEN fallback until sampler3 is hw-verified
+    &machine_sampler3,       // "Sampler" — the deck-architecture rebuild
     &machine_looper,
     &machine_slicer,
     &machine_granular,

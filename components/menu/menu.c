@@ -192,6 +192,7 @@ static int more_def_handler(int it_id, int event, void* event_data){
             for(int i = 0; machine_registry[i] != NULL && s_sys_n < 16; i++){
                 if(strcmp(machine_registry[i]->name, "Stub") == 0) continue;
                 if(strcmp(machine_registry[i]->name, "Sampler0") == 0) continue;   // legacy sampler hidden
+                if(strcmp(machine_registry[i]->name, "Sampler2") == 0) continue;   // fallback until sampler3 verified
                 s_sys_machines[s_sys_n] = machine_registry[i];
                 s_sys_names[s_sys_n] = machine_registry[i]->name;
                 s_sys_n++;
@@ -252,6 +253,8 @@ static int machine_sel_def_handler(int it_id, int event, void* event_data){
             pos = 0;
             for(int i = 0; machine_registry[i] != NULL && n < 16; i++){
                 if(strcmp(machine_registry[i]->name, "Stub") == 0) continue; // hidden fallback
+                if(strcmp(machine_registry[i]->name, "Sampler0") == 0) continue;
+                if(strcmp(machine_registry[i]->name, "Sampler2") == 0) continue;
                 if(machine_registry[i] == machine_active()) pos = n;
                 machines[n] = machine_registry[i];
                 names[n] = machine_registry[i]->name;
