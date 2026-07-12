@@ -511,6 +511,19 @@ static inline bool s3_frame_ok(const s3_voice_t *v, uint32_t f, bool resident)
     return (v->wpos - f) <= (S3_RING_FRAMES - S3_CHUNK_FRAMES);
 }
 
+// selector-cell adoption with hysteresis: unit-wide cells, a switch needs
+// the continuous position 15% past the boundary — residual CV wobble can't
+// flutter a quantized selection between neighbors
+static inline int s3_cell_adopt(float pos, int cur)
+{
+    int li = (int)pos;
+    if (li == cur) return cur;
+    if (li > cur + 1 || li < cur - 1) return li;   // a real jump: no debate
+    float frac = pos - (float)li;
+    if (li > cur ? (frac > 0.15f) : (frac < 0.85f)) return li;
+    return cur;
+}
+
 // matrix CV read — from the MEDIAN-conditioned snapshot (WiFi-burst ADC
 // spikes of ±80 counts punched through slew + hysteresis: jumpy crop
 // points). ch1/2 (1V/oct jacks) idle ~21% up the scale by analog design —
@@ -716,6 +729,33 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         cs = v->cs_sm;
         ln = v->ln_sm;
         float ce;
+        // QUANT2: the musical ladder — length picks a power-of-2 beat count
+        // (1/2/4/8/16/32, whatever fits the take) and start snaps to the
+        // phrase grid of that length, so every reachable window is loop-legal
+        if (v->crop_mode == S3_CROP_QUANT2 && v->bpm > 20.0f && v->play_len) {
+            float bf = 60.0f * 44100.0f / v->bpm;        // frames per beat
+            float nb = (float)v->play_len / bf;          // beats in the take
+            if (nb >= 1.0f) {
+                int nbi = (int)nb;
+                int steps = 1;                           // ladder 2^0..2^(steps-1)
+                while ((1 << steps) <= nbi && steps < 7) steps++;
+                // LENGTH control = selector across the ladder (cell hysteresis)
+                float lpos = ln * (float)steps;
+                v->q_ln = s3_cell_adopt(lpos, v->q_ln);
+                if (v->q_ln < 0) v->q_ln = 0;
+                if (v->q_ln > steps - 1) v->q_ln = steps - 1;
+                int lbeats = 1 << v->q_ln;
+                // START control = selector across the phrase slots
+                int slots = nbi / lbeats;
+                if (slots < 1) slots = 1;
+                float spos = (cs / 0.98f) * (float)slots;
+                v->q_cs = s3_cell_adopt(spos, v->q_cs);
+                if (v->q_cs < 0) v->q_cs = 0;
+                if (v->q_cs > slots - 1) v->q_cs = slots - 1;
+                cs = (float)(v->q_cs * lbeats) / nb;
+                ln = (float)lbeats / nb;
+            }
+        }
         // tempo-QUANTIZED crop: start and length snap to whole beats of the
         // take's stamped tempo. Adopted indices move only when the continuous
         // value clearly leaves the current beat (0.6-beat hysteresis).
@@ -1134,7 +1174,7 @@ static void s3_preset_load(const cJSON *node)
             ((j = cJSON_GetObjectItemCaseSensitive(vo, "m_en")) && cJSON_IsNumber(j)))
             v->src_len = (j->valueint >= 0 && j->valueint <= 7) ? j->valueint : -1;
         if ((j = cJSON_GetObjectItemCaseSensitive(vo, "cm")) && cJSON_IsNumber(j))
-            v->crop_mode = (j->valueint >= 0 && j->valueint <= 2) ? j->valueint
+            v->crop_mode = (j->valueint >= 0 && j->valueint <= 3) ? j->valueint
                                                                   : S3_CROP_FREE;
         if (!have_matrix &&
             (j = cJSON_GetObjectItemCaseSensitive(vo, "cv67")) && cJSON_IsNumber(j)) {
