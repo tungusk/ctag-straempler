@@ -395,6 +395,8 @@ static void setup_value_str(int i, char *val, size_t n){
             if (v->crop_mode == S3_CROP_OFF) snprintf(val, n, "OFF");
             else if (v->crop_mode == S3_CROP_QUANT)
                 snprintf(val, n, v->bpm > 20.0f ? "QUANT" : "QUANT (no bpm)");
+            else if (v->crop_mode == S3_CROP_QUANT2)
+                snprintf(val, n, v->bpm > 20.0f ? "QUANTx2" : "QUANTx2 (no bpm)");
             else snprintf(val, n, "FREE");
             break;
         case 4: src_name(v->src_speed, val, n); break;
@@ -450,7 +452,11 @@ static void setup_adj(int i, int dir){
         case 0: s_voice_sel = 1 - s_voice_sel; break;
         case 1: v->playmode = v->playmode == S3_MODE_LOOP ? S3_MODE_ONESHOT : S3_MODE_LOOP; break;
         case 2: s3_set_reverse(s_voice_sel, !v->reverse); break;
-        case 3: v->crop_mode = (v->crop_mode + (dir > 0 ? 1 : 2)) % 3; break;
+        case 3:
+            v->crop_mode = (v->crop_mode + (dir > 0 ? 1 : 3)) % 4;
+            v->q_cs = 0;               // selector indices are mode-specific:
+            v->q_ln = 1 << 20;         // start fresh (clamps into range)
+            break;
         case 4: v->src_speed = src_cycle(v->src_speed, dir); break;
         case 5: v->src_start = src_cycle(v->src_start, dir); break;
         case 6: v->src_len   = src_cycle(v->src_len, dir); break;

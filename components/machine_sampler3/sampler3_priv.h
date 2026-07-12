@@ -31,9 +31,12 @@
 
 enum { S3_MODE_ONESHOT = 0, S3_MODE_LOOP };
 // crop behavior: OFF bypasses the window entirely; FREE = continuous
-// points; QUANT snaps both points to whole beats of the take's stamped
-// tempo (falls back to FREE behavior when the sample has no bpm)
-enum { S3_CROP_OFF = 0, S3_CROP_FREE, S3_CROP_QUANT };
+// points; QUANT snaps start+length to whole beats of the take's stamped
+// tempo; QUANT2 = musical ladder — length picks from 1/2/4/8/16/32 beats
+// and start snaps to the phrase grid of that length (a 4-beat window sits
+// on 4-beat boundaries, KO II loop feel). Both fall back to FREE behavior
+// when the sample has no bpm.
+enum { S3_CROP_OFF = 0, S3_CROP_FREE, S3_CROP_QUANT, S3_CROP_QUANT2 };
 // CV matrix: each destination below carries its own source assignment
 // (-1 = off, 0..7 = CV1..CV8) so Speed + Start + End can all be modulated
 // at once. SPEED = through-zero varispeed (center unity, CCW through 0
