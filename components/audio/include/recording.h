@@ -13,6 +13,16 @@ void recording_stop(void);
 bool recording_is_active(void);
 void recording_push(const int32_t *samples);
 
+// Clock-synced capture (sampler3): prepare opens the file and parks the
+// writer so the actual start costs nothing; trigger/finish are bare atomic
+// stores — safe to call from the audio task ON a clock pulse (no logs, no
+// SD, no allocation). recording_start(vid) == prepare + trigger.
+void recording_prepare(int vid);
+bool recording_is_prepared(void);
+void recording_trigger(void);          // audio-task safe
+void recording_finish(void);           // audio-task safe
+void recording_cancel_prepared(void);  // disarm before trigger: file deleted
+
 // Returns true once (clears flag) when a recording has been saved and is ready to load.
 // Fills vid_out and fname_out (must be at least 48 bytes).
 bool recording_poll_load(int *vid_out, char *fname_out);

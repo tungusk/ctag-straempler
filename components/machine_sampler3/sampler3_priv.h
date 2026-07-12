@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "clock.h"
 
 // Sampler3 — the two-voice sampler rebuilt on the deck/tracker architecture:
 // one unpinned READER task owns ALL file I/O and fills per-voice PSRAM
@@ -28,9 +29,11 @@
 #define S3_NVOICES     2
 
 enum { S3_MODE_ONESHOT = 0, S3_MODE_LOOP };
-// per-voice pitch source, Settings-switchable. OFF = fixed 1.0 (the 1V/oct
-// jacks idle at ~21%, which the keyboard map would read as -1 octave)
-enum { S3_PITCH_OFF = 0, S3_PITCH_1VOCT, S3_PITCH_SPEED };
+// CV6/7 per-voice destination (the seed of a small mod matrix — crop-point
+// destinations join when the crop playmode lands). SPEED = through-zero
+// varispeed: knob center = unity, CCW sweeps down through 0 into reverse
+// (clamped at -100%), CW up to +150% (Arlo's curve, 2026-07-12).
+enum { S3_CV67_OFF = 0, S3_CV67_SPEED };
 
 typedef struct {
     // -- assignment (reader-owned once load_req is raised) ------------------
@@ -51,8 +54,12 @@ typedef struct {
     volatile bool head_valid;        // false while (re)building the head
     int16_t *ring;                   // PSRAM, S3_RING_FRAMES * 2
     volatile uint32_t wpos;          // stream write head (playback-order, absolute)
-    volatile uint32_t rpos_i;        // play cursor (playback-order, absolute)
-    double   rpos_f;                 // fractional part (engine only)
+    // play cursor: double so through-zero varispeed can run it backwards.
+    // Audio task owns `pos` during playback; the reader writes it only while
+    // the engine is parked (load, deck seek protocol). rpos_i is a per-block
+    // integer mirror for the reader's throttle + the UI bar.
+    double   pos;
+    volatile uint32_t rpos_i;
     // -- request flags: UI/audio tasks ONLY set these; the reader clears and
     //    applies them (including any cursor rewrites) -----------------------
     volatile bool load_req;          // assign `pending` to this voice
@@ -65,7 +72,8 @@ typedef struct {
     volatile bool loading;           // stream (re)filling; ring reads parked
     volatile int  playmode;          // S3_MODE_*
     // -- params (UI-owned, audio reads) --------------------------------------
-    volatile int   pitch_mode;       // S3_PITCH_*
+    volatile bool  v1oct;            // ch1/2 keyboard pitch multiplies the rate
+    volatile int   cv67_dest;        // S3_CV67_* (CV6 -> voice 1, CV7 -> voice 2)
     volatile float level;            // 0..1
     volatile float pan;              // -1..1
     // -- engine-local ---------------------------------------------------------
@@ -83,6 +91,29 @@ typedef struct {
     volatile int  arm_target;        // -1 none, 0/1 = voice armed for recording
     volatile bool save_failed;       // last take failed to save (UI banner)
     char last_rec[S3_NAME_LEN];      // last auto-picked recording (UI)
+
+    // CV clock (deck-pattern conditioning + the shared detector). Drives the
+    // synced-record workflow and the tempo stamp; the dual-deck machine will
+    // lift this wholesale. 4 pulses per beat assumed (the modular norm).
+    beatclock_t clk;
+    int  clk_base;                   // floor tracker of the clock channel
+    bool clk_high;                   // Schmitt state
+    volatile int clk_src;            // CV channel index (default 7 = CV8)
+
+    // clock-synced capture (audio-task-owned; reader consumes stamp_req).
+    // With a locked clock: capture STARTS on a pulse (downbeat = frame 0)
+    // and STOPS on the next whole beat -> takes are loop-ready. The tempo
+    // stamp lands in the take's JSN sidecar (deck convention bpm/grid/dver/
+    // conf) so recordings arrive pre-analyzed for the deck (and give the
+    // future crop mode its beat grid to snap crop points to).
+    volatile int  rec_wait_vid;      // voice waiting for a pulse to start (-1 none)
+    volatile bool rec_stop_wait;     // stop queued for the next whole beat
+    volatile bool rec_synced;        // capture started on a pulse (grid = 0)
+    volatile uint32_t rec_frames;    // frames captured so far
+    volatile uint32_t rec_pulses;    // clock pulses since capture start
+    volatile uint32_t rec_first_pulse; // frame of the first pulse (unsynced start)
+    volatile float rec_bpm;          // beat bpm latched at finish (0 = no stamp)
+    volatile bool rec_stamp_req;     // reader: amend the sidecar after pickup
 } s3_state_t;
 
 extern s3_state_t s3;

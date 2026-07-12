@@ -39,12 +39,16 @@ static void refresh_samples(void){
 // ---- Live ---------------------------------------------------------------------
 // change-driven redraws only (full-region repaints strobe — deck lesson)
 
-#define LANE_Y(i)   (34 + (i) * 62)
-#define LANE_H      54
-#define BANNER_Y    166
+// big lanes: DEJAVU24 name + a tall bar whose BACKGROUND is the state —
+// blue idle, green playing, yellow armed, red recording (the deck's
+// "bar color IS the transport" lesson, doubled)
+#define LANE_Y(i)   (26 + (i) * 66)
+#define LANE_BAR_H  24
+#define BANNER_Y    162
 
 static int s_lane_barx[S3_NVOICES] = {-1, -1};
 static char s_lane_line[S3_NVOICES][48] = {{0}, {0}};
+static int s_lane_state[S3_NVOICES] = {-1, -1};
 static int s_banner_state = -1;
 static int s_last_sel = -1;
 
@@ -54,56 +58,65 @@ static int lane_state(int i){
     return s3.v[i].playing ? 1 : 0;
 }
 
+static color_t lane_bg(int st){
+    switch (st){
+        case 3:  return COL_REC;
+        case 2:  return (color_t){130, 110, 20};   // armed: dark yellow
+        case 1:  return COL_PLAY;
+        default: return COL_IDLE;
+    }
+}
+
 static void draw_lane(int i, bool full){
     s3_voice_t *v = &s3.v[i];
     int y = LANE_Y(i);
-    int fh = TFT_getfontheight();
-    char line[48];
     int st = lane_state(i);
-    const char *stn = st == 3 ? "REC" : st == 2 ? "ARM" : st == 1 ? "PLAY" : "";
-    snprintf(line, sizeof(line), "%d %s %.12s  %s%s%s",
-             i + 1, i == s_voice_sel ? ">" : " ",
+    char line[48];
+    snprintf(line, sizeof(line), "%s%.11s %s%s",
+             i == s_voice_sel ? ">" : " ",
              v->name[0] ? v->name : "(empty)",
-             v->playmode == S3_MODE_LOOP ? "LOOP" : "1SHOT",
-             v->reverse ? " REV" : "", stn[0] ? " " : "");
+             v->playmode == S3_MODE_LOOP ? "LP" : "1S",
+             v->reverse ? "R" : "");
     if (full || strcmp(line, s_lane_line[i]) != 0){
         strcpy(s_lane_line[i], line);
+        Font f = cfont;
+        TFT_setFont(DEJAVU24_FONT, NULL);
+        int bfh = TFT_getfontheight();
         _bg = TFT_BLACK;
-        TFT_fillRect(0, y, _width, fh + 4, _bg);
+        TFT_fillRect(0, y, _width, bfh + 2, _bg);
         _fg = (i == s_voice_sel) ? TFT_WHITE : TFT_LIGHTGREY;
-        TFT_print(line, 8, y);
-        if (stn[0]){
-            _fg = st == 3 ? COL_REC : st == 2 ? COL_ARM : COL_PLAY;
-            TFT_print((char*)stn, _width - TFT_getStringWidth((char*)stn) - 10, y);
-        }
+        TFT_print(line, 6, y);
+        cfont = f;
         s_lane_barx[i] = -1;
     }
-    // position bar
-    int by = y + fh + 8, bh = 14;
-    color_t bg = st == 1 ? COL_PLAY : COL_IDLE;
-    if (s_lane_barx[i] < 0){
-        TFT_fillRect(8, by, _width - 16, bh, bg);
+    // tall state-colored bar
+    int by = y + 28;
+    if (st != s_lane_state[i] || s_lane_barx[i] < 0){
+        s_lane_state[i] = st;
+        TFT_fillRect(6, by, _width - 12, LANE_BAR_H, lane_bg(st));
         _fg = (color_t){70, 70, 90};
-        TFT_drawRect(8, by, _width - 16, bh, _fg);
+        TFT_drawRect(6, by, _width - 12, LANE_BAR_H, _fg);
         _bg = TFT_BLACK;
+        s_lane_barx[i] = -1;
     }
     if (v->play_len){
-        int x = 10 + (int)((uint64_t)(v->rpos_i < v->play_len ? v->rpos_i : v->play_len)
-                           * (_width - 22) / v->play_len);
+        int x = 8 + (int)((uint64_t)(v->rpos_i < v->play_len ? v->rpos_i : v->play_len)
+                          * (_width - 20) / v->play_len);
         if (x != s_lane_barx[i]){
             if (s_lane_barx[i] > 0)
-                TFT_fillRect(s_lane_barx[i], by + 1, 4, bh - 2, bg);
-            TFT_fillRect(x, by + 1, 4, bh - 2, (color_t){235, 235, 235});
+                TFT_fillRect(s_lane_barx[i], by + 1, 5, LANE_BAR_H - 2, lane_bg(st));
+            TFT_fillRect(x, by + 1, 5, LANE_BAR_H - 2, (color_t){235, 235, 235});
             s_lane_barx[i] = x;
         }
     }
 }
 
 static void draw_banner(void){
-    // one unmissable line: recording > armed > save-failed > last pickup
+    // one unmissable line: recording > sync-pending > armed > failed > pickup
     int st = 0;
-    if (recording_is_active()) st = 3;
-    else if (s3.arm_target >= 0) st = 2;
+    if (recording_is_active()) st = s3.rec_stop_wait ? 6 : 3;
+    else if (s3.rec_wait_vid >= 0) st = 5;
+    else if (s3.arm_target >= 0) st = s3.clk.locked ? 7 : 2;
     else if (s3.save_failed) st = 4;
     else if (s3.last_rec[0]) st = 1;
     if (st == s_banner_state && st != 3) return;   // REC repaints (name may arrive)
@@ -113,9 +126,21 @@ static void draw_banner(void){
     TFT_fillRect(0, BANNER_Y, _width, fh + 6, _bg);
     char b[64];
     switch (st){
+        case 6:
+            snprintf(b, sizeof(b), "REC V%d — stops on the beat",
+                     recording_get_target_vid() + 1);
+            _fg = COL_REC; break;
+        case 5:
+            snprintf(b, sizeof(b), "SYNCED — starts on the pulse (V%d)",
+                     s3.rec_wait_vid + 1);
+            _fg = COL_ARM; break;
         case 3:
             snprintf(b, sizeof(b), "REC -> V%d  (gate stops)", recording_get_target_vid() + 1);
             _fg = COL_REC; break;
+        case 7:
+            snprintf(b, sizeof(b), "ARMED V%d +CLK  (gate records on pulse)",
+                     s3.arm_target + 1);
+            _fg = COL_ARM; break;
         case 2:
             snprintf(b, sizeof(b), "ARMED V%d  (gate records)", s3.arm_target + 1);
             _fg = COL_ARM; break;
@@ -141,11 +166,11 @@ static void live_full_redraw(void){
     TFT_print(hdr, _width - TFT_getStringWidth(hdr) - 8, 4);
     s_banner_state = -1;
     s_last_sel = s_voice_sel;
-    for (int i = 0; i < S3_NVOICES; i++) draw_lane(i, true);
+    for (int i = 0; i < S3_NVOICES; i++) { s_lane_state[i] = -1; draw_lane(i, true); }
     draw_banner();
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:voice press:load hold:setup TR1/2:gates", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:voice press:load hold:setup TRhold:arm", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
@@ -182,11 +207,10 @@ static int s3_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup --------------------------------------------------------------------
-static const char *setup_labels[] = {"Voice", "Mode", "Reverse", "Pitch Src",
-                                     "Level", "Pan", "Start", "Length", "Record"};
-#define S3_SETUP_N 9
-
-static const char *pitch_names[] = {"OFF", "1V/oct", "PB speed"};
+static const char *setup_labels[] = {"Voice", "Mode", "Reverse", "1V/oct",
+                                     "CV6/7", "Level", "Pan", "Start", "Length",
+                                     "Record"};
+#define S3_SETUP_N 10
 
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -197,10 +221,10 @@ static void setup_redraw(int pos, int sel){
     menuTFTPrintAffordance("System", pos == -1);
     s3_voice_t *v = &s3.v[s_voice_sel];
     for (int i = 0; i < S3_SETUP_N; i++){
-        int y = fh + 14 + i * (fh + 7);
+        int y = fh + 12 + i * (fh + 5);
         _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
         _fg = (i == pos && sel) ? TFT_CYAN : TFT_WHITE;
-        TFT_fillRect(0, y - 2, _width, fh + 5, _bg);
+        TFT_fillRect(0, y - 2, _width, fh + 3, _bg);
         TFT_print((char*)setup_labels[i], 8, y);
         char val[28];
         switch(i){
@@ -210,21 +234,19 @@ static void setup_redraw(int pos, int sel){
                              v->playmode == S3_MODE_LOOP ? "LOOP" : "ONE-SHOT"); break;
             case 2: snprintf(val, sizeof(val), "%s", v->reverse ? "ON" : "OFF"); break;
             case 3: snprintf(val, sizeof(val), "%s (CV%d)",
-                             pitch_names[v->pitch_mode],
-                             v->pitch_mode == S3_PITCH_SPEED ? 6 + s_voice_sel : 1 + s_voice_sel); break;
-            case 4: snprintf(val, sizeof(val), "%d%%", (int)(v->level * 100 + 0.5f)); break;
-            case 5: snprintf(val, sizeof(val), "%+d", (int)(v->pan * 100 + 0.5f)); break;
-            case 6: snprintf(val, sizeof(val), "%d%%", (int)(v->start_pct * 100 + 0.5f)); break;
-            case 7: snprintf(val, sizeof(val), "%d%%", (int)(v->len_pct * 100 + 0.5f)); break;
-            case 8: snprintf(val, sizeof(val), "%s",
+                             v->v1oct ? "ON" : "OFF", 1 + s_voice_sel); break;
+            case 4: snprintf(val, sizeof(val), "%s (CV%d)",
+                             v->cv67_dest == S3_CV67_SPEED ? "Speed" : "off",
+                             6 + s_voice_sel); break;
+            case 5: snprintf(val, sizeof(val), "%d%%", (int)(v->level * 100 + 0.5f)); break;
+            case 6: snprintf(val, sizeof(val), "%+d", (int)(v->pan * 100 + 0.5f)); break;
+            case 7: snprintf(val, sizeof(val), "%d%%", (int)(v->start_pct * 100 + 0.5f)); break;
+            case 8: snprintf(val, sizeof(val), "%d%%", (int)(v->len_pct * 100 + 0.5f)); break;
+            case 9: snprintf(val, sizeof(val), "%s",
                              s3.arm_target >= 0 ? "ARMED" : "open"); break;
         }
         TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
     }
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("Start/Length re-read the sample window", 8, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
 }
 
 static void setup_adj(int i, int dir){
@@ -233,29 +255,24 @@ static void setup_adj(int i, int dir){
         case 0: s_voice_sel = 1 - s_voice_sel; break;
         case 1: v->playmode = v->playmode == S3_MODE_LOOP ? S3_MODE_ONESHOT : S3_MODE_LOOP; break;
         case 2: s3_set_window(s_voice_sel, v->start_pct, v->len_pct, !v->reverse); break;
-        case 3: {
-            int pm = v->pitch_mode + dir;
-            if (pm < 0) pm = 2;
-            if (pm > 2) pm = 0;
-            v->pitch_mode = pm;
-            break;
-        }
-        case 4: {
+        case 3: v->v1oct = !v->v1oct; break;
+        case 4: v->cv67_dest = (v->cv67_dest == S3_CV67_SPEED) ? S3_CV67_OFF : S3_CV67_SPEED; break;
+        case 5: {
             float lv = v->level + dir * 0.05f;
             if (lv < 0) lv = 0;
             if (lv > 1.0f) lv = 1.0f;
             v->level = lv;
             break;
         }
-        case 5: {
+        case 6: {
             float pn = v->pan + dir * 0.1f;
             if (pn < -1.0f) pn = -1.0f;
             if (pn > 1.0f) pn = 1.0f;
             v->pan = pn;
             break;
         }
-        case 6: s3_set_window(s_voice_sel, v->start_pct + dir * 0.01f, v->len_pct, v->reverse); break;
-        case 7: s3_set_window(s_voice_sel, v->start_pct, v->len_pct + dir * 0.01f, v->reverse); break;
+        case 7: s3_set_window(s_voice_sel, v->start_pct + dir * 0.01f, v->len_pct, v->reverse); break;
+        case 8: s3_set_window(s_voice_sel, v->start_pct, v->len_pct + dir * 0.01f, v->reverse); break;
     }
 }
 
@@ -275,7 +292,7 @@ static int s3_setup_handler(int it_id, int event, void *ev_data){
             break;
         case EV_SHORT_PRESS:
             if(pos == -1) return M_MORE;
-            if(pos == 8) return M_S3_REC;
+            if(pos == S3_SETUP_N - 1) return M_S3_REC;
             sel = !sel; setup_redraw(pos, sel);
             break;
         case EV_LONG_PRESS: return M_S3_LIVE;
