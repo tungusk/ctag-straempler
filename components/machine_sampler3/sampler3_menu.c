@@ -78,8 +78,9 @@ static int s_last_dbpm = -1;
 // per-pulse figure dances a few tenths (deck lesson); snaps on real changes.
 static void draw_clock_bpm(void){
     // external clock (green) wins; internal clock (grey) otherwise
-    bool ext = s3.clk.locked && s3.clk.bpm > 0;
-    float bpm = ext ? s3.clk.bpm / 4.0f : (s3.int_bpm > 0.5f ? s3.int_bpm : 0);
+    float ebpm = clockin_beat_bpm(&s3.ci);
+    bool ext = ebpm > 0;
+    float bpm = ext ? ebpm : (s3.int_bpm > 0.5f ? s3.int_bpm : 0);
     static float ema = 0;
     static uint32_t last_tk = 0;
     if (bpm <= 0) ema = 0;
@@ -255,7 +256,7 @@ static void draw_banner(void){
     int st = 0;
     if (recording_is_active()) st = s3.rec_stop_wait ? 6 : 3;
     else if (s3.rec_wait_vid >= 0) st = 5;
-    else if (s3.arm_target >= 0) st = (s3.clk.locked || s3.int_bpm > 0.5f) ? 7 : 2;
+    else if (s3.arm_target >= 0) st = (s3.ci.clk.locked || s3.int_bpm > 0.5f) ? 7 : 2;
     else if (s3.save_failed) st = 4;
     else if (s3.last_rec[0]) st = 1;
     if (st == s_banner_state && st != 3) return;   // REC repaints (name may arrive)
@@ -578,8 +579,14 @@ static int s3_load_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Record ---------------------------------------------------------------------
-static const char *rec_labels[] = {"Arm V1", "Arm V2", "Monitor", "Arm mutes", "Int Clock"};
-#define S3_REC_N 5
+static const char *rec_labels[] = {"Arm V1", "Arm V2", "Monitor", "Arm mutes",
+                                   "Int Clock", "Clock PPQ"};
+#define S3_REC_N 6
+
+// PPQ ladder — click cycles; applies to the external detector AND the
+// internal clock's pulse synthesis (Arlo's jig clocks at 8)
+static const float ppq_ladder[] = {1.0f, 2.0f, 4.0f, 8.0f};
+#define PPQ_N 4
 
 static void rec_redraw(int pos){
     TFT_resetclipwin();
@@ -597,9 +604,12 @@ static void rec_redraw(int pos){
         if (i < 2) snprintf(val, sizeof(val), "%s", s3.arm_target == i ? "ARMED" : "-");
         else if (i == 2) snprintf(val, sizeof(val), "%s", s3.monitor ? "ON" : "OFF");
         else if (i == 3) snprintf(val, sizeof(val), "%s", s3.arm_mutes ? "ON" : "OFF");
-        else if (s3.int_bpm > 0.5f) snprintf(val, sizeof(val), "%.0f bpm%s",
-                                             s3.int_bpm, s3.clk.locked ? " (ext!)" : "");
-        else snprintf(val, sizeof(val), "OFF");
+        else if (i == 4){
+            if (s3.int_bpm > 0.5f) snprintf(val, sizeof(val), "%.0f bpm%s",
+                                            s3.int_bpm, s3.ci.clk.locked ? " (ext!)" : "");
+            else snprintf(val, sizeof(val), "OFF");
+        }
+        else snprintf(val, sizeof(val), "%d", (int)(s3.ci.ppb + 0.5f));
         if (i < 2 && s3.arm_target == i) _fg = COL_ARM;
         TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
     }
@@ -648,6 +658,13 @@ static int s3_rec_handler(int it_id, int event, void *ev_data){
             if (pos < 2) s3_toggle_arm(pos);
             else if (pos == 2) s3.monitor = !s3.monitor;
             else if (pos == 3) s3.arm_mutes = !s3.arm_mutes;
+            else if (pos == 5) {       // Clock PPQ: click cycles the ladder
+                int k = 0;
+                for (int i = 0; i < PPQ_N; i++)
+                    if (s3.ci.ppb >= ppq_ladder[i] - 0.1f &&
+                        s3.ci.ppb <= ppq_ladder[i] + 0.1f) k = i;
+                clockin_set_ppb(&s3.ci, ppq_ladder[(k + 1) % PPQ_N]);
+            }
             else {                     // Int Clock: press = edit bpm / press again = done;
                 if (sel) sel = 0;      // (turn OFF by dialing... hold = off below)
                 else { sel = 1; if (s3.int_bpm < 0.5f) s3.int_bpm = 120.0f; }

@@ -118,3 +118,50 @@ bool clock_tick(beatclock_t *c, uint16_t cv)
     }
     return edge;
 }
+
+// ---- conditioned clock input --------------------------------------------------
+
+void clockin_set_ppb(clockin_t *ci, float ppb)
+{
+    if (ppb < 0.25f) ppb = 0.25f;
+    if (ppb > 24.0f) ppb = 24.0f;
+    ci->ppb = ppb;
+    // pulse-rate sanity gate scaled from the beat range (15..320 bpm) —
+    // with the default 20..300 gate a fast clock's every legitimate
+    // interval is rejected and the BPM is assembled from missed edges
+    ci->clk.period_min = (uint32_t)(CLK_RATE * 60.0f / (320.0f * ppb));
+    ci->clk.period_max = (uint32_t)(CLK_RATE * 60.0f / (15.0f * ppb));
+}
+
+void clockin_reset(clockin_t *ci, float ppb)
+{
+    clock_reset(&ci->clk);
+    ci->base = 4095;              // floor tracker converges down on first reads
+    ci->high = false;
+    ci->edge_since = 1u << 30;    // first edge is never ghost-gated
+    clockin_set_ppb(ci, ppb);
+}
+
+bool clockin_block(clockin_t *ci, uint16_t cv, int frames)
+{
+    // floor tracker: dips follow instantly, drift back up slowly
+    if ((int)cv < ci->base) ci->base = cv;
+    else if (ci->base < 4095) ci->base++;
+    bool edge = false;
+    if (!ci->high) {
+        if ((int)cv >= ci->base + 900) { ci->high = true; edge = true; }
+    } else if ((int)cv < ci->base + 350) {
+        ci->high = false;
+    }
+    uint16_t synth = ci->high ? 4095 : 0;
+    for (int f = 0; f < frames; f++) clock_tick(&ci->clk, synth);
+    // AC-coupled pulse sources ring on the tail and refire the Schmitt:
+    // accept a sync edge only >= 3/4 of a locked period after the last
+    if (ci->edge_since < (1u << 30)) ci->edge_since += (uint32_t)frames;
+    if (edge) {
+        uint32_t ep = ci->clk.period;
+        if (ep != 0 && ci->edge_since < ep - ep / 4) edge = false;   // ghost
+        else ci->edge_since = 0;
+    }
+    return edge;
+}

@@ -95,8 +95,8 @@ typedef struct {
 } dk_state_t;
 
 extern dk_state_t dk;
-extern const float dk_ppb[5];     // {0.25, 0.5, 1, 2, 4} pulses per beat
-extern const char *const dk_ppb_names[5];
+extern const float dk_ppb[6];     // {0.25, 0.5, 1, 2, 4, 8} pulses per beat
+extern const char *const dk_ppb_names[6];
 
 // UI-side (SD-touching; call from UI/background tasks only)
 int  deck_load_track(const char *name);   // select + start streaming + read sidecar

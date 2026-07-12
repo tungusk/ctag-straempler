@@ -299,7 +299,7 @@ static void setup_adj(int i, int dir){
     switch(i){
         case 1: dk.sync = !dk.sync; break;
         case 2: dk.clk_src = (dk.clk_src + (dir > 0 ? 1 : 7)) & 7; break;
-        case 3: dk.ppb_idx += dir; if (dk.ppb_idx < 0) dk.ppb_idx = 0; if (dk.ppb_idx > 4) dk.ppb_idx = 4; break;
+        case 3: dk.ppb_idx += dir; if (dk.ppb_idx < 0) dk.ppb_idx = 0; if (dk.ppb_idx > 5) dk.ppb_idx = 5; break;
         case 4: dk.loop = !dk.loop; break;
         case 5: {
             float b = dk.track_bpm > 0 ? dk.track_bpm : 120.0f;
