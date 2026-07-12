@@ -214,14 +214,16 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             }
             if (event == EV_TIMER_REPEATING_SLOW){
                 // engine internals through /status (v1) for remote debugging
-                char dbg[40];
-                snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d S%lu",
+                char dbg[56];
+                snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d S%lu g%u L%d n%d",
                          dk.playing ? 'P' : 's',
                          (unsigned long)dk.dbg_edges,
                          (unsigned long)(dk.dbg_iv / 44),        // ms between fires
                          (unsigned long)(dk.clk.period / 44),    // ms accepted period
                          (int)(dk.phase_err * 100),              // PLL convergence
-                         (unsigned long)dk.dbg_starve);          // ring underrun blocks
+                         (unsigned long)dk.dbg_starve,           // ring underrun blocks
+                         (unsigned)dk.clk.ghost_run,             // escape-hatch state
+                         (int)dk.clk.locked, (int)dk.clk.ring_n);
                 audio_status_set_voices("deck", dbg);
             }
             break;
