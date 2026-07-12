@@ -10,14 +10,15 @@ on the [`v09-machines`](../../tree/v09-machines) branch (July 2026).
 
 | Machine | What it does |
 |---|---|
-| **Sampler** | The original v0.9 dual-voice streaming sampler |
-| **Sampler2** | Extended fork: recording, crop mode, signed CV matrix amounts, CV-addressable start/length |
+| **Sampler** | The main sampler: dual-voice streaming with recording, crop mode, signed CV matrix amounts, CV-addressable start/length |
+| **Sampler0** | The original v0.9 engine, kept byte-identical as a frozen fallback |
 | **Looper** | 4-track clock-synced RAM looper with save-to-library and per-track filter |
 | **Slicer** | Grid or transient slicing of a sample, CV-addressable slices |
 | **Granular** | 16-grain cloud over a mono sample |
 | **Glitch** | Live-input stutter/beat-repeat with clock sync |
 | **Drums** | 8-pad CV-triggered drum sampler: routable trigger inputs with floor-tracking detection, per-pad level/pan/decay, CV-select mode |
-| **Deck** | Tempo-syncing track player: streams a long SD sample varispeed, phase-locked to an external CV clock (pulse-level PLL, clock mult/div), with offline BPM + beat-grid detection cached per track. Encoder scrubs by the bar; TR1 restarts at the downbeat, TR2 stops. *(active development)* |
+| **Deck** | Tempo-syncing track player: streams a long SD sample varispeed, phase-locked to an external CV clock (pulse-level PLL, clock mult/div). On-device BPM + beat-grid analysis is exact (reference click tracks detect to ±0.0005 BPM) and fast (~1 min per track), and the lock is instrument-verified: beats land +2 ms from the clock pulse with ~1 ms spread (100% within ±7 ms), ~1 ms/min residual slip. Encoder scrubs by the bar; TR1 restarts at the downbeat, TR2 stops. |
+| **Tracker** | Module player for ~50 classic tracker formats (MOD/XM/IT/S3M/…) via libxmp, with a KO-II-style performance sequence loop (TR2 toggles, CV sets length/position), bar-quantized pattern scrub, and web upload of module files |
 | **Freesound** | Web-driven freesound.org search + preview download straight into the sample library; direct MP3-URL import |
 
 **Web features** (the module serves its own page):
@@ -34,7 +35,7 @@ broken since IDF 4.3), a decades-old display-corrupting stack smash
 (upstreamed as [PR #29](https://github.com/ctag-fh-kiel/ctag-straempler/pull/29)),
 and declick/trigger-detection work throughout. Build docs live in
 [CLAUDE.md](CLAUDE.md); flashable snapshots of each milestone are in
-[`bin/`](bin/) (latest: `drums-remote-v1`).
+[`bin/`](bin/) (latest: `tracker-sync-v1` @ v1.1).
 
 **Building the hardware?** See the companion
 [strampler-build-pack](https://github.com/tungusk/strampler-build-pack):
