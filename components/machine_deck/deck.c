@@ -18,12 +18,12 @@
 static const char *TAG = "DECK";
 
 dk_state_t dk;
-const float dk_ppb[5] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f};
+const float dk_ppb[6] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 
 // smooth SYNC catch-up: drain sync_slew (frames) at a capped per-frame rate bend
 #define SYNC_SLEW_GAIN 0.0006f   // drains ~1667-frame TC once under the cap
 #define SYNC_SLEW_MAX  0.15f     // max +/-15% rate bend (~2.4 semitones), no dropout
-const char *const dk_ppb_names[5] = {"1 per 4 beats", "1 per 2 beats", "1 per beat", "2 per beat", "4 per beat"};
+const char *const dk_ppb_names[6] = {"1 per 4 beats", "1 per 2 beats", "1 per beat", "2 per beat", "4 per beat", "8 per beat"};
 
 static volatile bool s_run = false, s_alive = false;
 static volatile bool s_track_req = false;
@@ -493,7 +493,7 @@ static void deck_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
         dk.ppb_idx = j->valueint;
         if (dk.ppb_idx < 0) dk.ppb_idx = 0;
-        if (dk.ppb_idx > 4) dk.ppb_idx = 4;
+        if (dk.ppb_idx > 5) dk.ppb_idx = 5;
     }
     // only (re)load when the track actually changes — a remote "Apply" that
     // only touched sync/ppb/clk_src must NOT reload the track (that re-triggers

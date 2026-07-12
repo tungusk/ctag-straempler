@@ -33,3 +33,30 @@ void clock_reset(beatclock_t *c);
 // advance one frame with the clock line level (0..4095, e.g. a CV channel or
 // a synthesised 0/4095 from a trig). Returns true on a detected quarter edge.
 bool clock_tick(beatclock_t *c, uint16_t cv);
+
+// ---- conditioned clock INPUT (the shared front-end) --------------------------
+// Everything each machine was copy-pasting around beatclock_t: a floor-tracked
+// Schmitt over any CV channel (fixed thresholds misfire on attenuated/offset
+// channels), a synthesized square into the detector, an AC-coupling ghost-edge
+// gate on the raw sync edges (pulse tails ring and refire the Schmitt —
+// measured +83.6ms ghost-quantized takes), and the clock's pulses-per-beat
+// carried WITH the detector so tempo math stops hardcoding "4".
+typedef struct {
+    beatclock_t clk;
+    int      base;           // tracked channel floor
+    bool     high;           // Schmitt state
+    float    ppb;            // pulses per beat (1/2/4/8; deck also sub-beat)
+    uint32_t edge_since;     // ghost gate: frames since last ACCEPTED edge
+} clockin_t;
+
+void clockin_reset(clockin_t *ci, float ppb);
+void clockin_set_ppb(clockin_t *ci, float ppb);   // rescales the sanity gates
+// run one audio block: condition `cv`, tick the detector `frames` times.
+// Returns true when a ghost-gated rising edge fired within this block.
+bool clockin_block(clockin_t *ci, uint16_t cv, int frames);
+// tempo of the BEAT (pulse rate / ppb); 0 when unlocked
+static inline float clockin_beat_bpm(const clockin_t *ci)
+{
+    return (ci->clk.locked && ci->clk.bpm > 0 && ci->ppb > 0)
+           ? ci->clk.bpm / ci->ppb : 0;
+}

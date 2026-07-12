@@ -144,12 +144,11 @@ typedef struct {
     volatile bool save_failed;       // last take failed to save (UI banner)
     char last_rec[S3_NAME_LEN];      // last auto-picked recording (UI)
 
-    // CV clock (deck-pattern conditioning + the shared detector). Drives the
-    // synced-record workflow and the tempo stamp; the dual-deck machine will
-    // lift this wholesale. 4 pulses per beat assumed (the modular norm).
-    beatclock_t clk;
-    int  clk_base;                   // floor tracker of the clock channel
-    bool clk_high;                   // Schmitt state
+    // CV clock: the SHARED conditioned front-end (clockin_t in
+    // components/machine/clock.{h,c}) — Schmitt + floor + detector + ghost
+    // gate + pulses-per-beat carried together. Drives the synced-record
+    // workflow and the tempo stamp. PPQ is a Record-page setting (1/2/4/8).
+    clockin_t ci;
     // ch1/2 idle ~21% up the scale by analog design (1V/oct jacks) — floor
     // trackers so matrix reads from them span the full range when patched
     int  cv12_floor[2];
