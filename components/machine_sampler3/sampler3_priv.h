@@ -63,6 +63,8 @@ typedef struct {
     // -- request flags: UI/audio tasks ONLY set these; the reader clears and
     //    applies them (including any cursor rewrites) -----------------------
     volatile bool load_req;          // assign `pending` to this voice
+    volatile bool autoplay;          // start playing once the load lands
+                                     // (fresh takes loop immediately)
     char pending[S3_NAME_LEN];
     volatile bool window_req;        // trim/reverse changed: rebuild head+stream
     volatile bool retrig_req;        // gate: restart stream fill at head end
