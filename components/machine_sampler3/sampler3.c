@@ -210,6 +210,7 @@ static void reader_task(void *pv)
                     if (vid >= 0 && vid < S3_NVOICES) {
                         ESP_LOGI(TAG, "auto-pickup %s -> voice %d", id, vid);
                         strlcpy(s3.v[vid].pending, id, S3_NAME_LEN);
+                        s3.v[vid].autoplay = true;    // fresh take loops right away
                         s3.v[vid].load_req = true;
                         strlcpy(s3.last_rec, id, S3_NAME_LEN);
                     }
@@ -248,6 +249,10 @@ static void reader_task(void *pv)
                 }
                 v->pos = 0; v->rpos_i = 0;      // engine is parked (head_valid false)
                 v->loading = false;
+                if (v->autoplay) {              // fresh take: loop immediately
+                    v->autoplay = false;
+                    if (v->name[0]) v->playing = true;
+                }
                 worked = true;
                 continue;
             }
@@ -471,12 +476,21 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
     static uint32_t hold[S3_NVOICES];         // frames the gate has been low
     static bool hold_fired[S3_NVOICES];
     static bool rec_started_this_press[S3_NVOICES];
+    static uint32_t since_fell[S3_NVOICES];   // frames since the PREVIOUS press
+    static bool rapid_press[S3_NVOICES];      // press arrived mid-sequence
     const uint32_t HOLD_ARM = S3_RATE;        // ~1 s
+    // sequencer guard: a press following another within this window can NEVER
+    // arm — sequenced gates (long, repeating) were tripping the hold gesture,
+    // and every other note became an accidental take that overwrote the track
+    const uint32_t RAPID_WIN = (uint32_t)(2.5f * S3_RATE);
 
     for (int i = 0; i < S3_NVOICES; i++) {
         s3_voice_t *v = &s3.v[i];
         bool low = !(io->trig_level & (1 << i));
+        if (since_fell[i] < RAPID_WIN) since_fell[i] += (uint32_t)frames;
         if (fell & (1 << i)) {
+            rapid_press[i] = since_fell[i] < RAPID_WIN;
+            since_fell[i] = 0;
             hold[i] = (uint32_t)frames;
             hold_fired[i] = false;
             rec_started_this_press[i] = false;
@@ -515,7 +529,7 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                 hold_fired[i] = true;
                 if (recording_is_active() && rec_started_this_press[i]) {
                     s_rec_abort_req = true;    // held through the take: abort it
-                } else if (!recording_is_active()) {
+                } else if (!recording_is_active() && !rapid_press[i]) {
                     s_arm_vid = i;             // idle hold: arm (or disarm) this track
                     s_arm_req = true;
                 }
