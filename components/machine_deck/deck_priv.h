@@ -49,7 +49,14 @@ typedef struct {
     char track[DK_NAME_LEN];       // loaded track id ("" = none)
 
     // grid + sync
-    volatile float track_bpm;      // from analysis / manual override (0 = unknown)
+    volatile float track_bpm;      // EFFECTIVE bpm (bpm_raw x feel; 0 = unknown)
+    volatile float bpm_raw;        // sidecar/analysis bpm before feel
+    volatile float feel;           // per-TRACK tempo feel x0.5/1/2 — harmonic
+                                   // ambiguity is TASTE, not error ("some
+                                   // tracks sound right at .5"); persisted in
+                                   // the sidecar as "feel"
+    volatile float clk_scale;      // Setup: x0.5/1/2 on the incoming clock —
+                                   // the friendly layer over ppb
     volatile uint32_t grid_offset; // first downbeat, frames into the file
     volatile bool sync;            // follow the external clock
     volatile bool loop;            // wrap to the downbeat at end of file
@@ -115,6 +122,10 @@ typedef struct {
 
 extern dk_state_t dk;
 extern const float dk_ppb[6];     // {0.25, 0.5, 1, 2, 4, 8} pulses per beat
+// effective pulses per beat: the mult/div setting over the clock scale —
+// keep the three tempo layers distinct: feel (per-track, persisted) x
+// clk_scale (setup) x speed_mult (performance)
+#define DK_PPB_EFF() (dk_ppb[dk.ppb_idx] / (dk.clk_scale > 0 ? dk.clk_scale : 1.0f))
 extern const char *const dk_ppb_names[6];
 
 // UI-side (SD-touching; call from UI/background tasks only)
@@ -123,5 +134,6 @@ void deck_toggle_play(void);              // play/pause (resumes at the cue poin
 void deck_restart(void);                  // jump to the downbeat
 void deck_seek_beats(int beats);          // grid-snapped scrub (± whole beats)
 void deck_sync_now(void);                 // hard-snap grid phase to the clock now
+void deck_set_feel(float f);              // x0.5/1/2; reapplies bpm + writes sidecar
 int  deck_analyze_start(void);            // spawn BPM/grid analysis of the track
 void deck_analysis_commit(void);          // adopt an_bpm/an_grid + write sidecar

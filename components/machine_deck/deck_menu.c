@@ -57,7 +57,7 @@ static int s_last_dbpm = -1;
 static float ext_bpm_disp(void){
     static float ema = 0;
     static uint32_t last_tk = 0;
-    float x = dk.ci.clk.bpm / dk_ppb[dk.ppb_idx];
+    float x = dk.ci.clk.bpm / DK_PPB_EFF();
     if (!dk.ci.clk.locked || x <= 0) { ema = 0; return x; }
     float d = x - ema;
     if (ema <= 0 || d > 2.0f || d < -2.0f) { ema = x; return ema; }  // real tempo change: snap
@@ -330,8 +330,8 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup --------------------------------------------------------------------
-static const char *setup_labels[] = {"Track", "Sync", "Clock Src", "Clock", "Loop", "BPM", "Grid Nudge", "Analyze", "Auto BPM", "Loop Freeze"};
-#define DK_SETUP_N 10
+static const char *setup_labels[] = {"Track", "Sync", "Clock Src", "Clock", "Loop", "BPM", "Grid Nudge", "Analyze", "Auto BPM", "Loop Freeze", "Feel", "Clk Scale"};
+#define DK_SETUP_N 12
 
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -366,6 +366,8 @@ static void setup_redraw(int pos, int sel){
                 break;
             case 8: snprintf(v, sizeof(v), "%s", dk.auto_an ? "ON" : "OFF"); break;
             case 9: snprintf(v, sizeof(v), "%s", dk.loop_freeze ? "ON" : "OFF"); break;
+            case 10: snprintf(v, sizeof(v), dk.feel == 0.5f ? "x0.5" : dk.feel == 2.0f ? "x2" : "x1"); break;
+            case 11: snprintf(v, sizeof(v), dk.clk_scale == 0.5f ? "x0.5" : dk.clk_scale == 2.0f ? "x2" : "x1"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -397,6 +399,18 @@ static void setup_adj(int i, int dir){
         }
         case 8: dk.auto_an = !dk.auto_an; break;
         case 9: dk.loop_freeze = !dk.loop_freeze; break;
+        case 10: {   // per-track feel: x0.5 <-> x1 <-> x2, persisted in the sidecar
+            float f = dk.feel;
+            f = (dir > 0) ? (f == 0.5f ? 1.0f : 2.0f) : (f == 2.0f ? 1.0f : 0.5f);
+            deck_set_feel(f);
+            break;
+        }
+        case 11: {   // clock scale: the friendly layer over ppb
+            float c = dk.clk_scale;
+            c = (dir > 0) ? (c == 0.5f ? 1.0f : 2.0f) : (c == 2.0f ? 1.0f : 0.5f);
+            dk.clk_scale = c;
+            break;
+        }
     }
 }
 
