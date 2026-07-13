@@ -176,7 +176,15 @@ The machines (all working; archives in `bin/`):
 - `main/machine_stub.c` — silence; the unloadable-proof + safe fallback
 
 **Shared core services** (factored out of duplication):
-- `components/machine/clock.{h,c}` — `beatclock_t` CV clock detector (looper + glitch)
+- `components/machine/clock.{h,c}` — the ONE clock input stack (2026-07-13
+  unification): `beatclock_t` detector (median ring, octave/spurious guards,
+  faster-clock escape) + `clockin_t` conditioned front-end (floor-tracked
+  Schmitt, ppb-scaled sanity gates, AC-tail ghost gate, raw-fire diagnostics).
+  ALL clock consumers — sampler3, deck, tracker, looper, glitch — go through
+  `clockin_block()`; no machine carries a private Schmitt or feeds raw CV to
+  the detector anymore. `clockin_set_ppb()` on a real ppb change drops the
+  lock for a clean 2-pulse relock. Deck + tracker lock quality re-verified by
+  Scarlett A/B capture after the migration.
 - `components/util/sample_ram.{h,c}` — `sample_list()` / `sample_load()` +
   `sample_list_shared()` (one sorted 224-entry browser list shared by
   slicer/granular — per-menu `[32]` caps silently hid fresh uploads)
