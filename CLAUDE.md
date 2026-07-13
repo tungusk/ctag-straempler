@@ -31,6 +31,19 @@ export PATH=/path/to/xtensa-esp32-elf/bin:/path/to/esp32ulp-elf/bin:$PATH
 
 ## Code rules
 
+**Sample pool formats (2026-07-13)** — the pool speaks THREE containers via
+`components/util/sampfile.{h,c}` (+ `sampfile_f.c` FatFS twin): headerless
+`.RAW`, `.WAV` (PCM 16-bit/44.1k, mono or stereo), `.AIF/.AIFF` (same, big-
+endian). Ids stay extension-less everywhere; `sample_resolve()` maps id →
+file (.RAW wins ties). The probe sniffs MAGIC, not extension; anything else
+(24-bit, 48k, compressed) is rejected with a reason string — never silence.
+All conversion (header offset, mono expand, byteswap) happens in READER
+tasks/UI loaders; audio tasks only ever see native int16-stereo frames.
+Recordings and looper saves are written as `.WAV` (sampwav_start/finish;
+power-cut takes self-heal at probe). Take numbering = ONE readdir pass —
+per-index stat probing with a missing extension walks the whole FAT dir per
+call and starves the capture queue (bench-caught: 1804 dropped chunks).
+
 **FatFS paths only** — file paths passed to `f_open()` must NOT have a `/sdcard` prefix. VFS-style paths (`/sdcard/...`) cause an `f_open` abort crash. Use bare paths like `usr/REC_0001.RAW`.
 
 **SD bus is serialized by `sd_lock`** (`components/util/sd_lock.{h,c}`) — a global recursive mutex that EVERY SD I/O burst must hold: the audio raw-FatFS reads, REST file serving, recording writer, config/JSON, `sample_ram`. Acquired INSIDE the per-voice `file_mutex` (consistent order → no deadlock), released between bursts. The raw audio read path bypasses the esp_vfs_fat lock, so without this it races VFS I/O and wedges/corrupts the card. Don't add SD access that skips `sd_lock`.
@@ -194,6 +207,13 @@ The machines (all working; archives in `bin/`):
   browser walk, 512 entries in PSRAM, NEWEST FIRST, evicting the oldest when
   full (sampler3 + deck + drums). Its own translation unit because raw FatFS
   (`ff.h`) and VFS (`dirent.h`) both typedef `DIR`.
+- `components/util/sampfile.{h,c}` + `sampfile_f.c` — the sample-pool FORMAT
+  SEAM (see Code rules): probe/seek/read across RAW/WAV/AIFF + id resolver +
+  WAV write helpers. Every streaming reader (deck/dualdeck/sampler3) and
+  `sample_load` goes through it.
+- `components/util/reverb.{h,c}` — multi-mode Dattorro reverb (Room/Hall/
+  Plate/Shimmer over one PSRAM tank, ~170 KB lazy slab, live cost meter);
+  drums hosts it post-filter.
 - `components/util/svf.{h,c}` — the Chamberlin state-variable filter, ONE copy
   (it had been hand-written three times: deck, looper engine, looper bounce).
   `svf_step()` gives lp/bp/hp taps; the caller keeps the coefficient slew and
