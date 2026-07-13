@@ -21,7 +21,7 @@ static inline uint16_t cv_corrected(int src, const uint16_t *d) {
 
 typedef struct {
     char v0[32];
-    char v1[32];
+    char v1[64];   // diag string; 32 truncated multi-voice diags (dualdeck)
     uint16_t cv[8];
     uint8_t trig;      // raw gate levels, bit0=TR1 bit1=TR2 (active low)
 } audio_status_t;

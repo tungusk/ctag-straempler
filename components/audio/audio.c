@@ -35,7 +35,7 @@ void audio_get_cv(uint16_t out[8]) {
 void audio_status_set_voices(const char *v0, const char *v1) {
     portENTER_CRITICAL(&_status_mux);
     strncpy(_audio_status.v0, v0 ? v0 : "", 31); _audio_status.v0[31] = 0;
-    strncpy(_audio_status.v1, v1 ? v1 : "", 31); _audio_status.v1[31] = 0;
+    strncpy(_audio_status.v1, v1 ? v1 : "", 63); _audio_status.v1[63] = 0;
     portEXIT_CRITICAL(&_status_mux);
 }
 

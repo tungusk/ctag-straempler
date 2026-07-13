@@ -14,6 +14,7 @@
 #include "audio.h"
 #include "fileio.h"
 #include "sd_lock.h"
+#include "trig_gate.h"
 #include "dualdeck_priv.h"
 
 static const char *TAG = "DDECK";
@@ -24,7 +25,6 @@ const char *const dd_ppb_names[6] = {"1 per 4 beats", "1 per 2 beats", "1 per be
                                      "2 per beat", "4 per beat", "8 per beat"};
 
 #define DD_XF_GRAB 220        // knob counts of movement that grab the fader back
-#define DD_TR_LONG (uint32_t)(0.6f * DD_RATE)
 
 static volatile bool s_run = false, s_alive = false;
 
@@ -286,29 +286,14 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     if (!dd.d[0].ring || !dd.d[1].ring) return;
     const int frames = MACHINE_BLOCK / 2;
 
-    // ---- trig gates: TR1 = deck A, TR2 = deck B. Tap (release before 0.6s) =
-    // quantized start/restart; hold past 0.6s = quantized stop (fires at the
-    // threshold — the release does nothing after that).
-    static uint8_t prev_trig = 0x03;
-    static uint32_t hold[2] = {0, 0};
-    static bool held_fired[2] = {false, false};
-    uint8_t fell = prev_trig & (~io->trig_level) & 0x03;
-    uint8_t rose = (~prev_trig) & io->trig_level & 0x03;
-    prev_trig = io->trig_level;
+    // ---- trig gates on the shared grammar resolver (trig_gate.h): TR1 =
+    // deck A, TR2 = deck B. Tap = quantized start/restart (on release);
+    // TG_HOLD at the 0.6 s threshold = quantized stop (release then no-ops).
+    static trig_gate_t tg[2];
     for (int i = 0; i < 2; i++) {
-        uint8_t bit = 1 << i;
-        if (fell & bit) { hold[i] = frames; held_fired[i] = false; }
-        else if (hold[i] > 0 && !(io->trig_level & bit)) {
-            hold[i] += frames;
-            if (!held_fired[i] && hold[i] >= DD_TR_LONG) {
-                dualdeck_arm_stop(i);              // hold = quantized stop
-                held_fired[i] = true;
-            }
-        }
-        if (rose & bit) {
-            if (!held_fired[i] && hold[i] > 0) dualdeck_arm_start(i);  // tap
-            hold[i] = 0;
-        }
+        tg_event_t e = trig_gate_step(&tg[i], !(io->trig_level & (1 << i)), frames);
+        if (e == TG_HOLD) dualdeck_arm_stop(i);
+        else if (e == TG_REL_SHORT) dualdeck_arm_start(i);
     }
 
     // ---- shared clock + bar phase. An accepted pulse advances the counter;
