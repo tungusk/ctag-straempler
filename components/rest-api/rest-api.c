@@ -187,8 +187,11 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
 
     char path[72];
     size_t nl = strlen(name);
-    if (nl > 4 && strcasecmp(name + nl - 4, ".JSN") == 0)
-        snprintf(path, sizeof(path), "/sdcard/usr/%s", name);   // sidecar inspection
+    // accept both bare ids and full filenames — "REC_0147.RAW" used to become
+    // REC_0147.RAW.RAW and 404 (the long-standing "Not found" trap)
+    if (nl > 4 && (strcasecmp(name + nl - 4, ".JSN") == 0 ||
+                   strcasecmp(name + nl - 4, ".RAW") == 0))
+        snprintf(path, sizeof(path), "/sdcard/usr/%s", name);
     else
         snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
     sd_lock_take();
