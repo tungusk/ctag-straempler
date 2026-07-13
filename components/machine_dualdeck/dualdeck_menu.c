@@ -49,10 +49,12 @@ static int  s_last_xfx = -1;
 
 static int panel_state(int i){
     dd_deck_t *v = &dd.d[i];
+    if (v->loop_active) return 3;
     if (v->arm_start || v->arm_stop) return 2;
     return v->playing ? 1 : 0;
 }
 static color_t state_col(int st){
+    if (st == 3) return (color_t){150, 45, 95};   // loop pink (house shade)
     return st == 1 ? COL_PLAY : st == 2 ? COL_ARM : COL_STOP;
 }
 
@@ -155,7 +157,9 @@ static void draw_panel(int i, bool full){
     TFT_print(line, px + 6, PANEL_Y + 6);
 
     _fg = state_col(st);
-    const char *sw = st == 1 ? "PLAY" : st == 2 ? "ARM" : "STOP";
+    char sw[12];
+    if (st == 3) snprintf(sw, sizeof(sw), "LOOP %d", v->loop_beats);
+    else snprintf(sw, sizeof(sw), "%s", st == 1 ? "PLAY" : st == 2 ? "ARM" : "STOP");
     if (v->track_bpm > 0) snprintf(line, sizeof(line), "%s  %.1f", sw, v->track_bpm);
     else snprintf(line, sizeof(line), "%s  no grid", sw);
     TFT_print(line, px + 6, PANEL_Y + 6 + TFT_getfontheight() + 4);
@@ -197,7 +201,7 @@ static void live_full_redraw(void){
     draw_xfade(true);
     _bg = TFT_BLACK; _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:focus press:load hold:setup TRtap:start TRhold:stop", 6,
+    TFT_print("turn:focus press:load hold:setup TR1:start/stop TR2:loop", 6,
               _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
@@ -216,9 +220,11 @@ static int dd_live_handler(int it_id, int event, void *ev_data){
             if (event == EV_TIMER_REPEATING_SLOW){
                 char dbg[64];
                 snprintf(dbg, sizeof(dbg), "A%c s%lu E%+d | B%c s%lu E%+d | x%d p%lu L%d",
-                         dd.d[0].playing ? 'P' : 's', (unsigned long)dd.d[0].dbg_starve,
+                         dd.d[0].loop_active ? 'L' : (dd.d[0].playing ? 'P' : 's'),
+                         (unsigned long)dd.d[0].dbg_starve,
                          (int)(dd.d[0].phase_err * 100),
-                         dd.d[1].playing ? 'P' : 's', (unsigned long)dd.d[1].dbg_starve,
+                         dd.d[1].loop_active ? 'L' : (dd.d[1].playing ? 'P' : 's'),
+                         (unsigned long)dd.d[1].dbg_starve,
                          (int)(dd.d[1].phase_err * 100),
                          (int)(dd.xf * 100),
                          (unsigned long)(dd.ci.clk.period / 44),
@@ -295,9 +301,9 @@ static int dd_load_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup (house grammar: toggles click, lists bracket-edit, per-row paint) ----
-static const char *setup_labels[] = {"Clock Src", "Clock", "Fade"};
-#define DD_SETUP_N 3
-#define SETUP_IS_TOGGLE(i) ((i) == 2)   // Fade is a short cycle: click advances
+static const char *setup_labels[] = {"Clock Src", "Clock", "Fade", "Loop Len"};
+#define DD_SETUP_N 4
+#define SETUP_IS_TOGGLE(i) ((i) == 2 || (i) == 3)   // short cycles: click advances
 #define SETUP_ROW_Y(i) (TFT_getfontheight() + 12 + (i) * (TFT_getfontheight() + 8))
 
 static void setup_value_str(int i, char *v, size_t n){
@@ -308,6 +314,7 @@ static void setup_value_str(int i, char *v, size_t n){
             if (dd.fade_beats == 0) snprintf(v, n, "cut");
             else snprintf(v, n, "%d beats", dd.fade_beats);
             break;
+        case 3: snprintf(v, n, "%d beats", dd.loop_len_beats); break;
         default: v[0] = 0;
     }
 }
@@ -326,6 +333,14 @@ static void setup_adj(int i, int dir){
             for (int s = 0; s < 4; s++) if (steps[s] == dd.fade_beats) k = s;
             k = (k + (dir > 0 ? 1 : 3)) % 4;
             dd.fade_beats = steps[k];
+            break;
+        }
+        case 3: {
+            static const int lsteps[5] = {1, 2, 4, 8, 16};
+            int k = 2;
+            for (int s = 0; s < 5; s++) if (lsteps[s] == dd.loop_len_beats) k = s;
+            k = (k + (dir > 0 ? 1 : 4)) % 5;
+            dd.loop_len_beats = lsteps[k];   // next engage uses it
             break;
         }
     }
