@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "fileio.h"
+#include "sampfile.h"
 #include "machine.h"
 #include "clock.h"
 #include "audio.h"
@@ -248,11 +249,15 @@ int looper_save_track(int i)
     struct stat st;
     for (int n = 0; n < 9999; n++) {
         snprintf(name, sizeof(name), "LOOP_%04d", n);
-        snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
-        if (stat(path, &st) != 0) break;
+        snprintf(path, sizeof(path), "/sdcard/usr/%s.WAV", name);
+        if (stat(path, &st) == 0) continue;
+        char alt[48];   // don't collide with a RAW-era loop of the same index
+        snprintf(alt, sizeof(alt), "/sdcard/usr/%s.RAW", name);
+        if (stat(alt, &st) != 0) break;
     }
     FILE *f = fopen(path, "wb");
     if (!f) { ESP_LOGE("LOOPER", "save: cannot open %s", path); return -1; }
+    sampwav_start(f);             // saves are WAV: drag them straight into a DAW
 
     int32_t *chunk = heap_caps_malloc(512 * sizeof(int32_t), MALLOC_CAP_INTERNAL);
     if (!chunk) { fclose(f); return -1; }
@@ -267,12 +272,13 @@ int looper_save_track(int i)
         pos += nfr; left -= nfr;
     }
     free(chunk);
+    sampwav_finish(f);
     fclose(f);
 
     char jsn[48], field[24];
     snprintf(jsn, sizeof(jsn), "/sdcard/usr/%s.JSN", name);
     cJSON *root = cJSON_CreateObject();
-    snprintf(field, sizeof(field), "%s.raw", name);
+    snprintf(field, sizeof(field), "%s.wav", name);
     cJSON_AddStringToObject(root, "name", field);
     cJSON_AddStringToObject(root, "id", name);
     cJSON_AddStringToObject(root, "description", "Looper capture");

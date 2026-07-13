@@ -190,7 +190,8 @@ static void reader_task(void *pv)
                     const char *base = slash ? slash + 1 : fname;
                     char id[S3_NAME_LEN];
                     int blen = strlen(base);
-                    if (blen >= 4 && strcasecmp(base + blen - 4, ".RAW") == 0) blen -= 4;
+                    if (blen >= 4 && (strcasecmp(base + blen - 4, ".RAW") == 0 ||
+                                      strcasecmp(base + blen - 4, ".WAV") == 0)) blen -= 4;
                     snprintf(id, sizeof(id), "%.*s", blen, base);
                     // tempo stamp: a clock was locked during the take — write
                     // bpm + grid into the sidecar (deck convention, dver 2,

@@ -1,4 +1,5 @@
 #include "recording.h"
+#include "sampfile.h"
 #include "fileio.h"
 #include "sd_lock.h"
 #include "esp_log.h"
@@ -10,6 +11,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 #define TAG "REC"
 
@@ -47,7 +49,8 @@ static void write_rec_jsn(const char *raw_path)
     const char *base = slash ? slash + 1 : raw_path;
     char id[48];
     int baselen = strlen(base);
-    if (baselen >= 4 && strcasecmp(base + baselen - 4, ".RAW") == 0)
+    if (baselen >= 4 && (strcasecmp(base + baselen - 4, ".RAW") == 0 ||
+                         strcasecmp(base + baselen - 4, ".WAV") == 0))
         baselen -= 4;
     snprintf(id, sizeof(id), "%.*s", baselen, base);
 
@@ -56,7 +59,7 @@ static void write_rec_jsn(const char *raw_path)
 
     cJSON *root = cJSON_CreateObject();
     char name_field[52];
-    snprintf(name_field, sizeof(name_field), "%s.raw", id);
+    snprintf(name_field, sizeof(name_field), "%s.wav", id);
     cJSON_AddStringToObject(root, "name", name_field);
     cJSON_AddStringToObject(root, "id", id);
     cJSON_AddStringToObject(root, "description", "Recorded audio");
@@ -82,14 +85,40 @@ static void find_next_filename(char *buf, int buflen)
     // directory walk, and a few hundred of them back-to-back at this task's
     // priority starved the sampler reader (both tracks went silent) AND the
     // web server for seconds ("arming mutes both tracks").
-    static int hint = 0;
-    struct stat st;
-    for (int i = hint; i < 9999; i++) {
-        snprintf(buf, buflen, "/sdcard/usr/REC_%04d.RAW", i);
-        if (stat(buf, &st) != 0) { hint = i; return; }
-        if ((i & 7) == 7) vTaskDelay(1);      // courtesy yield
+    // ONE readdir pass finds the highest existing REC number (.RAW-era and
+    // .WAV takes alike), then numbering is monotonic within the boot. The
+    // old per-index stat probing turned pathological the moment a MISSING
+    // extension had to be checked (a stat miss walks the whole directory):
+    // the very first WAV-era arm did ~170 full FAT walks and dropped 1804
+    // capture chunks — the "arming mutes both tracks" disease, bench-caught.
+    static int hint = -1;
+    if (hint < 0) {
+        int maxn = -1;
+        sd_lock_take();
+        DIR *d = opendir("/sdcard/usr");
+        sd_lock_give();
+        if (d) {
+            int scanned = 0;
+            for (;;) {
+                // bus held only per readdir step (the /files discipline) so
+                // audio refills interleave with the walk
+                sd_lock_take();
+                struct dirent *e = readdir(d);
+                sd_lock_give();
+                if (e == NULL) break;
+                int n;
+                if (sscanf(e->d_name, "REC_%4d.", &n) == 1 && n > maxn) maxn = n;
+                if ((++scanned & 31) == 0) vTaskDelay(1);   // courtesy yield
+            }
+            sd_lock_take();
+            closedir(d);
+            sd_lock_give();
+        }
+        hint = maxn + 1;
     }
-    snprintf(buf, buflen, "/sdcard/usr/REC_OVFL.RAW");
+    if (hint > 9999) { snprintf(buf, buflen, "/sdcard/usr/REC_OVFL.WAV"); return; }
+    snprintf(buf, buflen, "/sdcard/usr/REC_%04d.WAV", hint);
+    hint++;
 }
 
 static void rec_writer_task(void *pvParams)
@@ -99,6 +128,7 @@ static void rec_writer_task(void *pvParams)
 
     sd_lock_take();
     FILE *f = fopen(fname, "wb");
+    if (f) sampwav_start(f);      // 44-byte header; sizes patched at finish
     sd_lock_give();
     if (f == NULL) {
         ESP_LOGE(TAG, "Could not open %s for writing", fname);
@@ -170,6 +200,7 @@ static void rec_writer_task(void *pvParams)
     }
 
     sd_lock_take();
+    sampwav_finish(f);            // patch RIFF + data sizes from real length
     int close_err = fclose(f);
     sd_lock_give();
 

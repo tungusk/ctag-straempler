@@ -68,3 +68,12 @@ int sample_resolve(const char *id, char *path, size_t path_len);
 // list-side helper: does this directory entry name look like a pool sample?
 // (any supported extension). Writes the extension-less id into id_out.
 bool sample_name_id(const char *fname, char *id_out, size_t id_len);
+
+// write side (stage 5 — recordings/loop saves as WAV): canonical 16-bit
+// 44.1 kHz stereo header. sampwav_start writes 44 placeholder bytes right
+// after open; append frames as raw int16 stereo exactly as before; then
+// sampwav_finish patches the RIFF + data sizes from the real file length
+// just before fclose. A power-cut take keeps placeholder sizes — the probe
+// self-heals those, so truncated takes still load.
+int sampwav_start(FILE *f);
+int sampwav_finish(FILE *f);
