@@ -58,7 +58,7 @@ static void reader_task(void *pv)
             }
         }
         if (f && dk.seek_req) {
-            vTaskDelay(pdMS_TO_TICKS(4));       // let the engine park on `loading`
+            vTaskDelay(1);                      // 1 tick settle; pdMS_TO_TICKS(4)==0 at 100Hz
             dk.seek_req = false;
             uint32_t to = dk.seek_to;           // latest wins if requests raced
             if (to >= dk.file_frames) to = 0;
@@ -91,7 +91,7 @@ static void reader_task(void *pv)
             }
             if (dk.loading && dk.wpos >= dk.file_frames) dk.loading = false;
         }
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelay(1);   // >=1 tick: pdMS_TO_TICKS(5)==0 at 100Hz = busy-spin
     }
     if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
     free(chunk);

@@ -341,7 +341,7 @@ int looper_bounce(void)
         lp.tr[i].state = LP_EMPTY;
         lp.tr[i].len = lp.tr[i].pos = lp.tr[i].target = 0;
     }
-    vTaskDelay(pdMS_TO_TICKS(5));
+    vTaskDelay(1);   // >=1 tick: pdMS_TO_TICKS(5)==0 at 100Hz = busy-spin
 
     lp_track_t *d = &lp.tr[0];
     memcpy(d->buf, scratch, bounce_len * sizeof(int16_t));

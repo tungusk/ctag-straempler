@@ -35,7 +35,7 @@ esp_err_t machine_activate(const machine_t *m)
         // block drain so stop() never frees memory under a running process()
         s_active = NULL;
         if (s_web_cb) s_web_cb(NULL);   // drop web URIs before stop() frees state
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelay(1);   // >=1 tick: pdMS_TO_TICKS(5)==0 at 100Hz = busy-spin
         if (old->stop) old->stop();
     }
     if (m) {
