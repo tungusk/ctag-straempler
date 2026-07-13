@@ -10,13 +10,12 @@ on the [`v09-machines`](../../tree/v09-machines) branch (July 2026).
 
 | Machine | What it does |
 |---|---|
-| **Sampler** | The main sampler: dual-voice streaming with recording, crop mode, signed CV matrix amounts, CV-addressable start/length |
-| **Sampler0** | The original v0.9 engine, kept byte-identical as a frozen fallback |
+| **Sampler** | Two-voice clock-time LOOP RECORDER: gate-triggered takes recorded in sync with the clock, phase-exact gapless looping, crop windows (OFF/FREE/QUANT/QUANTx2, snapping to the take's own beats), a CV matrix (speed/start/length x CV1-8), through-zero varispeed |
 | **Looper** | 4-track clock-synced RAM looper with save-to-library and per-track filter |
 | **Slicer** | Grid or transient slicing of a sample, CV-addressable slices |
 | **Granular** | 16-grain cloud over a mono sample |
 | **Glitch** | Live-input stutter/beat-repeat with clock sync |
-| **Drums** | 8-pad CV-triggered drum sampler: routable trigger inputs with floor-tracking detection, per-pad level/pan/decay, CV-select mode |
+| **Drums** | Four-pad CV-triggered drum machine. Each pad can hold a second CHOKE LAYER (its own sample + trigger, sharing one voice — the open/closed hi-hat), so 4 pads carry 8 sounds. knob6/knob7 perform whatever the encoder points at (level with soft-clipped overdrive; decay choke, and a retrig loop that tightens into a buzz), plus a master DJ filter with resonance |
 | **Deck** | Tempo-syncing track player: streams a long SD sample varispeed, phase-locked to an external CV clock (pulse-level PLL, clock mult/div). On-device BPM + beat-grid analysis is exact (reference click tracks detect to ±0.0005 BPM) and fast (~1 min per track), and the lock is instrument-verified: beats land +2 ms from the clock pulse with ~1 ms spread (100% within ±7 ms), ~1 ms/min residual slip. Encoder scrubs by the bar; TR1 restarts at the downbeat, TR2 stops. |
 | **Tracker** | Module player for ~50 classic tracker formats (MOD/XM/IT/S3M/…) via libxmp, with a KO-II-style performance sequence loop (TR2 toggles, CV sets length/position), bar-quantized pattern scrub, and web upload of module files |
 | **Freesound** | Web-driven freesound.org search + preview download straight into the sample library; direct MP3-URL import |
