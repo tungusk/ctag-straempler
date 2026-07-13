@@ -172,8 +172,8 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup page -----------------------------------------------------------
-static const char *setup_labels[] = {"Mode", "Slices", "Sensitivity", "Sample", "Auto", "Reverse"};
-#define SL_SETUP_N 6
+static const char *setup_labels[] = {"Mode", "Slices", "Sensitivity", "Sample", "Auto", "Reverse", "Load Mono"};
+#define SL_SETUP_N 7
 
 // shared sorted library list (sample_ram) — big cards hold >200 samples
 static char (*s_samples)[24] = NULL;
@@ -211,6 +211,7 @@ static void setup_redraw(int pos, int sel){
             case 3: snprintf(v, sizeof(v), "%s", sl.sample[0] ? sl.sample : "(none)"); break;
             case 4: snprintf(v, sizeof(v), "%s", sl.auto_on ? "ON" : "OFF"); break;
             case 5: snprintf(v, sizeof(v), "%s", sl.reverse ? "ON" : "OFF"); break;
+            case 6: snprintf(v, sizeof(v), "%s", sl.load_mono ? "ON (~36s)" : "OFF (~18s)"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -249,6 +250,7 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
                 else if(pos==1) cycle_target(+1);
                 else if(pos==4) sl.auto_on = !sl.auto_on;
                 else if(pos==5) sl.reverse = !sl.reverse;
+                else if(pos==6) sl.load_mono = !sl.load_mono;   // applies on next load
             } else { pos++; if(pos >= SL_SETUP_N) pos = -1; }
             setup_redraw(pos, sel);
             break;
@@ -258,6 +260,7 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
                 else if(pos==1) cycle_target(-1);
                 else if(pos==4) sl.auto_on = !sl.auto_on;
                 else if(pos==5) sl.reverse = !sl.reverse;
+                else if(pos==6) sl.load_mono = !sl.load_mono;
             } else { pos--; if(pos < -1) pos = SL_SETUP_N - 1; }
             setup_redraw(pos, sel);
             break;

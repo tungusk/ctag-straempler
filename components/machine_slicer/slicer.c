@@ -31,7 +31,7 @@ static void recompute_grid(int n)
 // sensitivity/count changes so the dial-in screen is responsive.
 #define SL_WIN     512
 #define SL_MAXCAND 192   // 2x the pool so 128 transient slices aren't starved
-static float    s_env[SL_MAX_FRAMES / SL_WIN + 2];
+static float    s_env[SL_MAX_FRAMES * 2 / SL_WIN + 2];   // sized for mono (2x frames)
 static uint32_t s_nwin = 0;
 
 static void compute_envelope(void)
@@ -41,8 +41,9 @@ static void compute_envelope(void)
         uint32_t a = w * SL_WIN;
         uint64_t acc = 0;
         for (int k = 0; k < SL_WIN; k++) {
-            int l = sl.buf[(a + k) * 2];     if (l < 0) l = -l;
-            int r = sl.buf[(a + k) * 2 + 1]; if (r < 0) r = -r;
+            uint32_t fi = a + k;
+            int l = sl.mono ? sl.buf[fi] : sl.buf[fi * 2];     if (l < 0) l = -l;
+            int r = sl.mono ? l          : sl.buf[fi * 2 + 1]; if (r < 0) r = -r;
             acc += (uint32_t)(l + r);
         }
         s_env[w] = (float)acc;
@@ -216,8 +217,10 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
             uint32_t i1 = i0 + 1;
             if (i1 >= sl.len) i1 = i0;
             float frac = (float)(sl.pos - (double)i0);
-            int l0 = sl.buf[i0 * 2],     l1 = sl.buf[i1 * 2];
-            int r0 = sl.buf[i0 * 2 + 1], r1 = sl.buf[i1 * 2 + 1];
+            int l0, l1, r0, r1;
+            if (sl.mono) { l0 = r0 = sl.buf[i0]; l1 = r1 = sl.buf[i1]; }
+            else { l0 = sl.buf[i0 * 2]; l1 = sl.buf[i1 * 2];
+                   r0 = sl.buf[i0 * 2 + 1]; r1 = sl.buf[i1 * 2 + 1]; }
             l = (l0 + (int)((l1 - l0) * frac)) * sl.level >> 8;
             r = (r0 + (int)((r1 - r0) * frac)) * sl.level >> 8;
 
@@ -242,8 +245,8 @@ static void compute_peaks(void)
         uint32_t b = (uint32_t)((uint64_t)(c + 1) * sl.len / SL_PEAKS);
         int peak = 0;
         for (uint32_t i = a; i < b; i++) {
-            int v = sl.buf[i * 2];     if (v < 0) v = -v;
-            int w = sl.buf[i * 2 + 1]; if (w < 0) w = -w;
+            int v = sl.mono ? sl.buf[i] : sl.buf[i * 2];     if (v < 0) v = -v;
+            int w = sl.mono ? v         : sl.buf[i * 2 + 1]; if (w < 0) w = -w;
             if (v > peak) peak = v;
             if (w > peak) peak = w;
         }
@@ -257,7 +260,10 @@ int slicer_load(const char *name)
     if (!sl.buf) return -1;
     sl.loading = true;
     sl.playing = false;
-    uint32_t n = sample_load(name, sl.buf, SL_MAX_FRAMES, false);   // stereo
+    // mono load packs one int16 per frame — same slab, double the seconds
+    sl.mono = sl.load_mono;
+    uint32_t cap = sl.mono ? SL_MAX_FRAMES * 2 : SL_MAX_FRAMES;
+    uint32_t n = sample_load(name, sl.buf, cap, sl.mono);
     if (n == 0) { sl.loading = false; return -1; }
     sl.len = n;
     strncpy(sl.sample, name, sizeof(sl.sample) - 1);
@@ -292,6 +298,7 @@ static cJSON *slicer_preset_save(void)
     cJSON_AddStringToObject(o, "sample", sl.sample);
     cJSON_AddBoolToObject(o, "auto", sl.auto_on);
     cJSON_AddBoolToObject(o, "reverse", sl.reverse);
+    cJSON_AddBoolToObject(o, "mono", sl.load_mono);
     return o;
 }
 
@@ -304,6 +311,7 @@ static void slicer_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sens")) && cJSON_IsNumber(j)) sl.sensitivity = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "auto")))    sl.auto_on = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "reverse"))) sl.reverse = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "mono"))) sl.load_mono = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])
         slicer_load(j->valuestring);   // reload the remembered sample (rebuilds slices)
 }

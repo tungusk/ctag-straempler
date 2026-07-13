@@ -76,12 +76,20 @@ int slicer_parse_ot(const char *name, uint32_t sample_len, uint32_t *out_pt, int
     uint32_t ref = be32(b + 0x32);
     if (ref == 0) ref = be32(b + OT_SLICES_AT + (count - 1) * 12 + 4);
     if (ref == 0) ref = sample_len;
+    // TRUNCATION clamp (long-chain phase 1): a chain longer than the RAM cap
+    // loads cut short, and its .ot ref then dwarfs sample_len — the old scale
+    // COMPRESSED the whole slice map into the loaded stub. A mismatch this
+    // big means truncation, not resampling: keep 1:1 and DROP slices past
+    // the cut instead.
+    bool truncated = (uint64_t)ref > (uint64_t)sample_len + sample_len / 5;
 
     int n = 0;
     uint32_t prev = 0;
     for (uint32_t i = 0; i < count && n < max_pts - 1; i++) {
         uint32_t start = be32(b + OT_SLICES_AT + i * 12);
-        uint32_t pt = (uint32_t)(((uint64_t)start * sample_len) / ref);
+        if (truncated && start >= sample_len) continue;   // beyond the cut: drop
+        uint32_t pt = truncated ? start
+                                : (uint32_t)(((uint64_t)start * sample_len) / ref);
         if (pt >= sample_len) pt = sample_len - 1;
         if (n > 0 && pt <= prev) continue;     // force monotonic
         out_pt[n++] = pt;
