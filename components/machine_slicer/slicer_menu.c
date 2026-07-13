@@ -152,6 +152,16 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
             if (sl.n_slices != s_last_slices) live_full_redraw();   // grid changed
             else if (sl.cur != s_last_cur || sl.sel != s_last_sel)
                 live_update_highlights();                           // just move highlights
+            if (event == EV_TIMER_REPEATING_SLOW){
+                // streaming internals through /status v1 (remote debugging)
+                char dbg[48];
+                snprintf(dbg, sizeof(dbg), "%c c%d n%d S%lu g%lu a%lu",
+                         sl.playing ? 'P' : 's', sl.cur, sl.n_slices,
+                         (unsigned long)sl.dbg_starve,
+                         (unsigned long)sl.gen,
+                         (unsigned long)sl.ring_avail);
+                audio_status_set_voices("slicer", dbg);
+            }
             break;
         case EV_FWD:
             sl.sel = (sl.sel + 1) % sl.n_slices;
@@ -172,8 +182,8 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup page -----------------------------------------------------------
-static const char *setup_labels[] = {"Mode", "Slices", "Sensitivity", "Sample", "Auto", "Reverse", "Load Mono"};
-#define SL_SETUP_N 7
+static const char *setup_labels[] = {"Mode", "Slices", "Sensitivity", "Sample", "Auto", "Reverse"};
+#define SL_SETUP_N 6
 
 // shared sorted library list (sample_ram) — big cards hold >200 samples
 static char (*s_samples)[24] = NULL;
@@ -211,7 +221,6 @@ static void setup_redraw(int pos, int sel){
             case 3: snprintf(v, sizeof(v), "%s", sl.sample[0] ? sl.sample : "(none)"); break;
             case 4: snprintf(v, sizeof(v), "%s", sl.auto_on ? "ON" : "OFF"); break;
             case 5: snprintf(v, sizeof(v), "%s", sl.reverse ? "ON" : "OFF"); break;
-            case 6: snprintf(v, sizeof(v), "%s", sl.load_mono ? "ON (~36s)" : "OFF (~18s)"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -249,8 +258,7 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
                 if(pos==0)      cycle_mode(+1);
                 else if(pos==1) cycle_target(+1);
                 else if(pos==4) sl.auto_on = !sl.auto_on;
-                else if(pos==5) sl.reverse = !sl.reverse;
-                else if(pos==6) sl.load_mono = !sl.load_mono;   // applies on next load
+                else if(pos==5) sl.reverse = !sl.reverse;   // reader rebuilds heads
             } else { pos++; if(pos >= SL_SETUP_N) pos = -1; }
             setup_redraw(pos, sel);
             break;
@@ -259,8 +267,7 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
                 if(pos==0)      cycle_mode(-1);
                 else if(pos==1) cycle_target(-1);
                 else if(pos==4) sl.auto_on = !sl.auto_on;
-                else if(pos==5) sl.reverse = !sl.reverse;
-                else if(pos==6) sl.load_mono = !sl.load_mono;
+                else if(pos==5) sl.reverse = !sl.reverse;   // reader rebuilds heads
             } else { pos--; if(pos < -1) pos = SL_SETUP_N - 1; }
             setup_redraw(pos, sel);
             break;
