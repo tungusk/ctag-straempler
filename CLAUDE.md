@@ -39,6 +39,13 @@ export PATH=/path/to/xtensa-esp32-elf/bin:/path/to/esp32ulp-elf/bin:$PATH
 
 **No core pinning for tasks that read files** — pinning reader tasks to core 0 causes WiFi preemption and produces constant clicks on both voices. Leave file-reading tasks unpinned.
 
+**Sleep at least one tick.** `CONFIG_FREERTOS_HZ=100`: one tick is 10 ms, so
+`pdMS_TO_TICKS(n)` for n<10 is ZERO and `vTaskDelay(0)` never yields to
+LOWER-priority tasks — an "idle" loop built on it is a busy-spin that starves
+httpd/readers depending on scheduler luck (the intermittent "REST dead while
+audio plays" family, and "arming mutes both tracks"). Use `vTaskDelay(1)`
+minimum in every task loop; grep single-digit `pdMS_TO_TICKS` in new code.
+
 **`audio_status_t` access** — always use `audio_get_status()` (portMUX spinlock protected). Never read `_audio_status` directly from outside `audio.c`.
 
 **Display corruption = memory corruption.** A years-old `sprintf("Single Shot")` into `char tmp[10]` (a 2-byte stack smash on every playmode redraw) masqueraded as an intermittent, firmware-dependent "white screen / stale-pixel" hardware fault for a long time — the blast radius shifted with each build's stack layout. Lesson: size string buffers generously and when the display corrupts, suspect a smash before the panel/ribbon/bus. `TFT_setclipwin` state and the `_fg/_bg/cfont` globals are shared — save/restore them around draws.
