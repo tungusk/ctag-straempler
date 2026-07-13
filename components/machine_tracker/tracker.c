@@ -17,6 +17,7 @@
 #include "audio.h"
 #include "sd_lock.h"
 #include "xmp.h"
+#include "trig_gate.h"
 #include "tracker_priv.h"
 
 static const char *TAG = "TRACKER";
@@ -591,12 +592,18 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
 {
     if (!trk.ring) return;
 
-    // transport gates: TR1 = play/stop, TR2 = loop-mode toggle
-    static uint8_t prev_trig = 0x03;
-    uint8_t pressed = prev_trig & (~io->trig_level) & 0x03;
-    prev_trig = io->trig_level;
-    if (pressed & 1) trk.playing = !trk.playing;
-    if (pressed & 2) trk.loop_toggle_req = true;
+    // transport gates — the unified TR grammar (convergence S4, shared
+    // trig_gate.h): TR1 tap = play/pause (fires on RELEASE now), TR1
+    // hold-release = restart from the top; TR2 press = loop toggle (engage
+    // ON PRESS — instant, beat-true), TR2 held past the threshold =
+    // MOMENTARY loop (the long release toggles back out).
+    static trig_gate_t tg1, tg2;
+    const int nfr = MACHINE_BLOCK / 2;
+    tg_event_t e1 = trig_gate_step(&tg1, !(io->trig_level & 1), nfr);
+    tg_event_t e2 = trig_gate_step(&tg2, !(io->trig_level & 2), nfr);
+    if (e1 == TG_REL_SHORT) trk.playing = !trk.playing;
+    else if (e1 == TG_REL_LONG) trk.restart_req = true;
+    if (e2 == TG_PRESS || e2 == TG_REL_LONG) trk.loop_toggle_req = true;
 
     // loop window from CV: CV7 (idx 6) = length selector, CV6 (idx 5) = position.
     // Deadband the raw CVs so ADC noise can't jitter length/position — otherwise
