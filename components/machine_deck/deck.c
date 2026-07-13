@@ -141,6 +141,8 @@ int deck_load_track(const char *name)
     dk.playing = false;
     dk.loading = true;
     dk.track_bpm = 0;
+    dk.bpm_raw = 0;
+    dk.feel = 1.0f;
     dk.grid_offset = 0;
     dk.phase_int = 0.0f;                         // new track: fresh PLL integrator
     dk.phase_offset = 0.0f;                       // and clear any manual nudge
@@ -157,11 +159,16 @@ int deck_load_track(const char *name)
     if (root) {
         cJSON *j;
         if ((j = cJSON_GetObjectItemCaseSensitive(root, "bpm")) && cJSON_IsNumber(j))
-            dk.track_bpm = (float)j->valuedouble;
+            dk.bpm_raw = (float)j->valuedouble;
         if ((j = cJSON_GetObjectItemCaseSensitive(root, "grid")) && cJSON_IsNumber(j))
             dk.grid_offset = (uint32_t)j->valuedouble;
         if ((j = cJSON_GetObjectItemCaseSensitive(root, "dver")) && cJSON_IsNumber(j))
             dver = j->valueint;
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, "feel")) && cJSON_IsNumber(j)) {
+            float f = (float)j->valuedouble;
+            if (f == 0.5f || f == 1.0f || f == 2.0f) dk.feel = f;
+        }
+        dk.track_bpm = dk.bpm_raw * dk.feel;
         cJSON_Delete(root);
     }
     if (dk.an_state != DK_AN_RUNNING) dk.an_state = DK_AN_IDLE;
@@ -229,6 +236,26 @@ void deck_seek_beats(int beats)
     dk.seek_req = true;                         // reader applies rpos; play state stays
 }
 
+// FEEL: harmonic tempo ambiguity is taste — a 140-detection that grooves at
+// 70 syncs half-time by default once its sidecar carries "feel": 0.5.
+// UI task only (writes the sidecar).
+void deck_set_feel(float f)
+{
+    if (f != 0.5f && f != 2.0f) f = 1.0f;
+    dk.feel = f;
+    if (dk.bpm_raw > 0) dk.track_bpm = dk.bpm_raw * f;
+    if (!dk.track[0]) return;
+    char jp[64];
+    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", dk.track);
+    cJSON *root = readJSONFileAsCJSON(jp);
+    if (!root) root = cJSON_CreateObject();
+    cJSON_DeleteItemFromObjectCaseSensitive(root, "feel");
+    cJSON_AddNumberToObject(root, "feel", f);
+    char *js = cJSON_Print(root);
+    cJSON_Delete(root);
+    if (js) { writeJSONFile(jp, js); free(js); }
+}
+
 // Hard-snap the playback phase so the track grid aligns to the external clock
 // NOW, instead of waiting for the slow loop to pull in. Snaps to the current
 // nudge offset target (keeps phase_offset). Called from the audio task on a TR2
@@ -238,7 +265,7 @@ void deck_sync_now(void)
     if (!dk.track[0] || !dk.file_frames) return;
     if (!dk.sync || !dk.ci.clk.locked || dk.ci.clk.period == 0 || dk.track_bpm <= 20.0f) return;
     uint32_t beat_tf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
-    float seg_tf = (float)beat_tf / dk_ppb[dk.ppb_idx] * dk.speed_mult;   // frames/pulse
+    float seg_tf = (float)beat_tf / DK_PPB_EFF() * dk.speed_mult;   // frames/pulse
     if (seg_tf < 1.0f) return;
     float p_ext = (float)dk.ci.clk.since / (float)dk.ci.clk.period;
     if (p_ext > 1.0f) p_ext = 1.0f;
@@ -293,7 +320,7 @@ static void deck_loop_toggle(void)
     // whole-pulse invariant: the window must hold an integer number of clock
     // segments so the PLL sails through wraps — lengths are powers of two,
     // so only sub-beat ppb settings raise the floor
-    float ppb = dk_ppb[dk.ppb_idx];
+    float ppb = DK_PPB_EFF();
     int min_beats = ppb >= 1.0f ? 1 : (int)(1.0f / ppb + 0.5f);
     while (s_loop_len_idx < 4 && dk_loop_beats[s_loop_len_idx] < min_beats)
         s_loop_len_idx++;
@@ -332,7 +359,9 @@ static esp_err_t deck_start(void)
     dk.ppb_idx = 4;          // 4 pulses per beat — the modular norm (4 PPQN)
     dk.rate = 1.0f;
     dk.rate_sm = 1.0f;
-    clockin_reset(&dk.ci, dk_ppb[dk.ppb_idx]);
+    dk.feel = 1.0f;
+    dk.clk_scale = 1.0f;
+    clockin_reset(&dk.ci, DK_PPB_EFF());
     s_run = true;
     // unpinned: file-reading tasks pinned to core 0 cause WiFi audio clicks
     xTaskCreate(reader_task, "deck_reader", 4096, NULL, 6, NULL);
@@ -390,7 +419,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
                 int ni = s_loop_len_idx + steps7;
                 if (ni < 0) ni = 0;
                 if (ni > 4) ni = 4;
-                float ppb = dk_ppb[dk.ppb_idx];
+                float ppb = DK_PPB_EFF();
                 int min_beats = ppb >= 1.0f ? 1 : (int)(1.0f / ppb + 0.5f);
                 while (ni < 4 && dk_loop_beats[ni] < min_beats) ni++;
                 uint32_t nl = (uint32_t)dk_loop_beats[ni] * beat_tf_lp;
@@ -470,7 +499,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         else if (dk.pitch_cv > 3072) m = 2.0f;
         dk.speed_mult = m;
         if (dk.ci.clk.locked && dk.ci.clk.period > 0 && beat_tf > 0) {
-            float ppb = dk_ppb[dk.ppb_idx];
+            float ppb = DK_PPB_EFF();
             // pulse-level phase lock (works for any mult/div): compare phase
             // within one external pulse against the track's matching segment
             float seg_tf = (float)beat_tf / ppb * m;           // track frames per pulse
@@ -608,7 +637,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     // extracted from). set_ppb every block keeps the pulse-rate sanity gates
     // scaled and, ON an actual mult/div change, drops the lock for a clean
     // 2-pulse relock instead of letting the guards defend the stale period.
-    clockin_set_ppb(&dk.ci, dk_ppb[dk.ppb_idx]);
+    clockin_set_ppb(&dk.ci, DK_PPB_EFF());
     clockin_block(&dk.ci, io->cv[dk.clk_src & 7], frames);
 }
 
@@ -623,6 +652,7 @@ static cJSON *deck_preset_save(void)
     cJSON_AddBoolToObject(o, "loop_freeze", dk.loop_freeze);
     cJSON_AddNumberToObject(o, "clk_src", dk.clk_src);
     cJSON_AddNumberToObject(o, "ppb", dk.ppb_idx);
+    cJSON_AddNumberToObject(o, "clkx", (double)dk.clk_scale);
     return o;
 }
 
@@ -642,6 +672,10 @@ static void deck_preset_load(const cJSON *node)
         if (dk.ppb_idx > 5) dk.ppb_idx = 5;
     }
     // only (re)load when the track actually changes — a remote "Apply" that
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clkx")) && cJSON_IsNumber(j)) {
+        float cs = (float)j->valuedouble;
+        dk.clk_scale = (cs == 0.5f || cs == 2.0f) ? cs : 1.0f;
+    }
     // only touched sync/ppb/clk_src must NOT reload the track (that re-triggers
     // the ring refill + PLL cold-relock and makes the deck sound like it reset)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "track")) && cJSON_IsString(j) && j->valuestring[0]

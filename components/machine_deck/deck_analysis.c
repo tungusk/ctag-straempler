@@ -34,7 +34,8 @@ void deck_analysis_commit(void)
 {
     if (dk.an_state != DK_AN_DONE || dk.an_bpm <= 0) return;
     if (strcmp(s_an_track, dk.track) == 0) {   // adopt live only if still loaded
-        dk.track_bpm = dk.an_bpm;
+        dk.bpm_raw = dk.an_bpm;
+        dk.track_bpm = dk.an_bpm * (dk.feel > 0 ? dk.feel : 1.0f);
         dk.grid_offset = dk.an_grid;
     }
 
