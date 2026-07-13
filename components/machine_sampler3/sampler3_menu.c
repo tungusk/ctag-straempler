@@ -6,6 +6,7 @@
 // that hidden state read as "sampler only plays monitor audio").
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "menusys.h"
@@ -127,19 +128,58 @@ static color_t lane_bg(int st){
     }
 }
 
-// the playbar: state color inside the crop window, heavily dimmed outside
-// (the crop viz lives HERE, not in the waveform)
-static void draw_playbar(int i, int px, int pw, int st, s3_voice_t *v){
-    int by = PANEL_Y + PANEL_H - PANEL_BAR_H - 4;
+// the playbar, deck treatment (Arlo): BLACK canvas, tiny-white waveform,
+// FAT state-colored border. The CROP window lives in the waveform
+// brightness — bright columns inside the loop, dimmed outside.
+#define PB_BW 3     // fat state border
+
+static void playbar_slice(int i, int px, int pw, int st, const s3_voice_t *v,
+                          int sx, int sw){
+    int by = PANEL_Y + PANEL_H - 2 * PANEL_BAR_H - 4;
     int bx = px + 3, bw = pw - 6;
-    color_t on = lane_bg(st);
-    color_t offc = {(uint8_t)(on.r / 4), (uint8_t)(on.g / 4), (uint8_t)(on.b / 4)};
+    TFT_fillRect(sx, by, sw, PANEL_BAR_H, (color_t){0, 0, 0});
+    // BOLD waveform: 2px strokes, pure white, sqrt amplitude lift so quiet
+    // material still reads at this size
+    if (v->wf_valid){
+        int wy = by + 2, wh = PANEL_BAR_H - 4;
+        color_t wc = {255, 255, 255};
+        for (int c = 0; c < bw - 1; c += 2){
+            int x = bx + c;
+            if (x + 2 <= sx || x >= sx + sw) continue;
+            float a = sqrtf((float)v->wf[(c * S3_WF_W) / bw] / 255.0f);
+            int h = (int)(a * (float)wh);
+            if (h < 2) h = 2;
+            TFT_fillRect(x, wy + (wh - h) / 2, 2, h, wc);
+        }
+    }
+    // the LOOP BRACKET: the fat state-colored box ends sit AT the crop
+    // points — the box IS the window (the bright/dim split didn't read)
+    {
+        color_t on = lane_bg(st);
+        int x0 = bx + s_lane_ccs[i] * bw / 100;
+        int x1 = bx + s_lane_cce[i] * bw / 100;
+        if (x1 > x0 + 2 * PB_BW){
+            struct { int x, w, y, h; } seg[4] = {
+                { x0, x1 - x0, by, PB_BW },                        // top
+                { x0, x1 - x0, by + PANEL_BAR_H - PB_BW, PB_BW },  // bottom
+                { x0, PB_BW, by, PANEL_BAR_H },                    // left end
+                { x1 - PB_BW, PB_BW, by, PANEL_BAR_H },            // right end
+            };
+            for (int k = 0; k < 4; k++){
+                int a = seg[k].x > sx ? seg[k].x : sx;
+                int b = (seg[k].x + seg[k].w) < (sx + sw) ? (seg[k].x + seg[k].w)
+                                                          : (sx + sw);
+                if (b > a) TFT_fillRect(a, seg[k].y, b - a, seg[k].h, on);
+            }
+        }
+    }
+}
+
+static void draw_playbar(int i, int px, int pw, int st, s3_voice_t *v){
+    int bx = px + 3, bw = pw - 6;
     s_lane_ccs[i] = crop_cell(v->ui_cs, s_lane_ccs[i]);   // draw FROM the cells
     s_lane_cce[i] = crop_cell(v->ui_ce, s_lane_cce[i]);
-    int x0 = bx + s_lane_ccs[i] * bw / 100;
-    int x1 = bx + s_lane_cce[i] * bw / 100;
-    TFT_fillRect(bx, by, bw, PANEL_BAR_H, offc);
-    if (x1 > x0) TFT_fillRect(x0, by, x1 - x0, PANEL_BAR_H, on);
+    playbar_slice(i, px, pw, st, v, bx, bw);   // black + wf + loop bracket
     s_lane_barx[i] = -1;
 }
 
@@ -165,14 +205,17 @@ static void draw_lane(int i, bool full){
         _fg = sel ? TFT_WHITE : (color_t){70, 70, 90};
         TFT_drawRect(px, PANEL_Y, pw, PANEL_H, _fg);
         if (sel) TFT_drawRect(px + 1, PANEL_Y + 1, pw - 2, PANEL_H - 2, _fg);
-        // big track numeral
+        // big track numeral + text stack: track 2 mirrors track 1 (Arlo) —
+        // its numeral/name/mode/state hug the RIGHT edge
+        bool mirror = (i == 1);
         Font f = cfont;
         TFT_setFont(DEJAVU24_FONT, NULL);
         char num[12];
         snprintf(num, sizeof(num), "%d", i + 1);
         _bg = PANEL_BG;
         _fg = TFT_WHITE;
-        TFT_print(num, px + 8, PANEL_Y + 8);
+        TFT_print(num, mirror ? px + pw - TFT_getStringWidth(num) - 8 : px + 8,
+                  PANEL_Y + 8);
         cfont = f;
         // name + mode, wrapped small under the numeral
         _fg = sel ? TFT_WHITE : TFT_LIGHTGREY;
@@ -180,23 +223,27 @@ static void draw_lane(int i, bool full){
         snprintf(nm, sizeof(nm), "%.12s", v->name[0] ? v->name : "(empty)");
         snprintf(md, sizeof(md), "%s%s", v->playmode == S3_MODE_LOOP ? "LOOP" : "1SHOT",
                  v->reverse ? " REV" : "");
-        TFT_print(nm, px + 8, PANEL_Y + 44);
-        TFT_print(md, px + 8, PANEL_Y + 64);
+        TFT_print(nm, mirror ? px + pw - TFT_getStringWidth(nm) - 8 : px + 8,
+                  PANEL_Y + 44);
+        TFT_print(md, mirror ? px + pw - TFT_getStringWidth(md) - 8 : px + 8,
+                  PANEL_Y + 64);
         const char *stn = st == 3 ? "REC" : st == 2 ? "ARMED" : st == 1 ? "PLAY" : "";
-        if (stn[0]) TFT_print((char*)stn, px + 8, PANEL_Y + 84);
-        // waveform thumbnail strip (playback order — reversed in reverse mode),
-        // clear of the state text above and the playbar below
-        if (v->wf_valid){
-            int wy = PANEL_Y + 106, wh = 30;
-            int wx = px + 4, ww = pw - 8;
-            color_t wc = {225, 225, 225};
-            for (int c = 0; c < ww; c++){
-                int h = (int)v->wf[(c * S3_WF_W) / ww] * wh / 255;
-                if (h < 1) h = 1;
-                TFT_fillRect(wx + c, wy + (wh - h) / 2, 1, h, wc);
-            }
+        if (stn[0]) TFT_print((char*)stn,
+                              mirror ? px + pw - TFT_getStringWidth((char*)stn) - 8 : px + 8,
+                              PANEL_Y + 84);
+        // total length of the loaded audio, right-justified under the bar
+        if (v->play_len){
+            char tl[16];
+            unsigned long ts = v->play_len / S3_RATE;
+            unsigned long td = (unsigned long)((uint64_t)(v->play_len % S3_RATE) * 10 / S3_RATE);
+            if (ts < 60) snprintf(tl, sizeof(tl), "%lu.%lus", ts, td);
+            else snprintf(tl, sizeof(tl), "%lu:%02lu", ts / 60, ts % 60);
+            _fg = TFT_LIGHTGREY;
+            _bg = PANEL_BG;
+            TFT_print(tl, px + pw - TFT_getStringWidth(tl) - 6,
+                      PANEL_Y + PANEL_H - PANEL_BAR_H);
         }
-        // the STATE lives here: a thick colored playbar at the panel floor
+        // the waveform + crop + state all live in the playbar now
         draw_playbar(i, px, pw, st, v);
         _bg = TFT_BLACK;
         s_lane_native[i] = -1;      // badge redraws after a full repaint
@@ -209,16 +256,18 @@ static void draw_lane(int i, bool full){
             crop_cell(v->ui_ce, s_lane_cce[i]) != s_lane_cce[i])
             draw_playbar(i, px, pw, st, v);
     }
-    // native-speed badge: "1:1" pops top-right while the knob sits at unity
+    // native-speed badge: "1:1" pops in the corner OPPOSITE the numeral
+    // (mirror layout: track 1 right, track 2 left)
     {
         int nat = (v->cur_rate == 1.0f) ? 1 : 0;
         if (nat != s_lane_native[i]){
             s_lane_native[i] = nat;
             _bg = PANEL_BG;
-            TFT_fillRect(px + pw - 40, PANEL_Y + 6, 36, TFT_getfontheight() + 2, PANEL_BG);
+            TFT_fillRect(i == 1 ? px + 4 : px + pw - 40, PANEL_Y + 6, 36,
+                         TFT_getfontheight() + 2, PANEL_BG);
             if (nat){
                 _fg = ACCENT;
-                TFT_print("1:1", px + pw - 36, PANEL_Y + 8);
+                TFT_print("1:1", i == 1 ? px + 8 : px + pw - 36, PANEL_Y + 8);
             }
             _bg = TFT_BLACK;
         }
@@ -229,23 +278,15 @@ static void draw_lane(int i, bool full){
     // flickering notches into the loop-point edges every marker pass
     // ("loop points jump around").
     if (v->play_len){
-        int by = PANEL_Y + PANEL_H - PANEL_BAR_H - 4;
+        int by = PANEL_Y + PANEL_H - 2 * PANEL_BAR_H - 4;
         int bx = px + 3, bw = pw - 6;
-        int x = bx + 1 + (int)((uint64_t)(v->rpos_i < v->play_len ? v->rpos_i : v->play_len)
-                               * (uint32_t)(bw - 6) / v->play_len);
+        int x = bx + PB_BW + 1 +
+                (int)((uint64_t)(v->rpos_i < v->play_len ? v->rpos_i : v->play_len)
+                      * (uint32_t)(bw - 2 * PB_BW - 6) / v->play_len);
         if (x != s_lane_barx[i]){
-            if (s_lane_barx[i] > 0 && s_lane_ccs[i] >= 0){
-                int sx = s_lane_barx[i];
-                color_t on = lane_bg(st);
-                color_t dim = {(uint8_t)(on.r / 4), (uint8_t)(on.g / 4), (uint8_t)(on.b / 4)};
-                int x0 = bx + s_lane_ccs[i] * bw / 100;   // bar's bright span,
-                int x1 = bx + s_lane_cce[i] * bw / 100;   // exactly as drawn
-                int i0 = sx > x0 ? sx : x0;               // bright overlap
-                int i1 = (sx + 4) < x1 ? (sx + 4) : x1;
-                TFT_fillRect(sx, by + 1, 4, PANEL_BAR_H - 2, dim);
-                if (i1 > i0) TFT_fillRect(i0, by + 1, i1 - i0, PANEL_BAR_H - 2, on);
-            }
-            TFT_fillRect(x, by + 1, 4, PANEL_BAR_H - 2, (color_t){235, 235, 235});
+            if (s_lane_barx[i] > 0)           // restore black + wf + bracket slice
+                playbar_slice(i, px, pw, st, v, s_lane_barx[i], 4);
+            TFT_fillRect(x, by + PB_BW, 4, PANEL_BAR_H - 2 * PB_BW, (color_t){235, 235, 235});
             s_lane_barx[i] = x;
         }
     }
@@ -434,7 +475,7 @@ static void setup_redraw(int pos, int sel){
     _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
     _fg = TFT_WHITE;
     TFT_print("Sampler Setup", 6, 4);
-    menuTFTPrintAffordance("System", pos == -1);
+    menuTFTPrintAffordance("Machine", pos == -1);
     for (int i = 0; i < S3_SETUP_N; i++) setup_row_redraw(i, pos, sel);
 }
 
