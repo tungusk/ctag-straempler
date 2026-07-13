@@ -341,11 +341,14 @@ static void render_task(void *pv)
         if (s_have_module && trk.sound_dirty) apply_sound_mode();
 
         // Keep the render only modestly ahead of playback: a deep buffer meant
-        // loop edits took "a couple of plays" to be heard. ~0.5 s normally,
-        // ~0.25 s while looping so position/length changes land almost at once.
+        // loop edits took "a couple of plays" to be heard. ~0.5 s free-running;
+        // ~0.25 s while looping OR synced+locked (convergence S3: halves the
+        // nudge latency; revert to /2 if S starts climbing in /status).
         // (Module is fully in PSRAM — no SD latency needs a big read-ahead.)
-        uint32_t fill_ahead = trk.loop_engage ? (uint32_t)(TRK_RATE / 4)
-                                              : (uint32_t)(TRK_RATE / 2);
+        uint32_t fill_ahead = (trk.loop_engage ||
+                               (trk.sync && trk.ci.clk.locked))
+                                  ? (uint32_t)(TRK_RATE / 4)
+                                  : (uint32_t)(TRK_RATE / 2);
         bool room = (trk.wpos - trk.rpos) < fill_ahead;
         if (trk.playing && trk.state == TRK_READY && s_have_module && room) {
             struct xmp_frame_info fi;
