@@ -24,6 +24,7 @@ static const color_t PAD_IDLE  = {14, 14, 20};   // = sampler3 PANEL_BG
 static const color_t PAD_EMPTY = {8, 8, 12};
 static const color_t WF_WHITE  = {235, 235, 235}; // no playhead here to compete with
 static const color_t ACCENT_F  = {40, 200, 230};  // the filter's sweep strip
+static const color_t WF_B      = {120, 180, 235}; // the B layer: hue IS its identity
 // hit flash cycles red -> green -> blue per trigger
 static const color_t PAD_LIT[3] = {{230, 60, 50}, {40, 200, 90}, {60, 120, 240}};
 static uint8_t s_flash_col[DR_PADS];
@@ -31,6 +32,7 @@ static uint8_t s_flash_col[DR_PADS];
 // the selected pad lives in dr.sel_pad: the Live encoder picks it, CV6/CV7
 // perform it (the engine reads it), and the Pads editor + browser act on it
 static int s_load_ret = M_DRUM_PADS;   // page the sample browser returns to
+static int s_layer = 0;                // Pads page + browser: which layer they edit
 
 // shared sorted library list (sample_ram) — big cards hold >200 samples
 static char (*s_samples)[24] = NULL;
@@ -39,8 +41,9 @@ static int  s_n_samples = 0, s_sample_idx = 0;
 static void refresh_samples(void){
     s_n_samples = sample_list_recent(&s_samples);   // 512, newest first — as everywhere
     s_sample_idx = 0;
+    const char *cur = dr.pad[dr.sel_pad].ly[s_layer].sample;
     for (int i = 0; i < s_n_samples; i++)
-        if (strcmp(s_samples[i], dr.pad[dr.sel_pad].sample) == 0) { s_sample_idx = i; break; }
+        if (strcmp(s_samples[i], cur) == 0) { s_sample_idx = i; break; }
 }
 
 // ---- Live page: pad grid ----------------------------------------------------
@@ -82,10 +85,18 @@ static void pad_dot(int i, bool on){
     int x, y, w, h, cx, cy, nl, nt;
     pad_cell_rect(i, &x, &y, &w, &h);
     pad_corners(i, x, y, w, h, &cx, &cy, &nl, &nt);
+    dr_pad_t *p = &dr.pad[i];
     int r = (dr.n_pads <= 4) ? 9 : 6;
-    color_t c = on ? PAD_LIT[s_flash_col[i] % 3]
-                   : (dr.pad[i].len ? PAD_IDLE : PAD_EMPTY);
-    TFT_fillCircle(cx, cy, r, c);
+    color_t idle = p->ly[0].len ? PAD_IDLE : PAD_EMPTY;
+    // which layer is sounding shows in the dot's SHAPE, not another colour — the
+    // R/G/B flash cycle has to survive (it's what makes a roll readable)
+    if (on && dr.layers_on && p->cur == 1){
+        TFT_fillCircle(cx, cy, r, idle);                       // B: a ring
+        TFT_drawCircle(cx, cy, r, PAD_LIT[s_flash_col[i] % 3]);
+        TFT_drawCircle(cx, cy, r - 1, PAD_LIT[s_flash_col[i] % 3]);
+    } else {
+        TFT_fillCircle(cx, cy, r, on ? PAD_LIT[s_flash_col[i] % 3] : idle);
+    }
     s_lit[i] = on;
 }
 
@@ -95,12 +106,32 @@ static void pad_dot(int i, bool on){
 // handed the gap the text and the hit dot leave behind.
 static void pad_waveform(int i, int bx, int by, int bw, int bh){
     dr_pad_t *p = &dr.pad[i];
-    if (!p->wf_valid || bh < 6) return;
+    if (bh < 6) return;
+    bool split = dr.layers_on && p->ly[1].wf_valid && p->ly[1].len;
+    if (!split){                                  // exactly as before: A, centred
+        if (!p->ly[0].wf_valid) return;
+        for (int c = 0; c < bw - 1; c += 2){
+            float a = sqrtf((float)p->ly[0].wf[(c * DR_WF_W) / bw] / 255.0f);
+            int ch = (int)(a * (float)bh);
+            if (ch < 2) ch = 2;
+            TFT_fillRect(bx + c, by + (bh - ch) / 2, 2, ch, WF_WHITE);
+        }
+        return;
+    }
+    // two layers: A grows UP from the midline, B grows DOWN, in its own hue. No
+    // extra text — the cell has none to spare.
+    int mid = by + bh / 2;
     for (int c = 0; c < bw - 1; c += 2){
-        float a = sqrtf((float)p->wf[(c * DR_WF_W) / bw] / 255.0f);
-        int ch = (int)(a * (float)bh);
-        if (ch < 2) ch = 2;
-        TFT_fillRect(bx + c, by + (bh - ch) / 2, 2, ch, WF_WHITE);
+        if (p->ly[0].wf_valid){
+            float a = sqrtf((float)p->ly[0].wf[(c * DR_WF_W) / bw] / 255.0f);
+            int ch = (int)(a * (float)(mid - by));
+            if (ch < 2) ch = 2;
+            TFT_fillRect(bx + c, mid - ch, 2, ch, WF_WHITE);
+        }
+        float b = sqrtf((float)p->ly[1].wf[(c * DR_WF_W) / bw] / 255.0f);
+        int chb = (int)(b * (float)(by + bh - mid));
+        if (chb < 2) chb = 2;
+        TFT_fillRect(bx + c, mid, 2, chb, WF_B);
     }
 }
 
@@ -111,7 +142,7 @@ static void draw_pad_cell(int i, bool lit){
     dr_pad_t *p = &dr.pad[i];
     bool sel = (i == dr.sel_pad);
     bool big = (dr.n_pads <= 4);
-    _bg = p->len ? PAD_IDLE : PAD_EMPTY;    // static cell; the dot does the flashing
+    _bg = p->ly[0].len ? PAD_IDLE : PAD_EMPTY;  // static cell; the dot does the flashing
     TFT_fillRect(x, y, w, h, _bg);
     // the selected pad wears a BOLD white outline — it's what the encoder turns
     // pick, what CV6/CV7 perform, and what a press loads a sample into
@@ -122,11 +153,20 @@ static void draw_pad_cell(int i, bool lit){
         TFT_drawRect(x + 2, y + 2, w - 4, h - 4, _fg);
     }
 
-    char nm[10], n[16], src[16];
-    snprintf(nm, sizeof(nm), "%.8s", p->sample[0] ? p->sample : "-");
+    char nm[10], n[16], src[16], src2[16];
+    snprintf(nm, sizeof(nm), "%.8s", p->ly[0].sample[0] ? p->ly[0].sample : "-");
     snprintf(n, sizeof(n), "%d", i + 1);
+    int sa = p->ly[0].trig_src, sb = p->ly[1].trig_src;
     if (dr.cv_select) snprintf(src, sizeof(src), "sel");
-    else snprintf(src, sizeof(src), "CV%d", (p->trig_src & 7) + 1);   // 1..8, always
+    else if (sa == DR_SRC_NONE) snprintf(src, sizeof(src), "--");
+    else snprintf(src, sizeof(src), "CV%d", (sa & 7) + 1);            // 1..8, always
+    // the B layer's own trigger, under A's, in B's hue. Only A's NAME is captioned;
+    // B's lives on the Pads page (a name that changes with the last hit strobes).
+    bool showb = dr.layers_on && p->ly[1].len;
+    if (!showb)                 src2[0] = 0;
+    else if (dr.cv_select)      snprintf(src2, sizeof(src2), "TR2");
+    else if (sb == DR_SRC_NONE) snprintf(src2, sizeof(src2), "--");
+    else snprintf(src2, sizeof(src2), "CV%d", (sb & 7) + 1);
     Font f = cfont;
 
     // numeral + name on the edge opposite the dot: numeral in the outer corner,
@@ -136,7 +176,7 @@ static void draw_pad_cell(int i, bool lit){
     int ty = num_top ? y + 4 : y + h - fh - 4;
     _fg = p->enabled ? TFT_WHITE : (color_t){90, 90, 90};
     TFT_print(n, num_left ? x + 6 : x + w - TFT_getStringWidth(n) - 6, ty);
-    _fg = p->len ? TFT_WHITE : (color_t){110, 110, 110};
+    _fg = p->ly[0].len ? TFT_WHITE : (color_t){110, 110, 110};
     TFT_print(nm, x + w / 2 - TFT_getStringWidth(nm) / 2, ty);
 
     // trigger source, small, in the free corner: the dot's edge, outer side
@@ -144,7 +184,13 @@ static void draw_pad_cell(int i, bool lit){
     int sfh = TFT_getfontheight();
     int sy = num_top ? y + h - sfh - 4 : y + 4;
     _fg = (color_t){110, 130, 170};
-    TFT_print(src, num_left ? x + 6 : x + w - TFT_getStringWidth(src) - 6, sy);
+    int sy_a = src2[0] ? (num_top ? sy - sfh - 1 : sy) : sy;   // stack the two labels
+    TFT_print(src, num_left ? x + 6 : x + w - TFT_getStringWidth(src) - 6, sy_a);
+    if (src2[0]){
+        _fg = WF_B;
+        TFT_print(src2, num_left ? x + 6 : x + w - TFT_getStringWidth(src2) - 6,
+                  num_top ? sy : sy + sfh + 1);
+    }
     cfont = f;
     TFT_setFont(DEFAULT_FONT, NULL);
 
@@ -156,11 +202,13 @@ static void draw_pad_cell(int i, bool lit){
         int r = 9;
         int dot_top = cy - r, dot_bot = cy + r;
         int top, bot;
+        int lab_top = src2[0] ? sy_a : sy;              // the label block, both lines
+        int lab_bot = src2[0] ? sy + sfh + 1 + sfh : sy + sfh;
         if (num_top){                                   // caption on top, dot below
             top = ty + fh + 3;
-            bot = (sy < dot_top ? sy : dot_top) - 3;
+            bot = (lab_top < dot_top ? lab_top : dot_top) - 3;
         } else {                                        // dot on top, caption below
-            int under = sy + sfh > dot_bot ? sy + sfh : dot_bot;
+            int under = lab_bot > dot_bot ? lab_bot : dot_bot;
             top = under + 3;
             bot = ty - 3;
         }
@@ -308,7 +356,8 @@ static int drum_live_handler(int it_id, int event, void *ev_data){
                 draw_filter_box();
                 break;
             }
-            refresh_samples();                      // a pad: load a sample into it
+            s_layer = 0;                            // a pad: load its A sample (B is
+            refresh_samples();                      // a deliberate Pads-page act)
             s_load_ret = M_DRUM_LIVE;
             return M_DRUM_LOAD;
         case EV_LONG_PRESS: return M_DRUM_SETUP;   // Live <-> Setup, no hub
@@ -340,38 +389,61 @@ static void row_draw(int i, int pos, int sel, const char *label, const char *raw
 }
 
 // ---- Pads page: per-pad editor (sub-page of Setup) ---------------------------
-static const char *pads_labels[] = {"Pad", "Sample", "Trig In", "Level", "Pan",
-                                    "Decay", "Knob7 CW", "Retrig", "Enabled"};
-#define DR_PADS_N 9
-// pad select, Knob7 CW and Enabled are click-to-advance; the rest click-to-edit
-#define PADS_IS_TOGGLE(i) ((i) == 0 || (i) == 6 || (i) == 8)
+// Rows are ID-keyed and the visible list is rebuilt per entry (Layer only exists
+// when B layers are on). The old index-keyed toggle macro would have silently
+// mis-assigned click behaviour the moment a row was inserted.
+enum { PR_PAD = 0, PR_LAYER, PR_SAMPLE, PR_TRIG, PR_LEVEL, PR_PAN, PR_DECAY,
+       PR_CW, PR_RETRIG, PR_ENABLED, PR_COUNT };
 
-static void pads_value_str(int i, char *v, size_t n){
+static const char *pads_labels[PR_COUNT] = {"Pad", "Layer", "Sample", "Trig In",
+                                            "Level", "Pan", "Decay", "Knob7 CW",
+                                            "Retrig", "Enabled"};
+// small option sets flip on a click; ranges keep click-to-edit
+#define PADS_IS_TOGGLE(id) ((id) == PR_PAD || (id) == PR_LAYER || \
+                            (id) == PR_CW  || (id) == PR_ENABLED)
+
+static int s_prows[PR_COUNT], s_pnrows;
+
+static void pads_build_rows(void){
+    s_pnrows = 0;
+    for (int id = 0; id < PR_COUNT; id++){
+        if (id == PR_LAYER && !dr.layers_on) continue;
+        s_prows[s_pnrows++] = id;
+    }
+    if (!dr.layers_on) s_layer = 0;
+}
+
+static void pads_value_str(int id, char *v, size_t n){
     dr_pad_t *p = &dr.pad[dr.sel_pad];
-    switch(i){
-        case 0: snprintf(v, n, "%d / %d", dr.sel_pad + 1, dr.n_pads); break;
-        case 1: snprintf(v, n, "%s", p->sample[0] ? p->sample : "(none)"); break;
-        case 2: snprintf(v, n, "CV%d", p->trig_src + 1); break;
+    dr_layer_t *L = &p->ly[s_layer];       // Sample + Trig In address the LAYER;
+    switch(id){                            // everything else is the pad
+        case PR_PAD:   snprintf(v, n, "%d / %d", dr.sel_pad + 1, dr.n_pads); break;
+        case PR_LAYER: snprintf(v, n, "%s", s_layer ? "B" : "A"); break;
+        case PR_SAMPLE: snprintf(v, n, "%s", L->sample[0] ? L->sample : "(none)"); break;
+        case PR_TRIG:
+            if (L->trig_src == DR_SRC_NONE) snprintf(v, n, "none");
+            else snprintf(v, n, "CV%d", (L->trig_src & 7) + 1);
+            break;
         // level reads as % of unity: 100 % is the sample as recorded, past that
         // the pad is driven ("drv" = into the soft clipper)
-        case 3: {
+        case PR_LEVEL: {
             int pct = (int)p->level * 100 / DR_LEVEL_UNITY;
             if (p->level > DR_LEVEL_UNITY) snprintf(v, n, "%d%% drv", pct);
             else snprintf(v, n, "%d%%", pct);
             break;
         }
-        case 4:
+        case PR_PAN:
             if (p->pan == 128) snprintf(v, n, "C");
             else if (p->pan < 128) snprintf(v, n, "L%d", (128 - p->pan) * 100 / 128);
             else snprintf(v, n, "R%d", (p->pan - 128) * 100 / 127);
             break;
-        // knob7 CCW writes decay; CW writes whichever target row 6 selects, so the
+        // knob7 CCW writes decay; CW writes whichever target PR_CW selects, so each
         // row shows the value that is actually live
-        case 5:
+        case PR_DECAY:
             if (p->decay_ms == 0) snprintf(v, n, "FULL");
             else snprintf(v, n, "%dms", p->decay_ms);
             break;
-        case 6:
+        case PR_CW:
             if (p->cw_mode == DR_CW_START)
                 snprintf(v, n, "start %d%%", (int)p->start_off * 100 / 255);
             else if (p->cw_mode == DR_CW_ATTACK)
@@ -381,56 +453,72 @@ static void pads_value_str(int i, char *v, size_t n){
             else
                 snprintf(v, n, "retrig");
             break;
-        case 7:
+        case PR_RETRIG:
             if (p->loop_reps == DR_REPS_INF) snprintf(v, n, "INF");
             else if (p->loop_reps) snprintf(v, n, "%d", p->loop_reps);
             else snprintf(v, n, "sample");     // run the loop out over the sample
             break;
-        case 8: snprintf(v, n, "%s", p->enabled ? "ON" : "OFF"); break;
+        case PR_ENABLED: snprintf(v, n, "%s", p->enabled ? "ON" : "OFF"); break;
         default: v[0] = 0;
     }
 }
 
-static void pads_row_redraw(int i, int pos, int sel){
+static void pads_row_redraw(int idx, int pos, int sel){
     char raw[24];
-    pads_value_str(i, raw, sizeof(raw));
-    row_draw(i, pos, sel, pads_labels[i], raw);
+    int id = s_prows[idx];
+    pads_value_str(id, raw, sizeof(raw));
+    row_draw(idx, pos, sel, pads_labels[id], raw);
 }
 
 static void pads_redraw(int pos, int sel){
     TFT_resetclipwin();
     _bg = SCREEN_BG; TFT_fillScreen(SCREEN_BG);
     _fg = TFT_WHITE;
-    TFT_print("Drum Pads", 6, 4);
-    for (int i = 0; i < DR_PADS_N; i++) pads_row_redraw(i, pos, sel);
+    char h[24];
+    snprintf(h, sizeof(h), "Drum Pads");
+    TFT_print(h, 6, 4);
+    for (int i = 0; i < s_pnrows; i++) pads_row_redraw(i, pos, sel);
     _bg = SCREEN_BG;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("press Sample to open the browser; hold to go back", 8,
-              _height - TFT_getfontheight() - 1);
+    TFT_print(dr.layers_on ? "B chokes A: one voice, two sounds"
+                           : "press Sample to open the browser; hold to go back",
+              8, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
-static void pads_adj(int i, int dir){
+// selector/trigger cycle: none -> CV1..CV8 -> none
+static int src_cycle(int src, int dir){
+    src += dir;
+    if (src > 7) src = DR_SRC_NONE;
+    if (src < DR_SRC_NONE) src = 7;
+    return src;
+}
+
+static void pads_adj(int id, int dir){
     dr_pad_t *p = &dr.pad[dr.sel_pad];
-    switch(i){
-        case 0: dr.sel_pad = (dr.sel_pad + (dir > 0 ? 1 : dr.n_pads - 1)) % dr.n_pads; break;
-        case 2: p->trig_src = (p->trig_src + (dir > 0 ? 1 : 7)) & 7; break;
-        case 3: {
+    dr_layer_t *L = &p->ly[s_layer];
+    switch(id){
+        case PR_PAD:
+            dr.sel_pad = (dr.sel_pad + (dir > 0 ? 1 : dr.n_pads - 1)) % dr.n_pads;
+            break;
+        case PR_LAYER: s_layer = s_layer ? 0 : 1; break;
+        case PR_TRIG:  L->trig_src = src_cycle(L->trig_src, dir); break;
+        case PR_LEVEL: {
             int lv = (int)p->level + dir * 16;
             if (lv < 0) lv = 0;
             if (lv > DR_LEVEL_MAX) lv = DR_LEVEL_MAX;   // past unity = drive
             p->level = (uint16_t)lv;
             break;
         }
-        case 4: {
+        case PR_PAN: {
             int pn = (int)p->pan + dir * 16;
             if (pn < 0) pn = 0;
             if (pn > 255) pn = 255;
             p->pan = (uint8_t)pn;
             break;
         }
-        case 5: {
+        case PR_DECAY: {
             int dm = (int)p->decay_ms + dir * 50;
             if (dm < 0) dm = 0;
             if (dm > 5000) dm = 5000;
@@ -438,9 +526,9 @@ static void pads_adj(int i, int dir){
             break;
         }
         // switching the CW target retires the others — leaving a stale attack (or
-        // skipped head, or loop) applied to a pad whose knob no longer drives it
+        // skipped head, or retrig) applied to a pad whose knob no longer drives it
         // would be a setting nothing on screen explains
-        case 6:
+        case PR_CW:
             p->cw_mode = (uint8_t)((p->cw_mode + 1) % DR_CW_MODES);
             p->attack_ms = 0;
             p->start_off = 0;
@@ -448,7 +536,7 @@ static void pads_adj(int i, int dir){
             break;
         // the retrig ladder: run the loop out over the sample, a fixed count, or
         // INF — hold the stutter until the pad is hit again
-        case 7: {
+        case PR_RETRIG: {
             static const uint8_t reps[] = {0, 2, 3, 4, 6, 8, 12, 16, DR_REPS_INF};
             const int nr = sizeof(reps) / sizeof(reps[0]);
             int k = 0;
@@ -459,36 +547,45 @@ static void pads_adj(int i, int dir){
             p->loop_reps = reps[k];
             break;
         }
-        case 8: p->enabled = !p->enabled; break;
+        case PR_ENABLED: p->enabled = !p->enabled; break;
     }
 }
 
 static int drum_pads_handler(int it_id, int event, void *ev_data){
     static int pos = 0, sel = 0;
     switch(event){
-        case EV_ENTERED_MENU: sel = 0; if (dr.sel_pad >= dr.n_pads) dr.sel_pad = 0; pads_redraw(pos, sel); break;
+        case EV_ENTERED_MENU:
+            sel = 0;
+            if (dr.sel_pad >= dr.n_pads) dr.sel_pad = 0;
+            pads_build_rows();
+            if (pos >= s_pnrows) pos = 0;
+            pads_redraw(pos, sel);
+            break;
         case EV_FWD:
         case EV_BWD: {
             int dir = (event == EV_FWD) ? +1 : -1;
             if(sel){
-                pads_adj(pos, dir);
+                pads_adj(s_prows[pos], dir);
                 pads_row_redraw(pos, pos, sel);      // value edit: one row only
             } else {
-                pos = (pos + dir + DR_PADS_N) % DR_PADS_N;
+                pos = (pos + dir + s_pnrows) % s_pnrows;
                 pads_redraw(pos, sel);
             }
             break;
         }
-        case EV_SHORT_PRESS:
-            if(pos == 1){ refresh_samples(); s_load_ret = M_DRUM_PADS; return M_DRUM_LOAD; }
-            if(PADS_IS_TOGGLE(pos)){
-                pads_adj(pos, +1);                   // small option set: flip in place
-                if (pos == 0) pads_redraw(pos, sel); // pad switch: every value changes
+        case EV_SHORT_PRESS: {
+            int id = s_prows[pos];
+            if(id == PR_SAMPLE){ refresh_samples(); s_load_ret = M_DRUM_PADS; return M_DRUM_LOAD; }
+            if(PADS_IS_TOGGLE(id)){
+                pads_adj(id, +1);                    // small option set: flip in place
+                // switching pad OR layer changes every value on the page
+                if (id == PR_PAD || id == PR_LAYER) pads_redraw(pos, sel);
                 else pads_row_redraw(pos, pos, 0);
             } else {
                 sel = !sel; pads_row_redraw(pos, pos, sel);
             }
             break;
+        }
         case EV_LONG_PRESS: return M_DRUM_SETUP;   // Pads is a sub-page of Setup
         default: break;
     }
@@ -502,7 +599,12 @@ static void load_redraw(void){
     int fh = TFT_getfontheight();
     _bg = SCREEN_BG; _fg = TFT_LIGHTGREY;
     char h[64];
-    snprintf(h, sizeof(h), "Pad %d  (%d/%d)", dr.sel_pad + 1, s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
+    if (dr.layers_on)
+        snprintf(h, sizeof(h), "Pad %d%c  (%d/%d)", dr.sel_pad + 1, s_layer ? 'B' : 'A',
+                 s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
+    else
+        snprintf(h, sizeof(h), "Pad %d  (%d/%d)", dr.sel_pad + 1,
+                 s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
     TFT_print(h, _width / 2 - TFT_getStringWidth(h) / 2, 4);
     if (!s_n_samples){
         char *m = "no samples in usr/";
@@ -538,11 +640,11 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
         case EV_FWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + 1) % s_n_samples; load_redraw(); } break;
         case EV_BWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + s_n_samples - 1) % s_n_samples; load_redraw(); } break;
         case EV_SHORT_PRESS:
-            // re-loading the sample the pad already holds costs an SD read and
+            // re-loading the sample the layer already holds costs an SD read and
             // rebuilds the thumbnail for nothing (Arlo) — confirming is a no-op
             if(s_n_samples &&
-               strcmp(s_samples[s_sample_idx], dr.pad[dr.sel_pad].sample) != 0)
-                drum_load_pad(dr.sel_pad, s_samples[s_sample_idx]);
+               strcmp(s_samples[s_sample_idx], dr.pad[dr.sel_pad].ly[s_layer].sample) != 0)
+                drum_load_layer(dr.sel_pad, s_layer, s_samples[s_sample_idx]);
             return s_load_ret;
         case EV_LONG_PRESS:
             return s_load_ret;       // cancel without loading
@@ -556,12 +658,12 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
 // a hub). The two selector-CV rows exist ONLY in CV-select mode — in Direct
 // mode the selectors do nothing, so the page doesn't mention them at all and
 // the encoder walks straight past.
-enum { R_PADEDIT = 0, R_PADS, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL, R_KNOB,
-       R_FILTER, R_COUNT };
+enum { R_PADEDIT = 0, R_PADS, R_LAYERS, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL,
+       R_KNOB, R_FILTER, R_COUNT };
 
-static const char *setup_labels[R_COUNT] = {"Pad Setup", "Pads", "Trigger", "Sensi",
-                                            "Sel CV TR1", "Sel CV TR2", "Velocity",
-                                            "Knob 6/7", "Filter"};
+static const char *setup_labels[R_COUNT] = {"Pad Setup", "Pads", "B Layers", "Trigger",
+                                            "Sensi", "Sel CV TR1", "Sel CV TR2",
+                                            "Velocity", "Knob 6/7", "Filter"};
 // everything is a small option set except the two selector CVs (none + 8
 // channels), which stay click-to-edit
 #define SETUP_IS_TOGGLE(id) ((id) != R_PADEDIT && (id) != R_SEL1 && (id) != R_SEL2)
@@ -586,6 +688,7 @@ static void setup_value_str(int id, char *v, size_t n){
     switch(id){
         case R_PADEDIT: v[0] = 0; break;      // a page link: no value to show
         case R_PADS: snprintf(v, n, "%d", dr.n_pads); break;
+        case R_LAYERS: snprintf(v, n, "%s", dr.layers_on ? "A+B choke" : "OFF"); break;
         case R_TRIG: snprintf(v, n, "%s", dr.cv_select ? "CV-select" : "Direct"); break;
         case R_SENS: snprintf(v, n, "%s", dr.sens == 0 ? "Low" : (dr.sens == 2 ? "High" : "Med")); break;
         case R_SEL1: sel_src_str(dr.sel_src[0], v, n); break;
@@ -614,8 +717,11 @@ static void setup_redraw(int pos, int sel){
     _bg = SCREEN_BG;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    const char *hint = dr.cv_select ? "gate on TR1/TR2 fires the pad its sel CV picks"
-                                    : "each CV input fires its own pad (75% edge)";
+    const char *hint = dr.layers_on
+        ? (dr.cv_select ? "TR1 fires A, TR2 fires B — of the pad the sel CV picks"
+                        : "each pad's B sample chokes its A (one voice)")
+        : (dr.cv_select ? "gate on TR1/TR2 fires the pad its sel CV picks"
+                        : "each CV input fires its own pad (75% edge)");
     TFT_print((char*)hint, 8, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
@@ -632,6 +738,7 @@ static int sel_cycle(int src, int dir){
 static void setup_adj(int id, int dir){
     switch(id){
         case R_PADS: dr.n_pads = (dr.n_pads == 8) ? 4 : 8; if (dr.sel_pad >= dr.n_pads) dr.sel_pad = 0; break;
+        case R_LAYERS: dr.layers_on = !dr.layers_on; break;
         case R_TRIG: dr.cv_select = !dr.cv_select; break;
         case R_SENS: dr.sens = (dr.sens + (dir > 0 ? 1 : 2)) % 3; break;
         case R_SEL1: dr.sel_src[0] = sel_cycle(dr.sel_src[0], dir); break;
@@ -701,8 +808,10 @@ static int drum_main_event(int event, void *ev_data){
         int fh = TFT_getfontheight();
         _bg = TFT_BLACK; TFT_fillRect(0, fh + 12, _width, 24, _bg);
         _fg = (color_t){230, 140, 40};
-        int loaded = 0;
-        for (int i = 0; i < dr.n_pads; i++) if (dr.pad[i].len) loaded++;
+        int loaded = 0;                            // count LAYERS, not pads
+        int nly = dr.layers_on ? DR_LAYERS : 1;
+        for (int i = 0; i < dr.n_pads; i++)
+            for (int l = 0; l < nly; l++) if (dr.pad[i].ly[l].len) loaded++;
         char s[64];
         snprintf(s, sizeof(s), "Drums: %d pads (%d loaded) %s",
                  dr.n_pads, loaded, dr.cv_select ? "cv-sel" : "direct");

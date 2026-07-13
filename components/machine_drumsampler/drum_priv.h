@@ -26,11 +26,47 @@
 // attenuate patched CV to ~half, shrinking the usable swing.
 // 0=Low, 1=Med, 2=High → fire deltas {1500, 1100, 700}, arm {600, 450, 300}
 
+// A pad holds TWO layers that share ONE voice: triggering either interrupts the
+// other. That is the open/closed hi-hat, and it is the intended replacement for
+// 8-pad mode — 4 cells carrying 8 sounds and 8 triggers. Optional (dr.layers_on);
+// with it off the machine behaves exactly as it did before layers existed.
+//
+// Per-layer: the buffer, its trigger CV, and its OWN Schmitt state — the two
+// layers watch different CV channels with different idle floors, so a shared
+// detector would cross-arm. Everything performable (level/pan/decay/cw/retrig) is
+// per PAD, not per layer: knob6/knob7 perform the pad, and a knob that meant a
+// different thing depending on which layer last fired would be unplayable. A pad
+// is a channel strip with two sounds in it.
+#define DR_LAYERS    2
+#define DR_SRC_NONE  (-1)
+
+// the retrigger fade. Same-layer keeps the original ~0.7 ms (a hit restarting
+// itself); a CROSS-layer choke is slower — 0.7 ms reads as a gate click, ~3 ms
+// reads as one sound cutting another off.
+#define DR_RETRIG_STEP 8
+#define DR_CHOKE_STEP  2
+
 typedef struct {
-    int16_t *buf;                 // PSRAM mono buffer, DR_MAX_FRAMES
+    int16_t *buf;                 // PSRAM mono, DR_MAX_FRAMES; NULL = not allocated
     volatile uint32_t len;        // frames loaded (0 = empty; zeroed during load)
+    volatile int trig_src;        // Direct mode: CV that fires THIS layer;
+                                  // DR_SRC_NONE = nothing does
+    bool armed;                   // Schmitt state, engine only — PER LAYER
+    int  base;                    // tracked floor of this layer's CV source
+    char sample[24];              // loaded library sample id ("" = empty)
+    // waveform thumbnail for the pad cell, built from the RAM buffer at load
+    // (no SD pass needed — the whole sample is already in PSRAM). Peak per
+    // column, 0..255, same scale the sampler uses.
+    uint8_t wf[DR_WF_W];
+    bool    wf_valid;
+} dr_layer_t;
+
+typedef struct {
+    dr_layer_t ly[DR_LAYERS];
+    // ---- ONE voice, shared by both layers: this is what makes the choke ----
     volatile uint32_t pos;        // play cursor (frames)
     volatile bool playing;
+    volatile uint8_t cur;         // the layer the voice is currently READING
     volatile bool enabled;
     // level is UNITY at 255 and goes up to DR_LEVEL_MAX: past unity the pad is
     // driven into the soft clipper (knob6 at 12 o'clock = 100 %, clockwise from
@@ -48,25 +84,19 @@ typedef struct {
                                   // sample's length, DR_REPS_INF = never stop.
                                   // THIS is the retrig control: "4 reps of a 60 ms
                                   // loop" is a fill, INF is a held drone
-    volatile int trig_src;        // Direct mode: CV input (0..7) that fires this
-                                  // pad, default = pad index; routable so pads
-                                  // can dodge bad jacks (e.g. this unit's ch4)
     volatile uint8_t vel;         // velocity of the current hit, 0..255
     volatile bool hit;            // set on trigger, cleared by the UI (pad flash)
-    bool armed;                   // Schmitt state, engine only
-    int  base;                    // tracked floor of the routed CV source
+    volatile uint8_t hit_layer;   // which layer fired it (the dot's shape)
     // declick (engine only): samples rarely start/end at zero crossings, so a
     // short attack ramp + tail ramp frame the one-shot, and a retrigger fades
-    // the playing voice out (~0.7 ms) before restarting instead of jumping
-    bool retrig;                  // fade-out-then-restart in progress
-    int  fade;                    // retrig fade level, 256..0
-    uint8_t vel_next;             // velocity for the queued restart
-    char sample[24];              // loaded library sample id ("" = empty)
-    // waveform thumbnail for the pad cell, built from the RAM buffer at load
-    // (no SD pass needed — the whole sample is already in PSRAM). Peak per
-    // column, 0..255, same scale the sampler uses.
-    uint8_t wf[DR_WF_W];
-    bool    wf_valid;
+    // the playing voice out before restarting instead of jumping. With layers,
+    // "retrig" means: fade whatever is sounding, THEN start next_layer — which
+    // may be the other buffer entirely.
+    bool retrig;                  // fade-out-then-(re)start in progress
+    int  fade;                    // fade level, 256..0
+    int  fade_step;               // DR_RETRIG_STEP or DR_CHOKE_STEP
+    uint8_t vel_next;             // velocity for the queued (re)start
+    uint8_t next_layer;           // layer for the queued (re)start
 } dr_pad_t;
 
 // CV6/CV7 perform the SELECTED pad: knob6 = level, knob7 = decay (knobs 6/7 are
@@ -116,6 +146,7 @@ typedef struct {
     volatile bool cv_select;      // false = Direct, true = TRIG1/2 + selector CV
     volatile bool velocity;       // Direct mode: scale hit by CV level at fire time
     volatile bool cv_mod;         // CV6/CV7 perform the selected pad
+    volatile bool layers_on;      // each pad's B layer exists and chokes its A
     volatile int sens;            // trigger sensitivity 0..2 (see thresholds above)
     volatile int sel_src[2];      // selector CV channel per trig (CV-select mode)
     uint8_t prev_trig;            // gate edge state (seed 0x03 = idle high)
@@ -146,5 +177,7 @@ typedef struct {
 extern dr_state_t dr;
 
 // UI-side helpers (drum.c); do SD I/O — call from the UI task only
-int  drum_load_pad(int pad, const char *name);
+int  drum_load_layer(int pad, int ly, const char *name);
+void drum_clear_layer(int pad, int ly);
+int  drum_load_pad(int pad, const char *name);   // = layer A
 void drum_clear_pad(int pad);

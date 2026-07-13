@@ -30,45 +30,84 @@ static inline int soft_clip(int x)
 
 // where a hit starts: the head the pad is told to skip (knob7 clockwise, in
 // DR_CW_START mode). Clamped well inside the sample so a hit is never silence.
-static uint32_t pad_start(const dr_pad_t *p)
+static uint32_t layer_start(const dr_pad_t *p, const dr_layer_t *L)
 {
-    if (!p->start_off || !p->len) return 0;
-    uint32_t st = (uint32_t)(((uint64_t)p->start_off * p->len) >> 8);
-    if (st >= p->len - 64) st = p->len - 64;
+    if (!p->start_off || !L->len) return 0;
+    uint32_t st = (uint32_t)(((uint64_t)p->start_off * L->len) >> 8);
+    if (st >= L->len - 64) st = L->len - 64;
     return st;
 }
 
-static void trigger_pad(dr_pad_t *p, uint8_t vel)
+// Trigger a LAYER of a pad. The two layers share one voice, so a hit on either
+// interrupts whatever is sounding: `retrig` no longer means "restart me", it
+// means "fade what's playing, then start next_layer" — which may be the other
+// buffer entirely. The fade is slower for a cross-layer choke: at 0.7 ms one
+// sound cutting another off reads as a gate click.
+static void trigger_pad(dr_pad_t *p, int ly, uint8_t vel)
 {
-    if (!p->enabled || p->len == 0) return;
+    dr_layer_t *L = &p->ly[ly];
+    if (!p->enabled || !L->buf || L->len == 0) return;
     if (p->playing) {
-        p->vel_next = vel;      // fade the running voice out, then restart
-        p->fade = 256;
+        bool cross = (p->cur != (uint8_t)ly);
+        p->vel_next   = vel;
+        p->next_layer = (uint8_t)ly;
+        if (!p->retrig) p->fade = 256;    // don't restart an in-flight fade, or a
+                                          // machine-gun roll would never land it
+        p->fade_step  = cross ? DR_CHOKE_STEP : DR_RETRIG_STEP;
         p->retrig = true;
     } else {
-        p->pos = pad_start(p);
-        p->vel = vel;
+        p->cur    = (uint8_t)ly;
+        p->pos    = layer_start(p, L);
+        p->vel    = vel;
         p->retrig = false;
         p->playing = true;
     }
     p->hit = true;
+    p->hit_layer = (uint8_t)ly;
+}
+
+// Everything the mixer's inner loop treats as invariant — and every one of these
+// belongs to the LAYER, not the pad. The layer can flip mid-block (a choke lands
+// when the fade completes), so this MUST be re-run at the flip: reading a shorter
+// B with A's length walks the cursor off the end of B's PSRAM buffer.
+typedef struct {
+    const int16_t *buf;
+    uint32_t len, st, ll, df, af;
+} dr_voice_t;
+
+static void voice_setup(dr_pad_t *p, dr_voice_t *v)
+{
+    dr_layer_t *L = &p->ly[p->cur];
+    v->buf = L->buf;
+    v->len = L->len;
+    v->df  = (uint32_t)p->decay_ms * 441 / 10;    // decay length in frames
+    v->af  = (uint32_t)p->attack_ms * 441 / 10;   // attack length in frames
+    v->st  = layer_start(p, L);                   // hits begin here
+    // stutter loop: the read wraps inside [st, st+ll) while the pad's LIFE is
+    // still the whole sample — so the roll ends when the one-shot would have,
+    // instead of droning. A loop longer than what's left is no loop at all.
+    v->ll  = (uint32_t)p->loop_ms * 441 / 10;
+    if (!v->len || v->ll >= v->len - v->st) v->ll = 0;
 }
 
 static esp_err_t drum_start(void)
 {
     memset(&dr, 0, sizeof(dr));
+    // Buffers are allocated LAZILY, at load time (drum_load_layer). 8 pads x 2
+    // layers x 176 KB would be 2.8 MB claimed up front — more than anything on
+    // this board has proven, and most of it for pads that stay empty. An empty
+    // kit now costs nothing, and the 16th load fails soft instead of crashing.
     for (int i = 0; i < DR_PADS; i++) {
-        dr.pad[i].buf = heap_caps_malloc((size_t)DR_MAX_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-        if (!dr.pad[i].buf) {
-            ESP_LOGE("DRUM", "PSRAM alloc failed (pad %d)", i);
-            for (int k = 0; k < i; k++) { free(dr.pad[k].buf); dr.pad[k].buf = NULL; }
-            return ESP_ERR_NO_MEM;
-        }
         dr.pad[i].enabled = true;
         dr.pad[i].level = 255;
         dr.pad[i].pan = 128;
-        dr.pad[i].trig_src = i;
-        dr.pad[i].base = 4095;     // floor tracker converges down on first reads
+        for (int l = 0; l < DR_LAYERS; l++) {
+            // A fires from the pad's own CV; B fires from NOTHING until it is
+            // routed — sharing A's channel would make B choke A on every hit,
+            // which reads as a bug rather than a feature
+            dr.pad[i].ly[l].trig_src = (l == 0) ? i : DR_SRC_NONE;
+            dr.pad[i].ly[l].base = 4095;   // floor tracker converges down on first reads
+        }
     }
     dr.n_pads = 4;          // 4 big pads is the default kit (Arlo); Setup goes to 8
     dr.cv_mod = true;       // knob6/knob7 perform the selected pad
@@ -91,14 +130,19 @@ static esp_err_t drum_start(void)
 
 static void drum_stop(void)
 {
-    for (int i = 0; i < DR_PADS; i++) { free(dr.pad[i].buf); dr.pad[i].buf = NULL; }
+    for (int i = 0; i < DR_PADS; i++)
+        for (int l = 0; l < DR_LAYERS; l++) {
+            free(dr.pad[i].ly[l].buf);
+            dr.pad[i].ly[l].buf = NULL;
+        }
 }
 
 static void drum_process(int32_t out[MACHINE_BLOCK],
                          const int32_t in[MACHINE_BLOCK],
                          const machine_io_t *io)
 {
-    if (!dr.pad[0].buf) return;     // out is pre-zeroed by the core
+    // (no "is pad 0 loaded" guard any more: with lazy allocation an empty pad 0 is
+    // normal. Every read is gated on its own layer's buf/len.)
 
     // ---- CV6/CV7 perform the SELECTED PAD (move-to-take-over; see drum_priv.h) --
     // A channel already spoken for as a CV-select selector is left alone — the
@@ -220,18 +264,23 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         int sens = dr.sens;
         if (sens < 0) sens = 0;
         if (sens > 2) sens = 2;
+        int nly = dr.layers_on ? DR_LAYERS : 1;
         for (int ch = 0; ch < dr.n_pads; ch++) {
             dr_pad_t *p = &dr.pad[ch];
-            int v = io->cv[p->trig_src & 7];
-            if (v < p->base) p->base = v;               // dips pull the floor down instantly
-            else if (p->base < 4095) p->base++;         // ~690/s upward drift back
-            if (!p->armed) {
-                if (v < p->base + arm_d[sens]) p->armed = true;
-            } else if (v >= p->base + fire_d[sens]) {
-                p->armed = false;
-                int vel = (v - p->base) >> 3;           // velocity from swing above floor
-                if (vel > 255) vel = 255;
-                trigger_pad(p, dr.velocity ? (uint8_t)vel : 255);
+            for (int l = 0; l < nly; l++) {
+                dr_layer_t *L = &p->ly[l];
+                if (!L->buf || !L->len || L->trig_src == DR_SRC_NONE) continue;
+                int v = io->cv[L->trig_src & 7];
+                if (v < L->base) L->base = v;           // dips pull the floor down instantly
+                else if (L->base < 4095) L->base++;     // ~690/s upward drift back
+                if (!L->armed) {
+                    if (v < L->base + arm_d[sens]) L->armed = true;
+                } else if (v >= L->base + fire_d[sens]) {
+                    L->armed = false;
+                    int vel = (v - L->base) >> 3;       // velocity from swing above floor
+                    if (vel > 255) vel = 255;
+                    trigger_pad(p, l, dr.velocity ? (uint8_t)vel : 255);
+                }
             }
         }
         dr.prev_trig = io->trig_level;   // keep edge state fresh across mode switches
@@ -246,7 +295,12 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
             uint16_t sv = io->cv[src & 7];
             int idx = (int)((uint32_t)sv * (uint32_t)dr.n_pads / 4096);
             if (idx >= dr.n_pads) idx = dr.n_pads - 1;
-            trigger_pad(&dr.pad[idx], 255);
+            // with layers on, the two gates address the two LAYERS of whichever pad
+            // their selector points at — TR1 fires A, TR2 fires B. (Quantizing the
+            // selector over n_pads*2 slots instead would halve the CV window per
+            // slot to ~2.5 %, which these inputs cannot play.)
+            int ly = (dr.layers_on && t == 1) ? 1 : 0;
+            trigger_pad(&dr.pad[idx], ly, 255);
         }
     }
 
@@ -259,22 +313,25 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
     for (int i = 0; i < DR_PADS; i++) {
         dr_pad_t *p = &dr.pad[i];
         if (!p->playing) continue;
+        dr_voice_t v;
+        voice_setup(p, &v);
+        if (!v.buf || !v.len) { p->playing = false; continue; }
         any = true;
-        uint32_t len = p->len;
-        uint32_t df = (uint32_t)p->decay_ms * 441 / 10;   // decay length in frames
-        uint32_t af = (uint32_t)p->attack_ms * 441 / 10;  // attack length in frames
-        uint32_t st = pad_start(p);                       // hits begin here
-        // stutter loop: the read wraps inside [st, st+ll) while the pad's LIFE is
-        // still the whole sample — so the roll ends when the one-shot would have,
-        // instead of droning. A loop longer than what's left is no loop at all.
-        uint32_t ll = (uint32_t)p->loop_ms * 441 / 10;
-        if (ll >= len - st) ll = 0;
+        uint32_t len = v.len, df = v.df, af = v.af, st = v.st, ll = v.ll;
         for (int f = 0; f < frames; f++) {
             if (p->retrig) {
-                // ~0.7 ms fade of the old voice, then restart at the new hit
-                p->fade -= 8;
+                // fade the sounding voice out, then start next_layer — the same
+                // buffer on a retrigger, the OTHER one on a choke
+                p->fade -= p->fade_step;
                 if (p->fade <= 0) {
                     p->retrig = false;
+                    p->cur = p->next_layer;
+                    // the flip lands HERE, mid-block, and len/st/ll all belong to
+                    // the layer: refresh them or a shorter B is read with A's
+                    // length and the cursor walks off the end of its buffer
+                    voice_setup(p, &v);
+                    if (!v.buf || !v.len) { p->playing = false; break; }
+                    len = v.len; df = v.df; af = v.af; st = v.st; ll = v.ll;
                     p->pos = st;
                     p->vel = p->vel_next;
                     continue;
@@ -334,7 +391,7 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
             // underflow guard as above: st can move under a running voice.
             uint32_t lel = (pos > st) ? pos - st : 0;
             uint32_t idx = ll ? st + (lel % ll) : pos;
-            int s = (p->buf[idx] * env) >> 8;
+            int s = (v.buf[idx] * env) >> 8;
             // gain: 255 = unity, above that the pad is driven. Clip SOFTLY —
             // letting a 4x sample slam into the int16 clamp is fuzz, not drive.
             int g = ((int)p->level * (int)p->vel) >> 8;      // 0..DR_LEVEL_MAX
@@ -383,54 +440,82 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
 // ---- sample I/O (UI task) ---------------------------------------------------
 // pad-cell thumbnail: peak per column straight out of the RAM buffer. No SD
 // pass and no yield needed — 48 columns over a 2 s mono buffer at most.
-static void drum_build_wf(dr_pad_t *p)
+static void drum_build_wf(dr_layer_t *L)
 {
-    p->wf_valid = false;
-    if (!p->len) return;
+    L->wf_valid = false;
+    if (!L->len || !L->buf) return;
     for (int c = 0; c < DR_WF_W; c++) {
-        uint32_t a = (uint32_t)((uint64_t)c * p->len / DR_WF_W);
-        uint32_t b = (uint32_t)((uint64_t)(c + 1) * p->len / DR_WF_W);
+        uint32_t a = (uint32_t)((uint64_t)c * L->len / DR_WF_W);
+        uint32_t b = (uint32_t)((uint64_t)(c + 1) * L->len / DR_WF_W);
         if (b <= a) b = a + 1;
-        if (b > p->len) b = p->len;
+        if (b > L->len) b = L->len;
         int peak = 0;
         for (uint32_t k = a; k < b; k++) {
-            int s = p->buf[k];
+            int s = L->buf[k];
             if (s < 0) s = -s;
             if (s > peak) peak = s;
         }
-        p->wf[c] = (uint8_t)(peak >> 7);      // 0..32767 -> 0..255, sampler scale
+        L->wf[c] = (uint8_t)(peak >> 7);      // 0..32767 -> 0..255, sampler scale
     }
-    p->wf_valid = true;
+    L->wf_valid = true;
 }
 
-int drum_load_pad(int pad, const char *name)
+int drum_load_layer(int pad, int ly, const char *name)
 {
-    if (pad < 0 || pad >= DR_PADS || !dr.pad[pad].buf) return -1;
+    if (pad < 0 || pad >= DR_PADS || ly < 0 || ly >= DR_LAYERS) return -1;
     dr_pad_t *p = &dr.pad[pad];
+    dr_layer_t *L = &p->ly[ly];
+
+    // silence this pad's voice before the buffer under it changes
     p->playing = false;
     p->retrig = false;
-    p->len = 0;                      // engine stops reading before we overwrite
-    p->wf_valid = false;
-    uint32_t n = sample_load(name, p->buf, DR_MAX_FRAMES, true);   // mono
-    if (n == 0) { p->sample[0] = 0; return -1; }
-    strncpy(p->sample, name, sizeof(p->sample) - 1);
-    p->sample[sizeof(p->sample) - 1] = 0;
-    p->len = n;
-    drum_build_wf(p);
-    ESP_LOGI("DRUM", "pad %d: %s (%lu frames)", pad + 1, name, (unsigned long)n);
+    L->len = 0;
+    L->wf_valid = false;
+
+    if (!L->buf) {      // lazy: a layer costs PSRAM only once something is in it
+        L->buf = heap_caps_malloc((size_t)DR_MAX_FRAMES * sizeof(int16_t),
+                                  MALLOC_CAP_SPIRAM);
+        if (!L->buf) {
+            ESP_LOGE("DRUM", "PSRAM full: pad %d layer %c (%u KB free)",
+                     pad + 1, 'A' + ly,
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+            L->sample[0] = 0;
+            return -1;
+        }
+    }
+    uint32_t n = sample_load(name, L->buf, DR_MAX_FRAMES, true);   // mono
+    if (n == 0) { L->sample[0] = 0; return -1; }
+    strncpy(L->sample, name, sizeof(L->sample) - 1);
+    L->sample[sizeof(L->sample) - 1] = 0;
+    L->len = n;
+    drum_build_wf(L);
+    ESP_LOGI("DRUM", "pad %d%c: %s (%lu frames, %u KB PSRAM free)",
+             pad + 1, 'A' + ly, name, (unsigned long)n,
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     return 0;
 }
 
-void drum_clear_pad(int pad)
+int drum_load_pad(int pad, const char *name) { return drum_load_layer(pad, 0, name); }
+
+void drum_clear_layer(int pad, int ly)
 {
-    if (pad < 0 || pad >= DR_PADS) return;
+    if (pad < 0 || pad >= DR_PADS || ly < 0 || ly >= DR_LAYERS) return;
     dr_pad_t *p = &dr.pad[pad];
+    dr_layer_t *L = &p->ly[ly];
+    // the engine gates every read on len, and never holds buf across a block —
+    // so: stop it reading, give it a tick to finish the block in flight, THEN
+    // free (the looper's swap protocol; one tick is 10 ms vs a 1.45 ms block)
     p->playing = false;
     p->retrig = false;
-    p->len = 0;
-    p->sample[0] = 0;
-    p->wf_valid = false;
+    L->len = 0;
+    L->sample[0] = 0;
+    L->wf_valid = false;
+    vTaskDelay(1);
+    free(L->buf);
+    L->buf = NULL;
 }
+
+void drum_clear_pad(int pad) { drum_clear_layer(pad, 0); }
 
 // ---- preset -----------------------------------------------------------------
 static cJSON *drum_preset_save(void)
@@ -440,6 +525,7 @@ static cJSON *drum_preset_save(void)
     cJSON_AddBoolToObject(o, "cvsel", dr.cv_select);
     cJSON_AddBoolToObject(o, "vel", dr.velocity);
     cJSON_AddBoolToObject(o, "cvmod", dr.cv_mod);
+    cJSON_AddBoolToObject(o, "lay", dr.layers_on);    // per-pad B layer + choke
     cJSON_AddBoolToObject(o, "flt", dr.flt_box);      // master filter box exists
     cJSON_AddBoolToObject(o, "flton", dr.flt_on);     // ...and is engaged
     cJSON_AddNumberToObject(o, "fcv", dr.flt_cv);     // sweep + resonance knob
@@ -451,12 +537,14 @@ static cJSON *drum_preset_save(void)
     cJSON *pads = cJSON_AddArrayToObject(o, "pad");
     for (int i = 0; i < DR_PADS; i++) {
         cJSON *p = cJSON_CreateObject();
-        cJSON_AddStringToObject(p, "s", dr.pad[i].sample);
+        cJSON_AddStringToObject(p, "s", dr.pad[i].ly[0].sample);
         cJSON_AddNumberToObject(p, "lvl", dr.pad[i].level);
         cJSON_AddNumberToObject(p, "pan", dr.pad[i].pan);
         cJSON_AddNumberToObject(p, "dec", dr.pad[i].decay_ms);
         cJSON_AddBoolToObject(p, "en", dr.pad[i].enabled);
-        cJSON_AddNumberToObject(p, "src", dr.pad[i].trig_src + 1);   // CV number, 1-based
+        cJSON_AddNumberToObject(p, "src", dr.pad[i].ly[0].trig_src + 1);  // CV number, 1-based
+        cJSON_AddStringToObject(p, "s2", dr.pad[i].ly[1].sample);         // the B layer
+        cJSON_AddNumberToObject(p, "src2", dr.pad[i].ly[1].trig_src + 1); // (0 = none)
         cJSON_AddNumberToObject(p, "cw", dr.pad[i].cw_mode);         // knob7 clockwise target
         cJSON_AddNumberToObject(p, "reps", dr.pad[i].loop_reps);     // retrig cap (255 = INF)
         cJSON_AddItemToArray(pads, p);
@@ -473,6 +561,7 @@ static void drum_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvsel"))) dr.cv_select = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "vel")))   dr.velocity = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvmod")))  dr.cv_mod = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lay")))    dr.layers_on = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flt")))    dr.flt_box = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flton")))  dr.flt_on = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fcv")) && cJSON_IsNumber(j)) {
@@ -515,7 +604,13 @@ static void drum_preset_load(const cJSON *node)
                 dr.pad[i].decay_ms = (uint16_t)d;
             }
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "en")))                       dr.pad[i].enabled = cJSON_IsTrue(j);
-            if ((j = cJSON_GetObjectItemCaseSensitive(p, "src")) && cJSON_IsNumber(j)) dr.pad[i].trig_src = (j->valueint - 1) & 7;
+            // src is 1-based; 0 (or absent) means NONE, which is how a -1 round-trips
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "src")) && cJSON_IsNumber(j))
+                dr.pad[i].ly[0].trig_src = (j->valueint <= 0) ? DR_SRC_NONE
+                                                              : ((j->valueint - 1) & 7);
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "src2")) && cJSON_IsNumber(j))
+                dr.pad[i].ly[1].trig_src = (j->valueint <= 0) ? DR_SRC_NONE
+                                                              : ((j->valueint - 1) & 7);
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "cw")) && cJSON_IsNumber(j))
                 dr.pad[i].cw_mode = (uint8_t)(j->valueint % DR_CW_MODES);
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "reps")) && cJSON_IsNumber(j)) {
@@ -524,8 +619,12 @@ static void drum_preset_load(const cJSON *node)
                 if (rp > DR_REPS_INF) rp = DR_REPS_INF;
                 dr.pad[i].loop_reps = (uint8_t)rp;
             }
+            // reload the remembered samples. An old preset has no "s2" — absent
+            // simply means the pad has no B layer, which is today's behaviour.
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "s")) && cJSON_IsString(j) && j->valuestring[0])
-                drum_load_pad(i, j->valuestring);   // reload the remembered sample
+                drum_load_layer(i, 0, j->valuestring);
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "s2")) && cJSON_IsString(j) && j->valuestring[0])
+                drum_load_layer(i, 1, j->valuestring);   // fails soft if PSRAM is gone
             i++;
         }
     }
