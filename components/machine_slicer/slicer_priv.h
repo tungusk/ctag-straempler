@@ -8,14 +8,18 @@
 // UI task writes settings + one-shot command flags and reads for display.
 
 #define SL_RATE       44100
-#define SL_MAX_SECS   12
+#define SL_MAX_SECS   18   // stereo cap (was 12); load-as-mono doubles it
 #define SL_MAX_FRAMES (SL_RATE * SL_MAX_SECS)   // stereo frames cap
 #define SL_PEAKS      300                       // waveform display columns
 #define SL_MAX_SLICES 128
 #define SL_OT_SLICES  64                        // Elektron .ot format limit
 
 typedef struct {
-    int16_t *buf;                 // PSRAM interleaved stereo L,R, SL_MAX_FRAMES*2
+    int16_t *buf;                 // PSRAM slab, SL_MAX_FRAMES*2 int16: holds
+                                  // interleaved STEREO frames, or 2x as many
+                                  // MONO frames when loaded with Load Mono
+    bool mono;                    // current buffer layout (set at load)
+    volatile bool load_mono;      // Setup: next load averages to mono (~36 s)
     volatile uint32_t len;        // frames loaded
     volatile bool loading;        // true while (re)loading — engine stays silent
     char sample[24];              // loaded sample id (no extension)
