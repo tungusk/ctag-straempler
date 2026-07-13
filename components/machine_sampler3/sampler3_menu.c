@@ -132,17 +132,21 @@ static color_t lane_bg(int st){
 // FAT state-colored border. The CROP window lives in the waveform
 // brightness — bright columns inside the loop, dimmed outside.
 #define PB_BW 3     // fat state border
+static const color_t WF_GREY = {125, 125, 135};   // waveform: reads under the white playhead
 
 static void playbar_slice(int i, int px, int pw, int st, const s3_voice_t *v,
                           int sx, int sw){
     int by = PANEL_Y + PANEL_H - 2 * PANEL_BAR_H - 4;
     int bx = px + 3, bw = pw - 6;
     TFT_fillRect(sx, by, sw, PANEL_BAR_H, (color_t){0, 0, 0});
-    // BOLD waveform: 2px strokes, pure white, sqrt amplitude lift so quiet
-    // material still reads at this size
+    // BOLD waveform: 2px strokes, MEDIUM GREY (Arlo) — a white waveform
+    // swallowed the white playhead whole once the bar filled up; the grey
+    // keeps the shape legible on black and leaves the playhead the only
+    // near-white thing in the bar. sqrt amplitude lift so quiet material
+    // still reads at this size.
     if (v->wf_valid){
         int wy = by + 2, wh = PANEL_BAR_H - 4;
-        color_t wc = {255, 255, 255};
+        color_t wc = WF_GREY;
         for (int c = 0; c < bw - 1; c += 2){
             int x = bx + c;
             if (x + 2 <= sx || x >= sx + sw) continue;
@@ -272,9 +276,10 @@ static void draw_lane(int i, bool full){
             _bg = TFT_BLACK;
         }
     }
-    // position marker inside the playbar. The erase repaints its slice from
-    // the SAME cell geometry the bar was drawn with — a float-based uniform
-    // erase disagreed with the cell-drawn bar by a few px and chewed
+    // position marker inside the playbar — a WHITE line over the grey waveform
+    // (a white-on-white waveform swallowed it). The erase repaints its slice
+    // from the SAME cell geometry the bar was drawn with — a float-based
+    // uniform erase disagreed with the cell-drawn bar by a few px and chewed
     // flickering notches into the loop-point edges every marker pass
     // ("loop points jump around").
     if (v->play_len){
@@ -286,7 +291,7 @@ static void draw_lane(int i, bool full){
         if (x != s_lane_barx[i]){
             if (s_lane_barx[i] > 0)           // restore black + wf + bracket slice
                 playbar_slice(i, px, pw, st, v, s_lane_barx[i], 4);
-            TFT_fillRect(x, by + PB_BW, 4, PANEL_BAR_H - 2 * PB_BW, (color_t){235, 235, 235});
+            TFT_fillRect(x, by + PB_BW, 4, PANEL_BAR_H - 2 * PB_BW, (color_t){245, 245, 245});
             s_lane_barx[i] = x;
         }
     }
