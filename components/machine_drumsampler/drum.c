@@ -109,7 +109,6 @@ static esp_err_t drum_start(void)
             dr.pad[i].ly[l].base = 4095;   // floor tracker converges down on first reads
         }
     }
-    dr.n_pads = 4;          // 4 big pads is the default kit (Arlo); Setup goes to 8
     dr.cv_mod = true;       // knob6/knob7 perform the selected pad
     dr.flt_box = true;      // the master filter box is reachable from Live
     dr.flt_on = false;
@@ -180,7 +179,7 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         }
     } else if (dr.cv_mod) {
         int sel = dr.sel_pad;
-        if (sel < 0 || sel >= dr.n_pads) sel = 0;
+        if (sel < 0 || sel >= DR_PADS) sel = 0;
         dr_pad_t *sp = &dr.pad[sel];
         int dlv = lv - dr.knob_last[0], ddc = dc - dr.knob_last[1];
         if (dlv < 0) dlv = -dlv;
@@ -215,11 +214,13 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
                 sp->attack_ms = 0;
                 sp->start_off = 0;
                 sp->loop_ms = 0;
-                if (sp->cw_mode == DR_CW_START) {
+                if (sp->cw_mode == DR_CW_NONE) {
+                    /* nothing: the pad is simply the untouched sample up here */
+                } else if (sp->cw_mode == DR_CW_START) {
                     sp->start_off = (uint8_t)(cw * DR_START_MAX / 2047);
                 } else if (sp->cw_mode == DR_CW_ATTACK) {
                     sp->attack_ms = (uint16_t)(cw * DR_ATTACK_MAX / 2047);
-                } else if (cw > 40) {                         // LOOP: dead spot at noon
+                } else if (sp->cw_mode == DR_CW_LOOP && cw > 40) {  // dead spot at noon
                     // further clockwise = SHORTER loop (Arlo): a roll that tightens
                     // into a buzz as you turn
                     uint32_t span = DR_LOOP_MAX_MS - DR_LOOP_MIN_MS;
@@ -264,9 +265,9 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         int sens = dr.sens;
         if (sens < 0) sens = 0;
         if (sens > 2) sens = 2;
-        int nly = dr.layers_on ? DR_LAYERS : 1;
-        for (int ch = 0; ch < dr.n_pads; ch++) {
+        for (int ch = 0; ch < DR_PADS; ch++) {
             dr_pad_t *p = &dr.pad[ch];
+            int nly = p->layered ? DR_LAYERS : 1;
             for (int l = 0; l < nly; l++) {
                 dr_layer_t *L = &p->ly[l];
                 if (!L->buf || !L->len || L->trig_src == DR_SRC_NONE) continue;
@@ -293,13 +294,13 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
             int src = dr.sel_src[t];
             if (src < 0) continue;              // no selector: this gate fires nothing
             uint16_t sv = io->cv[src & 7];
-            int idx = (int)((uint32_t)sv * (uint32_t)dr.n_pads / 4096);
-            if (idx >= dr.n_pads) idx = dr.n_pads - 1;
+            int idx = (int)((uint32_t)sv * (uint32_t)DR_PADS / 4096);
+            if (idx >= DR_PADS) idx = DR_PADS - 1;
             // with layers on, the two gates address the two LAYERS of whichever pad
             // their selector points at — TR1 fires A, TR2 fires B. (Quantizing the
             // selector over n_pads*2 slots instead would halve the CV window per
             // slot to ~2.5 %, which these inputs cannot play.)
-            int ly = (dr.layers_on && t == 1) ? 1 : 0;
+            int ly = (dr.pad[idx].layered && t == 1) ? 1 : 0;
             trigger_pad(&dr.pad[idx], ly, 255);
         }
     }
@@ -521,11 +522,9 @@ void drum_clear_pad(int pad) { drum_clear_layer(pad, 0); }
 static cJSON *drum_preset_save(void)
 {
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddNumberToObject(o, "pads", dr.n_pads);
     cJSON_AddBoolToObject(o, "cvsel", dr.cv_select);
     cJSON_AddBoolToObject(o, "vel", dr.velocity);
     cJSON_AddBoolToObject(o, "cvmod", dr.cv_mod);
-    cJSON_AddBoolToObject(o, "lay", dr.layers_on);    // per-pad B layer + choke
     cJSON_AddBoolToObject(o, "flt", dr.flt_box);      // master filter box exists
     cJSON_AddBoolToObject(o, "flton", dr.flt_on);     // ...and is engaged
     cJSON_AddNumberToObject(o, "fcv", dr.flt_cv);     // sweep + resonance knob
@@ -543,6 +542,7 @@ static cJSON *drum_preset_save(void)
         cJSON_AddNumberToObject(p, "dec", dr.pad[i].decay_ms);
         cJSON_AddBoolToObject(p, "en", dr.pad[i].enabled);
         cJSON_AddNumberToObject(p, "src", dr.pad[i].ly[0].trig_src + 1);  // CV number, 1-based
+        cJSON_AddBoolToObject(p, "lay", dr.pad[i].layered);               // B layer on?
         cJSON_AddStringToObject(p, "s2", dr.pad[i].ly[1].sample);         // the B layer
         cJSON_AddNumberToObject(p, "src2", dr.pad[i].ly[1].trig_src + 1); // (0 = none)
         cJSON_AddNumberToObject(p, "cw", dr.pad[i].cw_mode);         // knob7 clockwise target
@@ -556,12 +556,15 @@ static void drum_preset_load(const cJSON *node)
 {
     if (!node) return;
     cJSON *j;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "pads")) && cJSON_IsNumber(j))
-        dr.n_pads = (j->valueint == 4) ? 4 : 8;
+    // "pads" (4-vs-8) is gone; an old preset carrying it is simply ignored
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvsel"))) dr.cv_select = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "vel")))   dr.velocity = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvmod")))  dr.cv_mod = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lay")))    dr.layers_on = cJSON_IsTrue(j);
+    // "lay" used to be a global flag; if an old preset carries it, fan it out to
+    // every pad (the per-pad "lay" below then overrides where present)
+    bool lay_all = false;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lay"))) lay_all = cJSON_IsTrue(j);
+    if (lay_all) for (int k = 0; k < DR_PADS; k++) dr.pad[k].layered = true;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flt")))    dr.flt_box = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flton")))  dr.flt_on = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fcv")) && cJSON_IsNumber(j)) {
@@ -608,6 +611,8 @@ static void drum_preset_load(const cJSON *node)
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "src")) && cJSON_IsNumber(j))
                 dr.pad[i].ly[0].trig_src = (j->valueint <= 0) ? DR_SRC_NONE
                                                               : ((j->valueint - 1) & 7);
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lay")))
+                dr.pad[i].layered = cJSON_IsTrue(j);
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "src2")) && cJSON_IsNumber(j))
                 dr.pad[i].ly[1].trig_src = (j->valueint <= 0) ? DR_SRC_NONE
                                                               : ((j->valueint - 1) & 7);
