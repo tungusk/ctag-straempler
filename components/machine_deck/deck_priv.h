@@ -56,17 +56,11 @@ typedef struct {
     volatile int  clk_src;         // CV channel of the clock (default CV8)
     volatile int  ppb_idx;         // pulses-per-beat index into dk_ppb[] (mult/div)
     volatile int  pitch_cv;        // knob7 free-rate when sync is off
-    beatclock_t clk;
-    // clock-input conditioning: beatclock's fixed thresholds (1500/800 abs)
-    // misfire on attenuated/offset channels (this unit's CV8 caps at ~half);
-    // a floor-tracked Schmitt synthesises a clean square for it instead
-    int  clk_base;                 // tracked floor of the clock channel
-    bool clk_high;                 // Schmitt state
+    // conditioned clock input — the shared front-end (clock.h): floor-tracked
+    // Schmitt, ppb-scaled sanity gates, ghost gate, raw-fire diagnostics.
+    // The deck's private copy is what clockin_t was extracted from.
+    clockin_t ci;
     float rate_sm;                 // smoothed rate (edge jitter -> no warble)
-    // clock diagnostics (surfaced via /status): raw Schmitt fires + spacing
-    volatile uint32_t dbg_edges;
-    volatile uint32_t dbg_iv;      // frames between the last two fires
-    uint32_t dbg_since;
     volatile uint32_t dbg_starve;  // blocks muted mid-play: reader fell behind
     volatile float rate;           // current playback rate (UI display)
     volatile float phase_err;      // current beat phase error (UI display)
