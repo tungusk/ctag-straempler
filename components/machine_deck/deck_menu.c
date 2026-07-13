@@ -157,20 +157,22 @@ static color_t tbar_bg(void){
     }
 }
 
-// transport bar, restyled (Arlo): BLACK canvas so the tiny-white waveform
-// pops, with the transport state on a FAT color-coded border instead of
-// the fill. The marker erase repaints its interior slice: black + the
-// waveform columns that fall inside it.
+// transport bar, restyled (Arlo): BLACK canvas so the waveform pops, with the
+// transport state on a FAT color-coded border instead of the fill. The marker
+// erase repaints its interior slice: black + the waveform columns that fall
+// inside it.
 #define TBAR_BW 3     // fat state border
+static const color_t WF_GREY = {125, 125, 135};   // waveform: reads under the white playhead
 
 static void tbar_paint_slice(int x, int w){
     TFT_fillRect(x, TBAR_Y + TBAR_BW, w, TBAR_H - 2 * TBAR_BW, (color_t){0, 0, 0});
     if (dk.wf_state == 2){
         int wx = TBAR_X + TBAR_BW + 1, ww = TBAR_W - 2 * TBAR_BW - 2;
         int wy = TBAR_Y + TBAR_BW + 1, wh = TBAR_H - 2 * TBAR_BW - 2;
-        // BOLD: 2px strokes, pure white, sqrt amplitude lift (1px strokes
-        // read washed-out inside the box)
-        color_t wc = {255, 255, 255};
+        // BOLD: 2px strokes, MEDIUM GREY (Arlo) — white waveform columns
+        // swallowed the white position marker in a dense track. sqrt amplitude
+        // lift (1px strokes read washed-out inside the box).
+        color_t wc = WF_GREY;
         for (int c = 0; c < ww - 1; c += 2){
             int px = wx + c;
             if (px + 2 <= x || px >= x + w) continue;
@@ -204,7 +206,7 @@ static void draw_posbar(void){
     if (x == s_last_barx) return;
     if (s_last_barx > 0)                      // erase only the old marker slice
         tbar_paint_slice(s_last_barx, 5);
-    TFT_fillRect(x, TBAR_Y + TBAR_BW, 5, TBAR_H - 2 * TBAR_BW, (color_t){235, 235, 235});
+    TFT_fillRect(x, TBAR_Y + TBAR_BW, 5, TBAR_H - 2 * TBAR_BW, (color_t){245, 245, 245});
     s_last_barx = x;
 }
 
