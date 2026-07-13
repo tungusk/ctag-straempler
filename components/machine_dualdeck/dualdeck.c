@@ -37,10 +37,14 @@ static void reader_serve(dd_deck_t *v, FILE **fp, char *cur, int16_t *chunk)
         strlcpy(cur, v->pending, DD_NAME_LEN);
         if (cur[0]) {
             char path[64];
-            snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", cur);
+            sample_resolve(cur, path, sizeof(path));
             sd_lock_take();
             *fp = fopen(path, "rb");
-            if (*fp) { fseek(*fp, 0, SEEK_END); long sz = ftell(*fp); fseek(*fp, 0, SEEK_SET); v->file_frames = (uint32_t)(sz / 4); }
+            if (*fp && sampfile_probe(*fp, &v->sf) != 0) {
+                ESP_LOGE(TAG, "%s: %s", path, v->sf.why);
+                fclose(*fp); *fp = NULL;
+            }
+            if (*fp) v->file_frames = v->sf.frames;
             sd_lock_give();
             if (!*fp) { ESP_LOGE(TAG, "open %s failed", path); v->file_frames = 0; }
             v->wpos = 0; v->rpos_i = 0; v->rpos_f = 0;
@@ -58,7 +62,7 @@ static void reader_serve(dd_deck_t *v, FILE **fp, char *cur, int16_t *chunk)
         uint32_t to = v->seek_to;
         if (to >= v->file_frames) to = 0;
         sd_lock_take();
-        fseek(*fp, (long)to * 4, SEEK_SET);
+        fseek(*fp, sf_seek_pos(&v->sf, to), SEEK_SET);
         sd_lock_give();
         v->wpos = to;
         v->rpos_i = to;                   // reader is the ONLY seek-writer of rpos
@@ -70,7 +74,7 @@ static void reader_serve(dd_deck_t *v, FILE **fp, char *cur, int16_t *chunk)
             uint32_t want = v->file_frames - v->wpos;
             if (want > 4096) want = 4096;
             sd_lock_take();
-            size_t got = fread(chunk, 4, want, *fp);
+            size_t got = sampfile_read(*fp, &v->sf, chunk, want);
             sd_lock_give();
             if (got > 0) {
                 uint32_t w = v->wpos % DD_RING_FRAMES;
@@ -93,8 +97,8 @@ static void reader_serve(dd_deck_t *v, FILE **fp, char *cur, int16_t *chunk)
             if (want > 128) want = 128;
             sd_lock_take();
             long back = ftell(*fp);
-            fseek(*fp, (long)p * 4, SEEK_SET);
-            size_t got = want ? fread(chunk, 4, want, *fp) : 0;
+            fseek(*fp, sf_seek_pos(&v->sf, p), SEEK_SET);
+            size_t got = want ? sampfile_read(*fp, &v->sf, chunk, want) : 0;
             fseek(*fp, back, SEEK_SET);
             sd_lock_give();
             int peak = 0;

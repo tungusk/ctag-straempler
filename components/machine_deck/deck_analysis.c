@@ -20,6 +20,7 @@
 #include "ff.h"
 #include "fileio.h"
 #include "sd_lock.h"
+#include "sampfile_f.h"
 #include "deck_priv.h"
 
 static const char *TAG = "DECK-AN";
@@ -86,7 +87,7 @@ static void analysis_task(void *pv)
     // raw FatFS (bare path, like the ring reader): the buffered VFS fread
     // path measured ~31 ms per 16 KB idle and stretched to ~900 ms while the
     // module was in active use — the raw path is both faster and immune
-    snprintf(path, sizeof(path), "usr/%s.RAW", s_an_track);
+    sample_resolve_f(s_an_track, path, sizeof(path));   // .RAW/.WAV/.AIF(F)
 
     float *env = heap_caps_malloc(DK_ENV_MAX * sizeof(float), MALLOC_CAP_SPIRAM);
     // 16 hops per read (16 KB): 1 KB reads made analysis crawl (~30k SD
@@ -96,12 +97,16 @@ static void analysis_task(void *pv)
     #define AN_CHUNK_HOPS 16
     int16_t *chunk = heap_caps_malloc(AN_CHUNK_HOPS * DK_HOP * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
     FIL *f = malloc(sizeof(FIL));    // FatFS handle off the 6 KB task stack
-    long fsize = 0;
+    sampfile_t sfa = {0};
     bool open_ok = false;
     if (f) {
         sd_lock_take();
         open_ok = (f_open(f, path, FA_READ) == FR_OK);
-        if (open_ok) fsize = (long)f_size(f);
+        if (open_ok && sampfile_probe_f(f, &sfa) != 0) {
+            ESP_LOGE(TAG, "%s: %s", path, sfa.why);
+            f_close(f);
+            open_ok = false;
+        }
         sd_lock_give();
     }
     if (!env || !chunk || !open_ok) {
@@ -116,7 +121,7 @@ static void analysis_task(void *pv)
     }
 
     // 1) onset envelope
-    uint32_t total_hops = (uint32_t)(fsize / 4 / DK_HOP);
+    uint32_t total_hops = sfa.frames / DK_HOP;
     if (total_hops > DK_ENV_MAX) total_hops = DK_ENV_MAX;   // cap ~5 min
     uint32_t n = 0;
     while (n < total_hops) {
@@ -127,10 +132,9 @@ static void analysis_task(void *pv)
         uint32_t hops = total_hops - n;
         if (hops > AN_CHUNK_HOPS) hops = AN_CHUNK_HOPS;
         sd_lock_take();
-        UINT br = 0;
-        FRESULT frr = f_read(f, chunk, hops * DK_HOP * 4, &br);
+        size_t got_fr = sampfile_read_f(f, &sfa, chunk, hops * DK_HOP);
         sd_lock_give();
-        uint32_t got_hops = (frr == FR_OK) ? br / 4 / DK_HOP : 0;
+        uint32_t got_hops = (uint32_t)(got_fr / DK_HOP);
         for (uint32_t h = 0; h < got_hops && n < total_hops; h++) {
             int32_t acc = 0;
             const int16_t *p = chunk + h * DK_HOP * 2;
