@@ -332,7 +332,11 @@ static void deck_loop_toggle(void)
         s_loop_len_idx++;
     int lb = dk_loop_beats[s_loop_len_idx];
     uint32_t len = (uint32_t)lb * beat_tf;
-    if (len >= dk.file_frames) return;
+    // ring cap (dualdeck-stage catch): a 16-beat window below ~132 bpm
+    // exceeds the 8 s ring — wraps would read EVICTED data. Halve until
+    // the window is fully ring-residentable.
+    while (len > DK_RING_FRAMES - 8192 && lb > min_beats) { lb >>= 1; len = (uint32_t)lb * beat_tf; }
+    if (len >= dk.file_frames || len > DK_RING_FRAMES - 8192) return;
     // anchor on the NEAREST grid beat (an engage-position block anchor could
     // sit outside the ring; a beat is at most half a beat away)
     int64_t rel = (int64_t)dk.rpos_i - (int64_t)dk.grid_offset;
@@ -429,7 +433,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
                 int min_beats = ppb >= 1.0f ? 1 : (int)(1.0f / ppb + 0.5f);
                 while (ni < 4 && dk_loop_beats[ni] < min_beats) ni++;
                 uint32_t nl = (uint32_t)dk_loop_beats[ni] * beat_tf_lp;
-                if (ni != s_loop_len_idx &&
+                if (ni != s_loop_len_idx && nl <= DK_RING_FRAMES - 8192 &&
                     dk.loop_start + nl <= dk.file_frames) {
                     s_loop_len_idx = ni;
                     dk.loop_len_fr = nl;              // len before flag reads it

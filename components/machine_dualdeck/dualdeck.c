@@ -70,7 +70,12 @@ static void reader_serve(dd_deck_t *v, FILE **fp, char *cur, int16_t *chunk)
     }
     if (*fp && !v->track_req && !v->seek_req) {
         uint32_t lead = v->wpos - v->rpos_i;
-        if (v->wpos < v->file_frames && lead < DD_RING_FRAMES - 4096) {
+        // lead cap: keep 1 s of played history ring-resident (the deck's S5
+        // lesson — the loop's nearest-beat anchor may sit behind rpos), and
+        // PARK at the loop window's end while looping so wraps are pure
+        // cursor math (window content stays resident by construction)
+        if (v->wpos < v->file_frames && lead < DD_RING_FRAMES - DD_RATE - 4096 &&
+            (!v->loop_active || v->wpos < v->loop_start + v->loop_len_fr + 4096)) {
             uint32_t want = v->file_frames - v->wpos;
             if (want > 4096) want = 4096;
             sd_lock_take();
@@ -164,6 +169,38 @@ int dualdeck_load_track(int deck, const char *name)
 void dualdeck_arm_start(int deck) { dd.d[deck & 1].arm_start = true; }
 void dualdeck_arm_stop(int deck)  { dd.d[deck & 1].arm_stop = true; }
 
+// LOOP toggle for one deck (audio task via TR2; ordered writes make it safe
+// from the UI/web side too). Engage = seamless: nearest-beat anchor, first
+// audible effect is the first wrap. Release = seamless flag drop.
+void dualdeck_loop_toggle(int deck)
+{
+    dd_deck_t *v = &dd.d[deck & 1];
+    if (v->loop_active) { v->loop_active = false; return; }
+    if (!v->playing || v->loading || v->seek_req ||
+        v->track_bpm <= 20.0f || !v->file_frames) return;
+    uint32_t beat_tf = (uint32_t)(60.0f * DD_RATE / v->track_bpm);
+    if (!beat_tf) return;
+    float ppb = dd_ppb[dd.ppb_idx];
+    int min_beats = ppb >= 1.0f ? 1 : (int)(1.0f / ppb + 0.5f);
+    int lb = dd.loop_len_beats;
+    if (lb < min_beats) lb = min_beats;
+    uint32_t len = (uint32_t)lb * beat_tf;
+    // ring cap: the window must be fully ring-resident for gapless wraps
+    while (len > DD_RING_FRAMES - 8192 && lb > min_beats) { lb >>= 1; len = (uint32_t)lb * beat_tf; }
+    if (len >= v->file_frames || len > DD_RING_FRAMES - 8192) return;
+    int64_t rel = (int64_t)v->rpos_i - (int64_t)v->grid_offset;
+    int64_t idx = (rel >= 0) ? (rel + beat_tf / 2) / beat_tf
+                             : -(((-rel) + beat_tf / 2) / beat_tf);
+    int64_t st = (int64_t)v->grid_offset + idx * (int64_t)beat_tf;
+    int64_t oldest = (int64_t)v->wpos - DD_RING_FRAMES + 4096;
+    while (st < 0 || st < oldest) st += beat_tf;      // residency guard
+    if (st + len > (int64_t)v->file_frames) return;
+    v->loop_start = (uint32_t)st;                     // window BEFORE the flag
+    v->loop_len_fr = len;
+    v->loop_beats = lb;
+    v->loop_active = true;
+}
+
 // ---- engine helpers ----------------------------------------------------------
 // fire the armed transport ops for one deck (called ON the bar boundary, or
 // immediately when free-running with no clock)
@@ -173,6 +210,7 @@ static void deck_fire(int i)
     if (v->arm_stop) {
         v->arm_stop = false;
         v->arm_start = false;
+        v->loop_active = false;        // stop exits the loop
         v->playing = false;
         // re-park at the cue so the next start is instant
         v->loading = true;
@@ -182,6 +220,7 @@ static void deck_fire(int i)
     }
     if (v->arm_start) {
         v->arm_start = false;
+        v->loop_active = false;        // a restart exits the loop
         if (!v->track[0] || !v->file_frames) return;
         if (v->playing || v->rpos_i != v->grid_offset || v->loading) {
             // restart / not parked: full seek protocol (brief refill mute)
@@ -264,6 +303,7 @@ static esp_err_t dualdeck_start(void)
     dd.clk_src = 7;                 // CV8, house convention
     dd.ppb_idx = 4;                 // 4 PPQN, the modular norm
     dd.fade_beats = 4;
+    dd.loop_len_beats = 4;
     dd.xf = 0.0f;
     dd.manual = true;
     clockin_reset(&dd.ci, dd_ppb[dd.ppb_idx]);
@@ -290,15 +330,17 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     if (!dd.d[0].ring || !dd.d[1].ring) return;
     const int frames = MACHINE_BLOCK / 2;
 
-    // ---- trig gates on the shared grammar resolver (trig_gate.h): TR1 =
-    // deck A, TR2 = deck B. Tap = quantized start/restart (on release);
-    // TG_HOLD at the 0.6 s threshold = quantized stop (release then no-ops).
+    // ---- trig gates: the UNIFIED grammar on the FOCUSED deck (Arlo:
+    // consistency with deck/tracker beats per-deck trigs). TR1 tap =
+    // quantized start/restart, TG_HOLD = quantized stop; TR2 press = LOOP
+    // toggle (beat-true), held past 0.6 s = momentary (long release exits).
     static trig_gate_t tg[2];
-    for (int i = 0; i < 2; i++) {
-        tg_event_t e = trig_gate_step(&tg[i], !(io->trig_level & (1 << i)), frames);
-        if (e == TG_HOLD) dualdeck_arm_stop(i);
-        else if (e == TG_REL_SHORT) dualdeck_arm_start(i);
-    }
+    int fo = dd.focus;
+    tg_event_t e1 = trig_gate_step(&tg[0], !(io->trig_level & 1), frames);
+    tg_event_t e2 = trig_gate_step(&tg[1], !(io->trig_level & 2), frames);
+    if (e1 == TG_HOLD) dualdeck_arm_stop(fo);
+    else if (e1 == TG_REL_SHORT) dualdeck_arm_start(fo);
+    if (e2 == TG_PRESS || e2 == TG_REL_LONG) dualdeck_loop_toggle(fo);
 
     // ---- shared clock + bar phase. An accepted pulse advances the counter;
     // the bar boundary is every 4 beats' worth of pulses. With no lock, armed
@@ -410,6 +452,14 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
                 l = last[i][0]; r = last[i][1];
                 v->rpos_f += rate[i];
                 while (v->rpos_f >= 1.0) { v->rpos_f -= 1.0; v->rpos_i++; }
+                // engine-owned WRAP (deck protocol): whole windows back,
+                // parked during loading/seek; skip while the ring hasn't
+                // filled the window yet
+                if (v->loop_active && !v->loading && !v->seek_req) {
+                    uint32_t lend = v->loop_start + v->loop_len_fr;
+                    if (lend <= v->wpos)
+                        while (v->rpos_i >= lend) v->rpos_i -= v->loop_len_fr;
+                }
             }
             mix_l += l * g;
             mix_r += r * g;
@@ -444,6 +494,7 @@ static cJSON *dualdeck_preset_save(void)
     cJSON_AddNumberToObject(o, "clk_src", dd.clk_src);
     cJSON_AddNumberToObject(o, "ppb", dd.ppb_idx);
     cJSON_AddNumberToObject(o, "fade", dd.fade_beats);
+    cJSON_AddNumberToObject(o, "llen", dd.loop_len_beats);
     return o;
 }
 
@@ -462,6 +513,10 @@ static void dualdeck_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fade")) && cJSON_IsNumber(j)) {
         int fb = j->valueint;
         dd.fade_beats = (fb == 0 || fb == 1 || fb == 4 || fb == 8) ? fb : 4;
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "llen")) && cJSON_IsNumber(j)) {
+        int lb = j->valueint;
+        dd.loop_len_beats = (lb == 1 || lb == 2 || lb == 4 || lb == 8 || lb == 16) ? lb : 4;
     }
     // track loads only when the value actually changes — preset_load also runs
     // on remote settings writes, and reloading mid-performance would mute

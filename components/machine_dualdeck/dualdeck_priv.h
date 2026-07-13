@@ -11,8 +11,11 @@
 // SAME conditioned clock, so they are beatmatched by construction and the
 // performer's verbs shrink to fit the panel):
 //
-//   TR1 tap  = deck A quantized start/restart (next BAR)   TR1 hold = stop
-//   TR2 tap/hold = deck B, same
+//   TR1 = FOCUSED deck transport: tap = quantized start/restart (next BAR),
+//        hold = quantized stop  (unified TR grammar, convergence era)
+//   TR2 = FOCUSED deck LOOP: press = toggle (beat-true), hold = momentary
+//   NOTE the trade: trigs address the focused deck (encoder picks), so a
+//   sequencer can't independently gate both decks — grammar consistency won
 //   knob6/CV6 = equal-power crossfade A<->B (takeover fade auto-moves it on a
 //               deck start; moving the knob past a deadband grabs it back)
 //   knob7/CV7 = master DJ filter on the summed mix (the deck's LP/HP sweep)
@@ -57,6 +60,16 @@ typedef struct {
     volatile bool arm_start;       // start/restart from the cue
     volatile bool arm_stop;        // stop + re-park at the cue
 
+    // per-deck QUANTx2-style LOOP (the deck's KO-II loop, transplanted):
+    // TR2 press = toggle on the FOCUSED deck (unified TR grammar), engage
+    // anchors on the nearest grid beat (ring-resident by the lead cap),
+    // engine wraps by whole windows, release = seamless flag drop (a
+    // bar-quantized restart already covers "get back to song position")
+    volatile bool loop_active;
+    volatile uint32_t loop_start;  // frames, absolute
+    volatile uint32_t loop_len_fr;
+    volatile int  loop_beats;      // display
+
     // PLL (deck math, per deck, against the shared clock)
     float phase_int;
     volatile float phase_err;      // UI display
@@ -95,6 +108,9 @@ typedef struct {
     volatile bool manual;          // knob is live (grabbed / no auto pending)
     volatile int fade_beats;       // Setup: 0 = cut, else 1/4/8 beats
 
+    volatile int loop_len_beats;   // Setup ladder {1,2,4,8,16}; per-deck len
+                                   // freezes at engage
+
     // master DJ filter (knob7 on the summed mix; deck sweep, fixed q)
     volatile int filt_cv;
     float flt_f;
@@ -111,3 +127,4 @@ int  dualdeck_load_track(int deck, const char *name);
 // audio-task-safe transport arms (engine fires them on the bar)
 void dualdeck_arm_start(int deck);
 void dualdeck_arm_stop(int deck);
+void dualdeck_loop_toggle(int deck);   // TR2 grammar; safe from UI too
