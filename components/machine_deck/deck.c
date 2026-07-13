@@ -14,6 +14,7 @@
 #include "fileio.h"
 #include "sd_lock.h"
 #include "trig_gate.h"
+#include "sampfile.h"
 #include "deck_priv.h"
 
 static const char *TAG = "DECK";
@@ -34,6 +35,7 @@ static char s_pending[DK_NAME_LEN];
 static void reader_task(void *pv)
 {
     FILE *f = NULL;
+    sampfile_t sfl = {0};          // container descriptor for the open track
     char cur[DK_NAME_LEN] = "";
     // DMA-capable internal RAM per the SD house rule (with CAPS_ALLOC plain
     // malloc is internal anyway; explicit caps guard against config drift)
@@ -47,10 +49,14 @@ static void reader_task(void *pv)
             strlcpy(cur, s_pending, sizeof(cur));
             if (cur[0]) {
                 char path[64];
-                snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", cur);
+                sample_resolve(cur, path, sizeof(path));   // .RAW/.WAV/.AIF(F)
                 sd_lock_take();
                 f = fopen(path, "rb");
-                if (f) { fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET); dk.file_frames = (uint32_t)(sz / 4); }
+                if (f && sampfile_probe(f, &sfl) != 0) {
+                    ESP_LOGE(TAG, "%s: %s", path, sfl.why);   // e.g. "WAV: not 44.1kHz"
+                    fclose(f); f = NULL;
+                }
+                if (f) dk.file_frames = sfl.frames;
                 sd_lock_give();
                 if (!f) { ESP_LOGE(TAG, "open %s failed", path); dk.file_frames = 0; }
                 dk.wpos = 0;
@@ -66,7 +72,7 @@ static void reader_task(void *pv)
             uint32_t to = dk.seek_to;           // latest wins if requests raced
             if (to >= dk.file_frames) to = 0;
             sd_lock_take();
-            fseek(f, (long)to * 4, SEEK_SET);
+            fseek(f, sf_seek_pos(&sfl, to), SEEK_SET);
             sd_lock_give();
             dk.wpos = to;                       // ring restarts from the seek point
             dk.rpos_i = to;                     // reader is the ONLY seek-writer of rpos
@@ -85,7 +91,7 @@ static void reader_task(void *pv)
                 uint32_t want = dk.file_frames - dk.wpos;
                 if (want > 4096) want = 4096;
                 sd_lock_take();
-                size_t got = fread(chunk, 4, want, f);
+                size_t got = sampfile_read(f, &sfl, chunk, want);
                 sd_lock_give();
                 if (got > 0) {
                     uint32_t w = dk.wpos % DK_RING_FRAMES;
@@ -112,8 +118,8 @@ static void reader_task(void *pv)
                 if (want > 128) want = 128;
                 sd_lock_take();
                 long back = ftell(f);
-                fseek(f, (long)p * 4, SEEK_SET);
-                size_t got = want ? fread(chunk, 4, want, f) : 0;
+                fseek(f, sf_seek_pos(&sfl, p), SEEK_SET);
+                size_t got = want ? sampfile_read(f, &sfl, chunk, want) : 0;
                 fseek(f, back, SEEK_SET);
                 sd_lock_give();
                 int peak = 0;

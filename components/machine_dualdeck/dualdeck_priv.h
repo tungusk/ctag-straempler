@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "clock.h"
 #include "svf.h"
+#include "sampfile.h"
 
 // Dual-deck — a clock-locked track BLENDER, not a DJ rig (the design reframe:
 // manual beatmatching is what eats controls; here both decks phase-lock to the
@@ -44,6 +45,7 @@ typedef struct {
     volatile uint32_t seek_to;     // seek protocol: requesters set flags only,
     volatile bool seek_req;        // the READER applies them (deck lesson)
     volatile bool track_req;
+    sampfile_t sf;                 // container descriptor (reader-owned)
     char pending[DD_NAME_LEN];
     char track[DD_NAME_LEN];       // loaded track id ("" = none)
 
