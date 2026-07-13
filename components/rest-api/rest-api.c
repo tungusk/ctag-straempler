@@ -11,6 +11,7 @@
 #include "string_tools.h"
 #include "fileio.h"
 #include "sampfile.h"
+#include "sampimport.h"
 #include "sd_lock.h"
 #include "audio.h"
 #include "machine.h"
@@ -253,6 +254,26 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
     sd_lock_give();
     free(buf);
     return ESP_OK;
+}
+
+// ─── /import — convert-on-import (POST = start scan, GET = progress) ─────────
+
+static esp_err_t import_post_handler(httpd_req_t *req)
+{
+    if (samp_import_start() != 0)
+        return send_json(req, "{\"ok\":false,\"why\":\"busy\"}");
+    return send_json(req, "{\"ok\":true}");
+}
+
+static esp_err_t import_get_handler(httpd_req_t *req)
+{
+    char j[160];
+    snprintf(j, sizeof(j),
+             "{\"busy\":%s,\"done\":%d,\"fail\":%d,\"pct\":%d,\"cur\":\"%s\"}",
+             samp_import_busy ? "true" : "false",
+             samp_import_done, samp_import_fail, samp_import_pct,
+             samp_import_cur);
+    return send_json(req, j);
 }
 
 // ─── GET /settings ─────────────────────────────────────────────────────────────
@@ -508,6 +529,21 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     sd_lock_give();
     free(buf);
     cJSON_Delete(root);
+
+    // convert-on-import: the upload landed verbatim as <name>.RAW — sniff
+    // what actually arrived. Native containers already play (the probe reads
+    // magic, not extensions); MP3s and convertible WAV/AIFF (48k, 24-bit,
+    // float) get converted in place to a native .WAV, replacing the upload.
+    {
+        char vpath[96];
+        snprintf(vpath, sizeof(vpath), "/sdcard%s", file_name);
+        int irc = samp_import_file(vpath);   // 1 = native, 0 = converted, -1 = raw/unknown
+        if (irc == 0) {
+            // the sidecar the upload wrote pairs by base name — it survives;
+            // the .RAW source was replaced by <name>.WAV
+            ESP_LOGI(TAG, "upload converted to native: %s", file_name);
+        }
+    }
 
     httpd_resp_send(req, NULL, 0);
     ev.event = EV_DECODING_DONE;
@@ -1014,6 +1050,8 @@ static httpd_uri_t uris[] = {
     { .uri = "/files",      .method = HTTP_GET,    .handler = files_get_handler },
     { .uri = "/files",      .method = HTTP_DELETE, .handler = files_delete_handler },
     { .uri = "/files/raw",  .method = HTTP_GET,    .handler = files_raw_handler },
+    { .uri = "/import",     .method = HTTP_POST,   .handler = import_post_handler },
+    { .uri = "/import",     .method = HTTP_GET,    .handler = import_get_handler },
     { .uri = "/settings",   .method = HTTP_GET,    .handler = settings_get_handler },
     { .uri = "/settings",   .method = HTTP_POST,   .handler = settings_post_handler },
     { .uri = "/status",     .method = HTTP_GET,    .handler = status_get_handler },

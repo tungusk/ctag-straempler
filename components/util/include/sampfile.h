@@ -32,6 +32,14 @@ typedef struct {
     uint8_t  channels;      // 1 or 2
     bool     be;            // big-endian samples (AIFF)
     const char *why;        // rejection reason when probe fails (static str)
+    // source details, filled even when the probe REJECTS — the importer
+    // (sampimport) uses them to decide whether a file is convertible
+    uint32_t src_rate;
+    uint16_t src_bits;
+    uint16_t src_code;      // WAV audio format tag (1 = PCM, 3 = float)
+    uint16_t src_ch;
+    uint32_t src_data_off;
+    uint32_t src_data_len;  // bytes
 } sampfile_t;
 
 // bytes per frame in the FILE (2 for mono, 4 for stereo)
