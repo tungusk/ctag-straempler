@@ -85,6 +85,7 @@ void tracker_request_load(const char *name)
     trk.playing = false;
     trk.loading = true;
     trk.state = TRK_LOADING;
+    trk.nudge_req = 0;
     trk.load_req = true;
 }
 
@@ -296,6 +297,7 @@ static void render_task(void *pv)
         if (s_have_module && trk.restart_req) {
             trk.restart_req = false;
             trk.loop_engage = false;
+            trk.nudge_req = 0;
             xmp_restart_module(s_ctx);
             ring_flush();
         }
@@ -457,6 +459,7 @@ static void render_task(void *pv)
                     trk.tf_cur += 0.05f * (tgt - trk.tf_cur);
                 } else {
                     trk.tf_cur += 0.05f * (1.0f - trk.tf_cur);
+                    trk.nudge_req = 0;    // sync dropped: no stale nudge firings
                 }
                 xmp_set_tempo_factor(s_ctx, trk.tf_cur);
 
@@ -482,6 +485,33 @@ static void render_task(void *pv)
                     // holds the tail of the current bar. Flushing would DROP it
                     // (cutting the bar short); instead we let it play out and the
                     // target lands right after, seamlessly on the bar line.
+                    trk.nudge_req = 0;             // a scrub obsoletes pending nudges
+                }
+                // STEP-NUDGE (convergence S2): shift the row grid by whole
+                // external-pulse quanta. The servo measures phase mod ONE pulse,
+                // so a whole-pulse jump is invisible to it and the nudge STICKS
+                // (a fractional jump would be pulled straight back out).
+                // Known flag (plan): speeds >12 at ppb x4 overshoot via the
+                // min-1-row clamp; the bounded pull absorbs the residue.
+                if (trk.nudge_req != 0 && trk.sync && trk.ci.clk.locked &&
+                    last_norm_row >= 0 && fi.row != last_norm_row &&
+                    fi.speed > 0 && trk.total_steps > 0 &&
+                    fi.pos >= 0 && fi.pos < trk.n_orders) {
+                    int det = trk.nudge_req;
+                    trk.nudge_req = 0;
+                    float rpp = (24.0f / trk_ppb[trk.ppb_idx]) / (float)fi.speed;
+                    int rows = (int)lroundf(rpp * (float)det);
+                    if (rows == 0) rows = det > 0 ? 1 : -1;   // never a no-op
+                    int64_t tgt = (int64_t)trk.order_step0[fi.pos] + fi.row + rows;
+                    int64_t ts = (int64_t)trk.total_steps;
+                    tgt %= ts; if (tgt < 0) tgt += ts;
+                    int no, nr;
+                    abs_to_or((uint32_t)tgt, &no, &nr);
+                    // set_position resets replay speed (house precedent) —
+                    // only re-seat on a real cross-pattern move
+                    if (no != fi.pos) xmp_set_position(s_ctx, no);
+                    xmp_set_row(s_ctx, nr);
+                    // NO ring_flush here either — same rationale as the scrub
                 }
                 last_norm_row = fi.row;
             }

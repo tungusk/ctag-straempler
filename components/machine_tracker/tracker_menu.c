@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/queue.h"
 #include <esp_http_server.h>
 #include "menusys.h"
@@ -119,6 +120,18 @@ static void draw_title(void){
     cfont = f;
 }
 
+// NUDGE indicator: accumulates detents while the ~800 ms TTL is fresh and
+// rides the change-driven status repaint (draw_info compares strings, so the
+// prefix appears/expires without any extra draw calls)
+static int s_nudge_val = 0;
+static uint32_t s_nudge_tick = 0;
+static void nudge_note(int dir){
+    uint32_t tk = xTaskGetTickCount();
+    if (tk - s_nudge_tick >= pdMS_TO_TICKS(800)) s_nudge_val = 0;
+    s_nudge_val += dir;
+    s_nudge_tick = tk;
+}
+
 static void draw_info(void){
     TFT_setFont(DEFAULT_FONT, NULL);
     int fh = TFT_getfontheight();
@@ -141,6 +154,10 @@ static void draw_info(void){
             snprintf(st, sizeof(st), "LOOP  %d step%s  @ %02d:%02d  %s",
                      trk.loop_len, trk.loop_len > 1 ? "s" : "",
                      trk.loop_start_ord, trk.loop_start_row, bs);
+        else if (s_nudge_val != 0 &&
+                 xTaskGetTickCount() - s_nudge_tick < pdMS_TO_TICKS(800))
+            snprintf(st, sizeof(st), "NUDGE %+d   pat %02d/%02d   %s",
+                     s_nudge_val, trk.cur_pos, trk.num_pat, bs);
         else
             snprintf(st, sizeof(st), "%s   pat %02d/%02d   %s",
                      state_word(), trk.cur_pos, trk.num_pat, bs);
@@ -244,15 +261,25 @@ static int tracker_live_handler(int it_id, int event, void *ev_data){
         case EV_SHORT_PRESS:
             refresh_mods(); s_load_ret = M_TRACKER_LIVE;
             return M_TRACKER_LOAD;
+        // MODAL encoder (house pattern, deck precedent): synced+locked =
+        // STEP-NUDGE (whole-pulse row shifts the servo can't pull back out);
+        // otherwise the existing pattern scrub. Loop mode keeps its behaviour
+        // (CV6 covers position there; a nudge would be undone at re-seat).
         case EV_FWD:
-            if (trk.num_pat > 0){
+            if (trk.sync && trk.ci.clk.locked && !trk.loop_engage && trk.playing){
+                trk.nudge_req++;
+                nudge_note(+1);
+            } else if (trk.num_pat > 0){
                 if (!scrub_pending) scrub_target = trk.cur_pos;
                 scrub_target = (scrub_target + 1) % trk.num_pat;
                 scrub_pending = true; scrub_moved = true;
             }
             break;
         case EV_BWD:
-            if (trk.num_pat > 0){
+            if (trk.sync && trk.ci.clk.locked && !trk.loop_engage && trk.playing){
+                trk.nudge_req--;
+                nudge_note(-1);
+            } else if (trk.num_pat > 0){
                 if (!scrub_pending) scrub_target = trk.cur_pos;
                 scrub_target = (scrub_target + trk.num_pat - 1) % trk.num_pat;
                 scrub_pending = true; scrub_moved = true;
