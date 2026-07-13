@@ -355,8 +355,8 @@ static void render_task(void *pv)
                 // CV6 (position across the song). Tempo-syncs like normal play
                 // (the loop rides the external clock too).
                 int lb = trk.cur_bpm > 0 ? trk.cur_bpm : trk.mod_bpm;
-                if (trk.sync && trk.clk.locked && trk.clk.bpm > 0 && lb > 0) {
-                    float ext_beat = trk.clk.bpm / trk_ppb[trk.ppb_idx];
+                if (trk.sync && trk.ci.clk.locked && trk.ci.clk.bpm > 0 && lb > 0) {
+                    float ext_beat = trk.ci.clk.bpm / trk_ppb[trk.ppb_idx];
                     float tgt = (float)lb / ext_beat;   // time factor: live mod bpm / ext
                     if (tgt < 0.5f) tgt = 0.5f;
                     if (tgt > 2.0f) tgt = 2.0f;
@@ -421,8 +421,8 @@ static void render_task(void *pv)
                 // tempo factor (pitch-preserving). Slew so clock jitter drifts
                 // instead of warbling. Nominal factor 1.0 when unsynced/unlocked.
                 int live_bpm = trk.cur_bpm > 0 ? trk.cur_bpm : trk.mod_bpm;
-                if (trk.sync && trk.clk.locked && trk.clk.bpm > 0 && live_bpm > 0) {
-                    float ext_beat = trk.clk.bpm / trk_ppb[trk.ppb_idx];
+                if (trk.sync && trk.ci.clk.locked && trk.ci.clk.bpm > 0 && live_bpm > 0) {
+                    float ext_beat = trk.ci.clk.bpm / trk_ppb[trk.ppb_idx];
                     // xmp_set_tempo_factor is a TIME multiplier (bigger = slower),
                     // bench-verified inverted 2026-07-11 — so the ratio is mod/ext.
                     // LIVE bpm, not load-time: IT songs change tempo mid-song and
@@ -436,14 +436,14 @@ static void render_task(void *pv)
                     // audible position trails the render by the ring lead, so
                     // subtract it. Compare in PULSE phase (like the deck) so
                     // clock mult/div keeps working.
-                    if (trk.ph_speed > 0 && trk.clk.period > 0) {
+                    if (trk.ph_speed > 0 && trk.ci.clk.period > 0) {
                         float beat_fr = 44100.0f * 60.0f / ext_beat;
                         float ph_r = fmodf((float)trk.ph_row * (float)trk.ph_speed
                                            + (float)trk.ph_frame, 24.0f) / 24.0f;
                         float lead_b = (float)(trk.wpos - trk.rpos) / beat_fr;
                         float p_trk = (ph_r - lead_b) * trk_ppb[trk.ppb_idx];
                         p_trk -= floorf(p_trk);
-                        float p_ext = (float)trk.clk.since / (float)trk.clk.period;
+                        float p_ext = (float)trk.ci.clk.since / (float)trk.ci.clk.period;
                         if (p_ext > 1.0f) p_ext = 1.0f;
                         float err = p_ext - p_trk;          // >0: rows behind the clock
                         if (err > 0.5f)  err -= 1.0f;
@@ -526,15 +526,12 @@ static esp_err_t tracker_start(void)
     trk.clk_src = keep_clk; trk.ppb_idx = keep_ppb;
     strlcpy(trk.file, keep_file, sizeof(trk.file));
     if (trk.ppb_idx < 0 || trk.ppb_idx > 4) trk.ppb_idx = 4;
-    trk.clk_base = 4095;
     trk.tf_cur = 1.0f;
     trk.loop_len = 4;               // sane until process() reads CV7
     trk.state = TRK_EMPTY;
-    clock_reset(&trk.clk);
-    // widen the clock gate for multi-PPQN pulses (deck lesson): the default
-    // 20..300 BPM per-pulse gate rejects every interval of a 4 PPQN clock.
-    trk.clk.period_min = TRK_RATE * 60 / 300 / 4;
-    trk.clk.period_max = TRK_RATE * 60 / 20;
+    // shared front-end: ppb-scaled sanity gates replace the old fixed
+    // widened gate (which had to cover 4 PPQN and 1-per-4-beats at once)
+    clockin_reset(&trk.ci, trk_ppb[trk.ppb_idx]);
 
     s_run = true;
     // 32 KB stack: libxmp's loaders overrun the old 8 KB (FreeRTOS
@@ -611,16 +608,11 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     }
     if (starved) trk.dbg_starve++;
 
-    // CV clock conditioning (deck pattern): floor-tracked Schmitt on the clock
-    // channel synthesises a clean square for the shared detector.
-    uint16_t cv = io->cv[trk.clk_src];
-    if ((int)cv < trk.clk_base) trk.clk_base = cv;               // dips instantly
-    else trk.clk_base += ((int)cv - trk.clk_base) >> 9;          // rises slowly
-    uint16_t sq;
-    if (!trk.clk_high && (int)cv > trk.clk_base + 900) { trk.clk_high = true; }
-    else if (trk.clk_high && (int)cv < trk.clk_base + 350) { trk.clk_high = false; }
-    sq = trk.clk_high ? 4095 : 0;
-    for (int f = 0; f < frames; f++) clock_tick(&trk.clk, sq);
+    // CV clock conditioning: the shared front-end (clockin_t) — floor-tracked
+    // Schmitt + ppb-scaled gates; drops the lock for a clean relock when the
+    // ppb setting actually changes
+    clockin_set_ppb(&trk.ci, trk_ppb[trk.ppb_idx]);
+    clockin_block(&trk.ci, io->cv[trk.clk_src], frames);
 }
 
 // ---- preset -----------------------------------------------------------------

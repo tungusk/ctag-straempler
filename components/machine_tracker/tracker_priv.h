@@ -88,10 +88,10 @@ typedef struct {
     int      n_orders;
     uint32_t total_steps;          // sum of all order rows = song length in steps
 
-    // CV clock (process fills, render reads for sync)
-    beatclock_t clk;
-    int  clk_base;                 // tracked floor of the clock channel
-    bool clk_high;                 // Schmitt state
+    // CV clock (process fills, render reads for sync) — the shared
+    // conditioned front-end (clock.h): floor-tracked Schmitt + ppb-scaled
+    // gates replace the private near-copy of the deck pattern
+    clockin_t ci;
     float tf_cur;                  // current tempo factor (render-owned)
     int   ph_row, ph_frame, ph_speed;  // last rendered row/tick position
                                        // (render-owned; feeds the sync phase pull)
