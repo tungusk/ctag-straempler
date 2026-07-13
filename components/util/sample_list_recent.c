@@ -8,6 +8,7 @@
 #include "ff.h"          // raw FatFS: the timestamps ride along with the names
 #include "sd_lock.h"
 #include "sample_ram.h"
+#include "sampfile.h"
 
 int sample_list_recent(char (**out)[24])
 {
@@ -25,9 +26,14 @@ int sample_list_recent(char (**out)[24])
     if (f_opendir(&d, "usr") == FR_OK) {            // FatFS path: no /sdcard
         FILINFO fi;
         while (f_readdir(&d, &fi) == FR_OK && fi.fname[0]) {
-            int l = strlen(fi.fname);
-            if (!(l > 4 && strcasecmp(fi.fname + l - 4, ".RAW") == 0 && l - 4 < 24))
-                continue;
+            char id[24];
+            if (!sample_name_id(fi.fname, id, sizeof(id))) continue;
+            // one id per base across containers: the resolver (.RAW first)
+            // decides which file a loader gets
+            bool dup = false;
+            for (int k = 0; k < n; k++)
+                if (strcasecmp(list[k], id) == 0) { dup = true; break; }
+            if (dup) continue;
             uint32_t w = ((uint32_t)fi.fdate << 16) | fi.ftime;
             int slot = n;
             if (n >= SAMPLE_LIST_RECENT_MAX) {
@@ -42,7 +48,7 @@ int sample_list_recent(char (**out)[24])
             } else {
                 n++;
             }
-            snprintf(list[slot], 24, "%.*s", l - 4, fi.fname);
+            strcpy(list[slot], id);   // extension-less, dedup'd above
             when[slot] = w;
         }
         f_closedir(&d);
