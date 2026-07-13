@@ -91,13 +91,16 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_send_chunk(req, "{\"files\":[", HTTPD_RESP_USE_STRLEN);
 
-    sd_lock_take();
-    DIR *d = opendir("/sdcard/usr");
-    sd_lock_give();
+    static const char *const jdirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
+                                        "/sdcard/usr/LOOPS"};
     bool first = true;
     bool dead = false;   // client hung up mid-stream — stop sending (same
                          // disease as the /files/raw abort fix: a dead socket
                          // must not keep the worker pumping chunks at it)
+    for (int di = 0; di < 3 && !dead; di++) {
+    sd_lock_take();
+    DIR *d = opendir(jdirs[di]);
+    sd_lock_give();
     if (d) {
         for (;;) {
             // grab the SD bus only for the readdir step, release between entries
@@ -145,6 +148,7 @@ static esp_err_t files_get_handler(httpd_req_t *req)
         closedir(d);
         sd_lock_give();
     }
+    }
 
     if (dead) return ESP_FAIL;             // socket gone — no trailer to send
     httpd_resp_send_chunk(req, "]}", HTTPD_RESP_USE_STRLEN);
@@ -163,12 +167,15 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
     }
 
     char path[72];
-    static const char *const del_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF", ".JSN"};
+    static const char *const del_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF", ".JSN", ".OT"};
+    static const char *const del_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
+                                           "/sdcard/usr/LOOPS"};
     sd_lock_take();
-    for (int i = 0; i < 5; i++) {
-        snprintf(path, sizeof(path), "/sdcard/usr/%s%s", name, del_exts[i]);
-        remove(path);
-    }
+    for (int d = 0; d < 3; d++)
+        for (int i = 0; i < 6; i++) {
+            snprintf(path, sizeof(path), "%s/%s%s", del_dirs[d], name, del_exts[i]);
+            remove(path);
+        }
     sd_lock_give();
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");

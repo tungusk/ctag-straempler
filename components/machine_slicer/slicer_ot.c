@@ -23,6 +23,7 @@
 #include "esp_log.h"
 #include "sd_lock.h"
 #include "slicer_priv.h"
+#include "sampfile.h"
 
 #define OT_SIZE      832
 #define OT_SLICES_AT 0x3A
@@ -52,7 +53,7 @@ int slicer_parse_ot(const char *name, uint32_t sample_len, uint32_t *out_pt, int
     if (!name || !name[0] || sample_len == 0 || max_pts < 2) return -1;
 
     char path[64];
-    snprintf(path, sizeof(path), "/sdcard/usr/%s.OT", name);
+    sample_resolve_aux(name, ".OT", path, sizeof(path));
     uint8_t b[OT_SIZE];
     sd_lock_take();
     FILE *f = fopen(path, "rb");

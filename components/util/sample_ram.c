@@ -10,27 +10,31 @@
 
 int sample_list(char out[][24], int max)
 {
-    sd_lock_take();   // brief name-only walk; hold the bus for its duration
-    DIR *d = opendir("/sdcard/usr");
-    if (!d) { sd_lock_give(); return 0; }
+    // every pool folder (flat usr/ = legacy + uploads, REC = takes, LOOPS =
+    // saves) feeds ONE flat id list; loaders resolve ids back to folders
+    static const char *const dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
+                                       "/sdcard/usr/LOOPS"};
     int n = 0;
-    struct dirent *e;
-    char id[24], prev[24] = "";
-    while ((e = readdir(d)) != NULL && n < max) {
-        if (!sample_name_id(e->d_name, id, sizeof(id))) continue;
-        // a base present in two containers (FOO.RAW + FOO.WAV) is one id;
-        // FAT returns names in creation order, so dedup adjacent + let the
-        // loader's resolver (.RAW first) pick the file
-        bool dup = false;
-        for (int k = 0; k < n; k++)
-            if (strcasecmp(out[k], id) == 0) { dup = true; break; }
-        (void)prev;
-        if (dup) continue;
-        strcpy(out[n], id);
-        n++;
+    char id[24];
+    for (int di = 0; di < 3 && n < max; di++) {
+        sd_lock_take();   // brief name-only walk; hold the bus for its duration
+        DIR *d = opendir(dirs[di]);
+        if (!d) { sd_lock_give(); continue; }
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL && n < max) {
+            if (!sample_name_id(e->d_name, id, sizeof(id))) continue;
+            // one id per base across containers AND folders (dedup; the
+            // resolver — pool + RAW first — picks the file)
+            bool dup = false;
+            for (int k = 0; k < n; k++)
+                if (strcasecmp(out[k], id) == 0) { dup = true; break; }
+            if (dup) continue;
+            strcpy(out[n], id);
+            n++;
+        }
+        closedir(d);
+        sd_lock_give();
     }
-    closedir(d);
-    sd_lock_give();
     return n;
 }
 

@@ -61,9 +61,24 @@ int sampfile_probe(FILE *f, sampfile_t *sf);
 // plain fread. The caller owns seeking (sf_seek_pos) and any sd_lock.
 size_t sampfile_read(FILE *f, const sampfile_t *sf, int16_t *dst, size_t n);
 
-// id -> actual pool path. Tries usr/<id>.RAW, .WAV, .AIF, .AIFF (that
-// order — RAW keeps priority). Returns 0 and writes the VFS path, or -1.
+// POOL FOLDERS (2026-07-13): usr/ = the pool (uploads, imports, legacy flat
+// cards), usr/REC = device takes, usr/LOOPS = looper saves. Ids stay BARE and
+// extension-less; the resolver searches pool-first across every folder and
+// every container, so pre-folder cards need NO migration — legacy flat files
+// resolve forever, new files land sorted.
+//
+// id -> actual audio path (dirs x .RAW/.WAV/.AIF/.AIFF; pool + RAW win ties).
+// Returns 0 and writes the VFS path, or -1 (path gets a usr/ default).
 int sample_resolve(const char *id, char *path, size_t path_len);
+
+// sidecars/docs (.JSN/.OT/...) live NEXT TO their audio: resolves the audio,
+// swaps the extension in. Falls back to flat usr/ when no audio exists (yet).
+int sample_resolve_aux(const char *id, const char *ext, char *path, size_t path_len);
+
+// next free NNNN for prefix ("REC_"/"LOOP_"): one readdir MAX pass across all
+// pool folders (legacy flat files count — an old usr/REC_0042 must not shadow
+// a new usr/REC/REC_0042). Monotonic per prefix within a boot.
+int sample_next_index(const char *prefix);
 
 // list-side helper: does this directory entry name look like a pool sample?
 // (any supported extension). Writes the extension-less id into id_out.

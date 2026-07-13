@@ -54,8 +54,13 @@ static void write_rec_jsn(const char *raw_path)
         baselen -= 4;
     snprintf(id, sizeof(id), "%.*s", baselen, base);
 
-    char jsn_path[64];
-    snprintf(jsn_path, sizeof(jsn_path), "/sdcard/usr/%s.JSN", id);
+    char jsn_path[80];
+    strlcpy(jsn_path, raw_path, sizeof(jsn_path));   // sidecar sits NEXT TO the take
+    char *dot = strrchr(jsn_path, '.');
+    if (dot && (size_t)(dot - jsn_path) + 5 < sizeof(jsn_path))
+        memcpy(dot, ".JSN", 5);
+    else
+        snprintf(jsn_path, sizeof(jsn_path), "/sdcard/usr/REC/%.40s.JSN", id);
 
     cJSON *root = cJSON_CreateObject();
     char name_field[52];
@@ -85,39 +90,15 @@ static void find_next_filename(char *buf, int buflen)
     // directory walk, and a few hundred of them back-to-back at this task's
     // priority starved the sampler reader (both tracks went silent) AND the
     // web server for seconds ("arming mutes both tracks").
-    // ONE readdir pass finds the highest existing REC number (.RAW-era and
-    // .WAV takes alike), then numbering is monotonic within the boot. The
-    // old per-index stat probing turned pathological the moment a MISSING
-    // extension had to be checked (a stat miss walks the whole directory):
-    // the very first WAV-era arm did ~170 full FAT walks and dropped 1804
-    // capture chunks — the "arming mutes both tracks" disease, bench-caught.
+    // numbering: one readdir MAX pass across every pool folder (legacy flat
+    // usr/ RECs count — they must not shadow new usr/REC takes), then
+    // monotonic within the boot. Takes land SORTED in usr/REC (2026-07-13
+    // folder organization; pre-folder cards need no migration).
     static int hint = -1;
-    if (hint < 0) {
-        int maxn = -1;
-        sd_lock_take();
-        DIR *d = opendir("/sdcard/usr");
-        sd_lock_give();
-        if (d) {
-            int scanned = 0;
-            for (;;) {
-                // bus held only per readdir step (the /files discipline) so
-                // audio refills interleave with the walk
-                sd_lock_take();
-                struct dirent *e = readdir(d);
-                sd_lock_give();
-                if (e == NULL) break;
-                int n;
-                if (sscanf(e->d_name, "REC_%4d.", &n) == 1 && n > maxn) maxn = n;
-                if ((++scanned & 31) == 0) vTaskDelay(1);   // courtesy yield
-            }
-            sd_lock_take();
-            closedir(d);
-            sd_lock_give();
-        }
-        hint = maxn + 1;
-    }
-    if (hint > 9999) { snprintf(buf, buflen, "/sdcard/usr/REC_OVFL.WAV"); return; }
-    snprintf(buf, buflen, "/sdcard/usr/REC_%04d.WAV", hint);
+    mkdir("/sdcard/usr/REC", 0777);          // idempotent
+    if (hint < 0) hint = sample_next_index("REC_");
+    if (hint > 9999) { snprintf(buf, buflen, "/sdcard/usr/REC/REC_OVFL.WAV"); return; }
+    snprintf(buf, buflen, "/sdcard/usr/REC/REC_%04d.WAV", hint);
     hint++;
 }
 

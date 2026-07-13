@@ -146,7 +146,7 @@ int dualdeck_load_track(int deck, const char *name)
     // tempo truth = the sidecar stamp (deck-analyzed or sampler3 take);
     // no analysis engine here — unstamped tracks free-run
     char jp[64];
-    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", name);
+    sample_resolve_aux(name, ".JSN", jp, sizeof(jp));
     cJSON *root = readJSONFileAsCJSON(jp);
     if (root) {
         cJSON *j;

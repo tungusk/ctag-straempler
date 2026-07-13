@@ -41,7 +41,7 @@ void deck_analysis_commit(void)
     }
 
     char jp[64];
-    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", s_an_track);
+    sample_resolve_aux(s_an_track, ".JSN", jp, sizeof(jp));
     cJSON *root = readJSONFileAsCJSON(jp);
     if (!root) root = cJSON_CreateObject();
     // sidecar v2: "dver" versions the analysis (missing = v1 -> auto-upgrade
