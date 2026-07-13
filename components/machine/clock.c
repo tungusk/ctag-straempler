@@ -158,6 +158,9 @@ void clockin_reset(clockin_t *ci, float ppb)
     ci->base = 4095;              // floor tracker converges down on first reads
     ci->high = false;
     ci->edge_since = 1u << 30;    // first edge is never ghost-gated
+    ci->raw_fires = 0;
+    ci->raw_iv = 0;
+    ci->raw_since = 0;
     clockin_set_ppb(ci, ppb);
 }
 
@@ -166,9 +169,15 @@ bool clockin_block(clockin_t *ci, uint16_t cv, int frames)
     // floor tracker: dips follow instantly, drift back up slowly
     if ((int)cv < ci->base) ci->base = cv;
     else if (ci->base < 4095) ci->base++;
+    ci->raw_since += (uint32_t)frames;
     bool edge = false;
     if (!ci->high) {
-        if ((int)cv >= ci->base + 900) { ci->high = true; edge = true; }
+        if ((int)cv >= ci->base + 900) {
+            ci->high = true; edge = true;
+            ci->raw_fires++;
+            ci->raw_iv = ci->raw_since;
+            ci->raw_since = 0;
+        }
     } else if ((int)cv < ci->base + 350) {
         ci->high = false;
     }

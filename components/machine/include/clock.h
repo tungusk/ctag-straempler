@@ -47,6 +47,12 @@ typedef struct {
     bool     high;           // Schmitt state
     float    ppb;            // pulses per beat (1/2/4/8; deck also sub-beat)
     uint32_t edge_since;     // ghost gate: frames since last ACCEPTED edge
+    // raw Schmitt-fire diagnostics (pre-detector, pre-ghost-gate) — /status
+    // surfaces these to tell jack/pulse-width trouble (ghost + missed edges
+    // at the input) apart from detector trouble
+    uint32_t raw_fires;      // rising fires since reset
+    uint32_t raw_iv;         // frames between the last two fires
+    uint32_t raw_since;      // frames since the last fire
 } clockin_t;
 
 void clockin_reset(clockin_t *ci, float ppb);
