@@ -225,7 +225,12 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
   tempo analysis, measured lock, clip-window/corner + httpd abort fixes),
   `tracker-sync-v1` (clock detector octave+ghost guards, tracker external
   sync w/ tick-based phase servo, slicer .ot import/export, deck raw-read
-  analysis). `bin/<name>/flash.sh` returns to any known-good state.
+  analysis), `sampler3-v1` (the deck-pattern sampler rebuild: gate
+  workflow, clock-synced takes, panels UI), `sampler3-v2` (the loop
+  recorder complete: CV matrix, OFF/FREE/QUANT/QUANTx2 crop, phase-exact
+  gapless looping w/ pre-roll crossfade + loop-start cache, 6s capture
+  queue, shared PPQ clock front-end, zero-tick busy-spin sweep).
+  `bin/<name>/flash.sh` returns to any known-good state.
   Matching dated git tags.
 - **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
   (complete repo, `git clone`-able) + a copy of `bin/`. Refresh with
