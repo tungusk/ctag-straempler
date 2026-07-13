@@ -72,6 +72,23 @@ typedef struct {
                                    // brief rate bend (no seek/dropout); 0 = idle
     volatile float speed_mult;     // knob7 while synced: x0.5 / x1 / x2, still locked
 
+    // KO-II buffer LOOP (convergence S6-S7). Engage is SEAMLESS: the window
+    // anchors on the nearest grid beat (ring-resident by the reader lead cap)
+    // and the first audible effect is the first wrap — no seek, no mute.
+    // Protocol amendment: while loop_active && !loading && !seek_req the
+    // ENGINE wraps rpos_i back by whole windows; any seek/load re-parks it
+    // (the reader stays the only seek-writer).
+    volatile bool loop_active;
+    volatile bool loop_freeze;     // Setup (persisted): release resumes at the
+                                   // loop (freeze) vs where playback WOULD be
+    volatile uint32_t loop_start;  // window start (frames, absolute)
+    volatile uint32_t loop_len_fr; // window length (frames)
+    volatile uint32_t loop_adv;    // frames advanced while looping — feeds the
+                                   // keeps-running release phantom (robust
+                                   // across wraps, len changes, start moves)
+    volatile int  loop_len_beats;  // display + PLL whole-pulse invariant
+    uint32_t engage_rpos;          // rpos at engage (phantom base)
+
     // DJ filter (knob6): centre = bypass, left = LP sweeping down,
     // right = HP sweeping up. Chamberlin SVF, one per channel.
     volatile int filt_cv;          // raw knob (UI display)
