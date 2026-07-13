@@ -43,6 +43,12 @@ static inline int sf_wav_parse(sampfile_t *sf, long fsize, sf_read_at_fn rd, voi
             have_fmt = true;
         } else if (memcmp(h, "data", 4) == 0) {
             if (!have_fmt)          { sf->why = "WAV: data before fmt"; return -1; }
+            sf->src_rate = rate; sf->src_bits = (uint16_t)bits;
+            sf->src_code = (uint16_t)acode; sf->src_ch = (uint16_t)ch;
+            sf->src_data_off = (uint32_t)(pos + 8);
+            sf->src_data_len = ((long)pos + 8 + (long)csz > fsize || csz == 0 ||
+                                csz == 0xFFFFFFFFu)
+                                   ? (uint32_t)(fsize - pos - 8) : csz;
             if (acode != 1)         { sf->why = "WAV: not plain PCM"; return -1; }
             if (bits != 16)         { sf->why = "WAV: not 16-bit"; return -1; }
             if (rate != SF_RATE)    { sf->why = "WAV: not 44.1kHz"; return -1; }
@@ -84,15 +90,23 @@ static inline int sf_aiff_parse(sampfile_t *sf, long fsize, sf_read_at_fn rd, vo
             have_comm = true;
         } else if (memcmp(h, "SSND", 4) == 0) {
             if (!have_comm)         { sf->why = "AIFF: SSND before COMM"; return -1; }
+            sf->src_rate = rate; sf->src_bits = (uint16_t)bits;
+            sf->src_code = 1; sf->src_ch = (uint16_t)ch;
+            sf->be = true;              // AIFF is big-endian even when rejected
+            {
+                uint8_t sh[8];
+                if (rd(ctx, pos + 8, sh, 8) != 8) break;  // offset + blocksize
+                uint32_t off = sf_rb32(sh);
+                sf->src_data_off = (uint32_t)(pos + 8 + 8 + off);
+                sf->src_data_len = (uint32_t)(fsize - sf->src_data_off);
+            }
             if (bits != 16)         { sf->why = "AIFF: not 16-bit"; return -1; }
             if (rate != SF_RATE)    { sf->why = "AIFF: not 44.1kHz"; return -1; }
             if (ch != 1 && ch != 2) { sf->why = "AIFF: channels"; return -1; }
-            if (rd(ctx, pos + 8, h, 8) != 8) break;   // offset + blocksize
-            uint32_t off = sf_rb32(h);
             sf->fmt = SF_AIFF;
             sf->channels = (uint8_t)ch;
             sf->be = true;
-            sf->data_off = (uint32_t)(pos + 8 + 8 + off);
+            sf->data_off = sf->src_data_off;
             uint32_t avail = (uint32_t)(fsize - sf->data_off) / (ch * 2);
             sf->frames = (nframes && nframes <= avail) ? nframes : avail;
             return 0;
