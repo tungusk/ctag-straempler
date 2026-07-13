@@ -100,7 +100,7 @@ The machines (all working; archives in `bin/`):
   owns all SD I/O; per-voice 1s PSRAM head-cache (instant gate retrig) +
   4s ring in playback-order frame space (reader maps reverse). CROP
   windows are sampler2-style START+LENGTH, engine-side cursor math
-  (CV-rate performable, no head rebuild): modes OFF / FREE / QUANT
+  (CV-rate performable, no head rebuild): modes OFF / FREE / QUANT / QUANTx2
   (points snap to whole beats of the take's bpm stamp). CV MATRIX:
   per-voice Speed/Start/Length, each assigned any of CV1..8 (ch1/2
   floor-trimmed; all reads median-of-5 conditioned — WiFi ADC spikes).
@@ -129,12 +129,26 @@ The machines (all working; archives in `bin/`):
   sensitivity dial-in screen
 - `machine_granular` — 16-grain cloud over a mono sample (raised-cosine grains)
 - `machine_glitch` — live-input stutter/beat-repeat (no SD), clock beat-sync
-- `machine_drumsampler` ("Drums") — up to 8 one-shot mono RAM pads. Direct
-  mode: per-pad routable CV trigger (`Trig In`) through a floor-tracking
-  Schmitt detector (absolute thresholds fail on bipolar/1V-oct idle levels)
-  with a Low/Med/High `Sensi` setting (knobs 5/8 halve patched CV); CV-select
-  mode: TRIG1/2 fire the pad addressed by a selector CV. Declick ramps +
-  retrigger fade; 2x2 pad grid in 4-voice mode, 4x2 in 8-voice; R/G/B hit flash.
+- `machine_drumsampler` ("Drums") — FOUR one-shot mono RAM pads (the 8-pad mode
+  is gone: a pad can carry two sounds now, which is what 8 was for). Each pad
+  may hold a second CHOKE LAYER (per-pad `layered`): a B sample on its own CV
+  trigger sharing ONE voice, so either hit interrupts the other (open/closed
+  hi-hat) — 4 cells, 8 sounds, 8 triggers. Per layer: buffer, trigger, Schmitt
+  state; per pad: everything performable. Buffers are LAZY (an empty kit costs
+  no PSRAM; a failed alloc fails soft). Trigger modes unchanged (Direct
+  floor-tracking Schmitt per CV; CV-select = TRIG1/2 + selector CV, and with
+  layers TR1 fires A, TR2 fires B). PERFORMANCE: knob6/knob7 drive whatever the
+  encoder is pointing at, both NEUTRAL at noon, taking over only when moved —
+  knob6 = level (noon = unity, CW drives up to 4x through a cubic soft clipper),
+  knob7 = CCW decay choke, CW one of four per-pad targets (retrig loop / attack
+  / start / none). Retrig has a repeat cap: sample-length, a count, or INF.
+  MASTER FILTER: a box in the middle of the menu bar that the encoder selects
+  like a pad (knob6 = the deck's DJ sweep, knob7 = resonance, which forces a
+  lower stability ceiling + a damping floor that rises with cutoff + a NaN
+  guard). Live grid: a layered pad draws as two half-cells (own dot, name,
+  trigger tag, rectified half-wave converging on the midline); the selection box
+  is the HALF; the encoder traces the grid circularly
+  (1A > filter > 2A > 2B > 4A > 4B > 3B > 3A > 1B).
 - `machine_deck` ("Deck") — tempo-syncing track player: streams long
   usr/*.RAW from SD through a PSRAM ring (reader task; process() never
   touches SD), varispeed playback phase-locked to the external CV clock
@@ -143,7 +157,8 @@ The machines (all working; archives in `bin/`):
   "bpm"/"grid" in the track's JSN sidecar, AUTO-run on loading an
   unanalyzed track (coexists with playback; snapshots its track name so a
   mid-analysis load can't poison the new track's sidecar). TR1 = restart
-  at downbeat, TR2 = stop, encoder press = track browser. Deck audio is
+  at downbeat, TR2 = stop, encoder press = track browser (512 entries, newest
+  first — `sample_list_recent`). Transport bar: grey waveform, white playhead. Deck audio is
   legitimately rough ~60 s after boot (ring refill + PLL cold relock) and
   ~15 s after scrubs — judge audio only after settling (/status v1:
   healthy = i==p, E≈0, S flat). Tempo v2 (2026-07-10): analysis is EXACT
@@ -164,7 +179,17 @@ The machines (all working; archives in `bin/`):
 - `components/machine/clock.{h,c}` — `beatclock_t` CV clock detector (looper + glitch)
 - `components/util/sample_ram.{h,c}` — `sample_list()` / `sample_load()` +
   `sample_list_shared()` (one sorted 224-entry browser list shared by
-  slicer/granular/drums — per-menu `[32]` caps silently hid fresh uploads)
+  slicer/granular — per-menu `[32]` caps silently hid fresh uploads)
+- `components/util/sample_list_recent.c` — `sample_list_recent()`: the DATED
+  browser walk, 512 entries in PSRAM, NEWEST FIRST, evicting the oldest when
+  full (sampler3 + deck + drums). Its own translation unit because raw FatFS
+  (`ff.h`) and VFS (`dirent.h`) both typedef `DIR`.
+- `components/util/svf.{h,c}` — the Chamberlin state-variable filter, ONE copy
+  (it had been hand-written three times: deck, looper engine, looper bounce).
+  `svf_step()` gives lp/bp/hp taps; the caller keeps the coefficient slew and
+  the clamp ceiling, which is what made porting deck + looper bit-identical.
+  NOTE: `components/util` globs its sources — a new file there needs an
+  `idf.py reconfigure` before it links.
 - `components/util/sd_lock.{h,c}` — global SD-bus mutex (see Code rules)
 - `components/util/mp3.{h,c}` — async decode + `decodeMP3FileSync()` (reports
   channels + samprate; the decoder does NOT resample)
@@ -246,6 +271,9 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
   recorder complete: CV matrix, OFF/FREE/QUANT/QUANTx2 crop, phase-exact
   gapless looping w/ pre-roll crossfade + loop-start cache, 6s capture
   queue, shared PPQ clock front-end, zero-tick busy-spin sweep).
+  `drums-v2` (four pads, per-pad A/B choke layers, performable knobs w/ soft-clip
+  drive + retrig, master filter, half-cell Live grid; shared SVF; newest-first
+  browser; grey waveform).
   `bin/<name>/flash.sh` returns to any known-good state.
   Matching dated git tags.
 - **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
