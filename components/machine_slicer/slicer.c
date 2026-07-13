@@ -144,7 +144,15 @@ static void end_slice(void)
 static esp_err_t slicer_start(void)
 {
     memset(&sl, 0, sizeof(sl));
-    sl.buf = heap_caps_malloc((size_t)SL_MAX_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    // descending alloc: take the biggest slab PSRAM will actually grant
+    static const int sl_secs[] = {SL_MAX_SECS, 14, 12};
+    sl.cap_frames = 0;
+    for (int i = 0; i < 3 && !sl.buf; i++) {
+        sl.cap_frames = (uint32_t)SL_RATE * (uint32_t)sl_secs[i];
+        sl.buf = heap_caps_malloc((size_t)sl.cap_frames * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    }
+    if (sl.buf) ESP_LOGI("SLICER", "sample slab %lu s stereo",
+                         (unsigned long)(sl.cap_frames / SL_RATE));
     if (!sl.buf) { ESP_LOGE("SLICER", "PSRAM alloc failed"); return ESP_ERR_NO_MEM; }
     sl.slice_target = 16;
     sl.n_slices = 16;
@@ -262,7 +270,7 @@ int slicer_load(const char *name)
     sl.playing = false;
     // mono load packs one int16 per frame — same slab, double the seconds
     sl.mono = sl.load_mono;
-    uint32_t cap = sl.mono ? SL_MAX_FRAMES * 2 : SL_MAX_FRAMES;
+    uint32_t cap = sl.mono ? sl.cap_frames * 2 : sl.cap_frames;
     uint32_t n = sample_load(name, sl.buf, cap, sl.mono);
     if (n == 0) { sl.loading = false; return -1; }
     sl.len = n;
