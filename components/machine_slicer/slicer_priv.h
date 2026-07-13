@@ -8,7 +8,10 @@
 // UI task writes settings + one-shot command flags and reads for display.
 
 #define SL_RATE       44100
-#define SL_MAX_SECS   18   // stereo cap (was 12); load-as-mono doubles it
+#define SL_MAX_SECS   18   // stereo TARGET; the start-time alloc walks down
+                           // 18 -> 14 -> 12 s until PSRAM grants a slab
+                           // (3.17 MB failed on this board — largest proven
+                           // single alloc is ~2.1 MB; fragmentation decides)
 #define SL_MAX_FRAMES (SL_RATE * SL_MAX_SECS)   // stereo frames cap
 #define SL_PEAKS      300                       // waveform display columns
 #define SL_MAX_SLICES 128
@@ -18,6 +21,7 @@ typedef struct {
     int16_t *buf;                 // PSRAM slab, SL_MAX_FRAMES*2 int16: holds
                                   // interleaved STEREO frames, or 2x as many
                                   // MONO frames when loaded with Load Mono
+    uint32_t cap_frames;          // granted STEREO frame capacity (mono: x2)
     bool mono;                    // current buffer layout (set at load)
     volatile bool load_mono;      // Setup: next load averages to mono (~36 s)
     volatile uint32_t len;        // frames loaded
