@@ -57,8 +57,8 @@ static int s_last_dbpm = -1;
 static float ext_bpm_disp(void){
     static float ema = 0;
     static uint32_t last_tk = 0;
-    float x = dk.clk.bpm / dk_ppb[dk.ppb_idx];
-    if (!dk.clk.locked || x <= 0) { ema = 0; return x; }
+    float x = dk.ci.clk.bpm / dk_ppb[dk.ppb_idx];
+    if (!dk.ci.clk.locked || x <= 0) { ema = 0; return x; }
     float d = x - ema;
     if (ema <= 0 || d > 2.0f || d < -2.0f) { ema = x; return ema; }  // real tempo change: snap
     // advance at most 4x/s — this runs from BOTH bpm draws on BOTH timer
@@ -79,7 +79,7 @@ static void draw_big_bpm(void){
     // legitimately wobbles a few % while the PLL corrects phase, which made
     // the big number dance even with a perfect clock
     float bpm;
-    if (dk.sync && dk.clk.locked && dk.clk.bpm > 0)
+    if (dk.sync && dk.ci.clk.locked && dk.ci.clk.bpm > 0)
         bpm = ext_bpm_disp() * dk.speed_mult;
     else
         bpm = dk.track_bpm > 0 ? dk.track_bpm * dk.rate : 0;
@@ -94,7 +94,7 @@ static void draw_big_bpm(void){
     int bw = 120, bh = TFT_getfontheight() + 4;
     _bg = TFT_BLACK;
     TFT_fillRect(_width - bw, 2, bw, bh, _bg);
-    _fg = (dk.sync && dk.clk.locked) ? (color_t){40, 200, 90} : TFT_WHITE;
+    _fg = (dk.sync && dk.ci.clk.locked) ? (color_t){40, 200, 90} : TFT_WHITE;
     TFT_print(s, _width - TFT_getStringWidth(s) - 8, 4);
     cfont = f;
 }
@@ -115,7 +115,7 @@ static void draw_info(void){
         snprintf(s1, sizeof(s1), "trk %.1f  %s  x%s  %s", dk.track_bpm, st, sp, fl);
 
     if (dk.sync){
-        if (dk.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK",
+        if (dk.ci.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK",
                                     ext_bpm_disp());
         else snprintf(s2, sizeof(s2), "ext: waiting for clock on CV%d", dk.clk_src + 1);
     } else s2[0] = 0;
@@ -128,7 +128,7 @@ static void draw_info(void){
     if (strcmp(s2, s_info2) != 0){
         strcpy(s_info2, s2);
         _bg = TFT_BLACK; TFT_fillRect(0, y + fh + 6, _width, fh + 4, _bg);
-        _fg = dk.clk.locked ? (color_t){40, 200, 90} : TFT_LIGHTGREY;
+        _fg = dk.ci.clk.locked ? (color_t){40, 200, 90} : TFT_LIGHTGREY;
         if (s2[0]) TFT_print(s2, 8, y + fh + 6);
     }
 }
@@ -262,13 +262,13 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
                 char dbg[56];
                 snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d S%lu g%u L%d n%d",
                          dk.playing ? 'P' : 's',
-                         (unsigned long)dk.dbg_edges,
-                         (unsigned long)(dk.dbg_iv / 44),        // ms between fires
-                         (unsigned long)(dk.clk.period / 44),    // ms accepted period
+                         (unsigned long)dk.ci.raw_fires,
+                         (unsigned long)(dk.ci.raw_iv / 44),        // ms between fires
+                         (unsigned long)(dk.ci.clk.period / 44),    // ms accepted period
                          (int)(dk.phase_err * 100),              // PLL convergence
                          (unsigned long)dk.dbg_starve,           // ring underrun blocks
-                         (unsigned)dk.clk.ghost_run,             // escape-hatch state
-                         (int)dk.clk.locked, (int)dk.clk.ring_n);
+                         (unsigned)dk.ci.clk.ghost_run,             // escape-hatch state
+                         (int)dk.ci.clk.locked, (int)dk.ci.clk.ring_n);
                 audio_status_set_voices("deck", dbg);
             }
             break;
@@ -278,13 +278,13 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             s_load_ret = M_DECK_LIVE;
             return M_DECK_LOAD;
         case EV_FWD:
-            if (dk.clk.locked && dk.sync) {          // locked+synced: fine phase nudge
+            if (dk.ci.clk.locked && dk.sync) {          // locked+synced: fine phase nudge
                 dk.phase_offset -= DK_NUDGE_STEP;
                 if (dk.phase_offset < 0.0f) dk.phase_offset += 1.0f;
             } else deck_seek_beats(+4);              // else: one-bar scrub
             break;
         case EV_BWD:
-            if (dk.clk.locked && dk.sync) {
+            if (dk.ci.clk.locked && dk.sync) {
                 dk.phase_offset += DK_NUDGE_STEP;
                 if (dk.phase_offset >= 1.0f) dk.phase_offset -= 1.0f;
             } else deck_seek_beats(-4);

@@ -224,11 +224,11 @@ void deck_seek_beats(int beats)
 void deck_sync_now(void)
 {
     if (!dk.track[0] || !dk.file_frames) return;
-    if (!dk.sync || !dk.clk.locked || dk.clk.period == 0 || dk.track_bpm <= 20.0f) return;
+    if (!dk.sync || !dk.ci.clk.locked || dk.ci.clk.period == 0 || dk.track_bpm <= 20.0f) return;
     uint32_t beat_tf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
     float seg_tf = (float)beat_tf / dk_ppb[dk.ppb_idx] * dk.speed_mult;   // frames/pulse
     if (seg_tf < 1.0f) return;
-    float p_ext = (float)dk.clk.since / (float)dk.clk.period;
+    float p_ext = (float)dk.ci.clk.since / (float)dk.ci.clk.period;
     if (p_ext > 1.0f) p_ext = 1.0f;
     int64_t rel = (int64_t)dk.rpos_i - (int64_t)dk.grid_offset;
     float p_trk = fmodf((float)rel, seg_tf) / seg_tf;
@@ -257,8 +257,7 @@ static esp_err_t deck_start(void)
     dk.ppb_idx = 4;          // 4 pulses per beat — the modular norm (4 PPQN)
     dk.rate = 1.0f;
     dk.rate_sm = 1.0f;
-    dk.clk_base = 4095;      // floor tracker converges down on first reads
-    clock_reset(&dk.clk);
+    clockin_reset(&dk.ci, dk_ppb[dk.ppb_idx]);
     s_run = true;
     // unpinned: file-reading tasks pinned to core 0 cause WiFi audio clicks
     xTaskCreate(reader_task, "deck_reader", 4096, NULL, 6, NULL);
@@ -344,13 +343,13 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         if (dk.pitch_cv < 1024) m = 0.5f;
         else if (dk.pitch_cv > 3072) m = 2.0f;
         dk.speed_mult = m;
-        if (dk.clk.locked && dk.clk.period > 0 && beat_tf > 0) {
+        if (dk.ci.clk.locked && dk.ci.clk.period > 0 && beat_tf > 0) {
             float ppb = dk_ppb[dk.ppb_idx];
             // pulse-level phase lock (works for any mult/div): compare phase
             // within one external pulse against the track's matching segment
             float seg_tf = (float)beat_tf / ppb * m;           // track frames per pulse
-            float base = seg_tf / (float)dk.clk.period;        // nominal rate
-            float p_ext = (float)dk.clk.since / (float)dk.clk.period;
+            float base = seg_tf / (float)dk.ci.clk.period;        // nominal rate
+            float p_ext = (float)dk.ci.clk.since / (float)dk.ci.clk.period;
             if (p_ext > 1.0f) p_ext = 1.0f;
             float p_trk = fmodf((float)((int64_t)dk.rpos_i - (int64_t)dk.grid_offset), seg_tf) / seg_tf;
             if (p_trk < 0) p_trk += 1.0f;
@@ -364,7 +363,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
             // baseline wanders ±3-5 ms, so exact zero is a moving target —
             // this centers it (musically dead-on)
             #define DK_LAG_LEAD_FR (0.0131f * 44100.0f)
-            float lead = DK_LAG_LEAD_FR / (float)dk.clk.period;
+            float lead = DK_LAG_LEAD_FR / (float)dk.ci.clk.period;
             float err = p_ext - p_trk - dk.phase_offset + lead;   // NUDGE trims the lock point
             err -= floorf(err);                            // wrap to [0,1)
             if (err > 0.5f) err -= 1.0f;                    // nearest, in [-0.5,0.5)
@@ -464,32 +463,13 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     }
     if (starved) dk.dbg_starve++;
 
-    // clock conditioning: track the channel floor (dips follow instantly,
-    // drifts back up slowly), Schmitt relative to it, and feed the detector
-    // a clean synthesized square — works on any channel at any attenuation
-    // scale the detector's sanity gate to the expected PULSE rate — with the
-    // default 20..300 BPM gate a 4 PPQN clock's every interval is rejected
-    // and the BPM is assembled purely from missed-edge garbage
-    float gppb = dk_ppb[dk.ppb_idx];
-    dk.clk.period_min = (uint32_t)(44100.0f * 60.0f / (320.0f * gppb));
-    dk.clk.period_max = (uint32_t)(44100.0f * 60.0f / (15.0f * gppb));
-
-    int ccv = io->cv[dk.clk_src & 7];
-    if (ccv < dk.clk_base) dk.clk_base = ccv;
-    else if (dk.clk_base < 4095) dk.clk_base++;
-    dk.dbg_since += (uint32_t)frames;
-    if (!dk.clk_high) {
-        if (ccv >= dk.clk_base + 900) {
-            dk.clk_high = true;
-            dk.dbg_edges++;                    // raw fire, pre-gate
-            dk.dbg_iv = dk.dbg_since;
-            dk.dbg_since = 0;
-        }
-    } else if (ccv < dk.clk_base + 350) {
-        dk.clk_high = false;
-    }
-    uint16_t synth = dk.clk_high ? 4095 : 0;
-    for (int fno = 0; fno < frames; fno++) clock_tick(&dk.clk, synth);
+    // clock conditioning lives in the shared front-end now (clockin_t,
+    // components/machine/clock.{h,c} — the code this replaced is what it was
+    // extracted from). set_ppb every block keeps the pulse-rate sanity gates
+    // scaled and, ON an actual mult/div change, drops the lock for a clean
+    // 2-pulse relock instead of letting the guards defend the stale period.
+    clockin_set_ppb(&dk.ci, dk_ppb[dk.ppb_idx]);
+    clockin_block(&dk.ci, io->cv[dk.clk_src & 7], frames);
 }
 
 // ---- preset -------------------------------------------------------------------
