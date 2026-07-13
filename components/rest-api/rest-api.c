@@ -10,6 +10,7 @@
 #include "ui_events.h"
 #include "string_tools.h"
 #include "fileio.h"
+#include "sampfile.h"
 #include "sd_lock.h"
 #include "audio.h"
 #include "machine.h"
@@ -114,12 +115,13 @@ static esp_err_t files_get_handler(httpd_req_t *req)
             char id[260] = {0};
             strncpy(id, ent->d_name, len - 4);
 
-            // RAW size via stat — light, no file open needed
+            // audio size via stat — light, no file open needed; the resolver
+            // finds whichever container (.RAW/.WAV/.AIF) carries this id
             char raw_path[280];
-            snprintf(raw_path, sizeof(raw_path), "/sdcard/usr/%s.RAW", id);
             struct stat st;
             sd_lock_take();
-            long fsize = (stat(raw_path, &st) == 0) ? st.st_size : 0;
+            long fsize = (sample_resolve(id, raw_path, sizeof(raw_path)) == 0 &&
+                          stat(raw_path, &st) == 0) ? st.st_size : 0;
             sd_lock_give();
 
             // build ONE tiny object (cJSON just for correct string escaping),
@@ -161,11 +163,12 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
     }
 
     char path[72];
+    static const char *const del_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF", ".JSN"};
     sd_lock_take();
-    snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
-    remove(path);
-    snprintf(path, sizeof(path), "/sdcard/usr/%s.JSN", name);
-    remove(path);
+    for (int i = 0; i < 5; i++) {
+        snprintf(path, sizeof(path), "/sdcard/usr/%s%s", name, del_exts[i]);
+        remove(path);
+    }
     sd_lock_give();
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -187,13 +190,15 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
 
     char path[72];
     size_t nl = strlen(name);
-    // accept both bare ids and full filenames — "REC_0147.RAW" used to become
-    // REC_0147.RAW.RAW and 404 (the long-standing "Not found" trap)
-    if (nl > 4 && (strcasecmp(name + nl - 4, ".JSN") == 0 ||
-                   strcasecmp(name + nl - 4, ".RAW") == 0))
+    // accept bare ids and full filenames — "REC_0147.RAW" used to become
+    // REC_0147.RAW.RAW and 404. Bare ids resolve across containers.
+    char idtmp[32];
+    if (nl > 4 && strcasecmp(name + nl - 4, ".JSN") == 0)
         snprintf(path, sizeof(path), "/sdcard/usr/%s", name);
+    else if (sample_name_id(name, idtmp, sizeof(idtmp)))
+        snprintf(path, sizeof(path), "/sdcard/usr/%s", name);   // full audio filename
     else
-        snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
+        sample_resolve(name, path, sizeof(path));               // bare id
     sd_lock_take();
     FILE *f = fopen(path, "rb");
     sd_lock_give();

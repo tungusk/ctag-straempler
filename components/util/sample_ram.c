@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include "esp_log.h"
 #include "sd_lock.h"
+#include "sampfile.h"
 
 int sample_list(char out[][24], int max)
 {
@@ -14,15 +15,19 @@ int sample_list(char out[][24], int max)
     if (!d) { sd_lock_give(); return 0; }
     int n = 0;
     struct dirent *e;
+    char id[24], prev[24] = "";
     while ((e = readdir(d)) != NULL && n < max) {
-        int L = strlen(e->d_name);
-        if (L > 4 && strcasecmp(e->d_name + L - 4, ".RAW") == 0) {
-            int idl = L - 4;
-            if (idl > 23) idl = 23;
-            memcpy(out[n], e->d_name, idl);
-            out[n][idl] = 0;
-            n++;
-        }
+        if (!sample_name_id(e->d_name, id, sizeof(id))) continue;
+        // a base present in two containers (FOO.RAW + FOO.WAV) is one id;
+        // FAT returns names in creation order, so dedup adjacent + let the
+        // loader's resolver (.RAW first) pick the file
+        bool dup = false;
+        for (int k = 0; k < n; k++)
+            if (strcasecmp(out[k], id) == 0) { dup = true; break; }
+        (void)prev;
+        if (dup) continue;
+        strcpy(out[n], id);
+        n++;
     }
     closedir(d);
     sd_lock_give();
@@ -47,25 +52,35 @@ int sample_list_shared(char (**out)[24])
 uint32_t sample_load(const char *name, int16_t *dst, uint32_t max_frames, bool mono)
 {
     char path[64];
-    snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", name);
+    sample_resolve(name, path, sizeof(path));   // .RAW / .WAV / .AIF(F)
     sd_lock_take();
     FILE *f = fopen(path, "rb");
     sd_lock_give();
     if (!f) { ESP_LOGE("SAMPLE", "cannot open %s", path); return 0; }
+    sampfile_t sf;
+    sd_lock_take();
+    int pr = sampfile_probe(f, &sf);
+    sd_lock_give();
+    if (pr != 0) {
+        ESP_LOGE("SAMPLE", "%s: %s", path, sf.why);
+        sd_lock_take(); fclose(f); sd_lock_give();
+        return 0;
+    }
 
     uint32_t n = 0;
-    int32_t rbuf[256];
+    int16_t rbuf[256 * 2];                      // 256 native stereo frames
     size_t got;
     for (;;) {
         if (n >= max_frames) break;
-        // one 1 KB read per lock hold, released between so audio/REST interleave
+        uint32_t want = max_frames - n;
+        if (want > 256) want = 256;
+        // one ~1 KB read per lock hold, released between so audio/REST interleave
         sd_lock_take();
-        got = fread(rbuf, sizeof(int32_t), 256, f);
+        got = sampfile_read(f, &sf, rbuf, want);
         sd_lock_give();
         if (got == 0) break;
         for (size_t k = 0; k < got && n < max_frames; k++) {
-            int16_t l = (int16_t)(rbuf[k] & 0xFFFF);
-            int16_t r = (int16_t)(rbuf[k] >> 16);
+            int16_t l = rbuf[k * 2], r = rbuf[k * 2 + 1];
             if (mono) dst[n] = (int16_t)(((int)l + r) / 2);
             else { dst[n * 2] = l; dst[n * 2 + 1] = r; }
             n++;
