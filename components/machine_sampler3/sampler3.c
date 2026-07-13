@@ -11,7 +11,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "cJSON.h"
-#include "ff.h"          // raw FatFS: dated directory scan
+#include "sample_ram.h"  // shared dated browser walk (sample_list_recent)
 #include "machine.h"
 #include "audio.h"
 #include "recording.h"
@@ -433,63 +433,13 @@ void s3_toggle_arm(int vid)
     }
 }
 
+// the dated 512-entry browser walk now lives in util/sample_ram
+// (sample_list_recent) — the deck browses the same library the same way
+_Static_assert(S3_NAME_LEN == 24, "sample_list_recent hands back char[24] ids");
+
 int s3_list_samples(char (**names)[S3_NAME_LEN])
 {
-    static char (*list)[S3_NAME_LEN] = NULL;
-    static const int MAX = 512;
-    static uint32_t when[512];        // FatFS date<<16|time per entry
-    if (!list) list = heap_caps_malloc(MAX * S3_NAME_LEN, MALLOC_CAP_SPIRAM);
-    int n = 0;
-    sd_lock_take();
-    // raw FatFS scan: f_readdir hands over the timestamps in the SAME pass
-    // (a per-file stat() would re-scan the directory once per entry)
-    FF_DIR d;
-    if (f_opendir(&d, "usr") == FR_OK) {          // FatFS path: no /sdcard
-        FILINFO fi;
-        while (f_readdir(&d, &fi) == FR_OK && fi.fname[0]) {
-            int l = strlen(fi.fname);
-            if (!(l > 4 && strcasecmp(fi.fname + l - 4, ".RAW") == 0 &&
-                  l - 4 < S3_NAME_LEN))
-                continue;
-            uint32_t w = ((uint32_t)fi.fdate << 16) | fi.ftime;
-            int slot = n;
-            if (n >= MAX) {
-                // list full: evict the OLDEST if this file is newer. The old
-                // first-224-seen cap silently hid every fresh take once the
-                // library outgrew it ("can't find recordings above 140") —
-                // the drums-era lesson, again.
-                int oldest = 0;
-                for (int k = 1; k < MAX; k++)
-                    if (when[k] < when[oldest]) oldest = k;
-                if (w <= when[oldest]) continue;
-                slot = oldest;
-            } else {
-                n++;
-            }
-            snprintf(list[slot], S3_NAME_LEN, "%.*s", l - 4, fi.fname);
-            when[slot] = w;
-        }
-        f_closedir(&d);
-    }
-    sd_lock_give();
-    // insertion sort, NEWEST FIRST — fresh takes land at the top of the
-    // browser (Arlo); name breaks ties so equal-dated files stay stable
-    for (int i = 1; i < n; i++) {
-        char tmp[S3_NAME_LEN];
-        uint32_t tw = when[i];
-        memcpy(tmp, list[i], S3_NAME_LEN);
-        int j = i - 1;
-        while (j >= 0 && (when[j] < tw ||
-                          (when[j] == tw && strcasecmp(list[j], tmp) > 0))) {
-            memcpy(list[j + 1], list[j], S3_NAME_LEN);
-            when[j + 1] = when[j];
-            j--;
-        }
-        memcpy(list[j + 1], tmp, S3_NAME_LEN);
-        when[j + 1] = tw;
-    }
-    *names = list;
-    return n;
+    return sample_list_recent(names);
 }
 
 // ---- engine --------------------------------------------------------------------
