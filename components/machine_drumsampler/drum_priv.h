@@ -3,8 +3,9 @@
 #include <stdbool.h>
 #include "svf.h"
 
-// Drum sampler — up to 8 one-shot pads, each a mono PSRAM buffer, triggered
-// from the CV inputs. Two trigger modes:
+// Drum sampler — four one-shot pads, each a mono PSRAM buffer, triggered from the
+// CV inputs. (A pad can carry a second, choking layer, which is what the old
+// 8-pad mode was really for — see dr_pad_t.layered.) Two trigger modes:
 //   Direct    — CV1..CVn each fire their own pad via a Schmitt edge detector
 //               (fire >= 75 % after having re-armed below 40 %; a channel that
 //               never drops below the arm level — e.g. a jack pinned high —
@@ -16,7 +17,8 @@
 
 #define DR_RATE       44100
 #define DR_MAX_FRAMES (DR_RATE * 2)   // 2 s mono per pad (~176 KB PSRAM each)
-#define DR_PADS       8
+#define DR_PADS       4      // four pads, full stop: a layered pad already
+                                    // carries two sounds, which is what 8 was for
 #define DR_WF_W       48              // waveform thumbnail columns (pad cell)
 // Schmitt thresholds are RELATIVE to a per-source floor tracker: the CV
 // channels idle at wildly different levels (1V/oct ~21 %, bipolar ~50 %, a
@@ -63,6 +65,9 @@ typedef struct {
 
 typedef struct {
     dr_layer_t ly[DR_LAYERS];
+    volatile bool layered;        // THIS pad has a B layer that chokes its A. Per
+                                  // pad, not global (Arlo): a kit is usually one
+                                  // hi-hat pair and three plain one-shots.
     // ---- ONE voice, shared by both layers: this is what makes the choke ----
     volatile uint32_t pos;        // play cursor (frames)
     volatile bool playing;
@@ -114,7 +119,9 @@ typedef struct {
 #define DR_CW_LOOP      0         // stutter: loop the head, shorter the further CW
 #define DR_CW_ATTACK    1         // fade the hit in, up to DR_ATTACK_MAX
 #define DR_CW_START     2         // skip into the sample, up to DR_START_MAX/255
-#define DR_CW_MODES     3
+#define DR_CW_NONE      3         // clockwise does NOTHING: knob7 is a decay-only
+                                  // control, and half its travel is a safe zone
+#define DR_CW_MODES     4
 #define DR_ATTACK_MAX   400       // ms at full clockwise
 #define DR_START_MAX    192       // /255 of the sample: 75 % in, still leaves a tail
 // the loop: just past noon it's a long roll, hard right it's a buzz. The pad
@@ -137,7 +144,6 @@ typedef struct {
 
 typedef struct {
     dr_pad_t pad[DR_PADS];
-    volatile int n_pads;          // 4 or 8
     volatile int sel_pad;         // pad the encoder/CV6/CV7 are aimed at
     volatile bool sel_filter;     // ...unless the encoder is on the FILTER box.
                                   // A separate flag, NOT a sel_pad sentinel:
@@ -146,7 +152,6 @@ typedef struct {
     volatile bool cv_select;      // false = Direct, true = TRIG1/2 + selector CV
     volatile bool velocity;       // Direct mode: scale hit by CV level at fire time
     volatile bool cv_mod;         // CV6/CV7 perform the selected pad
-    volatile bool layers_on;      // each pad's B layer exists and chokes its A
     volatile int sens;            // trigger sensitivity 0..2 (see thresholds above)
     volatile int sel_src[2];      // selector CV channel per trig (CV-select mode)
     uint8_t prev_trig;            // gate edge state (seed 0x03 = idle high)

@@ -47,11 +47,10 @@ static void refresh_samples(void){
 }
 
 // ---- Live page: pad grid ----------------------------------------------------
-static bool s_lit[DR_PADS];
+static bool s_lit[DR_PADS][DR_LAYERS];
 
 static void pad_cell_rect(int i, int *x, int *y, int *w, int *h){
-    int cols = (dr.n_pads <= 4) ? 2 : 4;    // 4 voices = 2x2, 8 = 4x2
-    int rows = (dr.n_pads + cols - 1) / cols;
+    int cols = 2, rows = 2;               // 2x2, always
     int fh = TFT_getfontheight();
     int gx = 6, gy = fh + 14;
     int gw = _width - 12, gh = _height - gy - fh - 10;
@@ -70,9 +69,9 @@ static void pad_cell_rect(int i, int *x, int *y, int *w, int *h){
 static void pad_corners(int i, int x, int y, int w, int h,
                         int *dot_cx, int *dot_cy, int *num_left, int *num_top)
 {
-    int cols = (dr.n_pads <= 4) ? 2 : 4;
+    int cols = 2;
     int col = i % cols, row = i / cols;
-    int r = (dr.n_pads <= 4) ? 9 : 6;
+    int r = 9;
     bool dot_right = (col < cols / 2);      // dot hugs the screen centre...
     bool dot_bottom = (row == 0);
     *dot_cx = dot_right ? x + w - r - 5 : x + r + 5;
@@ -81,58 +80,132 @@ static void pad_corners(int i, int x, int y, int w, int h,
     *num_top  = dot_bottom;
 }
 
-static void pad_dot(int i, bool on){
-    int x, y, w, h, cx, cy, nl, nt;
-    pad_cell_rect(i, &x, &y, &w, &h);
-    pad_corners(i, x, y, w, h, &cx, &cy, &nl, &nt);
-    dr_pad_t *p = &dr.pad[i];
-    int r = (dr.n_pads <= 4) ? 9 : 6;
-    color_t idle = p->ly[0].len ? PAD_IDLE : PAD_EMPTY;
-    // which layer is sounding shows in the dot's SHAPE, not another colour — the
-    // R/G/B flash cycle has to survive (it's what makes a roll readable)
-    if (on && dr.layers_on && p->cur == 1){
-        TFT_fillCircle(cx, cy, r, idle);                       // B: a ring
-        TFT_drawCircle(cx, cy, r, PAD_LIT[s_flash_col[i] % 3]);
-        TFT_drawCircle(cx, cy, r - 1, PAD_LIT[s_flash_col[i] % 3]);
-    } else {
-        TFT_fillCircle(cx, cy, r, on ? PAD_LIT[s_flash_col[i] % 3] : idle);
-    }
-    s_lit[i] = on;
+// A LAYERED pad is two self-contained half-cells stacked in one window: each half
+// carries its own hit dot, sample name, trigger label and waveform (Arlo). A plain
+// pad keeps the original anatomy — one dot, one caption, one big waveform.
+// A is ALWAYS the upper half. (The bottom row was briefly mirrored — but then the
+// encoder's circular path stops being circular: going down the right column you
+// meet BR's lower half first, which would be its A, and the ring below reads
+// 4B-before-4A. Arlo's ring is the constraint; the layout follows it.)
+static bool layer_is_top(int i, int l){
+    (void)i;
+    return l == 0;
 }
 
-// the peak thumbnail (built in RAM at load, dr.pad[].wf). WHITE — unlike the
-// sampler's bar there is no playhead to compete with (Arlo), and no transport
-// bar either: a one-shot pad is over before a playhead would move. The band is
-// handed the gap the text and the hit dot leave behind.
-static void pad_waveform(int i, int bx, int by, int bw, int bh){
+static bool half_lit(int i, int l){
     dr_pad_t *p = &dr.pad[i];
-    if (bh < 6) return;
-    bool split = dr.layers_on && p->ly[1].wf_valid && p->ly[1].len;
-    if (!split){                                  // exactly as before: A, centred
-        if (!p->ly[0].wf_valid) return;
-        for (int c = 0; c < bw - 1; c += 2){
-            float a = sqrtf((float)p->ly[0].wf[(c * DR_WF_W) / bw] / 255.0f);
-            int ch = (int)(a * (float)bh);
-            if (ch < 2) ch = 2;
-            TFT_fillRect(bx + c, by + (bh - ch) / 2, 2, ch, WF_WHITE);
-        }
-        return;
+    return p->playing && p->cur == (uint8_t)l;
+}
+
+// the band a half owns (or the whole cell, for a plain pad)
+static void half_rect(int i, int l, int *hx, int *hy, int *hw, int *hh){
+    int x, y, w, h;
+    pad_cell_rect(i, &x, &y, &w, &h);
+    if (!dr.pad[i].layered){ *hx = x; *hy = y; *hw = w; *hh = h; return; }
+    int mid = y + h / 2;
+    bool top = layer_is_top(i, l);
+    *hx = x; *hw = w;
+    *hy = top ? y : mid;
+    *hh = top ? mid - y : y + h - mid;
+}
+
+static void half_dot_pos(int i, int l, int *cx, int *cy, int *r, bool *num_left){
+    int hx, hy, hw, hh;
+    half_rect(i, l, &hx, &hy, &hw, &hh);
+    int cols = 2;
+    int col = i % cols, row = i / cols;
+    bool dot_right = (col < cols / 2);        // dots still hug the screen centre
+    *r = dr.pad[i].layered ? 5 : 9;
+    *num_left = dot_right;
+    *cx = dot_right ? hx + hw - *r - 5 : hx + *r + 5;
+    if (dr.pad[i].layered){
+        // the dot rides its half's detail row, which is the cell's OUTER edge
+        *cy = layer_is_top(i, l) ? hy + *r + 4 : hy + hh - *r - 4;
+    } else {
+        *cy = (row == 0) ? hy + hh - *r - 5 : hy + *r + 5;
     }
-    // two layers: A grows UP from the midline, B grows DOWN, in its own hue. No
-    // extra text — the cell has none to spare.
-    int mid = by + bh / 2;
-    for (int c = 0; c < bw - 1; c += 2){
-        if (p->ly[0].wf_valid){
-            float a = sqrtf((float)p->ly[0].wf[(c * DR_WF_W) / bw] / 255.0f);
-            int ch = (int)(a * (float)(mid - by));
-            if (ch < 2) ch = 2;
-            TFT_fillRect(bx + c, mid - ch, 2, ch, WF_WHITE);
-        }
-        float b = sqrtf((float)p->ly[1].wf[(c * DR_WF_W) / bw] / 255.0f);
-        int chb = (int)(b * (float)(by + bh - mid));
-        if (chb < 2) chb = 2;
-        TFT_fillRect(bx + c, mid, 2, chb, WF_B);
+}
+
+static void pad_dot_layer(int i, int l, bool on){
+    dr_pad_t *p = &dr.pad[i];
+    int cx, cy, r;
+    bool nl;
+    half_dot_pos(i, l, &cx, &cy, &r, &nl);
+    color_t idle = p->ly[l].len ? PAD_IDLE : PAD_EMPTY;
+    TFT_fillCircle(cx, cy, r, on ? PAD_LIT[s_flash_col[i] % 3] : idle);
+    s_lit[i][l] = on;
+}
+
+// the peak thumbnail (built in RAM at load). WHITE — unlike the sampler's bar there
+// is no playhead to compete with (Arlo), and no transport bar either: a one-shot is
+// over before a playhead would move.
+static void half_waveform(int i, int l, int bx, int by, int bw, int bh){
+    dr_layer_t *L = &dr.pad[i].ly[l];
+    if (!L->wf_valid || !L->len || bh < 4) return;
+    color_t c = (l == 0) ? WF_WHITE : WF_B;   // hue is the layer's identity
+    for (int cc = 0; cc < bw - 1; cc += 2){
+        float a = sqrtf((float)L->wf[(cc * DR_WF_W) / bw] / 255.0f);
+        int ch = (int)(a * (float)bh);
+        if (ch < 2) ch = 2;
+        TFT_fillRect(bx + cc, by + (bh - ch) / 2, 2, ch, c);
     }
+}
+
+// the HALF-WAVE: rectified, growing from a baseline. In a layered cell the two
+// layers share the cell's midline as their baseline and grow away from each other
+// (A up, B down), which is what gives the split window its definition — the detail
+// rows sit outside them, above and below.
+static void half_wave_from(int i, int l, int bx, int base, int bw, int reach, bool up){
+    dr_layer_t *L = &dr.pad[i].ly[l];
+    if (!L->wf_valid || !L->len || reach < 3) return;
+    color_t c = (l == 0) ? WF_WHITE : WF_B;
+    for (int cc = 0; cc < bw - 1; cc += 2){
+        float a = sqrtf((float)L->wf[(cc * DR_WF_W) / bw] / 255.0f);
+        int ch = (int)(a * (float)reach);
+        if (ch < 2) ch = 2;
+        TFT_fillRect(bx + cc, up ? base - ch : base, 2, ch, c);
+    }
+}
+
+// one half of a layered cell: caption row (name centred, trigger label in the outer
+// corner, dot in the inner corner) and the waveform under it
+static void draw_half(int i, int l, bool sel_half){
+    dr_pad_t *p = &dr.pad[i];
+    dr_layer_t *L = &p->ly[l];
+    int hx, hy, hw, hh;
+    half_rect(i, l, &hx, &hy, &hw, &hh);
+    int cx, cy, r;
+    bool num_left;
+    half_dot_pos(i, l, &cx, &cy, &r, &num_left);
+
+    _bg = L->len ? PAD_IDLE : PAD_EMPTY;
+    TFT_fillRect(hx + 1, hy + 1, hw - 2, hh - 2, _bg);
+
+    char nm[10], tag[20];
+    snprintf(nm, sizeof(nm), "%.8s", L->sample[0] ? L->sample : "-");
+    // pad + layer + its trigger, in one compact tag: "1A CV1"
+    if (dr.cv_select)
+        snprintf(tag, sizeof(tag), "%d%c %s", i + 1, 'A' + l, l ? "TR2" : "TR1");
+    else if (L->trig_src == DR_SRC_NONE)
+        snprintf(tag, sizeof(tag), "%d%c --", i + 1, 'A' + l);
+    else
+        snprintf(tag, sizeof(tag), "%d%c CV%d", i + 1, 'A' + l, (L->trig_src & 7) + 1);
+
+    Font f = cfont;
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    int fh = TFT_getfontheight();
+    int ty = layer_is_top(i, l) ? hy + 3 : hy + hh - fh - 3;   // details on the outer edge
+    _fg = sel_half ? TFT_WHITE : ((l == 0) ? (color_t){110, 130, 170} : WF_B);
+    TFT_print(tag, num_left ? hx + 5 : hx + hw - TFT_getStringWidth(tag) - 5, ty);
+    _fg = L->len ? TFT_WHITE : (color_t){110, 110, 110};
+    // the name is centred in what the tag and the dot leave — not in the half, or a
+    // long name would run under both
+    TFT_print(nm, hx + hw / 2 - TFT_getStringWidth(nm) / 2, ty);
+    cfont = f;
+    TFT_setFont(DEFAULT_FONT, NULL);
+
+    pad_dot_layer(i, l, half_lit(i, l));
+    (void)fh;
 }
 
 static void draw_pad_cell(int i, bool lit){
@@ -140,38 +213,77 @@ static void draw_pad_cell(int i, bool lit){
     pad_cell_rect(i, &x, &y, &w, &h);
     pad_corners(i, x, y, w, h, &cx, &cy, &num_left, &num_top);
     dr_pad_t *p = &dr.pad[i];
-    bool sel = (i == dr.sel_pad);
-    bool big = (dr.n_pads <= 4);
+    // sel_pad KEEPS pointing at its pad while the encoder is on the filter box (so
+    // the knobs know where to return) — so "selected" is sel_pad AND not-the-box,
+    // or the pad stays outlined and two things look selected at once
+    bool sel = (i == dr.sel_pad) && !dr.sel_filter;
+    color_t border = p->enabled ? (color_t){90, 90, 110} : (color_t){50, 50, 60};
+
+    if (p->layered){
+        int cmid = y + h / 2;
+        TFT_fillRect(x, y, w, h, PAD_EMPTY);
+        draw_half(i, 0, sel && s_layer == 0);
+        draw_half(i, 1, sel && s_layer == 1);
+        // the two half-waves CONVERGE on the midline: A grows up to meet it, B grows
+        // down from it, with each half's details outside them
+        {
+            int sfh = 0;
+            Font ff = cfont;
+            TFT_setFont(DEF_SMALL_FONT, NULL);
+            sfh = TFT_getfontheight();
+            cfont = ff;
+            TFT_setFont(DEFAULT_FONT, NULL);
+            int rr = 5;
+            int top_floor = y + 3 + sfh + 2;            // under the upper detail row
+            int t_dotb    = y + 3 + rr * 2 + 2;
+            if (t_dotb > top_floor) top_floor = t_dotb;
+            int bot_ceil  = y + h - 3 - sfh - 2;        // over the lower detail row
+            int b_dott    = y + h - 3 - rr * 2 - 2;
+            if (b_dott < bot_ceil) bot_ceil = b_dott;
+            int lt = layer_is_top(i, 0) ? 0 : 1;        // the layer in the upper half
+            int lb = 1 - lt;
+            half_wave_from(i, lt, x + 5, cmid - 2, w - 10, cmid - 2 - top_floor, true);
+            half_wave_from(i, lb, x + 5, cmid + 2, w - 10, bot_ceil - (cmid + 2), false);
+        }
+        // the cell's own border stays GREY even when a half is selected — only the
+        // selected HALF goes white, or the unselected half looks selected too (Arlo)
+        _fg = border;
+        TFT_drawRect(x, y, w, h, _fg);
+        // the divide: BLACK and wide enough to be a gap, so the two halves read as
+        // two windows rather than one
+        TFT_fillRect(x + 1, cmid - 1, w - 2, 3, SCREEN_BG);
+        if (sel){
+            int sy0 = (s_layer == 1) ? cmid : y;
+            int sh  = h / 2;
+            _fg = TFT_WHITE;
+            TFT_drawRect(x + 1, sy0 + 1, w - 2, sh - 2, _fg);
+            TFT_drawRect(x + 2, sy0 + 2, w - 4, sh - 4, _fg);
+        }
+        return;
+    }
+
+    // ---- a plain pad: the original anatomy, untouched ----
     _bg = p->ly[0].len ? PAD_IDLE : PAD_EMPTY;  // static cell; the dot does the flashing
     TFT_fillRect(x, y, w, h, _bg);
-    // the selected pad wears a BOLD white outline — it's what the encoder turns
-    // pick, what CV6/CV7 perform, and what a press loads a sample into
-    _fg = sel ? TFT_WHITE : (p->enabled ? (color_t){90, 90, 110} : (color_t){50, 50, 60});
+    _fg = sel ? TFT_WHITE : border;
     TFT_drawRect(x, y, w, h, _fg);
     if (sel){
         TFT_drawRect(x + 1, y + 1, w - 2, h - 2, _fg);
         TFT_drawRect(x + 2, y + 2, w - 4, h - 4, _fg);
     }
 
-    char nm[10], n[16], src[16], src2[16];
+    char nm[10], n[16], src[16];
     snprintf(nm, sizeof(nm), "%.8s", p->ly[0].sample[0] ? p->ly[0].sample : "-");
     snprintf(n, sizeof(n), "%d", i + 1);
-    int sa = p->ly[0].trig_src, sb = p->ly[1].trig_src;
+    int sa = p->ly[0].trig_src;
     if (dr.cv_select) snprintf(src, sizeof(src), "sel");
     else if (sa == DR_SRC_NONE) snprintf(src, sizeof(src), "--");
     else snprintf(src, sizeof(src), "CV%d", (sa & 7) + 1);            // 1..8, always
-    // the B layer's own trigger, under A's, in B's hue. Only A's NAME is captioned;
-    // B's lives on the Pads page (a name that changes with the last hit strobes).
-    bool showb = dr.layers_on && p->ly[1].len;
-    if (!showb)                 src2[0] = 0;
-    else if (dr.cv_select)      snprintf(src2, sizeof(src2), "TR2");
-    else if (sb == DR_SRC_NONE) snprintf(src2, sizeof(src2), "--");
-    else snprintf(src2, sizeof(src2), "CV%d", (sb & 7) + 1);
     Font f = cfont;
 
     // numeral + name on the edge opposite the dot: numeral in the outer corner,
     // name centred beside it
-    TFT_setFont(big ? DEFAULT_FONT : DEF_SMALL_FONT, NULL);
+    TFT_setFont(DEFAULT_FONT, NULL);
     int fh = TFT_getfontheight();
     int ty = num_top ? y + 4 : y + h - fh - 4;
     _fg = p->enabled ? TFT_WHITE : (color_t){90, 90, 90};
@@ -184,37 +296,27 @@ static void draw_pad_cell(int i, bool lit){
     int sfh = TFT_getfontheight();
     int sy = num_top ? y + h - sfh - 4 : y + 4;
     _fg = (color_t){110, 130, 170};
-    int sy_a = src2[0] ? (num_top ? sy - sfh - 1 : sy) : sy;   // stack the two labels
-    TFT_print(src, num_left ? x + 6 : x + w - TFT_getStringWidth(src) - 6, sy_a);
-    if (src2[0]){
-        _fg = WF_B;
-        TFT_print(src2, num_left ? x + 6 : x + w - TFT_getStringWidth(src2) - 6,
-                  num_top ? sy : sy + sfh + 1);
-    }
+    TFT_print(src, num_left ? x + 6 : x + w - TFT_getStringWidth(src) - 6, sy);
     cfont = f;
     TFT_setFont(DEFAULT_FONT, NULL);
 
     // the waveform gets EVERYTHING left over — every pixel between the two text
     // rows, full cell width. It is the point of the cell; the text is a caption.
-    // The dot's row bounds it as well as the caption's: the dot bulges above the
-    // small type it sits beside.
-    if (big){
+    {
         int r = 9;
         int dot_top = cy - r, dot_bot = cy + r;
         int top, bot;
-        int lab_top = src2[0] ? sy_a : sy;              // the label block, both lines
-        int lab_bot = src2[0] ? sy + sfh + 1 + sfh : sy + sfh;
         if (num_top){                                   // caption on top, dot below
             top = ty + fh + 3;
-            bot = (lab_top < dot_top ? lab_top : dot_top) - 3;
+            bot = (sy < dot_top ? sy : dot_top) - 3;
         } else {                                        // dot on top, caption below
-            int under = lab_bot > dot_bot ? lab_bot : dot_bot;
+            int under = sy + sfh > dot_bot ? sy + sfh : dot_bot;
             top = under + 3;
             bot = ty - 3;
         }
-        pad_waveform(i, x + 5, top, w - 10, bot - top);
+        half_waveform(i, 0, x + 5, top, w - 10, bot - top);
     }
-    pad_dot(i, lit);
+    pad_dot_layer(i, 0, lit);
 }
 
 // ---- the master filter box (menu bar, top right) -----------------------------
@@ -230,17 +332,13 @@ static void filter_label(char *s, size_t n){
     // filter knobs are blocked. Say so — a dead knob reads as broken hardware.
     bool blocked = dr.cv_select &&
                    (dr.sel_src[0] == DR_MOD_LEVEL_CV || dr.sel_src[1] == DR_MOD_LEVEL_CV);
-    if (blocked)              { snprintf(s, n, "FLT sel"); return; }
-    if (!dr.flt_on)           { snprintf(s, n, "FLT");     return; }
-    if (dr.flt_mode == 0)     { snprintf(s, n, "FLT --");  return; }
-    // the cutoff the knob is actually asking for, in the deck's own mapping
-    int cv = dr.flt_cv;
-    float fc;
-    if (dr.flt_mode == 1) fc = 80.0f  * powf(150.0f, (float)cv / (2048.0f - 150.0f));
-    else                  fc = 30.0f  * powf(200.0f, (float)(cv - 2198) / (4095.0f - 2198.0f));
-    const char *m = (dr.flt_mode == 1) ? "LP" : "HP";
-    if (fc >= 1000.0f) snprintf(s, n, "%s %.1fk", m, fc / 1000.0f);
-    else               snprintf(s, n, "%s %d", m, (int)fc);
+    // the box always SAYS what it is (Arlo). The mode rides along once it is
+    // sweeping, and the strip underneath shows how far the sweep has gone — the
+    // cutoff in Hz was detail nobody was reading mid-performance.
+    if (blocked)          { snprintf(s, n, "Filter sel"); return; }
+    if (!dr.flt_on)       { snprintf(s, n, "Filter");     return; }
+    if (dr.flt_mode == 0) { snprintf(s, n, "Filter");     return; }
+    snprintf(s, n, "Filter %s", (dr.flt_mode == 1) ? "LP" : "HP");
 }
 
 static void draw_filter_box(void){
@@ -248,7 +346,8 @@ static void draw_filter_box(void){
     bool sel = dr.sel_filter;
     int fh = TFT_getfontheight();
     int bh = fh + 8, bw = FBOX_W;
-    int bx = _width - bw - 4, by = 2;
+    int bx = _width / 2 - bw / 2, by = 2;   // dead centre of the menu bar: it sits
+                                            // between pads 1 and 2 in the ring too
     _bg = dr.flt_on ? PAD_IDLE : SCREEN_BG;   // filled = engaged (a pad's grammar)
     TFT_fillRect(bx, by, bw, bh, _bg);
     _fg = sel ? TFT_WHITE : (dr.flt_on ? (color_t){90, 90, 110} : (color_t){60, 60, 70});
@@ -293,7 +392,7 @@ static void live_full_redraw(void){
     TFT_fillScreen(SCREEN_BG);
     _bg = SCREEN_BG; _fg = TFT_WHITE;
     TFT_print("Drums", 6, 4);
-    for (int i = 0; i < dr.n_pads; i++) draw_pad_cell(i, dr.pad[i].playing);
+    for (int i = 0; i < DR_PADS; i++) draw_pad_cell(i, dr.pad[i].playing);
     s_fbox_mode = -1;                      // force the box to paint
     draw_filter_box();
     _bg = SCREEN_BG;
@@ -301,50 +400,119 @@ static void live_full_redraw(void){
     TFT_setFont(DEF_SMALL_FONT, NULL);
     const char *hint = dr.sel_filter
         ? "turn:select  press:filter on/off  knob6:sweep  knob7:res"
-        : (dr.cv_mod ? "turn:select  press:load  hold:setup  knob6/7: level/decay"
-                     : "turn:select  press:load  hold:setup");
+        : "turn:select  press:load  hold:setup  knob6/7: level/decay";
     TFT_print((char*)hint, 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
 // turn = pick the pad (or the filter box) the outline and CV6/CV7 follow; only
 // what changed is repainted — a full grid repaint per detent strobes
+// The encoder walks every LOADABLE slot: a plain pad is one, a LAYERED pad is two
+// (its A half and its B half), then the filter box. Layering is per pad, so the
+// slot count is a sum, not a multiplication.
+//
+// The walk goes ROUND the grid, not along the array (Arlo). Pad index order is
+// 1,2,3,4 = top-left, top-right, bottom-left, bottom-right — turning the encoder
+// through that jumps the cursor diagonally across the screen on every second
+// detent. Visiting them clockwise instead (TL, TR, BR, BL) makes the knob feel
+// like it is tracing the grid, and within a pad the halves run top-then-bottom,
+// which is the same direction the eye is already travelling.
+// The circle Arlo wants, traced on the grid (pads 1..4 = TL, TR, BL, BR):
+//
+//   1A  ->  FILT  ->  2A          across the top, through the box in the middle
+//                     2B          down the right column...
+//                     4A  4B      ...through pad 4
+//   1B  <-  3A  <-    3B          back along the bottom and up the left column
+//
+// So a half is only ever adjacent to the half it physically touches. The table is
+// (pad, layer) pairs; -1 is the filter box; B entries are skipped for a pad that
+// isn't layered.
+static const int8_t RING[][2] = {
+    {0, 0}, {-1, 0}, {1, 0}, {1, 1}, {3, 0}, {3, 1}, {2, 1}, {2, 0}, {0, 1},
+};
+#define RING_N ((int)(sizeof(RING) / sizeof(RING[0])))
+
+// The ring is an explicit table, because the filter box lives INSIDE it: the box is
+// drawn in the middle of the menu bar, between pads 1 and 2, and the encoder passes
+// through it there rather than tacking it on after the last pad (Arlo).
+// slot = {pad, layer}; pad == -1 is the filter box.
+static int8_t s_slot[DR_PADS * DR_LAYERS + 1][2];
+static int s_nslot;
+
+static void build_ring(void){
+    s_nslot = 0;
+    for (int k = 0; k < RING_N; k++){
+        int pad = RING[k][0], ly = RING[k][1];
+        if (pad < 0){                                  // the filter box
+            if (!dr.flt_box) continue;
+        } else if (ly == 1 && !dr.pad[pad].layered) {
+            continue;                                  // no B half on a plain pad
+        }
+        s_slot[s_nslot][0] = (int8_t)pad;
+        s_slot[s_nslot][1] = (int8_t)ly;
+        s_nslot++;
+    }
+}
+
+static int live_slot_of(int pad, int layer){
+    for (int k = 0; k < s_nslot; k++)
+        if (s_slot[k][0] == pad && s_slot[k][1] == layer) return k;
+    return 0;
+}
+
+static int live_filter_slot(void){
+    for (int k = 0; k < s_nslot; k++) if (s_slot[k][0] < 0) return k;
+    return -1;
+}
+
 static void live_select(int dir){
-    int n = dr.n_pads + (dr.flt_box ? 1 : 0);
-    int prev = dr.sel_filter ? dr.n_pads : dr.sel_pad;
-    int cur = (prev + dir + n) % n;
+    build_ring();                              // layering can change between turns
+    if (s_nslot == 0) return;
+    if (dr.sel_pad >= DR_PADS) dr.sel_pad = 0;
+    int prev = dr.sel_filter ? live_filter_slot() : live_slot_of(dr.sel_pad, s_layer);
+    if (prev < 0) prev = 0;
+    int cur = (prev + dir + s_nslot) % s_nslot;
     if (cur == prev) return;
     int prev_pad = dr.sel_pad;
-    if (cur == dr.n_pads){                     // landed on the filter box
+    bool was_box = dr.sel_filter;
+    if (s_slot[cur][0] < 0){                   // landed on the filter box
         dr.sel_filter = true;
         dr.flt_take_f = dr.flt_take_q = false; // arm the knob pickup: the sweep
         dr.flt_ref_f = dr.flt_ref_q = -1;      // must not jump to where a knob sits
     } else {
         dr.sel_filter = false;
-        dr.sel_pad = cur;
+        dr.sel_pad = s_slot[cur][0];
+        s_layer    = s_slot[cur][1];
     }
-    if (prev != dr.n_pads) draw_pad_cell(prev_pad, dr.pad[prev_pad].playing);
-    if (!dr.sel_filter)    draw_pad_cell(dr.sel_pad, dr.pad[dr.sel_pad].playing);
+    if (!was_box)       draw_pad_cell(prev_pad, dr.pad[prev_pad].playing);
+    if (!dr.sel_filter) draw_pad_cell(dr.sel_pad, dr.pad[dr.sel_pad].playing);
     draw_filter_box();
 }
 
 static int drum_live_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU:
-            if (dr.sel_pad >= dr.n_pads) dr.sel_pad = 0;
+            if (dr.sel_pad >= DR_PADS) dr.sel_pad = 0;
             if (!dr.flt_box) dr.sel_filter = false;
             live_full_redraw();
             break;
         case EV_TIMER_REPEATING_FAST:
         case EV_TIMER_REPEATING_SLOW:
-            for (int i = 0; i < dr.n_pads; i++){
-                bool lit = dr.pad[i].playing;
-                if (dr.pad[i].hit){
-                    dr.pad[i].hit = false;
+            for (int i = 0; i < DR_PADS; i++){
+                dr_pad_t *p = &dr.pad[i];
+                int nly = p->layered ? DR_LAYERS : 1;
+                if (p->hit){
+                    int hl = p->layered ? (p->hit_layer & 1) : 0;
+                    p->hit = false;
                     s_flash_col[i]++;               // next hit, next colour
-                    pad_dot(i, true);               // dot only — fast enough to groove
+                    pad_dot_layer(i, hl, true);     // dot only — fast enough to groove
+                    // a choke means the OTHER half just went dark
+                    if (p->layered) pad_dot_layer(i, hl ^ 1, false);
                 }
-                else if (lit != s_lit[i]) pad_dot(i, lit);
+                for (int l = 0; l < nly; l++){
+                    bool lit_l = half_lit(i, l);
+                    if (lit_l != s_lit[i][l]) pad_dot_layer(i, l, lit_l);
+                }
             }
             filter_box_tick();
             break;
@@ -356,8 +524,8 @@ static int drum_live_handler(int it_id, int event, void *ev_data){
                 draw_filter_box();
                 break;
             }
-            s_layer = 0;                            // a pad: load its A sample (B is
-            refresh_samples();                      // a deliberate Pads-page act)
+            if (!dr.pad[dr.sel_pad].layered) s_layer = 0;   // load into the selected
+            refresh_samples();                              // half (A, or B)
             s_load_ret = M_DRUM_LIVE;
             return M_DRUM_LOAD;
         case EV_LONG_PRESS: return M_DRUM_SETUP;   // Live <-> Setup, no hub
@@ -392,32 +560,34 @@ static void row_draw(int i, int pos, int sel, const char *label, const char *raw
 // Rows are ID-keyed and the visible list is rebuilt per entry (Layer only exists
 // when B layers are on). The old index-keyed toggle macro would have silently
 // mis-assigned click behaviour the moment a row was inserted.
-enum { PR_PAD = 0, PR_LAYER, PR_SAMPLE, PR_TRIG, PR_LEVEL, PR_PAN, PR_DECAY,
-       PR_CW, PR_RETRIG, PR_ENABLED, PR_COUNT };
+enum { PR_PAD = 0, PR_LAYERED, PR_LAYER, PR_SAMPLE, PR_TRIG, PR_LEVEL, PR_PAN,
+       PR_DECAY, PR_CW, PR_RETRIG, PR_ENABLED, PR_COUNT };
 
-static const char *pads_labels[PR_COUNT] = {"Pad", "Layer", "Sample", "Trig In",
-                                            "Level", "Pan", "Decay", "Knob7 CW",
-                                            "Retrig", "Enabled"};
+static const char *pads_labels[PR_COUNT] = {"Pad", "B Layer", "Layer", "Sample",
+                                            "Trig In", "Level", "Pan", "Decay",
+                                            "Knob7 CW", "Retrig", "Enabled"};
 // small option sets flip on a click; ranges keep click-to-edit
-#define PADS_IS_TOGGLE(id) ((id) == PR_PAD || (id) == PR_LAYER || \
-                            (id) == PR_CW  || (id) == PR_ENABLED)
+#define PADS_IS_TOGGLE(id) ((id) == PR_PAD || (id) == PR_LAYERED || \
+                            (id) == PR_LAYER || (id) == PR_CW || (id) == PR_ENABLED)
 
 static int s_prows[PR_COUNT], s_pnrows;
 
 static void pads_build_rows(void){
+    bool layered = dr.pad[dr.sel_pad].layered;   // layering is per PAD now
     s_pnrows = 0;
     for (int id = 0; id < PR_COUNT; id++){
-        if (id == PR_LAYER && !dr.layers_on) continue;
+        if (id == PR_LAYER && !layered) continue;   // nothing to switch between
         s_prows[s_pnrows++] = id;
     }
-    if (!dr.layers_on) s_layer = 0;
+    if (!layered) s_layer = 0;
 }
 
 static void pads_value_str(int id, char *v, size_t n){
     dr_pad_t *p = &dr.pad[dr.sel_pad];
     dr_layer_t *L = &p->ly[s_layer];       // Sample + Trig In address the LAYER;
     switch(id){                            // everything else is the pad
-        case PR_PAD:   snprintf(v, n, "%d / %d", dr.sel_pad + 1, dr.n_pads); break;
+        case PR_PAD:   snprintf(v, n, "%d / %d", dr.sel_pad + 1, DR_PADS); break;
+        case PR_LAYERED: snprintf(v, n, "%s", p->layered ? "A+B choke" : "OFF"); break;
         case PR_LAYER: snprintf(v, n, "%s", s_layer ? "B" : "A"); break;
         case PR_SAMPLE: snprintf(v, n, "%s", L->sample[0] ? L->sample : "(none)"); break;
         case PR_TRIG:
@@ -444,7 +614,9 @@ static void pads_value_str(int id, char *v, size_t n){
             else snprintf(v, n, "%dms", p->decay_ms);
             break;
         case PR_CW:
-            if (p->cw_mode == DR_CW_START)
+            if (p->cw_mode == DR_CW_NONE)
+                snprintf(v, n, "none");
+            else if (p->cw_mode == DR_CW_START)
                 snprintf(v, n, "start %d%%", (int)p->start_off * 100 / 255);
             else if (p->cw_mode == DR_CW_ATTACK)
                 snprintf(v, n, "attack %dms", p->attack_ms);
@@ -481,8 +653,8 @@ static void pads_redraw(int pos, int sel){
     _bg = SCREEN_BG;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print(dr.layers_on ? "B chokes A: one voice, two sounds"
-                           : "press Sample to open the browser; hold to go back",
+    TFT_print(dr.pad[dr.sel_pad].layered ? "B chokes A: one voice, two sounds"
+                                        : "press Sample to open the browser; hold to go back",
               8, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
@@ -500,7 +672,11 @@ static void pads_adj(int id, int dir){
     dr_layer_t *L = &p->ly[s_layer];
     switch(id){
         case PR_PAD:
-            dr.sel_pad = (dr.sel_pad + (dir > 0 ? 1 : dr.n_pads - 1)) % dr.n_pads;
+            dr.sel_pad = (dr.sel_pad + (dir > 0 ? 1 : DR_PADS - 1)) % DR_PADS;
+            break;
+        case PR_LAYERED:
+            p->layered = !p->layered;
+            if (!p->layered) s_layer = 0;   // the B half no longer exists to edit
             break;
         case PR_LAYER: s_layer = s_layer ? 0 : 1; break;
         case PR_TRIG:  L->trig_src = src_cycle(L->trig_src, dir); break;
@@ -556,7 +732,7 @@ static int drum_pads_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU:
             sel = 0;
-            if (dr.sel_pad >= dr.n_pads) dr.sel_pad = 0;
+            if (dr.sel_pad >= DR_PADS) dr.sel_pad = 0;
             pads_build_rows();
             if (pos >= s_pnrows) pos = 0;
             pads_redraw(pos, sel);
@@ -578,9 +754,13 @@ static int drum_pads_handler(int it_id, int event, void *ev_data){
             if(id == PR_SAMPLE){ refresh_samples(); s_load_ret = M_DRUM_PADS; return M_DRUM_LOAD; }
             if(PADS_IS_TOGGLE(id)){
                 pads_adj(id, +1);                    // small option set: flip in place
-                // switching pad OR layer changes every value on the page
-                if (id == PR_PAD || id == PR_LAYER) pads_redraw(pos, sel);
-                else pads_row_redraw(pos, pos, 0);
+                // pad / layer / layering all change what the whole page shows —
+                // and B Layer adds or removes a row, so the list must be rebuilt
+                if (id == PR_PAD || id == PR_LAYER || id == PR_LAYERED){
+                    pads_build_rows();
+                    if (pos >= s_pnrows) pos = s_pnrows - 1;
+                    pads_redraw(pos, sel);
+                } else pads_row_redraw(pos, pos, 0);
             } else {
                 sel = !sel; pads_row_redraw(pos, pos, sel);
             }
@@ -599,7 +779,7 @@ static void load_redraw(void){
     int fh = TFT_getfontheight();
     _bg = SCREEN_BG; _fg = TFT_LIGHTGREY;
     char h[64];
-    if (dr.layers_on)
+    if (dr.pad[dr.sel_pad].layered)
         snprintf(h, sizeof(h), "Pad %d%c  (%d/%d)", dr.sel_pad + 1, s_layer ? 'B' : 'A',
                  s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
     else
@@ -658,10 +838,10 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
 // a hub). The two selector-CV rows exist ONLY in CV-select mode — in Direct
 // mode the selectors do nothing, so the page doesn't mention them at all and
 // the encoder walks straight past.
-enum { R_PADEDIT = 0, R_PADS, R_LAYERS, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL,
+enum { R_PADEDIT = 0, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL,
        R_KNOB, R_FILTER, R_COUNT };
 
-static const char *setup_labels[R_COUNT] = {"Pad Setup", "Pads", "B Layers", "Trigger",
+static const char *setup_labels[R_COUNT] = {"Pad Setup", "Trigger",
                                             "Sensi", "Sel CV TR1", "Sel CV TR2",
                                             "Velocity", "Knob 6/7", "Filter"};
 // everything is a small option set except the two selector CVs (none + 8
@@ -687,8 +867,6 @@ static void sel_src_str(int src, char *v, size_t n){
 static void setup_value_str(int id, char *v, size_t n){
     switch(id){
         case R_PADEDIT: v[0] = 0; break;      // a page link: no value to show
-        case R_PADS: snprintf(v, n, "%d", dr.n_pads); break;
-        case R_LAYERS: snprintf(v, n, "%s", dr.layers_on ? "A+B choke" : "OFF"); break;
         case R_TRIG: snprintf(v, n, "%s", dr.cv_select ? "CV-select" : "Direct"); break;
         case R_SENS: snprintf(v, n, "%s", dr.sens == 0 ? "Low" : (dr.sens == 2 ? "High" : "Med")); break;
         case R_SEL1: sel_src_str(dr.sel_src[0], v, n); break;
@@ -717,11 +895,9 @@ static void setup_redraw(int pos, int sel){
     _bg = SCREEN_BG;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    const char *hint = dr.layers_on
-        ? (dr.cv_select ? "TR1 fires A, TR2 fires B — of the pad the sel CV picks"
-                        : "each pad's B sample chokes its A (one voice)")
-        : (dr.cv_select ? "gate on TR1/TR2 fires the pad its sel CV picks"
-                        : "each CV input fires its own pad (75% edge)");
+    const char *hint = dr.cv_select
+        ? "gate on TR1/TR2 fires the pad its sel CV picks (TR2 = its B layer)"
+        : "each CV input fires its own pad (75% edge)";
     TFT_print((char*)hint, 8, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
@@ -737,8 +913,6 @@ static int sel_cycle(int src, int dir){
 
 static void setup_adj(int id, int dir){
     switch(id){
-        case R_PADS: dr.n_pads = (dr.n_pads == 8) ? 4 : 8; if (dr.sel_pad >= dr.n_pads) dr.sel_pad = 0; break;
-        case R_LAYERS: dr.layers_on = !dr.layers_on; break;
         case R_TRIG: dr.cv_select = !dr.cv_select; break;
         case R_SENS: dr.sens = (dr.sens + (dir > 0 ? 1 : 2)) % 3; break;
         case R_SEL1: dr.sel_src[0] = sel_cycle(dr.sel_src[0], dir); break;
@@ -809,12 +983,12 @@ static int drum_main_event(int event, void *ev_data){
         _bg = TFT_BLACK; TFT_fillRect(0, fh + 12, _width, 24, _bg);
         _fg = (color_t){230, 140, 40};
         int loaded = 0;                            // count LAYERS, not pads
-        int nly = dr.layers_on ? DR_LAYERS : 1;
-        for (int i = 0; i < dr.n_pads; i++)
-            for (int l = 0; l < nly; l++) if (dr.pad[i].ly[l].len) loaded++;
+        for (int i = 0; i < DR_PADS; i++)
+            for (int l = 0; l < (dr.pad[i].layered ? DR_LAYERS : 1); l++)
+                if (dr.pad[i].ly[l].len) loaded++;
         char s[64];
         snprintf(s, sizeof(s), "Drums: %d pads (%d loaded) %s",
-                 dr.n_pads, loaded, dr.cv_select ? "cv-sel" : "direct");
+                 DR_PADS, loaded, dr.cv_select ? "cv-sel" : "direct");
         TFT_print(s, 6, fh + 16);
     }
     return 0;
