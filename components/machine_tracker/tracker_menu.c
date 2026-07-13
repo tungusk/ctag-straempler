@@ -132,9 +132,9 @@ static void draw_info(void){
         // bpm slot: when clock-synced and locked, show the EXTERNAL tempo the
         // module is actually following, tagged EXT — the sync-is-live indicator
         char bs[16];
-        if (trk.sync && trk.clk.locked && trk.clk.bpm > 0)
+        if (trk.sync && trk.ci.clk.locked && trk.ci.clk.bpm > 0)
             snprintf(bs, sizeof(bs), "%d bpm EXT",
-                     (int)(trk.clk.bpm / trk_ppb[trk.ppb_idx] + 0.5f));
+                     (int)(trk.ci.clk.bpm / trk_ppb[trk.ppb_idx] + 0.5f));
         else
             snprintf(bs, sizeof(bs), "%d bpm", trk.mod_bpm);
         if (trk.loop_engage)
