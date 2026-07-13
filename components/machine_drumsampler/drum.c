@@ -1,6 +1,7 @@
 // Drum sampler engine — CV-triggered one-shot pads mixed to stereo.
 // All-RAM playback (SD only at load time), polyphonic across all pads.
 #include <string.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -71,6 +72,15 @@ static esp_err_t drum_start(void)
     }
     dr.n_pads = 4;          // 4 big pads is the default kit (Arlo); Setup goes to 8
     dr.cv_mod = true;       // knob6/knob7 perform the selected pad
+    dr.flt_box = true;      // the master filter box is reachable from Live
+    dr.flt_on = false;
+    dr.flt_cv = 2048;       // centre = bypass
+    dr.flt_res_cv = 0;      // clean
+    dr.flt_q = DR_Q_CLEAN;
+    dr.flt_ref_f = -1;      // pickup: seize the reference on the first block
+    dr.flt_ref_q = -1;
+    svf_reset(&dr.flt_l);
+    svf_reset(&dr.flt_r);
     dr.sens = 1;            // Med
     dr.sel_src[0] = 5;      // knob6/knob7 — the two fully-good CV channels
     dr.sel_src[1] = 6;
@@ -90,27 +100,49 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
 {
     if (!dr.pad[0].buf) return;     // out is pre-zeroed by the core
 
-    // ---- CV6/CV7 perform the selected pad (move-to-take-over; see drum_priv.h) --
+    // ---- CV6/CV7 perform the SELECTED PAD (move-to-take-over; see drum_priv.h) --
     // A channel already spoken for as a CV-select selector is left alone — the
     // selectors default to exactly these two channels, and one knob can't both
     // address a pad and set its level. In Direct mode the selectors don't exist,
     // so nothing blocks the knobs there.
-    if (dr.cv_mod) {
-        static int last_lv = -1, last_dc = -1;
-        bool lv_free = !(dr.cv_select && (dr.sel_src[0] == DR_MOD_LEVEL_CV ||
-                                          dr.sel_src[1] == DR_MOD_LEVEL_CV));
-        bool dc_free = !(dr.cv_select && (dr.sel_src[0] == DR_MOD_DECAY_CV ||
-                                          dr.sel_src[1] == DR_MOD_DECAY_CV));
+    bool lv_free = !(dr.cv_select && (dr.sel_src[0] == DR_MOD_LEVEL_CV ||
+                                      dr.sel_src[1] == DR_MOD_LEVEL_CV));
+    bool dc_free = !(dr.cv_select && (dr.sel_src[0] == DR_MOD_DECAY_CV ||
+                                      dr.sel_src[1] == DR_MOD_DECAY_CV));
+    int lv = io->cv[DR_MOD_LEVEL_CV], dc = io->cv[DR_MOD_DECAY_CV];
+    if (!dr.knob_seen) {                          // first block: adopt, don't apply
+        dr.knob_last[0] = lv;
+        dr.knob_last[1] = dc;
+        dr.knob_seen = true;
+    }
+
+    // the knobs aim at ONE thing: the selected pad, or the filter box
+    if (dr.cv_mod && dr.flt_box && dr.sel_filter) {
+        // grab-then-track: nothing moves until the knob leaves where it sat when
+        // the box was selected, and then it tracks continuously — a sweep can't
+        // be stepped like a pad parameter
+        if (dr.flt_ref_f < 0) dr.flt_ref_f = lv;
+        if (dr.flt_ref_q < 0) dr.flt_ref_q = dc;
+        int df = lv - dr.flt_ref_f, dq = dc - dr.flt_ref_q;
+        if (df < 0) df = -df;
+        if (dq < 0) dq = -dq;
+        if (lv_free) {
+            if (!dr.flt_take_f && df > DR_MOD_MOVE) dr.flt_take_f = true;
+            if (dr.flt_take_f) dr.flt_cv = lv;
+        }
+        if (dc_free) {
+            if (!dr.flt_take_q && dq > DR_MOD_MOVE) dr.flt_take_q = true;
+            if (dr.flt_take_q) dr.flt_res_cv = dc;
+        }
+    } else if (dr.cv_mod) {
         int sel = dr.sel_pad;
         if (sel < 0 || sel >= dr.n_pads) sel = 0;
         dr_pad_t *sp = &dr.pad[sel];
-        int lv = io->cv[DR_MOD_LEVEL_CV], dc = io->cv[DR_MOD_DECAY_CV];
-        if (last_lv < 0) { last_lv = lv; last_dc = dc; }   // first block: adopt, don't apply
-        int dlv = lv - last_lv, ddc = dc - last_dc;
+        int dlv = lv - dr.knob_last[0], ddc = dc - dr.knob_last[1];
         if (dlv < 0) dlv = -dlv;
         if (ddc < 0) ddc = -ddc;
         if (lv_free && dlv > DR_MOD_MOVE) {
-            last_lv = lv;
+            dr.knob_last[0] = lv;
             // 12 o'clock = 100 % (unity), CCW fades to silence, CW drives the
             // pad into the soft clipper (Arlo)
             if (lv <= 2048)
@@ -121,7 +153,7 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
                                        (DR_LEVEL_MAX - DR_LEVEL_UNITY) / 2047);
         }
         if (dc_free && ddc > DR_MOD_MOVE) {
-            last_dc = dc;
+            dr.knob_last[1] = dc;
             // Both knobs are NEUTRAL at 12 o'clock (Arlo). Counter-clockwise from
             // noon chokes the decay — 1.5 s just under centre down to 20 ms hard
             // left. Clockwise drives whichever target the pad selects (attack or
@@ -151,6 +183,32 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
                 }
             }
         }
+    }
+
+    // ---- master filter coefficients (once per block; the deck's mapping) ------
+    {
+        int fcv = dr.flt_cv;
+        int mode = 0;
+        float fc = 0;
+        if (fcv < 2048 - 150) {                  // LP zone: sweeps DOWN to the left
+            mode = 1;
+            float t = (float)fcv / (2048.0f - 150.0f);
+            fc = 80.0f * powf(150.0f, t);                    // 80 Hz .. 12 kHz
+        } else if (fcv > 2048 + 150) {           // HP zone: sweeps UP to the right
+            mode = 2;
+            float t = (float)(fcv - 2048 - 150) / (4095.0f - 2048.0f - 150.0f);
+            fc = 30.0f * powf(200.0f, t);                    // 30 Hz .. 6 kHz
+        }
+        dr.flt_mode = mode;
+        float f_t = mode ? svf_coef(fc, (float)DR_RATE, DR_FLT_FMAX) : 0.0f;
+        dr.flt_f += 0.2f * (f_t - dr.flt_f);     // slewed: no zipper on a fast sweep
+        // resonance, and the reason the deck could skip this: a Chamberlin with
+        // low damping AND a high coefficient self-oscillates, so the damping floor
+        // has to rise with the cutoff
+        float q_t = svf_damp((float)dr.flt_res_cv / 4095.0f, DR_Q_SQUELCH, DR_Q_CLEAN);
+        float qfloor = DR_Q_SQUELCH + 0.8f * (dr.flt_f > 0.85f ? (dr.flt_f - 0.85f) : 0.0f);
+        if (q_t < qfloor) q_t = qfloor;
+        dr.flt_q += 0.2f * (q_t - dr.flt_q);     // a jumped q clicks: slew it too
     }
 
     // ---- triggers ----
@@ -287,13 +345,38 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
             p->pos = pos + 1;
         }
     }
-    if (!any) return;
+    // ---- master filter + output ------------------------------------------------
+    // The filter must keep running after the last pad dies: its ring is still
+    // decaying, and returning early would chop the tail off.
+    bool flt_live = dr.flt_box && dr.flt_on;
+    if (!any && !flt_live) return;
+
+    // a NaN in an SVF is PERMANENT silence — it would read as dead hardware
+    if (!(fabsf(dr.flt_l.lp) < 1e9f) || !(fabsf(dr.flt_r.lp) < 1e9f)) {
+        svf_reset(&dr.flt_l);
+        svf_reset(&dr.flt_r);
+    }
+
     for (int f = 0; f < frames; f++) {
-        int32_t l = accL[f], r = accR[f];
-        if (l > 32767) l = 32767; else if (l < -32768) l = -32768;
-        if (r > 32767) r = 32767; else if (r < -32768) r = -32768;
-        out[f * 2]     = l << 16;
-        out[f * 2 + 1] = r << 16;
+        int32_t li = accL[f], ri = accR[f];
+        if (li > 32767) li = 32767; else if (li < -32768) li = -32768;
+        if (ri > 32767) ri = 32767; else if (ri < -32768) ri = -32768;
+        float l = (float)li, r = (float)ri;
+        if (flt_live && dr.flt_mode) {
+            float lo, hi;
+            svf_step(&dr.flt_l, l, dr.flt_f, dr.flt_q, &lo, NULL, &hi);
+            l = (dr.flt_mode == 1) ? lo : hi;
+            svf_step(&dr.flt_r, r, dr.flt_f, dr.flt_q, &lo, NULL, &hi);
+            r = (dr.flt_mode == 1) ? lo : hi;
+        } else {
+            svf_park(&dr.flt_l, l);        // bypass parks the state ON the signal,
+            svf_park(&dr.flt_r, r);        // so re-engaging can't thump
+        }
+        int32_t lo32 = (int32_t)l, ro32 = (int32_t)r;   // resonance overshoots: clamp
+        if (lo32 > 32767) lo32 = 32767; else if (lo32 < -32768) lo32 = -32768;
+        if (ro32 > 32767) ro32 = 32767; else if (ro32 < -32768) ro32 = -32768;
+        out[f * 2]     = lo32 << 16;
+        out[f * 2 + 1] = ro32 << 16;
     }
 }
 
@@ -357,6 +440,11 @@ static cJSON *drum_preset_save(void)
     cJSON_AddBoolToObject(o, "cvsel", dr.cv_select);
     cJSON_AddBoolToObject(o, "vel", dr.velocity);
     cJSON_AddBoolToObject(o, "cvmod", dr.cv_mod);
+    cJSON_AddBoolToObject(o, "flt", dr.flt_box);      // master filter box exists
+    cJSON_AddBoolToObject(o, "flton", dr.flt_on);     // ...and is engaged
+    cJSON_AddNumberToObject(o, "fcv", dr.flt_cv);     // sweep + resonance knob
+    cJSON_AddNumberToObject(o, "fres", dr.flt_res_cv);// positions (knob pickup
+                                                      // holds them until moved)
     cJSON_AddNumberToObject(o, "sens", dr.sens);
     cJSON_AddNumberToObject(o, "sel0", dr.sel_src[0]);
     cJSON_AddNumberToObject(o, "sel1", dr.sel_src[1]);
@@ -385,6 +473,16 @@ static void drum_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvsel"))) dr.cv_select = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "vel")))   dr.velocity = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvmod")))  dr.cv_mod = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flt")))    dr.flt_box = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flton")))  dr.flt_on = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fcv")) && cJSON_IsNumber(j)) {
+        int f = j->valueint;
+        dr.flt_cv = (f < 0) ? 0 : (f > 4095 ? 4095 : f);
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fres")) && cJSON_IsNumber(j)) {
+        int f = j->valueint;
+        dr.flt_res_cv = (f < 0) ? 0 : (f > 4095 ? 4095 : f);
+    }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sens")) && cJSON_IsNumber(j)) {
         dr.sens = j->valueint;
         if (dr.sens < 0) dr.sens = 0;
