@@ -21,6 +21,7 @@
                                               // (ring keeps filling to 8 s) —
                                               // low so seeks/scrubs feel instant
 #define DK_NAME_LEN    24
+#define DK_WF_W        144            // waveform thumbnail columns
 
 // analysis envelope: 256-frame hops (~172 Hz) — resolves ~±1 BPM at 120
 #define DK_HOP         256
@@ -83,6 +84,12 @@ typedef struct {
     float out_gain;                // declick ramp (0..1) across seeks/stops
     float lp_l, bp_l, lp_r, bp_r;  // SVF state
     volatile int flt_mode;         // 0 off, 1 LP, 2 HP (UI display)
+
+    // waveform thumbnail (sampler3 scheme): the reader builds one decimated
+    // column per idle pass once the ring is warm — never blocks playback
+    uint8_t wf[144];               // per-column peak, 0..255 (DK_WF_W)
+    volatile int wf_state;         // 0 none, 1 building, 2 valid
+    int wf_col;                    // reader progress
 
     // analysis
     volatile int an_state;         // DK_AN_*

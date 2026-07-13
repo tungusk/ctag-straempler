@@ -55,6 +55,8 @@ static void reader_task(void *pv)
                 dk.wpos = 0;
                 dk.rpos_i = 0;
                 dk.rpos_f = 0;
+                dk.wf_state = (f && dk.file_frames) ? 1 : 0;   // thumbnail pending
+                dk.wf_col = 0;
             }
         }
         if (f && dk.seek_req) {
@@ -90,6 +92,30 @@ static void reader_task(void *pv)
                 continue;              // keep filling without the delay below
             }
             if (dk.loading && dk.wpos >= dk.file_frames) dk.loading = false;
+
+            // waveform thumbnail, one column per idle pass (ring is warm
+            // when we get here): seek away for a 128-frame peek, restore
+            // the stream position. ~144 passes at a tick apiece — the
+            // sampler3 tiny-white scheme, built without a playback hiccup.
+            if (dk.wf_state == 1 && dk.file_frames) {
+                uint32_t p = (uint32_t)((uint64_t)dk.wf_col * dk.file_frames / DK_WF_W);
+                uint32_t want = dk.file_frames - p;
+                if (want > 128) want = 128;
+                sd_lock_take();
+                long back = ftell(f);
+                fseek(f, (long)p * 4, SEEK_SET);
+                size_t got = want ? fread(chunk, 4, want, f) : 0;
+                fseek(f, back, SEEK_SET);
+                sd_lock_give();
+                int peak = 0;
+                for (size_t k = 0; k < got * 2; k++) {
+                    int sv = chunk[k];
+                    if (sv < 0) sv = -sv;
+                    if (sv > peak) peak = sv;
+                }
+                dk.wf[dk.wf_col] = (uint8_t)(peak >> 7);
+                if (++dk.wf_col >= DK_WF_W) dk.wf_state = 2;
+            }
         }
         vTaskDelay(1);   // >=1 tick: pdMS_TO_TICKS(5)==0 at 100Hz = busy-spin
     }

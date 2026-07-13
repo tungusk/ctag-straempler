@@ -120,7 +120,7 @@ static void setup_redraw(int pos, int sel){
     int fh = TFT_getfontheight();
     _fg = TFT_WHITE;
     TFT_print("Granular Setup", 6, 4);
-    menuTFTPrintAffordance("System", pos == -1);
+    menuTFTPrintAffordance("Machine", pos == -1);
     for (int i = 0; i < GR_SETUP_N; i++){
         int y = fh + 14 + i * (fh + 8);
         _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;

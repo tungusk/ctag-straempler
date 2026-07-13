@@ -170,7 +170,7 @@ static void system_full_redraw(void){
     _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
     TFT_setFont(DEFAULT_FONT, NULL);
     _fg = TFT_WHITE;
-    TFT_print("Machines", 6, 3);
+    TFT_print("Machine", 6, 3);
     menuTFTPrintAffordance("Settings", s_sys_pos == -1);
     for(int i = 0; i < s_sys_n; i++) sys_row(i);
 }

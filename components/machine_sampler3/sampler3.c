@@ -727,9 +727,11 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
             hold[i] += (uint32_t)frames;
             if (!hold_fired[i] && hold[i] >= HOLD_ARM) {
                 hold_fired[i] = true;
+                bool other_low = !(io->trig_level & (1 << (1 - i)));
                 if (recording_is_active() && rec_started_this_press[i]) {
                     s_rec_abort_req = true;    // held through the take: abort it
-                } else if (!recording_is_active() && !rapid_press[i]) {
+                } else if (!recording_is_active() && !rapid_press[i] &&
+                           !other_low) {       // both-held = the JOINT gesture
                     s_arm_vid = i;             // idle hold: arm (or disarm) this track
                     s_arm_req = true;
                 }
@@ -737,6 +739,24 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         } else if (!low) {
             hold[i] = 0;
         }
+    }
+
+    // BOTH gates held ~1s with both tracks loaded = JOINT GRID SNAP (Arlo):
+    // the two loops restart from their window starts ON the same clock
+    // pulse — mutually locked and back on the grid in one gesture. The
+    // initial presses paused both (press-while-playing), so they drop out
+    // together and re-enter together.
+    {
+        static bool both_fired = false;
+        bool both_low = (io->trig_level & 0x03) == 0;
+        if (both_low && !both_fired &&
+            hold[0] >= HOLD_ARM && hold[1] >= HOLD_ARM &&
+            s3.v[0].name[0] && s3.v[1].name[0] && !recording_is_active()) {
+            both_fired = true;
+            s3.v[0].sync_snap_req = true;
+            s3.v[1].sync_snap_req = true;
+        }
+        if (!both_low) both_fired = false;
     }
 
     bool rec_active = recording_is_active();
@@ -1198,6 +1218,30 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
             v->pos = (double)(cs_f + (s3.post_stop_frames % L));
             v->playing = true;
             v->sync_start_req = false;
+        }
+    }
+
+    // JOINT GRID SNAP: both voices consume the SAME pulse edge, restarting
+    // from their window starts — together, and on the grid. No clock: land
+    // immediately (still together, this same block).
+    for (int i = 0; i < S3_NVOICES; i++) {
+        s3_voice_t *v = &s3.v[i];
+        if (!v->sync_snap_req) continue;
+        if (!v->name[0] || !v->head_valid) { v->sync_snap_req = false; continue; }
+        if (clk_ok && !edge) continue;
+        uint32_t cs_f = (uint32_t)(v->ui_cs * (float)v->play_len);
+        v->pos = (double)cs_f;
+        v->playing = true;
+        v->sync_snap_req = false;
+        // streamed start not in RAM: seek (the loop-start cache usually has
+        // it, since these loops were just playing)
+        bool res = (v->play_len <= v->head_frames + S3_RING_FRAMES) &&
+                   v->wpos >= v->play_len;
+        if (v->play_len > v->head_frames && !s3_frame_ok(v, cs_f, res)) {
+            v->loading = true;
+            v->seek_frame = cs_f > S3_XFADE_FRAMES + 2048
+                          ? cs_f - S3_XFADE_FRAMES - 2048 : 0;
+            v->retrig_req = true;
         }
     }
 

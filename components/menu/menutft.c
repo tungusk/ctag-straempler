@@ -109,21 +109,28 @@ void menuTFTPrintAffordance(const char *label, int highlighted){
 }
 
 void menuTFTPrintAbout(){
+    // own title + affordance: this page used to inherit whatever the
+    // previous page left in the title bar
+    _bg = TFT_BLACK;
+    TFT_fillRect(0, 0, _width, TFT_getfontheight() + 8, _bg);
+    _fg = TFT_WHITE;
+    TFT_print("About", 6, 4);
+    menuTFTPrintAffordance("Settings", false);   // long-press returns there
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     TFT_fillWindow(TFT_BLACK);
     _fg = TFT_WHITE;
-	_bg = TFT_BLACK;
-    TFT_print("Freesound Sampler Version:", 4, 4);
-    TFT_print(STRAMPLER_FW_VERSION, 4, TFT_Y);
-    TFT_Y += TFT_getfontheight();
-    TFT_print("Created by: ", 4, TFT_Y);
-    TFT_print("Niklas Wantrupp", 4, TFT_Y);
-    TFT_print("Phillip Lamp", 4, TFT_Y);
-    TFT_print("Robert Manzke", 4, TFT_Y);
-    TFT_Y += TFT_getfontheight();
-    TFT_print("v0.9 contributors: ", 4, TFT_Y);
-    TFT_print("Arlo Fishman", 4, TFT_Y);
-    TFT_print("Claude (Anthropic)", 4, TFT_Y);
+    _bg = TFT_BLACK;
+    int fh = TFT_getfontheight() + 2;            // single-spaced (was doubled)
+    int y = 4;
+    TFT_print("Freesound Sampler Version:", 4, y); y += fh;
+    TFT_print(STRAMPLER_FW_VERSION, 4, y);         y += fh + 4;
+    TFT_print("Created by:", 4, y);                y += fh;
+    TFT_print("Niklas Wantrupp", 4, y);            y += fh;
+    TFT_print("Phillip Lamp", 4, y);               y += fh;
+    TFT_print("Robert Manzke", 4, y);              y += fh + 4;
+    TFT_print("v0.9 contributors:", 4, y);         y += fh;
+    TFT_print("Arlo Fishman", 4, y);               y += fh;
+    TFT_print("Claude (Anthropic)", 4, y);
     TFT_resetclipwin();   // clip is shared global state — leaking it garbles the title-bar affordance
 }
 

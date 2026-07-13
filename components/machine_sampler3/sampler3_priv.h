@@ -99,6 +99,9 @@ typedef struct {
     volatile bool sync_start_req;    // start ON the next clock pulse, offset
                                      // by the elapsed save/load time so the
                                      // loop comes in IN PHASE with the clock
+    volatile bool sync_snap_req;     // JOINT GRID SNAP (both-gates hold):
+                                     // restart from the window start ON the
+                                     // next pulse — both voices land together
     char pending[S3_NAME_LEN];
     volatile bool window_req;        // reverse changed: rebuild head+stream
     volatile bool retrig_req;        // restart stream fill at seek_frame

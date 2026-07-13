@@ -3,6 +3,7 @@
 // the shared library browser for track selection.
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "menusys.h"
@@ -97,7 +98,7 @@ static void draw_big_bpm(void){
 
 static void draw_info(void){
     int fh = TFT_getfontheight();
-    int y = fh + 42;
+    int y = fh + 50;              // a breath of padding under the big title
     char s1[96], s2[64];
     const char *st = dk.playing ? (dk.loading ? "BUF" : "PLAY") : "STOP";
     const char *sp = dk.speed_mult == 0.5f ? ".5" : (dk.speed_mult == 2.0f ? "2" : "1");
@@ -109,6 +110,7 @@ static void draw_info(void){
         snprintf(s1, sizeof(s1), "ana %d%%  %s  x%s  %s", dk.an_progress, st, sp, fl);
     else
         snprintf(s1, sizeof(s1), "trk %.1f  %s  x%s  %s", dk.track_bpm, st, sp, fl);
+
     if (dk.sync){
         if (dk.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK",
                                     ext_bpm_disp());
@@ -152,25 +154,54 @@ static color_t tbar_bg(void){
     }
 }
 
+// transport bar, restyled (Arlo): BLACK canvas so the tiny-white waveform
+// pops, with the transport state on a FAT color-coded border instead of
+// the fill. The marker erase repaints its interior slice: black + the
+// waveform columns that fall inside it.
+#define TBAR_BW 3     // fat state border
+
+static void tbar_paint_slice(int x, int w){
+    TFT_fillRect(x, TBAR_Y + TBAR_BW, w, TBAR_H - 2 * TBAR_BW, (color_t){0, 0, 0});
+    if (dk.wf_state == 2){
+        int wx = TBAR_X + TBAR_BW + 1, ww = TBAR_W - 2 * TBAR_BW - 2;
+        int wy = TBAR_Y + TBAR_BW + 1, wh = TBAR_H - 2 * TBAR_BW - 2;
+        // BOLD: 2px strokes, pure white, sqrt amplitude lift (1px strokes
+        // read washed-out inside the box)
+        color_t wc = {255, 255, 255};
+        for (int c = 0; c < ww - 1; c += 2){
+            int px = wx + c;
+            if (px + 2 <= x || px >= x + w) continue;
+            float a = sqrtf((float)dk.wf[(c * DK_WF_W) / ww] / 255.0f);
+            int h = (int)(a * (float)wh);
+            if (h < 2) h = 2;
+            TFT_fillRect(px, wy + (wh - h) / 2, 2, h, wc);
+        }
+    }
+}
+
+static int s_wf_drawn = -1;    // wf_state the bar was last painted with
+
 static void draw_posbar_frame(void){
-    TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, tbar_bg());
-    _fg = (color_t){70, 70, 90};
-    TFT_drawRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, _fg);
+    TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, tbar_bg());   // border color
+    tbar_paint_slice(TBAR_X + TBAR_BW, TBAR_W - 2 * TBAR_BW);  // black canvas
     _bg = TFT_BLACK;      // _bg is a shared global — leaking the bar color
                           // painted the hint line's text background blue
     s_last_barx = -1;
     s_bar_state = tbar_state();
+    s_wf_drawn = dk.wf_state;
 }
 
 static void draw_posbar(void){
-    if (tbar_state() != s_bar_state)          // bar color follows transport/analysis
+    if (tbar_state() != s_bar_state ||        // border follows transport;
+        (dk.wf_state == 2) != (s_wf_drawn == 2))   // thumbnail landed: paint it
         draw_posbar_frame();
     if (!dk.file_frames) return;
-    int x = TBAR_X + 2 + (int)((uint64_t)dk.rpos_i * (TBAR_W - 8) / dk.file_frames);
+    int x = TBAR_X + TBAR_BW + 1 +
+            (int)((uint64_t)dk.rpos_i * (TBAR_W - 2 * TBAR_BW - 6) / dk.file_frames);
     if (x == s_last_barx) return;
     if (s_last_barx > 0)                      // erase only the old marker slice
-        TFT_fillRect(s_last_barx, TBAR_Y + 1, 5, TBAR_H - 2, tbar_bg());
-    TFT_fillRect(x, TBAR_Y + 1, 5, TBAR_H - 2, (color_t){235, 235, 235});
+        tbar_paint_slice(s_last_barx, 5);
+    TFT_fillRect(x, TBAR_Y + TBAR_BW, 5, TBAR_H - 2 * TBAR_BW, (color_t){235, 235, 235});
     s_last_barx = x;
 }
 
@@ -193,6 +224,15 @@ static void live_full_redraw(void){
     draw_info();
     s_bar_state = -1;        // force the first frame paint
     draw_posbar();
+    // total track length, right-justified under the transport bar
+    if (dk.file_frames){
+        char tl[12];
+        unsigned ts = (unsigned)(dk.file_frames / DK_RATE);
+        snprintf(tl, sizeof(tl), "%u:%02u", ts / 60, ts % 60);
+        _fg = TFT_LIGHTGREY;
+        _bg = TFT_BLACK;
+        TFT_print(tl, TBAR_X + TBAR_W - TFT_getStringWidth(tl), TBAR_Y + TBAR_H + 4);
+    }
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     TFT_print("turn:scrub/nudge press:tracks TR2hold:sync", 6, _height - TFT_getfontheight() - 1);
@@ -260,7 +300,7 @@ static void setup_redraw(int pos, int sel){
     int fh = TFT_getfontheight();
     _fg = TFT_WHITE;
     TFT_print("Deck Setup", 6, 4);
-    menuTFTPrintAffordance("System", pos == -1);   // top-right; pos -1 = System selected
+    menuTFTPrintAffordance("Machine", pos == -1);   // top-right; pos -1 = System selected
     for (int i = 0; i < DK_SETUP_N; i++){
         int y = fh + 14 + i * (fh + 7);
         _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
