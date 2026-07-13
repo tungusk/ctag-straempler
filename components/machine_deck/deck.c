@@ -72,7 +72,10 @@ static void reader_task(void *pv)
         }
         if (f && !s_track_req && !dk.seek_req) {
             uint32_t lead = dk.wpos - dk.rpos_i;
-            if (dk.wpos < dk.file_frames && lead < DK_RING_FRAMES - 4096) {
+            // lead cap (convergence S5): stop one second EARLIER than ring-full
+            // so >=1 s of played history always stays ring-resident behind rpos
+            // (the loop engage anchors up to a beat back; 7 s lookahead remains)
+            if (dk.wpos < dk.file_frames && lead < DK_RING_FRAMES - DK_RATE - 4096) {
                 uint32_t want = dk.file_frames - dk.wpos;
                 if (want > 4096) want = 4096;
                 sd_lock_take();
