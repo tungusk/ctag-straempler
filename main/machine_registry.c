@@ -7,6 +7,7 @@
 #include "machine_drumsampler.h"
 #include "machine_freesound.h"
 #include "machine_deck.h"
+#include "machine_dualdeck.h"
 #include "machine_tracker.h"
 
 // declared bare: machine_sampler2.h drags the legacy fork's whole type
@@ -28,6 +29,7 @@ const machine_t *const machine_registry[] = {
     &machine_glitch,
     &machine_drumsampler,
     &machine_deck,
+    &machine_dualdeck,     // "DualDeck" — clock-locked track blender
     &machine_tracker,
     &machine_freesound,
     &machine_stub,
