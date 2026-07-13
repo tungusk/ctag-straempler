@@ -139,6 +139,9 @@ typedef struct {
                                      // seek when it lands, not a storm)
     uint32_t starve_run;             // consecutive starved blocks — a run
                                      // past ~150ms force-seeks (wedge-proof)
+    uint32_t seam_cs, seam_ce, seam_xf;   // seam latch: the fade + wrap use
+    bool     seam_on;                // ONE geometry per pass (FREE CVs move
+                                     // the corners a little every block)
     // -- waveform thumbnail (reader builds at load/window change; playback-
     //    order, so reverse mode shows it reversed for free) -------------------
     uint8_t wf[S3_WF_W];             // per-column peak, 0..255
