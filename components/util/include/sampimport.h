@@ -30,5 +30,6 @@ int samp_import_start(void);
 extern volatile bool samp_import_busy;
 extern volatile int  samp_import_done;    // files converted this pass
 extern volatile int  samp_import_fail;    // files that failed conversion
+extern volatile int  samp_import_seen;    // candidates encountered (diagnostic)
 extern volatile int  samp_import_pct;     // 0..100 within the current file
 extern char samp_import_cur[32];          // file currently converting

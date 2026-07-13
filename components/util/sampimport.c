@@ -21,6 +21,7 @@ static const char *TAG = "IMPORT";
 volatile bool samp_import_busy = false;
 volatile int  samp_import_done = 0;
 volatile int  samp_import_fail = 0;
+volatile int  samp_import_seen = 0;
 volatile int  samp_import_pct = 0;
 char samp_import_cur[32] = "";
 
@@ -130,16 +131,62 @@ static size_t rs_run(imp_rs_t *rs, const int16_t *in, size_t nin,
 }
 
 // ---- one-file conversion -----------------------------------------------------
+// a REAL MPEG frame header at p? Raw PCM fakes the 0xFF sync byte easily
+// (bench: seven .RAW files got misrouted) — validate version/layer/bitrate/
+// samplerate fields too.
+static bool mp3_hdr_ok(const uint8_t *m)
+{
+    if (m[0] != 0xFF || (m[1] & 0xE0) != 0xE0) return false;
+    if (((m[1] >> 3) & 0x3) == 1) return false;   // reserved MPEG version
+    if (((m[1] >> 1) & 0x3) == 0) return false;   // reserved layer
+    if ((m[2] >> 4) == 0xF) return false;         // invalid bitrate
+    if (((m[2] >> 2) & 0x3) == 3) return false;   // invalid samplerate
+    return true;
+}
+
+// frame length of a Layer III header (0 = not computable)
+static size_t mp3_frame_len(const uint8_t *m)
+{
+    static const int br1[16] = {0,32,40,48,56,64,80,96,112,128,160,192,224,256,320};
+    static const int br2[16] = {0,8,16,24,32,40,48,56,64,80,96,112,128,144,160};
+    static const int sr1[4]  = {44100,48000,32000,0};
+    int ver = (m[1] >> 3) & 3;          // 3=MPEG1, 2=MPEG2, 0=MPEG2.5
+    int bri = m[2] >> 4, sri = (m[2] >> 2) & 3, pad = (m[2] >> 1) & 1;
+    int br = (ver == 3 ? br1 : br2)[bri];
+    int sr = sr1[sri];
+    if (ver == 2) sr /= 2;
+    if (ver == 0) sr /= 4;
+    if (!br || !sr) return 0;
+    return (size_t)((ver == 3 ? 144 : 72) * br * 1000 / sr) + pad;
+}
+
 static bool magic_is_mp3(const char *path)
 {
-    uint8_t m[4] = {0};
+    // encoders pad the stream head (sox leads with 0x00; ID3v2 tags run KBs).
+    // Discriminator vs raw PCM (which fakes single syncs easily): an ID3 tag,
+    // or TWO valid frame headers CHAINED at the computed frame length.
+    uint8_t buf[2048];
+    size_t got;
     sd_lock_take();
     FILE *f = fopen(path, "rb");
-    if (f) { fread(m, 1, 4, f); fclose(f); }
+    got = f ? fread(buf, 1, sizeof(buf), f) : 0;
+    if (f) fclose(f);
     sd_lock_give();
-    if (!f) return false;
-    if (memcmp(m, "ID3", 3) == 0) return true;
-    return m[0] == 0xFF && (m[1] & 0xE0) == 0xE0;
+    if (got < 4) return false;
+    if (memcmp(buf, "ID3", 3) == 0) return true;
+    for (size_t i = 0; i + 4 <= got; i++) {
+        if (!mp3_hdr_ok(buf + i)) continue;
+        size_t L1 = mp3_frame_len(buf + i);
+        if (!L1 || i + L1 + 4 > got) continue;
+        if (!mp3_hdr_ok(buf + i + L1)) continue;
+        // THREE chained frames: loud clipped recordings are full of 0xFFFF
+        // runs and one lucky offset two-chains (bench: 16 takes misrouted) —
+        // a third exact hop is beyond luck
+        size_t L2 = mp3_frame_len(buf + i + L1);
+        if (!L2 || i + L1 + L2 + 4 > got) continue;
+        if (mp3_hdr_ok(buf + i + L1 + L2)) return true;
+    }
+    return false;
 }
 
 static void vfs_to_fat(const char *vfs, char *fat, size_t n)
@@ -297,11 +344,12 @@ static void import_task(void *pv)
                                        "/sdcard/usr/LOOPS"};
     samp_import_done = 0;
     samp_import_fail = 0;
+    samp_import_seen = 0;
     for (int di = 0; di < 3; di++) {
         sd_lock_take();
         DIR *d = opendir(dirs[di]);
         sd_lock_give();
-        if (!d) continue;
+        if (!d) continue;                  // folder may not exist yet (LOOPS)
         for (;;) {
             sd_lock_take();
             struct dirent *e = readdir(d);
@@ -314,6 +362,7 @@ static void import_task(void *pv)
                         ext_is(e->d_name, ".AIF") || ext_is(e->d_name, ".AIFF") ||
                         ext_is(e->d_name, ".RAW");
             if (!cand || strncasecmp(e->d_name, "IMP", 3) == 0) continue;
+            samp_import_seen++;
             char path[96];
             snprintf(path, sizeof(path), "%s/%.64s", dirs[di], e->d_name);
             int rc = samp_import_file(path);
@@ -337,7 +386,10 @@ int samp_import_start(void)
     if (samp_import_busy) return -1;
     samp_import_busy = true;
     // unpinned, modest priority: it's a background chore
-    if (xTaskCreate(import_task, "importer", 6144, NULL, 5, NULL) != pdPASS) {
+    // 20 KB: helix decodeMP3FileSync runs IN THIS TASK (the house MP3 tasks
+    // give themselves 16 KB) plus the scan/convert frames on top — 12 KB
+    // overflowed (bench: stack canary panic mid-scan)
+    if (xTaskCreate(import_task, "importer", 20480, NULL, 5, NULL) != pdPASS) {
         samp_import_busy = false;
         return -1;
     }

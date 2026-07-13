@@ -269,10 +269,10 @@ static esp_err_t import_get_handler(httpd_req_t *req)
 {
     char j[160];
     snprintf(j, sizeof(j),
-             "{\"busy\":%s,\"done\":%d,\"fail\":%d,\"pct\":%d,\"cur\":\"%s\"}",
+             "{\"busy\":%s,\"done\":%d,\"fail\":%d,\"seen\":%d,\"pct\":%d,\"cur\":\"%s\"}",
              samp_import_busy ? "true" : "false",
-             samp_import_done, samp_import_fail, samp_import_pct,
-             samp_import_cur);
+             samp_import_done, samp_import_fail, samp_import_seen,
+             samp_import_pct, samp_import_cur);
     return send_json(req, j);
 }
 
@@ -486,13 +486,6 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     }
 
     buf = malloc(4096);
-    if (req->content_len % 4 != 0) {
-        int pad = 4 - (req->content_len % 4);
-        const char zeros[3] = {0};
-        sd_lock_take();
-        f_write(&raw_file, zeros, pad, &bw);
-        sd_lock_give();
-    }
     remaining = req->content_len;
 
     int timeouts = 0;
@@ -519,6 +512,18 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
         xQueueSend(ui_ev_queue, &ev, portMAX_DELAY);
     }
 
+    // frame-align by padding at the END — the old leading pad shifted every
+    // non-4-multiple upload by 1-3 bytes, which was invisible for RAW audio
+    // but corrupted byte-exact containers (bench: every MP3 upload arrived
+    // with 0x00 bytes prepended and helix refused the stream)
+    if (req->content_len % 4 != 0) {
+        int pad = 4 - (req->content_len % 4);
+        const char zeros[3] = {0};
+        sd_lock_take();
+        f_write(&raw_file, zeros, pad, &bw);
+        sd_lock_give();
+    }
+
     cJSON_AddStringToObject(root, "username", "myself");
     cJSON_AddStringToObject(root, "url", "local");
     cJSON_AddStringToObject(root, "license", "own license");
@@ -530,20 +535,12 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     free(buf);
     cJSON_Delete(root);
 
-    // convert-on-import: the upload landed verbatim as <name>.RAW — sniff
-    // what actually arrived. Native containers already play (the probe reads
-    // magic, not extensions); MP3s and convertible WAV/AIFF (48k, 24-bit,
-    // float) get converted in place to a native .WAV, replacing the upload.
-    {
-        char vpath[96];
-        snprintf(vpath, sizeof(vpath), "/sdcard%s", file_name);
-        int irc = samp_import_file(vpath);   // 1 = native, 0 = converted, -1 = raw/unknown
-        if (irc == 0) {
-            // the sidecar the upload wrote pairs by base name — it survives;
-            // the .RAW source was replaced by <name>.WAV
-            ESP_LOGI(TAG, "upload converted to native: %s", file_name);
-        }
-    }
+    // convert-on-import: the upload landed verbatim as <name>.RAW — kick the
+    // background importer to sniff and convert it. NOT done inline: helix +
+    // the resampler need a ~20 KB stack and seconds of runtime; the httpd
+    // worker has neither (the import task owns both). Native uploads pass
+    // the scan untouched.
+    samp_import_start();
 
     httpd_resp_send(req, NULL, 0);
     ev.event = EV_DECODING_DONE;
