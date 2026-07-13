@@ -326,8 +326,9 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         fc = 30.0f * powf(200.0f, t);                       // 30 Hz .. 6 kHz
     }
     dk.flt_mode = mode;
-    float f_target = mode ? 2.0f * sinf(3.14159265f * fc / (float)DK_RATE) : 0;
-    if (f_target > 1.2f) f_target = 1.2f;
+    // 1.2 is not a tidy-up candidate: 12 kHz gives an unclamped ~1.51, so this
+    // clamp IS the top of the LP sweep
+    float f_target = mode ? svf_coef(fc, (float)DK_RATE, 1.2f) : 0;
     dk.flt_f += 0.2f * (f_target - dk.flt_f);
     const float q = 0.9f;                // mild resonance, DJ-ish
 
@@ -434,22 +435,19 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         float fr = (float)dk.rpos_f;
         float l = (float)dk.ring[i0 * 2]     + ((float)dk.ring[i1 * 2]     - (float)dk.ring[i0 * 2])     * fr;
         float r = (float)dk.ring[i0 * 2 + 1] + ((float)dk.ring[i1 * 2 + 1] - (float)dk.ring[i0 * 2 + 1]) * fr;
-        if (mode) {                       // Chamberlin SVF per channel
-            dk.lp_l += dk.flt_f * dk.bp_l;
-            float hi_l = l - dk.lp_l - q * dk.bp_l;
-            dk.bp_l += dk.flt_f * hi_l;
-            l = (mode == 1) ? dk.lp_l : hi_l;
-            dk.lp_r += dk.flt_f * dk.bp_r;
-            float hi_r = r - dk.lp_r - q * dk.bp_r;
-            dk.bp_r += dk.flt_f * hi_r;
-            r = (mode == 1) ? dk.lp_r : hi_r;
+        if (mode) {                       // Chamberlin SVF per channel (util/svf.h)
+            float lo, hi;
+            svf_step(&dk.flt_l, l, dk.flt_f, q, &lo, NULL, &hi);
+            l = (mode == 1) ? lo : hi;
+            svf_step(&dk.flt_r, r, dk.flt_f, q, &lo, NULL, &hi);
+            r = (mode == 1) ? lo : hi;
             if (l > 32767) l = 32767;
             if (l < -32768) l = -32768;
             if (r > 32767) r = 32767;
             if (r < -32768) r = -32768;
         } else {
-            dk.lp_l = l; dk.bp_l = 0;     // park state at the signal: no thump
-            dk.lp_r = r; dk.bp_r = 0;     // when the filter re-engages
+            svf_park(&dk.flt_l, l);       // park state at the signal: no thump
+            svf_park(&dk.flt_r, r);       // when the filter re-engages
         }
         last_l = l * dk.out_gain;
         last_r = r * dk.out_gain;

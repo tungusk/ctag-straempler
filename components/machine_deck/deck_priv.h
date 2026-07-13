@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "clock.h"
+#include "svf.h"
 
 // Deck — a tempo-syncing track player. Streams a long usr/*.RAW from SD
 // through a PSRAM ring (an unpinned reader task keeps it ahead of the play
@@ -82,7 +83,7 @@ typedef struct {
     volatile int filt_cv;          // raw knob (UI display)
     float flt_f;                   // slewed coefficient
     float out_gain;                // declick ramp (0..1) across seeks/stops
-    float lp_l, bp_l, lp_r, bp_r;  // SVF state
+    svf_t flt_l, flt_r;            // SVF state (util/svf.h — shared kernel)
     volatile int flt_mode;         // 0 off, 1 LP, 2 HP (UI display)
 
     // waveform thumbnail (sampler3 scheme): the reader builds one decimated

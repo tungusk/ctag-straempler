@@ -70,7 +70,7 @@ static esp_err_t looper_start(void)
         lp.tr[i].pan = 2048;     // center
         lp.tr[i].cutoff = 4095;  // filter open (bright)
         lp.tr[i].res = 900;
-        lp.tr[i].svf_low = lp.tr[i].svf_band = 0.0f;
+        svf_reset(&lp.tr[i].svf);
     }
     clock_reset(&s_clk);
     audio_status_set_voices("looper", "");
@@ -163,10 +163,8 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     // per-block SVF coeffs for every track (cheap: 4 sinf per 1.45ms block)
     for (int i = 0; i < LP_TRACKS; i++) {
         float fc = 120.0f + ((float)lp.tr[i].cutoff / 4095.0f) * 5800.0f;  // Hz
-        float f = 2.0f * sinf((float)M_PI * fc / (float)LP_RATE);
-        if (f > 0.95f) f = 0.95f;
-        lp.tr[i].f = f;
-        lp.tr[i].q = 2.0f - ((float)lp.tr[i].res / 4095.0f) * 1.9f;        // 2.0..0.1
+        lp.tr[i].f = svf_coef(fc, (float)LP_RATE, 0.95f);
+        lp.tr[i].q = svf_damp((float)lp.tr[i].res / 4095.0f, 0.1f, 2.0f);  // 2.0..0.1
     }
 
     int frames = MACHINE_BLOCK / 2;
@@ -208,10 +206,9 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
             } else if (t->state == LP_PLAY && t->len > 0) {
                 int32_t raw = t->buf[t->pos];
                 if (lp.filter_on) {                                    // bandpass SVF
-                    t->svf_low += t->f * t->svf_band;
-                    float high = (float)raw - t->svf_low - t->q * t->svf_band;
-                    t->svf_band += t->f * high;
-                    raw = (int32_t)t->svf_band;
+                    float bp;
+                    svf_step(&t->svf, (float)raw, t->f, t->q, NULL, &bp, NULL);
+                    raw = (int32_t)bp;                                 // truncation, not a round
                 }
                 int32_t s = (raw * t->vol) >> 8;                       // level
                 mixL += (s * (4095 - t->pan)) >> 12;                   // linear pan
@@ -314,7 +311,7 @@ int looper_bounce(void)
 
     // per-track running bandpass state, advanced in playback (wrap) order so
     // the baked filter tracks what the engine renders at looper.c's play path
-    float bl[LP_TRACKS] = {0}, bb[LP_TRACKS] = {0};
+    svf_t bsv[LP_TRACKS] = {0};
 
     for (uint32_t j = 0; j < bounce_len; j++) {
         int32_t acc = 0;
@@ -323,10 +320,9 @@ int looper_bounce(void)
             if (t->len == 0 || !(t->state == LP_PLAY || t->state == LP_STOP)) continue;
             int32_t raw = t->buf[j % t->len];
             if (lp.filter_on) {                                    // bandpass SVF
-                bl[i] += t->f * bb[i];
-                float high = (float)raw - bl[i] - t->q * bb[i];
-                bb[i] += t->f * high;
-                raw = (int32_t)bb[i];
+                float bp;                                          // same kernel + same
+                svf_step(&bsv[i], (float)raw, t->f, t->q, NULL, &bp, NULL);
+                raw = (int32_t)bp;                                 // truncation as the engine
             }
             acc += (raw * t->vol) >> 8;                            // level
         }
@@ -350,7 +346,7 @@ int looper_bounce(void)
     d->pos = 0;
     d->vol = 255;                 // unity — the balance is already baked in
     d->pan = 2048;                // center
-    d->svf_low = d->svf_band = 0.0f;
+    svf_reset(&d->svf);
     d->state = LP_PLAY;
 
     ESP_LOGI("LOOPER", "bounced %d track(s) -> track 1 (%lu frames)",
