@@ -382,7 +382,7 @@ static void reader_task(void *pv)
             }
         }
 
-        if (!worked) vTaskDelay(pdMS_TO_TICKS(5));
+        if (!worked) vTaskDelay(1);   // >=1 tick: pdMS_TO_TICKS(5)==0 at 100Hz = busy-spin
     }
     for (int i = 0; i < S3_NVOICES; i++)
         if (rv[i].f) { sd_lock_take(); fclose(rv[i].f); sd_lock_give(); }

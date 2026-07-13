@@ -244,7 +244,7 @@ static void do_load(void)
 static void ring_flush(void)                    // drop buffered audio, refill
 {
     trk.loading = true;
-    vTaskDelay(pdMS_TO_TICKS(4));               // let process see loading, mute
+    vTaskDelay(1);                              // 1 tick; pdMS_TO_TICKS(4)==0 at 100Hz
     trk.wpos = trk.rpos = 0;
 }
 
@@ -497,7 +497,7 @@ static void render_task(void *pv)
             }
             continue;                             // keep filling, no delay
         }
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelay(1);   // >=1 tick: pdMS_TO_TICKS(5)==0 at 100Hz = busy-spin
     }
 
     if (s_have_module) { xmp_end_player(s_ctx); xmp_release_module(s_ctx); }

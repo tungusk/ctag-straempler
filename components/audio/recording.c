@@ -76,10 +76,18 @@ static void write_rec_jsn(const char *raw_path)
 
 static void find_next_filename(char *buf, int buflen)
 {
+    // start from the last hit: REC numbers are monotonic within a boot, so
+    // after the first scan this is 1-2 stats. The full from-zero scan (first
+    // arm after boot) yields every few entries — each stat is a linear FAT
+    // directory walk, and a few hundred of them back-to-back at this task's
+    // priority starved the sampler reader (both tracks went silent) AND the
+    // web server for seconds ("arming mutes both tracks").
+    static int hint = 0;
     struct stat st;
-    for (int i = 0; i < 9999; i++) {
+    for (int i = hint; i < 9999; i++) {
         snprintf(buf, buflen, "/sdcard/usr/REC_%04d.RAW", i);
-        if (stat(buf, &st) != 0) return;
+        if (stat(buf, &st) != 0) { hint = i; return; }
+        if ((i & 7) == 7) vTaskDelay(1);      // courtesy yield
     }
     snprintf(buf, buflen, "/sdcard/usr/REC_OVFL.RAW");
 }
@@ -105,7 +113,8 @@ static void rec_writer_task(void *pvParams)
     // park until the trigger (a clock pulse, via recording_trigger) or a
     // cancel (disarm before any capture — delete the empty file)
     while (!atomic_load(&rec_active) && !atomic_load(&rec_cancel))
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelay(1);   // >=1 TICK: pdMS_TO_TICKS(5) is ZERO at 100Hz — a
+                         // busy-spin that starved the reader + httpd while armed
     if (atomic_load(&rec_cancel)) {
         atomic_store(&rec_cancel, false);
         sd_lock_take();
@@ -216,7 +225,10 @@ void recording_prepare(int vid)
     xQueueReset(rec_queue);
     atomic_store(&rec_cancel, false);
     atomic_store(&rec_prepared, true);
-    xTaskCreate(rec_writer_task, "rec_writer", 4096, NULL, 18, &rec_task_handle);
+    // priority 10, not 18: the 6s capture queue absorbs scheduling slack,
+    // and 18 let the prepare-phase directory scan starve the sampler reader
+    // (prio 6) and httpd (prio 5) for seconds
+    xTaskCreate(rec_writer_task, "rec_writer", 4096, NULL, 10, &rec_task_handle);
     ESP_LOGI(TAG, "Recording prepared for vid=%d", vid);
 }
 
