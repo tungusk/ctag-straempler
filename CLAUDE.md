@@ -40,7 +40,12 @@ file (.RAW wins ties). The probe sniffs MAGIC, not extension; anything else
 All conversion (header offset, mono expand, byteswap) happens in READER
 tasks/UI loaders; audio tasks only ever see native int16-stereo frames.
 Recordings and looper saves are written as `.WAV` (sampwav_start/finish;
-power-cut takes self-heal at probe). Take numbering = ONE readdir pass —
+power-cut takes self-heal at probe). CONVERT-ON-IMPORT
+(components/util/sampimport.{h,c}): MP3 (helix) and convertible WAV/AIFF
+(8/24-bit, float, any rate 8-96k) become native .WAV ONCE — streaming cubic
+resampler, source REPLACED by the twin; POST /import scans the pool
+(background task, 20 KB stack — helix needs it), uploads auto-kick it. MP3
+sniff = ID3 or THREE chained frame headers (clipped audio fakes fewer). Take numbering = ONE readdir pass —
 per-index stat probing with a missing extension walks the whole FAT dir per
 call and starves the capture queue (bench-caught: 1804 dropped chunks).
 
@@ -260,7 +265,10 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
   8 CV, trig bits), `/sysinfo` (IP + SD free/total + remote flag + machine list,
   on-demand — not in the hot poll), `/files` (**streamed**, name+size only, no
   sidecar reads — see the PSRAM/DMA rule), `/files/raw` (download), `/settings`,
-  `/drop_sample` (upload), DELETE `/files`, `/remote/*` (teleremote, gated),
+  `/drop_sample` (upload — sniffs the payload and kicks convert-on-import for
+  MP3/48k/24-bit arrivals; pad appended at END, never leading), POST/GET
+  `/import` (pool-wide convert-on-import scan / progress), DELETE `/files`,
+  `/remote/*` (teleremote, gated),
   plus the active machine's own URIs (e.g. `/fs/*`). Tabs: Files, Upload
   (**converts any audio file in-browser** via Web Audio → 44.1k stereo RAW),
   Freesound (search/Get + direct-URL fetch), Remote (monitor + controls +
