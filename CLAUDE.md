@@ -140,8 +140,12 @@ The machines (all working; archives in `bin/`):
 - `machine_looper` — 4-track clock-synced RAM looper, save-to-library, per-track
   BP filter. House-style UI (2026-07-13): waveform-thumbnail lanes w/ state-colored
   playhead + slice redraws, click-toggle Setup rows w/ [ value ] bracket edits
-- `machine_slicer` — one stereo sample, grid OR transient slicing + a
-  sensitivity dial-in screen
+- `machine_slicer` — STREAMING slicer (2026-07-13): any-length pool sample
+  (RAW/WAV/AIFF), grid OR transient OR .ot slicing + sensitivity dial-in.
+  Per-slice 80 ms attack heads in one PSRAM slab (playback order — reverse
+  pre-flipped), playing slice's tail streamed by a reader task into a 2 s
+  ring (deck discipline; process() reads PSRAM only). Length ceiling gone;
+  load runs a one-pass peaks+envelope scan (~1.5 min per 8 min of audio).
 - `machine_granular` — 16-grain cloud over a mono sample (raised-cosine grains)
 - `machine_glitch` — live-input stutter/beat-repeat (no SD), clock beat-sync
 - `machine_drumsampler` ("Drums") — FOUR one-shot mono RAM pads (the 8-pad mode

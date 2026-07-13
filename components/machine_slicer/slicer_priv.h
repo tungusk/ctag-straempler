@@ -2,80 +2,103 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// M3 slicer — ONE stereo sample loaded into PSRAM, chopped into an equal grid
-// of slices; one monophonic (retrigger) voice plays a slice on trigger. All
-// controls act on this single track. Engine (audio task) owns playback; the
-// UI task writes settings + one-shot command flags and reads for display.
+// M3 slicer — STREAMING edition (2026-07-13, "the real fix, deck-sized").
+// The whole-sample PSRAM buffer is gone and with it the length ceiling: any
+// pool sample (RAW/WAV/AIFF via sampfile) of any length slices now.
+//
+//   attack:  every slice keeps an 80 ms HEAD in one PSRAM slab, stored in
+//            PLAYBACK ORDER (reverse heads are pre-flipped at build time),
+//            so a trigger is instant and the voice never knows the direction
+//   tail:    a reader task streams the playing slice's remainder into a 2 s
+//            ring (deck discipline: sd_lock per burst, request flags, the
+//            reader is the only file toucher; process() reads PSRAM only)
+//
+// Trigger latency = head (RAM). Tail arrival budget: at 2.0x pitch an 80 ms
+// head lasts 40 ms wall; the reader's FIRST chunk is small (1024 frames) so
+// the ring goes live in ~15 ms. Retrigger = new generation; a stale ring is
+// simply ignored until the reader catches up (the head covers the gap).
 
-#define SL_RATE       44100
-#define SL_MAX_SECS   18   // stereo TARGET; the start-time alloc walks down
-                           // 18 -> 14 -> 12 s until PSRAM grants a slab
-                           // (3.17 MB failed on this board — largest proven
-                           // single alloc is ~2.1 MB; fragmentation decides)
-#define SL_MAX_FRAMES (SL_RATE * SL_MAX_SECS)   // stereo frames cap
-#define SL_PEAKS      300                       // waveform display columns
-#define SL_MAX_SLICES 128
-#define SL_OT_SLICES  64                        // Elektron .ot format limit
+#define SL_RATE        44100
+#define SL_HEAD_FRAMES 3528                  // 80 ms per-slice attack head
+#define SL_MAX_SLICES  128
+#define SL_RING_FRAMES (SL_RATE * 2)         // 2 s tail ring (~352 KB)
+#define SL_WIN         512                   // transient envelope hop
+#define SL_ENV_MAX     (10 * 60 * SL_RATE / SL_WIN + 2)   // <=10 min detection
+#define SL_PEAKS       300                   // waveform display columns
+#define SL_OT_SLICES   64                    // Elektron .ot format limit
 
 typedef struct {
-    int16_t *buf;                 // PSRAM slab, SL_MAX_FRAMES*2 int16: holds
-                                  // interleaved STEREO frames, or 2x as many
-                                  // MONO frames when loaded with Load Mono
-    uint32_t cap_frames;          // granted STEREO frame capacity (mono: x2)
-    bool mono;                    // current buffer layout (set at load)
-    volatile bool load_mono;      // Setup: next load averages to mono (~36 s)
-    volatile uint32_t len;        // frames loaded
-    volatile bool loading;        // true while (re)loading — engine stays silent
+    // PSRAM (allocated once at start; each slab under the ~2.1 MB grant ceiling)
+    int16_t *heads;               // SL_MAX_SLICES * SL_HEAD_FRAMES stereo frames
+    int16_t *ring;                // SL_RING_FRAMES stereo frames (tail)
+    float   *env;                 // transient envelope (reader-built per load)
+    volatile uint32_t env_n;      // envelope windows valid
+
+    uint32_t head_len[SL_MAX_SLICES];  // frames valid per head (reader writes
+                                       // under the loading gate)
+    volatile bool heads_valid;
+
+    volatile uint32_t len;        // file frames (sampfile probe)
+    volatile bool loading;        // load/reslice in progress — engine silent
     char sample[24];              // loaded sample id (no extension)
 
+    // reader request protocol (UI/audio set flags; READER acts)
+    volatile bool load_req;
+    char pending[24];
+    volatile bool resl_req;       // recompute boundaries + rebuild heads
+
+    // stream generations: engine bumps gen on every fire; the reader fills
+    // the ring for that generation and publishes ring_gen/ring_avail. The
+    // voice touches the ring only when ring_gen matches its own generation.
+    volatile uint32_t gen;
+    volatile int      gen_slice;
+    volatile uint32_t ring_gen;
+    volatile uint32_t ring_avail; // playback-order frames available (slice-rel)
+    volatile uint32_t vpos_i;     // voice position (slice-rel), for reader lead
+
     // settings (UI writes, engine reads)
-    volatile int  slice_target;   // requested slice count 8/16/32 (grid = exact,
-                                  // transient = max)
-    volatile int  n_slices;       // ACTUAL slice count in use
-    volatile bool transient_mode; // slice at detected transients vs equal grid
-    volatile int  sensitivity;    // 0..100 transient threshold (higher = more)
-    uint32_t slice_pt[SL_MAX_SLICES + 1];  // slice boundaries (frames), n_slices+1
-    volatile int  sel;            // selected slice (UI/CV target)
-    volatile bool auto_on;        // auto-advance through slices on slice end
-    volatile bool reverse;        // play slices reversed
-    volatile uint16_t level;      // 0..255 output level (CV6)
-    volatile uint16_t pitch_cv;   // 0..4095 pitch control (CV7)
+    volatile int  slice_target;
+    volatile int  n_slices;
+    volatile bool transient_mode;
+    volatile int  sensitivity;
+    uint32_t slice_pt[SL_MAX_SLICES + 1];
+    volatile int  sel;
+    volatile bool auto_on;
+    volatile bool reverse;        // direction (reader rebuilds heads on change)
+    volatile uint16_t level;
+    volatile uint16_t pitch_cv;
 
-    // playback voice (engine)
+    // playback voice (audio task)
     volatile bool playing;
-    volatile int  cur;            // slice currently playing (for display)
-    double  pos;                  // fractional frame position
-    uint32_t s_start, s_end;      // current slice bounds (frames)
-    float   inc;                  // pitch increment (frames per output sample)
+    volatile int  cur;
+    double  pos;                  // slice-relative playback-order position
+    uint32_t s_len;               // current slice length (frames)
+    float   inc;
+    volatile uint32_t dbg_starve; // blocks the tail wasn't ready
 
-    // Octatrack .ot sidecar slices (usr/<sample>.OT, auto-detected on load)
-    uint32_t ot_pt[SL_OT_SLICES + 1];  // boundary frames from the .ot
-    int      ot_n;                     // slice count from the .ot (0 = none)
-    volatile bool ot_present;          // a valid .ot exists for this sample
-    volatile bool ot_active;           // slices currently come from the .ot
+    // Octatrack .ot sidecar
+    uint32_t ot_pt[SL_OT_SLICES + 1];
+    int      ot_n;
+    volatile bool ot_present;
+    volatile bool ot_active;
 
-    // one-shot commands from UI (engine consumes)
-    volatile uint8_t cmd_fire;    // fire sel slice
-    volatile uint8_t cmd_advance; // fire sel, then step sel to next
+    // one-shot commands (engine consumes)
+    volatile uint8_t cmd_fire;
+    volatile uint8_t cmd_advance;
 
-    // waveform display (computed on load)
+    // waveform display (reader-built per load)
     volatile int  peak_n;
-    uint8_t peaks[SL_PEAKS];      // 0..31 mono peak height per column
+    uint8_t peaks[SL_PEAKS];
 } sl_state_t;
 
 extern sl_state_t sl;
 
-// load a stereo RAW from /sdcard/usr/<name>.RAW into PSRAM (UI task). 0 = ok.
+// request a (re)load — ASYNC now: the reader opens/probes/scans (UI task safe)
 int slicer_load(const char *name);
-// recompute slice boundaries from slice_target + mode (UI task; mutes briefly)
+// request boundary recompute + head rebuild (ASYNC; brief mute while it runs)
 void slicer_reslice(void);
-// list usr/*.RAW ids into out[][], returns count (<= max)
 int slicer_list_samples(char out[][24], int max);
 
-// Octatrack .ot sidecar I/O (slicer_ot.c, UI/httpd task only)
-// parse usr/<name>.OT: scaled slice-start boundaries into out_pt[0..n]
-// (n+1 entries, last = sample_len); returns n slices, 0/-1 = none/invalid
+// Octatrack .ot sidecar I/O (slicer_ot.c)
 int slicer_parse_ot(const char *name, uint32_t sample_len, uint32_t *out_pt, int max_pts);
-// build an Octatrack-compatible 832-byte .ot image from the CURRENT slices
-// (bpm for the tempo field; <=0 uses 120). -1 if no sample or >64 slices.
 int slicer_build_ot(uint8_t out[832], float bpm);
