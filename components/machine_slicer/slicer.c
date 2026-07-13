@@ -149,6 +149,10 @@ static void scan_file(FILE *f, const sampfile_t *sf, int16_t *stage)
     fseek(f, sf_seek_pos(sf, 0), SEEK_SET);
     sd_lock_give();
     while (frames_done < sl.len) {
+        if (!s_run || sl.load_req) break;   // machine stopping / superseded load:
+                                            // bail NOW (a 100s scan outlives the
+                                            // 1s stop-wait and used to keep
+                                            // writing into freed slabs)
         uint32_t want = sl.len - frames_done;
         if (want > SL_CHUNK) want = SL_CHUNK;
         sd_lock_take();
@@ -183,6 +187,7 @@ static void build_heads(FILE *f, const sampfile_t *sf, int16_t *stage)
 {
     sl.heads_valid = false;
     for (int i = 0; i < sl.n_slices && i < SL_MAX_SLICES; i++) {
+        if (!s_run || sl.load_req) return;  // stopping / superseded: bail
         uint32_t slen = sl.slice_pt[i + 1] - sl.slice_pt[i];
         uint32_t hl = slen < SL_HEAD_FRAMES ? slen : SL_HEAD_FRAMES;
         int16_t *dst = sl.heads + (size_t)i * SL_HEAD_FRAMES * 2;
@@ -382,7 +387,10 @@ static void slicer_stop(void)
 {
     sl.playing = false;
     s_run = false;
-    for (int i = 0; i < 100 && s_alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    // the reader aborts scans within one chunk (~10 ms) once s_run drops;
+    // wait generously anyway — freeing under a live scan corrupts the heap
+    for (int i = 0; i < 300 && s_alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    if (s_alive) { ESP_LOGE(TAG, "reader did not stop; leaking slabs"); return; }
     free(sl.heads); sl.heads = NULL;
     free(sl.ring);  sl.ring = NULL;
     free(sl.env);   sl.env = NULL;
