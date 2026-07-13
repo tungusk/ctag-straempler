@@ -17,6 +17,7 @@
 #include "recording.h"
 #include "sd_lock.h"
 #include "fileio.h"
+#include "sampfile.h"
 #include "sampler3_priv.h"
 
 static const char *TAG = "S3";
@@ -43,13 +44,15 @@ static volatile bool s_discard_next = false;   // eat the aborted take's auto-pi
 
 typedef struct {
     FILE *f;
+    sampfile_t sf;          // container descriptor (probe at open)
     uint32_t stream_p;      // next playback-order frame the stream will read
 } s3_reader_voice_t;
 
 // read `n` playback-order frames starting at frame `p` of voice v into dst
 // (interleaved stereo int16). Handles the forward/reverse file mapping.
 // Caller provides the DMA staging buffer. Returns frames actually read.
-static uint32_t read_playback_frames(s3_voice_t *v, FILE *f, uint32_t p,
+static uint32_t read_playback_frames(s3_voice_t *v, FILE *f,
+                                     const sampfile_t *sf, uint32_t p,
                                      uint32_t n, int16_t *dst, int16_t *stage)
 {
     if (p >= v->play_len) return 0;
@@ -64,8 +67,8 @@ static uint32_t read_playback_frames(s3_voice_t *v, FILE *f, uint32_t p,
             : (long)v->play_start + (long)pp;
         if (file_frame < 0) { want += file_frame; file_frame = 0; }
         sd_lock_take();
-        fseek(f, file_frame * 4, SEEK_SET);
-        size_t got = fread(stage, 4, want, f);
+        fseek(f, sf_seek_pos(sf, (uint32_t)file_frame), SEEK_SET);
+        size_t got = sampfile_read(f, sf, stage, want);
         sd_lock_give();
         if (got == 0) break;
         if (v->reverse) {
@@ -99,7 +102,7 @@ static void rebuild_head(s3_voice_t *v, s3_reader_voice_t *rv, int16_t *stage)
     while (got < hf) {
         uint32_t want = hf - got;
         if (want > S3_CHUNK_FRAMES) want = S3_CHUNK_FRAMES;
-        uint32_t r = read_playback_frames(v, rv->f, got, want, stage, stage);
+        uint32_t r = read_playback_frames(v, rv->f, &rv->sf, got, want, stage, stage);
         if (r == 0) break;
         memcpy(v->head + got * 2, stage, r * 4);
         got += r;
@@ -118,7 +121,7 @@ static void rebuild_head(s3_voice_t *v, s3_reader_voice_t *rv, int16_t *stage)
         uint32_t p = (uint32_t)((uint64_t)c * v->play_len / S3_WF_W);
         uint32_t want = v->play_len - p;
         if (want > 128) want = 128;
-        uint32_t got_c = want ? read_playback_frames(v, rv->f, p, want, stage, stage) : 0;
+        uint32_t got_c = want ? read_playback_frames(v, rv->f, &rv->sf, p, want, stage, stage) : 0;
         int peak = 0;
         for (uint32_t k = 0; k < got_c * 2; k++) {
             int s = stage[k];
@@ -240,11 +243,17 @@ static void reader_task(void *pv)
                 v->file_frames = 0;
                 if (v->pending[0]) {
                     char path[64];
-                    snprintf(path, sizeof(path), "/sdcard/usr/%s.RAW", v->pending);
+                    sample_resolve(v->pending, path, sizeof(path));
                     sd_lock_take();
                     FILE *f = fopen(path, "rb");
-                    if (f) { fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-                             v->file_frames = (uint32_t)(sz / 4); }
+                    if (f) {
+                        if (sampfile_probe(f, &rv[i].sf) == 0)
+                            v->file_frames = rv[i].sf.frames;
+                        else {
+                            ESP_LOGE(TAG, "%s: %s", path, rv[i].sf.why);
+                            fclose(f); f = NULL;
+                        }
+                    }
                     sd_lock_give();
                     if (!f || v->file_frames == 0) {
                         // missing/empty file = voice stays unloaded, never abort
@@ -311,7 +320,7 @@ static void reader_task(void *pv)
                     while (got < n) {
                         uint32_t want = n - got;
                         if (want > S3_CHUNK_FRAMES) want = S3_CHUNK_FRAMES;
-                        uint32_t r = read_playback_frames(v, rv[i].f, lw + got,
+                        uint32_t r = read_playback_frames(v, rv[i].f, &rv[i].sf, lw + got,
                                                           want, stage, stage);
                         if (r == 0) break;
                         memcpy(v->lsc + (size_t)got * 2, stage, r * 4);
@@ -361,7 +370,7 @@ static void reader_task(void *pv)
             if (want && want < 1024 && rv[i].stream_p + want < v->play_len)
                 want = 0;
             if (want && lead < S3_RING_FRAMES - 2 * S3_CHUNK_FRAMES) {
-                uint32_t got = read_playback_frames(v, rv[i].f, rv[i].stream_p, want, stage, stage);
+                uint32_t got = read_playback_frames(v, rv[i].f, &rv[i].sf, rv[i].stream_p, want, stage, stage);
                 if (got > 0) {
                     uint32_t w = rv[i].stream_p % S3_RING_FRAMES;
                     uint32_t first = S3_RING_FRAMES - w;
