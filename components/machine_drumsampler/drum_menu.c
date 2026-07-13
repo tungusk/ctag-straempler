@@ -839,14 +839,15 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
 // mode the selectors do nothing, so the page doesn't mention them at all and
 // the encoder walks straight past.
 enum { R_PADEDIT = 0, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL,
-       R_KNOB, R_FILTER, R_COUNT };
+       R_KNOB, R_FILTER, R_REVERB, R_RVMIX, R_COUNT };
 
 static const char *setup_labels[R_COUNT] = {"Pad Setup", "Trigger",
                                             "Sensi", "Sel CV TR1", "Sel CV TR2",
-                                            "Velocity", "Knob 6/7", "Filter"};
+                                            "Velocity", "Knob 6/7", "Filter",
+                                            "Reverb", "Rev Mix"};
 // everything is a small option set except the two selector CVs (none + 8
 // channels), which stay click-to-edit
-#define SETUP_IS_TOGGLE(id) ((id) != R_PADEDIT && (id) != R_SEL1 && (id) != R_SEL2)
+#define SETUP_IS_TOGGLE(id) ((id) != R_PADEDIT && (id) != R_SEL1 && (id) != R_SEL2 && (id) != R_RVMIX)
 
 // visible rows, rebuilt whenever the trigger mode changes; `pos` indexes THIS
 static int s_rows[R_COUNT], s_nrows;
@@ -874,6 +875,11 @@ static void setup_value_str(int id, char *v, size_t n){
         case R_VEL:  snprintf(v, n, "%s", dr.velocity ? "ON" : "OFF"); break;
         case R_KNOB: snprintf(v, n, "%s", dr.cv_mod ? "level/decay" : "OFF"); break;
         case R_FILTER: snprintf(v, n, "%s", dr.flt_box ? "box" : "OFF"); break;
+        case R_REVERB:
+            if (dr.rv.mode == RV_OFF) snprintf(v, n, "OFF");
+            else snprintf(v, n, "%s %dus", reverb_mode_name(dr.rv.mode), dr.rv.cost_us);
+            break;
+        case R_RVMIX: snprintf(v, n, "%d%%", (int)(dr.rv.wet * 100 + 0.5f)); break;
         default: v[0] = 0;
     }
 }
@@ -923,6 +929,14 @@ static void setup_adj(int id, int dir){
             dr.flt_box = !dr.flt_box;
             if (!dr.flt_box) dr.sel_filter = false;   // don't strand the encoder on a
             break;                                    // box that no longer exists
+        case R_REVERB: {
+            int m = (dr.rv.mode + (dir > 0 ? 1 : RV_N_MODES - 1)) % RV_N_MODES;
+            // lazy slab on first use; a failed PSRAM alloc fails soft to OFF
+            if (m != RV_OFF && !dr.rv.slab && reverb_init(&dr.rv) != ESP_OK) m = RV_OFF;
+            reverb_set_mode(&dr.rv, m);
+            break;
+        }
+        case R_RVMIX: reverb_set_mix(&dr.rv, dr.rv.wet + (float)dir * 0.05f); break;
     }
 }
 

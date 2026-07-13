@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "svf.h"
+#include "reverb.h"
 
 // Drum sampler — four one-shot pads, each a mono PSRAM buffer, triggered from the
 // CV inputs. (A pad can carry a second, choking layer, which is what the old
@@ -171,6 +172,12 @@ typedef struct {
     bool  flt_take_f, flt_take_q;
     float flt_f, flt_q;           // slewed coefficient + damping (engine only)
     svf_t flt_l, flt_r;           // engine only
+
+    // master REVERB (shared util/reverb.h — the FX rack's second brick after
+    // the filter): sits AFTER the filter on the summed mix. Slab is LAZY
+    // (an OFF reverb costs no PSRAM); menu/preset own mode+mix, engine only
+    // calls reverb_block_i32 (self-gating on mode/slab).
+    reverb_t rv;
 
     // knob take-over state for the PADS (was function-static in drum_process,
     // where it survived stop()/start() and let a machine re-entry inherit the

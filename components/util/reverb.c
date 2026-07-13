@@ -1,0 +1,277 @@
+// Multi-mode reverb — Dattorro-style plate tank (Effect Design Part 1
+// topology, delays rescaled 29.761 kHz -> 44.1 kHz), modes as parameter sets,
+// shimmer via an octave-up dual-head shifter in the tank feed.
+//
+// Numbers stay float end to end; every delay line is carved out of one PSRAM
+// slab. Per sample: ~26 line accesses + ~60 flops — measured live via
+// rv->cost_us (EMA, us per 64-frame block; 1450 us = 100% of the audio tick).
+// No tank modulation in v1 — add the classic ±8-sample excursion later if the
+// tail reads metallic on hardware.
+#include <string.h>
+#include <math.h>
+#include "esp_heap_caps.h"
+#include "esp_timer.h"
+#include "esp_log.h"
+#include "reverb.h"
+
+static const char *TAG = "REVERB";
+
+// base line capacities (samples @44.1k; Dattorro x1.4818, rounded)
+#define L_PRE    1102     // 25 ms predelay
+#define L_API0   210
+#define L_API1   159
+#define L_API2   562
+#define L_API3   410
+#define L_APA1   996
+#define L_DA1    6598
+#define L_APA2   2667
+#define L_DA2    5512
+#define L_APB1   1345
+#define L_DB1    6249
+#define L_APB2   3936
+#define L_DB2    4687
+#define L_SHIM   4096     // ~93 ms shifter window
+#define RV_SLAB  (L_PRE+L_API0+L_API1+L_API2+L_API3+L_APA1+L_DA1+L_APA2+L_DA2+ \
+                  L_APB1+L_DB1+L_APB2+L_DB2+L_SHIM)
+
+// output tap offsets (into the live, size-scaled lines; scaled on mode set)
+static const int TAP_BASE[14] = {
+    // left: +d_b1[394], +d_b1[4407], -ap_b2[2835], +d_b2[2958],
+    //       -d_a1[2949], -ap_a2[277], -d_a2[1580]
+    394, 4407, 2835, 2958, 2949, 277, 1580,
+    // right: +d_a1[523], +d_a1[5375], -ap_a2[1820], +d_a2[3961],
+    //        -d_b1[3128], -ap_b2[496], -d_b2[179]
+    523, 5375, 1820, 3961, 3128, 496, 179,
+};
+
+static inline float line_read(const rv_line_t *l, int back)
+{
+    int i = l->w - back;
+    if (i < 0) i += l->len;
+    return l->buf[i];
+}
+static inline void line_push(rv_line_t *l, float v)
+{
+    l->buf[l->w] = v;
+    if (++l->w >= l->len) l->w = 0;
+}
+// classic allpass: y = -g*x + delayed;  push x + g*y
+static inline float ap_step(rv_line_t *l, float x, float g)
+{
+    float d = line_read(l, l->len - 1);
+    float y = d - g * x;
+    line_push(l, x + g * y);
+    return y;
+}
+
+static float *carve(float **p, rv_line_t *l, int cap)
+{
+    l->buf = *p;
+    l->cap = cap;
+    l->len = cap;
+    l->w = 0;
+    *p += cap;
+    return l->buf;
+}
+
+esp_err_t reverb_init(reverb_t *rv)
+{
+    memset(rv, 0, sizeof(*rv));
+    rv->slab = heap_caps_calloc(RV_SLAB, sizeof(float), MALLOC_CAP_SPIRAM);
+    if (!rv->slab) {
+        ESP_LOGE(TAG, "PSRAM slab alloc failed (%u KB)",
+                 (unsigned)(RV_SLAB * sizeof(float) / 1024));
+        return ESP_ERR_NO_MEM;
+    }
+    float *p = rv->slab;
+    carve(&p, &rv->pre, L_PRE);
+    carve(&p, &rv->ap_in[0], L_API0);
+    carve(&p, &rv->ap_in[1], L_API1);
+    carve(&p, &rv->ap_in[2], L_API2);
+    carve(&p, &rv->ap_in[3], L_API3);
+    carve(&p, &rv->ap_a1, L_APA1);
+    carve(&p, &rv->d_a1,  L_DA1);
+    carve(&p, &rv->ap_a2, L_APA2);
+    carve(&p, &rv->d_a2,  L_DA2);
+    carve(&p, &rv->ap_b1, L_APB1);
+    carve(&p, &rv->d_b1,  L_DB1);
+    carve(&p, &rv->ap_b2, L_APB2);
+    carve(&p, &rv->d_b2,  L_DB2);
+    carve(&p, &rv->shim,  L_SHIM);
+    rv->mode = RV_OFF;
+    rv->wet = 0.35f;
+    ESP_LOGI(TAG, "slab %u KB PSRAM", (unsigned)(RV_SLAB * sizeof(float) / 1024));
+    return ESP_OK;
+}
+
+void reverb_free(reverb_t *rv)
+{
+    if (rv->slab) heap_caps_free(rv->slab);
+    rv->slab = NULL;
+    rv->mode = RV_OFF;
+}
+
+// live tap offsets, rebuilt when size scales the tank
+static int s_tap[14];
+
+static void tank_resize(reverb_t *rv, float size)
+{
+    if (size < 0.35f) size = 0.35f;
+    if (size > 1.0f) size = 1.0f;
+    rv_line_t *tank[8] = { &rv->ap_a1, &rv->d_a1, &rv->ap_a2, &rv->d_a2,
+                           &rv->ap_b1, &rv->d_b1, &rv->ap_b2, &rv->d_b2 };
+    for (int i = 0; i < 8; i++) {
+        int nl = (int)((float)tank[i]->cap * size);
+        if (nl < 4) nl = 4;
+        tank[i]->len = nl;
+        tank[i]->w = 0;
+        memset(tank[i]->buf, 0, (size_t)tank[i]->cap * sizeof(float));
+    }
+    for (int i = 0; i < 14; i++) {
+        s_tap[i] = (int)((float)TAP_BASE[i] * size);
+        if (s_tap[i] < 1) s_tap[i] = 1;
+    }
+    rv->damp_a = rv->damp_b = 0;
+    rv->in_lp = 0;
+}
+
+void reverb_set_mode(reverb_t *rv, int mode)
+{
+    if (!rv->slab) { rv->mode = RV_OFF; return; }
+    float size = 1.0f;
+    switch (mode) {
+        case RV_ROOM:
+            size = 0.45f; rv->decay = 0.42f; rv->damp = 0.55f;
+            rv->in_bw = 0.55f; rv->shim_gain = 0.0f;
+            break;
+        case RV_HALL:
+            size = 1.0f;  rv->decay = 0.62f; rv->damp = 0.35f;
+            rv->in_bw = 0.65f; rv->shim_gain = 0.0f;
+            break;
+        case RV_PLATE:
+            size = 0.75f; rv->decay = 0.55f; rv->damp = 0.10f;
+            rv->in_bw = 0.90f; rv->shim_gain = 0.0f;
+            break;
+        case RV_SHIMMER:
+            size = 1.0f;  rv->decay = 0.65f; rv->damp = 0.25f;
+            rv->in_bw = 0.70f; rv->shim_gain = 0.45f;
+            break;
+        default:
+            mode = RV_OFF;
+            break;
+    }
+    if (mode != RV_OFF) tank_resize(rv, size);
+    rv->shim_pos = 0;
+    rv->mode = mode;                 // set LAST: the kernel gates on it
+}
+
+void reverb_set_mix(reverb_t *rv, float wet)
+{
+    if (wet < 0) wet = 0;
+    if (wet > 1) wet = 1;
+    rv->wet = wet;
+}
+
+// octave-up dual-head granular over the shifter window: heads advance at 2x,
+// half a window apart, triangle-crossfaded — integer reads, no interpolation
+static inline float shim_step(reverb_t *rv, float x)
+{
+    line_push(&rv->shim, x);
+    float pos = rv->shim_pos + 2.0f;
+    if (pos >= (float)L_SHIM) pos -= (float)L_SHIM;
+    rv->shim_pos = pos;
+    int n = L_SHIM, h = n / 2;
+    int p0 = (int)pos;
+    int back0 = rv->shim.w - 1 - p0; if (back0 < 0) back0 += n;
+    int back1 = back0 - h; if (back1 < 0) back1 += n;
+    // triangle window on head 0's phase; head 1 gets the complement
+    float ph = pos / (float)n;               // 0..1
+    float w0 = 2.0f * (ph < 0.5f ? ph : 1.0f - ph);
+    return line_read(&rv->shim, back0) * w0 +
+           line_read(&rv->shim, back1) * (1.0f - w0);
+}
+
+void reverb_block_i32(reverb_t *rv, int32_t *out, int frames)
+{
+    if (!rv->slab || rv->mode == RV_OFF) { rv->cost_us = 0; return; }
+    int64_t t0 = esp_timer_get_time();
+    const float decay = rv->decay;
+    const float damp = rv->damp;
+    const float bw = rv->in_bw;
+    const float wet = rv->wet;
+    // equal-power dry/wet
+    const float gd = cosf(wet * (float)M_PI_2);
+    const float gw = sinf(wet * (float)M_PI_2);
+    const float sg = rv->shim_gain;
+
+    for (int f = 0; f < frames; f++) {
+        float dl = (float)(out[f * 2] >> 16);
+        float dr = (float)(out[f * 2 + 1] >> 16);
+        float x = 0.5f * (dl + dr) * 0.6f;           // mono tank feed, headroom
+
+        // shimmer: blend the octave-up of what the tank just produced
+        if (sg > 0) x += sg * shim_step(rv, rv->damp_a + rv->damp_b);
+
+        line_push(&rv->pre, x);
+        x = line_read(&rv->pre, rv->pre.len - 1);
+        rv->in_lp += bw * (x - rv->in_lp);           // input bandwidth
+        x = rv->in_lp;
+        x = ap_step(&rv->ap_in[0], x, 0.75f);
+        x = ap_step(&rv->ap_in[1], x, 0.75f);
+        x = ap_step(&rv->ap_in[2], x, 0.625f);
+        x = ap_step(&rv->ap_in[3], x, 0.625f);
+
+        // figure-8 tank: each branch takes the input + the OTHER branch's tail
+        float tail_b = line_read(&rv->d_a2, rv->d_a2.len - 1) * decay;
+        float tail_a = line_read(&rv->d_b2, rv->d_b2.len - 1) * decay;
+
+        float a = ap_step(&rv->ap_a1, x + tail_a, 0.70f);
+        line_push(&rv->d_a1, a);
+        float ad = line_read(&rv->d_a1, rv->d_a1.len - 1);
+        rv->damp_a += (1.0f - damp) * (ad - rv->damp_a);   // damping LPF
+        a = ap_step(&rv->ap_a2, rv->damp_a * decay, 0.50f);
+        line_push(&rv->d_a2, a);
+
+        float b = ap_step(&rv->ap_b1, x + tail_b, 0.70f);
+        line_push(&rv->d_b1, b);
+        float bd = line_read(&rv->d_b1, rv->d_b1.len - 1);
+        rv->damp_b += (1.0f - damp) * (bd - rv->damp_b);
+        b = ap_step(&rv->ap_b2, rv->damp_b * decay, 0.50f);
+        line_push(&rv->d_b2, b);
+
+        // output taps (Dattorro accumulator table, size-scaled offsets)
+        float yl = 0.6f * ( line_read(&rv->d_b1, s_tap[0])
+                          + line_read(&rv->d_b1, s_tap[1])
+                          - line_read(&rv->ap_b2, s_tap[2])
+                          + line_read(&rv->d_b2, s_tap[3])
+                          - line_read(&rv->d_a1, s_tap[4])
+                          - line_read(&rv->ap_a2, s_tap[5])
+                          - line_read(&rv->d_a2, s_tap[6]));
+        float yr = 0.6f * ( line_read(&rv->d_a1, s_tap[7])
+                          + line_read(&rv->d_a1, s_tap[8])
+                          - line_read(&rv->ap_a2, s_tap[9])
+                          + line_read(&rv->d_a2, s_tap[10])
+                          - line_read(&rv->d_b1, s_tap[11])
+                          - line_read(&rv->ap_b2, s_tap[12])
+                          - line_read(&rv->d_b2, s_tap[13]));
+
+        float ol = gd * dl + gw * yl;
+        float or_ = gd * dr + gw * yr;
+        if (ol > 32767.0f) ol = 32767.0f;
+        if (ol < -32768.0f) ol = -32768.0f;
+        if (or_ > 32767.0f) or_ = 32767.0f;
+        if (or_ < -32768.0f) or_ = -32768.0f;
+        out[f * 2]     = ((int32_t)ol) << 16;
+        out[f * 2 + 1] = ((int32_t)or_) << 16;
+    }
+
+    // NaN guard (svf lesson: a NaN in a recursive network is permanent
+    // silence that looks like a hardware fault) — flush the tank if poisoned
+    if (!(rv->damp_a == rv->damp_a) || !(rv->damp_b == rv->damp_b)) {
+        tank_resize(rv, 1.0f);
+        reverb_set_mode(rv, rv->mode);
+    }
+
+    int us = (int)(esp_timer_get_time() - t0);
+    rv->cost_us += (us - rv->cost_us) >> 3;          // EMA, ~8-block settle
+}
