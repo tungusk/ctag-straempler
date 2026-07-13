@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "svf.h"
 
 // Drum sampler — up to 8 one-shot pads, each a mono PSRAM buffer, triggered
 // from the CV inputs. Two trigger modes:
@@ -93,16 +94,53 @@ typedef struct {
 #define DR_LOOP_MIN_MS  8
 #define DR_REPS_INF     255       // loop until the pad is retriggered — a drone
 
+// MASTER FILTER — a fifth thing the encoder can select in Live (a box in the
+// menu bar, not a grid cell). knob6 = the deck's DJ sweep (centre bypass, left
+// = LP down, right = HP up), knob7 = resonance, which the deck doesn't have.
+// Runs on the mixed output of every pad.
+#define DR_FLT_FMAX   1.0f        // Chamberlin stability ceiling. LOWER than the
+                                  // deck's 1.2: the deck can push that hard only
+                                  // because its damping is nailed at 0.9 — with a
+                                  // resonance knob, 1.2 self-oscillates.
+#define DR_Q_CLEAN    2.0f        // damping: HIGHER is cleaner (q is 1/resonance)
+#define DR_Q_SQUELCH  0.10f
+
 typedef struct {
     dr_pad_t pad[DR_PADS];
     volatile int n_pads;          // 4 or 8
     volatile int sel_pad;         // pad the encoder/CV6/CV7 are aimed at
+    volatile bool sel_filter;     // ...unless the encoder is on the FILTER box.
+                                  // A separate flag, NOT a sel_pad sentinel:
+                                  // dr.pad[dr.sel_pad] is indexed all over, and
+                                  // sel_pad == n_pads would index pad[8].
     volatile bool cv_select;      // false = Direct, true = TRIG1/2 + selector CV
     volatile bool velocity;       // Direct mode: scale hit by CV level at fire time
     volatile bool cv_mod;         // CV6/CV7 perform the selected pad
     volatile int sens;            // trigger sensitivity 0..2 (see thresholds above)
     volatile int sel_src[2];      // selector CV channel per trig (CV-select mode)
     uint8_t prev_trig;            // gate edge state (seed 0x03 = idle high)
+
+    // --- master filter ---
+    volatile bool flt_box;        // Setup: does the box exist at all
+    volatile bool flt_on;         // encoder click on the box
+    volatile int  flt_cv;         // last ACCEPTED sweep knob (knob6), UI reads
+    volatile int  flt_res_cv;     // last ACCEPTED resonance knob (knob7), UI reads
+    volatile int  flt_mode;       // 0 bypass / 1 LP / 2 HP  (engine writes, UI reads)
+    // knob pickup: selecting the box must NOT slam the filter to wherever knob6
+    // happens to sit. The UI arms these at -1; the engine seizes the reference on
+    // its next block and applies nothing until the knob moves past DR_MOD_MOVE —
+    // after which it tracks CONTINUOUSLY (a DJ sweep has to be smooth, unlike the
+    // pads' stepped take-over).
+    volatile int  flt_ref_f, flt_ref_q;
+    bool  flt_take_f, flt_take_q;
+    float flt_f, flt_q;           // slewed coefficient + damping (engine only)
+    svf_t flt_l, flt_r;           // engine only
+
+    // knob take-over state for the PADS (was function-static in drum_process,
+    // where it survived stop()/start() and let a machine re-entry inherit the
+    // last session's reference)
+    int  knob_last[2];
+    bool knob_seen;
 } dr_state_t;
 
 extern dr_state_t dr;

@@ -23,6 +23,7 @@ static const color_t SCREEN_BG = {0, 0, 0};
 static const color_t PAD_IDLE  = {14, 14, 20};   // = sampler3 PANEL_BG
 static const color_t PAD_EMPTY = {8, 8, 12};
 static const color_t WF_WHITE  = {235, 235, 235}; // no playhead here to compete with
+static const color_t ACCENT_F  = {40, 200, 230};  // the filter's sweep strip
 // hit flash cycles red -> green -> blue per trigger
 static const color_t PAD_LIT[3] = {{230, 60, 50}, {40, 200, 90}, {60, 120, 240}};
 static uint8_t s_flash_col[DR_PADS];
@@ -168,36 +169,122 @@ static void draw_pad_cell(int i, bool lit){
     pad_dot(i, lit);
 }
 
+// ---- the master filter box (menu bar, top right) -----------------------------
+// It is the fifth thing the encoder can land on. Same selection language as a
+// pad (bold triple-stroke outline), same loaded/empty language for on/off (the
+// pad blue when live, black when bypassed).
+#define FBOX_W 84
+
+static int s_fbox_mode = -1, s_fbox_cell = -1, s_fbox_on = -1, s_fbox_sel = -1;
+
+static void filter_label(char *s, size_t n){
+    // in CV-select mode the selectors default to EXACTLY knob6/knob7, so the
+    // filter knobs are blocked. Say so — a dead knob reads as broken hardware.
+    bool blocked = dr.cv_select &&
+                   (dr.sel_src[0] == DR_MOD_LEVEL_CV || dr.sel_src[1] == DR_MOD_LEVEL_CV);
+    if (blocked)              { snprintf(s, n, "FLT sel"); return; }
+    if (!dr.flt_on)           { snprintf(s, n, "FLT");     return; }
+    if (dr.flt_mode == 0)     { snprintf(s, n, "FLT --");  return; }
+    // the cutoff the knob is actually asking for, in the deck's own mapping
+    int cv = dr.flt_cv;
+    float fc;
+    if (dr.flt_mode == 1) fc = 80.0f  * powf(150.0f, (float)cv / (2048.0f - 150.0f));
+    else                  fc = 30.0f  * powf(200.0f, (float)(cv - 2198) / (4095.0f - 2198.0f));
+    const char *m = (dr.flt_mode == 1) ? "LP" : "HP";
+    if (fc >= 1000.0f) snprintf(s, n, "%s %.1fk", m, fc / 1000.0f);
+    else               snprintf(s, n, "%s %d", m, (int)fc);
+}
+
+static void draw_filter_box(void){
+    if (!dr.flt_box) return;
+    bool sel = dr.sel_filter;
+    int fh = TFT_getfontheight();
+    int bh = fh + 8, bw = FBOX_W;
+    int bx = _width - bw - 4, by = 2;
+    _bg = dr.flt_on ? PAD_IDLE : SCREEN_BG;   // filled = engaged (a pad's grammar)
+    TFT_fillRect(bx, by, bw, bh, _bg);
+    _fg = sel ? TFT_WHITE : (dr.flt_on ? (color_t){90, 90, 110} : (color_t){60, 60, 70});
+    TFT_drawRect(bx, by, bw, bh, _fg);
+    if (sel){                                  // the pad's bold selection outline
+        TFT_drawRect(bx + 1, by + 1, bw - 2, bh - 2, _fg);
+        TFT_drawRect(bx + 2, by + 2, bw - 4, bh - 4, _fg);
+    }
+    char lab[16];
+    filter_label(lab, sizeof(lab));
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    _fg = dr.flt_on ? TFT_WHITE : (color_t){120, 120, 140};
+    TFT_print(lab, bx + bw / 2 - TFT_getStringWidth(lab) / 2, by + 4);
+    TFT_setFont(DEFAULT_FONT, NULL);
+    // sweep strip: a centre tick with the depth filled out toward LP or HP
+    int sy = by + bh - 3, sx = bx + 4, sw = bw - 8;
+    TFT_fillRect(sx, sy, sw, 2, SCREEN_BG);
+    TFT_fillRect(sx + sw / 2, sy, 1, 2, (color_t){80, 80, 100});
+    if (dr.flt_on && dr.flt_mode){
+        int d = (dr.flt_cv - 2048) * (sw / 2) / 2048;
+        if (d < 0) TFT_fillRect(sx + sw / 2 + d, sy, -d, 2, ACCENT_F);
+        else       TFT_fillRect(sx + sw / 2, sy, d, 2, ACCENT_F);
+    }
+    _bg = SCREEN_BG;
+    s_fbox_mode = dr.flt_mode;
+    s_fbox_cell = dr.flt_cv >> 5;       // repaint only on a VISIBLE move
+    s_fbox_on   = dr.flt_on ? 1 : 0;
+    s_fbox_sel  = sel ? 1 : 0;
+}
+
+// repaint the box only when something on it actually changed — it sits on the
+// fast timer, and an unconditional redraw strobes
+static void filter_box_tick(void){
+    if (!dr.flt_box) return;
+    if (dr.flt_mode != s_fbox_mode || (dr.flt_cv >> 5) != s_fbox_cell ||
+        (dr.flt_on ? 1 : 0) != s_fbox_on || (dr.sel_filter ? 1 : 0) != s_fbox_sel)
+        draw_filter_box();
+}
+
 static void live_full_redraw(void){
     TFT_resetclipwin();
     TFT_fillScreen(SCREEN_BG);
     _bg = SCREEN_BG; _fg = TFT_WHITE;
     TFT_print("Drums", 6, 4);
     for (int i = 0; i < dr.n_pads; i++) draw_pad_cell(i, dr.pad[i].playing);
+    s_fbox_mode = -1;                      // force the box to paint
+    draw_filter_box();
     _bg = SCREEN_BG;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    const char *hint = dr.cv_mod ? "turn:pad  press:load  hold:setup  knob6/7: level/decay"
-                                 : "turn:pad  press:load  hold:setup";
+    const char *hint = dr.sel_filter
+        ? "turn:select  press:filter on/off  knob6:sweep  knob7:res"
+        : (dr.cv_mod ? "turn:select  press:load  hold:setup  knob6/7: level/decay"
+                     : "turn:select  press:load  hold:setup");
     TFT_print((char*)hint, 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
-// turn = pick the pad the outline (and CV6/CV7) follow; only the two cells that
-// changed are repainted — a full grid repaint per detent strobes
+// turn = pick the pad (or the filter box) the outline and CV6/CV7 follow; only
+// what changed is repainted — a full grid repaint per detent strobes
 static void live_select(int dir){
-    int prev = dr.sel_pad;
-    int n = dr.n_pads;
-    dr.sel_pad = (prev + dir + n) % n;
-    if (dr.sel_pad == prev) return;
-    draw_pad_cell(prev, dr.pad[prev].playing);
-    draw_pad_cell(dr.sel_pad, dr.pad[dr.sel_pad].playing);
+    int n = dr.n_pads + (dr.flt_box ? 1 : 0);
+    int prev = dr.sel_filter ? dr.n_pads : dr.sel_pad;
+    int cur = (prev + dir + n) % n;
+    if (cur == prev) return;
+    int prev_pad = dr.sel_pad;
+    if (cur == dr.n_pads){                     // landed on the filter box
+        dr.sel_filter = true;
+        dr.flt_take_f = dr.flt_take_q = false; // arm the knob pickup: the sweep
+        dr.flt_ref_f = dr.flt_ref_q = -1;      // must not jump to where a knob sits
+    } else {
+        dr.sel_filter = false;
+        dr.sel_pad = cur;
+    }
+    if (prev != dr.n_pads) draw_pad_cell(prev_pad, dr.pad[prev_pad].playing);
+    if (!dr.sel_filter)    draw_pad_cell(dr.sel_pad, dr.pad[dr.sel_pad].playing);
+    draw_filter_box();
 }
 
 static int drum_live_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU:
             if (dr.sel_pad >= dr.n_pads) dr.sel_pad = 0;
+            if (!dr.flt_box) dr.sel_filter = false;
             live_full_redraw();
             break;
         case EV_TIMER_REPEATING_FAST:
@@ -211,11 +298,17 @@ static int drum_live_handler(int it_id, int event, void *ev_data){
                 }
                 else if (lit != s_lit[i]) pad_dot(i, lit);
             }
+            filter_box_tick();
             break;
         case EV_FWD: live_select(+1); break;
         case EV_BWD: live_select(-1); break;
-        case EV_SHORT_PRESS:                        // load a sample into the selection
-            refresh_samples();
+        case EV_SHORT_PRESS:
+            if (dr.sel_filter){                     // the box: click = engage/bypass
+                dr.flt_on = !dr.flt_on;
+                draw_filter_box();
+                break;
+            }
+            refresh_samples();                      // a pad: load a sample into it
             s_load_ret = M_DRUM_LIVE;
             return M_DRUM_LOAD;
         case EV_LONG_PRESS: return M_DRUM_SETUP;   // Live <-> Setup, no hub
@@ -463,11 +556,12 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
 // a hub). The two selector-CV rows exist ONLY in CV-select mode — in Direct
 // mode the selectors do nothing, so the page doesn't mention them at all and
 // the encoder walks straight past.
-enum { R_PADEDIT = 0, R_PADS, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL, R_KNOB, R_COUNT };
+enum { R_PADEDIT = 0, R_PADS, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL, R_KNOB,
+       R_FILTER, R_COUNT };
 
 static const char *setup_labels[R_COUNT] = {"Pad Setup", "Pads", "Trigger", "Sensi",
                                             "Sel CV TR1", "Sel CV TR2", "Velocity",
-                                            "Knob 6/7"};
+                                            "Knob 6/7", "Filter"};
 // everything is a small option set except the two selector CVs (none + 8
 // channels), which stay click-to-edit
 #define SETUP_IS_TOGGLE(id) ((id) != R_PADEDIT && (id) != R_SEL1 && (id) != R_SEL2)
@@ -498,6 +592,7 @@ static void setup_value_str(int id, char *v, size_t n){
         case R_SEL2: sel_src_str(dr.sel_src[1], v, n); break;
         case R_VEL:  snprintf(v, n, "%s", dr.velocity ? "ON" : "OFF"); break;
         case R_KNOB: snprintf(v, n, "%s", dr.cv_mod ? "level/decay" : "OFF"); break;
+        case R_FILTER: snprintf(v, n, "%s", dr.flt_box ? "box" : "OFF"); break;
         default: v[0] = 0;
     }
 }
@@ -543,6 +638,10 @@ static void setup_adj(int id, int dir){
         case R_SEL2: dr.sel_src[1] = sel_cycle(dr.sel_src[1], dir); break;
         case R_VEL:  dr.velocity = !dr.velocity; break;
         case R_KNOB: dr.cv_mod = !dr.cv_mod; break;
+        case R_FILTER:
+            dr.flt_box = !dr.flt_box;
+            if (!dr.flt_box) dr.sel_filter = false;   // don't strand the encoder on a
+            break;                                    // box that no longer exists
     }
 }
 
