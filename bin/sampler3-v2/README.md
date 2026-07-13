@@ -1,6 +1,7 @@
 # sampler3-v2 — the clock-time loop recorder, complete
 
-Full-firmware snapshot at `a1e43d4` (2026-07-12). The "Sampler" machine
+Full-firmware snapshot at `77765a4` (2026-07-12, refreshed with the
+performance + polish wave). The "Sampler" machine
 grown from the sampler3-v1 rebuild into a performable, phase-exact loop
 instrument, plus core fixes that improve every machine on the module.
 
@@ -52,6 +53,15 @@ Live encoder turn disarms an armed track.
 `/status` v1: `PP s<starve0>/<starve1> h<heals>/<retrigs> d<capture-drops>
 j<crop-jitter> p<cursor>` (focused voice). `/files/raw?name=REC_0150`
 (bare name — the handler appends .RAW).
+
+## Polish wave (77765a4)
+
+Joint grid snap (hold BOTH gates ~1s: both loops restart on the same
+pulse), waveform-in-the-bar UI for deck + sampler3 (black canvas, fat
+state border; sampler3's box ends sit AT the crop points — the box IS
+the loop), bold 2px sqrt-lifted waveforms, mirrored track-2 panel,
+total-length figures, "Machine" affordances, tidy About page, and a
+clean version string via version.txt.
 
 ## Flash
 
