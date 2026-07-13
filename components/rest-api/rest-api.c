@@ -198,14 +198,18 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
     char path[72];
     size_t nl = strlen(name);
     // accept bare ids and full filenames — "REC_0147.RAW" used to become
-    // REC_0147.RAW.RAW and 404. Bare ids resolve across containers.
+    // REC_0147.RAW.RAW and 404. Everything goes through the resolvers so
+    // foldered files (usr/REC, usr/LOOPS) are found wherever they live.
     char idtmp[32];
-    if (nl > 4 && strcasecmp(name + nl - 4, ".JSN") == 0)
-        snprintf(path, sizeof(path), "/sdcard/usr/%s", name);
-    else if (sample_name_id(name, idtmp, sizeof(idtmp)))
-        snprintf(path, sizeof(path), "/sdcard/usr/%s", name);   // full audio filename
+    if (nl > 4 && (strcasecmp(name + nl - 4, ".JSN") == 0 ||
+                   strcasecmp(name + nl - 3, ".OT") == 0)) {
+        int el = (strcasecmp(name + nl - 3, ".OT") == 0) ? 3 : 4;
+        snprintf(idtmp, sizeof(idtmp), "%.*s", (int)nl - el, name);
+        sample_resolve_aux(idtmp, name + nl - el, path, sizeof(path));
+    } else if (sample_name_id(name, idtmp, sizeof(idtmp)))
+        sample_resolve(idtmp, path, sizeof(path));   // full audio filename -> id
     else
-        sample_resolve(name, path, sizeof(path));               // bare id
+        sample_resolve(name, path, sizeof(path));    // bare id
     sd_lock_take();
     FILE *f = fopen(path, "rb");
     sd_lock_give();
