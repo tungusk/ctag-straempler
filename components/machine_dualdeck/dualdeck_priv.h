@@ -88,6 +88,8 @@ typedef struct {
     float auto_step;               // per-block xf increment while auto-fading
     int   xf_ref;                  // manual-grab latch: knob position at auto
                                    // start; move past DD_XF_GRAB counts = grab
+    int   grab_run;                // consecutive moved blocks — a real hand
+                                   // move persists, a WiFi ADC spike doesn't
     volatile bool manual;          // knob is live (grabbed / no auto pending)
     volatile int fade_beats;       // Setup: 0 = cut, else 1/4/8 beats
 

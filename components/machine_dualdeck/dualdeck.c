@@ -196,6 +196,7 @@ static void deck_fire(int i)
             dd.auto_active = true;
             dd.manual = false;
             dd.xf_ref = dd.xf_cv;      // grab latch reference
+            dd.grab_run = 0;
         } else if (dd.fade_beats == 0) {
             // cut: snap (still slewed a little in the block loop — no click)
             dd.auto_target = (i == 0) ? 0.0f : 1.0f;
@@ -203,6 +204,7 @@ static void deck_fire(int i)
             dd.auto_active = true;
             dd.manual = false;
             dd.xf_ref = dd.xf_cv;
+            dd.grab_run = 0;
         }
     }
 }
@@ -323,23 +325,31 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     bool bar_edge = pulse && dd.ci.clk.locked && (dd.pulses % per_bar) == 1;
     if (bar_edge || !dd.ci.clk.locked) { deck_fire(0); deck_fire(1); }
 
-    // ---- crossfade: takeover automation vs manual knob, grab-then-track.
+    // ---- crossfade: three states — AUTO (takeover fade in flight), HELD
+    // (fade landed; the mix stays put wherever automation left it), MANUAL
+    // (knob is live). Moving the knob past the grab deadband promotes
+    // auto/held to manual — the pickup. Handing straight back to manual on
+    // fade completion would snap the mix to wherever the knob happens to
+    // sit, defeating the takeover entirely (caught on first bench test).
     dd.xf_cv = io->cv[5];
-    if (dd.auto_active) {
-        // knob moved past the deadband -> performer grabs the fader
+    if (!dd.manual) {                  // auto or held: watch for the grab.
+        // The move must PERSIST (~12 ms) — a single-block WiFi ADC spike on
+        // the knob read faked a grab and killed every takeover fade the
+        // moment /status polling was active (sampler3's median-of-5 lesson).
         int dcv = dd.xf_cv - dd.xf_ref;
         if (dcv < 0) dcv = -dcv;
-        if (dcv > DD_XF_GRAB) { dd.auto_active = false; dd.manual = true; }
+        if (dcv > DD_XF_GRAB) {
+            if (++dd.grab_run >= 8) { dd.auto_active = false; dd.manual = true; }
+        } else dd.grab_run = 0;
     }
-    float xf_target;
     if (dd.auto_active) {
-        xf_target = dd.auto_target;
+        float xf_target = dd.auto_target;
         float step = dd.auto_step;
         if (dd.xf < xf_target) { dd.xf += step; if (dd.xf > xf_target) dd.xf = xf_target; }
         else                   { dd.xf -= step; if (dd.xf < xf_target) dd.xf = xf_target; }
-        if (dd.xf == xf_target) { dd.auto_active = false; dd.manual = true; dd.xf_ref = dd.xf_cv; }
+        if (dd.xf == xf_target) dd.auto_active = false;   // -> HELD, not manual
     } else if (dd.manual) {
-        xf_target = (float)dd.xf_cv / 4095.0f;
+        float xf_target = (float)dd.xf_cv / 4095.0f;
         // gentle slew so a jumpy ADC read never steps the mix
         dd.xf += 0.2f * (xf_target - dd.xf);
     }
