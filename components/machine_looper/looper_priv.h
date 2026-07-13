@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "svf.h"
 
 // M2 looper — shared state between engine (looper.c) and UI (looper_menu.c).
 // Concurrency: engine (audio task) owns track state; UI writes only the
@@ -30,7 +31,7 @@ typedef struct {
     volatile uint16_t cutoff;     // 0..4095 BP filter cutoff (CV1 when selected)
     volatile uint16_t res;        // 0..4095 BP resonance (CV2 when selected)
     float f, q;                   // per-block filter coeffs (engine)
-    float svf_low, svf_band;      // state-variable filter state (engine)
+    svf_t svf;                    // filter state (util/svf.h — shared kernel)
 } lp_track_t;
 
 typedef struct {
