@@ -19,9 +19,11 @@
 lp_state_t lp;
 
 // ---- clock detection ------------------------------------------------------
-// tempo detection via the shared core detector (components/machine/clock.c);
-// lp.bpm / lp.locked mirror it for the UI. "period" is samples per quarter.
-static beatclock_t s_clk;
+// tempo detection via the shared conditioned front-end (clockin_t,
+// components/machine/clock.c); lp.bpm / lp.locked mirror it for the UI.
+// "period" is samples per quarter. The floor-tracked Schmitt replaces the
+// detector's fixed 1500/800 thresholds, which misfired on attenuated CV.
+static clockin_t s_ci;
 
 // clock line as a 0/4095 level fed to the detector, from either a CV channel
 // (raw, thresholded in clock.c) or a trig input. Trigs are active-low: a clock
@@ -36,8 +38,8 @@ static uint16_t clock_level(const machine_io_t *io)
 // ---- track helpers --------------------------------------------------------
 static uint32_t bar_frames(void)
 {
-    if (!s_clk.period) return 0;
-    return s_clk.period * 4u * (uint32_t)(lp.bars > 0 ? lp.bars : 1);
+    if (!s_ci.clk.period) return 0;
+    return s_ci.clk.period * 4u * (uint32_t)(lp.bars > 0 ? lp.bars : 1);
 }
 
 static void track_start_record(lp_track_t *t)
@@ -72,7 +74,7 @@ static esp_err_t looper_start(void)
         lp.tr[i].res = 900;
         svf_reset(&lp.tr[i].svf);
     }
-    clock_reset(&s_clk);
+    clockin_reset(&s_ci, 1.0f);   // 1 pulse per beat, the looper convention
     audio_status_set_voices("looper", "");
     return ESP_OK;
 }
@@ -168,20 +170,25 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     }
 
     int frames = MACHINE_BLOCK / 2;
-    uint16_t clk = clock_level(io);
+    // CV is sampled once per block, so the old per-frame tick could only ever
+    // fire on the first frame anyway — the block-level front-end keeps that
+    // timing exactly. An ACCEPTED pulse shows up as a ring_n change (Schmitt
+    // fires that fail the sanity gate don't count, same as before).
+    uint32_t rn_pre = s_ci.clk.ring_n;
+    clockin_block(&s_ci, clock_level(io), frames);
+    bool clk_acc = (s_ci.clk.ring_n != rn_pre);
+    lp.bpm = s_ci.clk.bpm;                  // mirror to the UI-facing fields
+    lp.locked = s_ci.clk.locked;            // (also reflects clock-stop promptly)
 
     for (int f = 0; f < frames; f++) {
         bool bar_edge = false;
-        if (clock_tick(&s_clk, clk)) {
-            lp.bpm = s_clk.bpm;             // mirror to the UI-facing fields
-            lp.locked = s_clk.locked;
+        if (f == 0 && clk_acc) {
             // each clock pulse = one quarter; a bar (4/4) is every 4 pulses.
             // Armed tracks start on the next bar boundary; the record LENGTH
             // (bars) is handled separately by track_start_record's target.
-            if (s_clk.locked && (s_clk.ring_n % 4) == 0)
+            if (s_ci.clk.locked && (s_ci.clk.ring_n % 4) == 0)
                 bar_edge = true;
         }
-        if (!s_clk.locked) lp.locked = false;   // reflect clock-stop promptly
 
         // mono input = (L+R)/2 from the 32-bit left-justified samples
         int32_t l = in[f * 2] >> 16;
