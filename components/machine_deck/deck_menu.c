@@ -24,7 +24,10 @@ static int  s_n_samples = 0, s_sample_idx = 0;
 static int  s_load_ret = M_DECK_SETUP;   // page the load browser returns to
 
 static void refresh_samples(void){
-    s_n_samples = sample_list_shared(&s_samples);
+    // dated list, like the sampler: 512 entries, NEWEST FIRST — a fresh
+    // upload is the track you want to cue, and it used to fall off the
+    // bottom of a 224-name alphabetical list
+    s_n_samples = sample_list_recent(&s_samples);
     s_sample_idx = 0;
     for (int i = 0; i < s_n_samples; i++)
         if (strcmp(s_samples[i], dk.track) == 0) { s_sample_idx = i; break; }
