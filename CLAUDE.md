@@ -113,6 +113,11 @@ The machines (all working; archives in `bin/`):
   drives the whole synced-record workflow without an external clock.
   Explicit Record page + ARM/REC banner (Live encoder turn disarms),
   auto-pickup of finished recordings, version-gated autosave (s3v:2).
+  JOINT GRID SNAP: hold BOTH gates ~1s and both loops restart from their
+  window starts on the same clock pulse. Live UI: mirrored side-by-side
+  panels (track 2 right-justified), playbar = black canvas + bold white
+  waveform with the FAT state-colored box's ends sitting AT the crop
+  points (the box IS the loop window), total length under the bar.
 - `machine_sampler2` ("Sampler2", HIDDEN) — legacy `s2_`-prefixed fork:
   crop mode, signed CV matrix amounts, CV-addressable start/length.
   Patched 2026-07-12 (deferred auto-load, DMA-capable SD buffers, no
@@ -208,6 +213,10 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
 
 ## Working with the hardware (operational)
 
+- **Version string**: `version.txt` in the repo root sets `PROJECT_VER`
+  (shown on the About page) — bump it at milestones alongside the `bin/`
+  archive; without it IDF falls back to git-describe with a `-dirty`
+  suffix on any uncommitted build.
 - **Build**: `export PATH="$HOME/.espressif/tools/xtensa-esp32-elf/esp-2021r2-patch3-8.4.0/xtensa-esp32-elf/bin:$HOME/.espressif/tools/esp32ulp-elf/2.28.51-esp-20191205/esp32ulp-elf-binutils/bin:$PATH"; export IDF_PATH="$HOME/esp/esp-idf-v4.3"` then `idf.py build -DCMAKE_POLICY_VERSION_MINIMUM=3.5`.
 - **Flash**: port is `/dev/cu.usbserial-3110`; use the esptool invocation with
   `--flash_size detect`. ALWAYS announce before flashing (it reboots the
