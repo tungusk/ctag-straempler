@@ -109,7 +109,10 @@ static void draw_info(void){
     // while analysing, the tempo slot shows analysis progress counting UP
     // ("an 16%"), matching the Setup row — shown while playing too (frozen,
     // since analysis pauses during playback) so the pending state stays visible
-    if (dk.an_state == DK_AN_RUNNING)
+    if (dk.loop_active)
+        snprintf(s1, sizeof(s1), "LOOP %dbt  %s  x%s  %s",
+                 dk.loop_len_beats, st, sp, fl);
+    else if (dk.an_state == DK_AN_RUNNING)
         snprintf(s1, sizeof(s1), "ana %d%%  %s  x%s  %s", dk.an_progress, st, sp, fl);
     else
         snprintf(s1, sizeof(s1), "trk %.1f  %s  x%s  %s", dk.track_bpm, st, sp, fl);
@@ -145,12 +148,15 @@ static void draw_info(void){
 
 static int s_bar_state = -1;   // -1 forces the first paint
 
-static int tbar_state(void){   // 1 = playing, 2 = analyzing (stopped), 0 = idle
+static int tbar_state(void){   // 3 = looping, 1 = playing, 2 = analyzing, 0 = idle
     // playing wins: analysis is paused during playback, so show green not pink
+    if (dk.loop_active) return 3;
     return dk.playing ? 1 : (dk.an_state == DK_AN_RUNNING ? 2 : 0);
 }
 static color_t tbar_bg(void){
     switch (tbar_state()){
+        case 3:  return (color_t){150, 45, 95};    // loop pink (tracker's shade —
+                                                   // analysis keeps its brighter one)
         case 2:  return (color_t){210, 70, 150};   // pink: analysis running
         case 1:  return (color_t){25, 120, 50};    // green: playing
         default: return (color_t){30, 60, 140};    // blue: stopped
@@ -185,6 +191,28 @@ static void tbar_paint_slice(int x, int w){
 }
 
 static int s_wf_drawn = -1;    // wf_state the bar was last painted with
+static int s_loop_key = -1;    // loop window fingerprint (band change detection)
+
+// the LOOP BAND: top+bottom strips in loop pink across the window's span of
+// the canvas, clipped to [sx, sx+sw) so marker-erase slices restore it
+static void tbar_loop_band(int sx, int sw){
+    if (!dk.loop_active || !dk.file_frames) return;
+    int bx = TBAR_X + TBAR_BW + 1, bw = TBAR_W - 2 * TBAR_BW - 6;
+    int x0 = bx + (int)((uint64_t)dk.loop_start * bw / dk.file_frames);
+    int x1 = bx + (int)((uint64_t)(dk.loop_start + dk.loop_len_fr) * bw / dk.file_frames);
+    if (x1 <= x0) x1 = x0 + 1;
+    int a = x0 > sx ? x0 : sx;
+    int b = x1 < sx + sw ? x1 : sx + sw;
+    if (b <= a) return;
+    color_t pk = {150, 45, 95};
+    TFT_fillRect(a, TBAR_Y + TBAR_BW, b - a, 3, pk);
+    TFT_fillRect(a, TBAR_Y + TBAR_H - TBAR_BW - 3, b - a, 3, pk);
+}
+
+static int loop_key(void){
+    return dk.loop_active
+        ? (int)(dk.loop_start >> 11) * 31 + (int)(dk.loop_len_fr >> 11) : -1;
+}
 
 static void draw_posbar_frame(void){
     TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, tbar_bg());   // border color
@@ -198,14 +226,20 @@ static void draw_posbar_frame(void){
 
 static void draw_posbar(void){
     if (tbar_state() != s_bar_state ||        // border follows transport;
-        (dk.wf_state == 2) != (s_wf_drawn == 2))   // thumbnail landed: paint it
+        (dk.wf_state == 2) != (s_wf_drawn == 2) ||  // thumbnail landed: paint it
+        loop_key() != s_loop_key){                  // loop window moved/resized
         draw_posbar_frame();
+        tbar_loop_band(TBAR_X + TBAR_BW, TBAR_W - 2 * TBAR_BW);
+        s_loop_key = loop_key();
+    }
     if (!dk.file_frames) return;
     int x = TBAR_X + TBAR_BW + 1 +
             (int)((uint64_t)dk.rpos_i * (TBAR_W - 2 * TBAR_BW - 6) / dk.file_frames);
     if (x == s_last_barx) return;
-    if (s_last_barx > 0)                      // erase only the old marker slice
+    if (s_last_barx > 0){                     // erase only the old marker slice
         tbar_paint_slice(s_last_barx, 5);
+        tbar_loop_band(s_last_barx, 5);       // restore the band through it
+    }
     TFT_fillRect(x, TBAR_Y + TBAR_BW, 5, TBAR_H - 2 * TBAR_BW, (color_t){245, 245, 245});
     s_last_barx = x;
 }
@@ -240,7 +274,7 @@ static void live_full_redraw(void){
     }
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:scrub/nudge press:tracks TR2hold:sync", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:scrub/nudge press:tracks TR1:play TR2:loop", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
@@ -261,7 +295,7 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
                 // engine internals through /status (v1) for remote debugging
                 char dbg[56];
                 snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d S%lu g%u L%d n%d",
-                         dk.playing ? 'P' : 's',
+                         dk.loop_active ? 'L' : (dk.playing ? 'P' : 's'),
                          (unsigned long)dk.ci.raw_fires,
                          (unsigned long)(dk.ci.raw_iv / 44),        // ms between fires
                          (unsigned long)(dk.ci.clk.period / 44),    // ms accepted period
@@ -296,8 +330,8 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup --------------------------------------------------------------------
-static const char *setup_labels[] = {"Track", "Sync", "Clock Src", "Clock", "Loop", "BPM", "Grid Nudge", "Analyze", "Auto BPM"};
-#define DK_SETUP_N 9
+static const char *setup_labels[] = {"Track", "Sync", "Clock Src", "Clock", "Loop", "BPM", "Grid Nudge", "Analyze", "Auto BPM", "Loop Freeze"};
+#define DK_SETUP_N 10
 
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
@@ -331,6 +365,7 @@ static void setup_redraw(int pos, int sel){
                 else snprintf(v, sizeof(v), "press");
                 break;
             case 8: snprintf(v, sizeof(v), "%s", dk.auto_an ? "ON" : "OFF"); break;
+            case 9: snprintf(v, sizeof(v), "%s", dk.loop_freeze ? "ON" : "OFF"); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -361,6 +396,7 @@ static void setup_adj(int i, int dir){
             break;
         }
         case 8: dk.auto_an = !dk.auto_an; break;
+        case 9: dk.loop_freeze = !dk.loop_freeze; break;
     }
 }
 
