@@ -29,8 +29,9 @@ typedef struct {
     volatile bool reverse;        // play the window reversed
     volatile int  level;          // 0..255 (CV1 jack)
 
-    // beat sync (shared clock detector)
-    beatclock_t       clk;
+    // beat sync — the shared conditioned front-end (clock.h): floor-Schmitt
+    // replaces the fixed 1500/800 thresholds that misfired on attenuated CV
+    clockin_t         ci;
     volatile bool sync;           // window length follows the clock
     volatile int  clk_src;        // clock CV channel (0..7), default CV8
     volatile int  division;       // 0=1/4, 1=1/8, 2=1/16, 3=1/32 note

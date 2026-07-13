@@ -50,9 +50,9 @@ static void info_block(void){
     TFT_print(s, _width/2 - TFT_getStringWidth(s)/2, y + 2);
     char t[40];
     if (gl.sync){
-        if (gl.clk.locked) snprintf(t, sizeof(t), "SYNC %s  %.1f BPM", div_name(gl.division), gl.clk.bpm);
+        if (gl.ci.clk.locked) snprintf(t, sizeof(t), "SYNC %s  %.1f BPM", div_name(gl.division), gl.ci.clk.bpm);
         else               snprintf(t, sizeof(t), "SYNC %s  (no clock)", div_name(gl.division));
-        _fg = gl.clk.locked ? (color_t){40,200,90} : TFT_LIGHTGREY;
+        _fg = gl.ci.clk.locked ? (color_t){40,200,90} : TFT_LIGHTGREY;
         TFT_print(t, _width/2 - TFT_getStringWidth(t)/2, y + fh + 6);
     }
     s_last_win = gl.win_ms;

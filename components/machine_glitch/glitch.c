@@ -14,8 +14,8 @@ gl_state_t gl;
 // window length in frames: a clock division when synced+locked, else knob/ms
 static uint32_t window_frames(void)
 {
-    if (gl.sync && gl.clk.locked && gl.clk.period > 0)
-        return gl.clk.period / (1u << gl.division);   // 1/4 = period .. 1/32 = period/8
+    if (gl.sync && gl.ci.clk.locked && gl.ci.clk.period > 0)
+        return gl.ci.clk.period / (1u << gl.division);   // 1/4 = period .. 1/32 = period/8
     return (uint32_t)gl.win_ms * GL_RATE / 1000;
 }
 
@@ -49,7 +49,7 @@ static esp_err_t glitch_start(void)
     gl.level = 255;
     gl.clk_src = 7;     // CV8 default (both trigs are stutter controls)
     gl.division = 1;    // 1/8 note
-    clock_reset(&gl.clk);
+    clockin_reset(&gl.ci, 1.0f);   // 1 pulse per beat, same as the looper
     audio_status_set_voices("glitch", "");
     return ESP_OK;
 }
@@ -85,11 +85,11 @@ static void glitch_process(int32_t out[MACHINE_BLOCK],
     if (want && !gl.stutter) { capture_window(); gl.stutter = true; }
     else if (!want && gl.stutter) { gl.stutter = false; }
 
-    uint16_t clk_cv = io->cv[gl.clk_src & 7];
     int frames = MACHINE_BLOCK / 2;
+    // keep the tempo detector running — CV is sampled once per block, so the
+    // block-level conditioned feed is timing-identical to the old per-frame tick
+    clockin_block(&gl.ci, io->cv[gl.clk_src & 7], frames);
     for (int f = 0; f < frames; f++) {
-        clock_tick(&gl.clk, clk_cv);        // keep the tempo detector running
-
         int32_t l, r;
         if (!gl.stutter) {
             // passthrough + write live into the ring
