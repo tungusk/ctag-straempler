@@ -36,7 +36,10 @@ static volatile bool s_discard_next = false;   // eat the aborted take's auto-pi
 
 #define S3_CHUNK_FRAMES 4096
 #define S3_LOW_WATER    (S3_RATE / 4)     // unmute once 0.25 s is buffered
-#define S3_XFADE_FRAMES 256               // loop-seam crossfade (~6 ms)
+#define S3_XFADE_FRAMES 1024              // loop-seam crossfade (~23 ms): a
+                                          // LIGHT musical fade, not just a
+                                          // declick (Arlo). Clamped to
+                                          // window/4 for tiny windows.
 
 typedef struct {
     FILE *f;
@@ -84,6 +87,8 @@ static uint32_t read_playback_frames(s3_voice_t *v, FILE *f, uint32_t p,
 static void rebuild_head(s3_voice_t *v, s3_reader_voice_t *rv, int16_t *stage)
 {
     v->head_valid = false;
+    v->lsc_valid = false;       // playback order may have changed (reverse/
+    v->lsc_start = 0;           // load): the loop-start cache is stale
     // the reader always streams the WHOLE file; crop is engine-side cursor
     // math (CV-performable — never lands back here)
     v->play_start = 0;
@@ -290,6 +295,36 @@ static void reader_task(void *pv)
                 continue;
             }
 
+            // (re)build the loop-start cache when the engine's wish moved —
+            // ~0.5s of RAM at the window start so wraps of ANY window length
+            // play instantly while the stream rewinds behind them
+            {
+                uint32_t lw = v->lsc_want;
+                uint32_t d = lw > v->lsc_start ? lw - v->lsc_start
+                                               : v->lsc_start - lw;
+                if (v->lsc && lw && lw < v->play_len &&
+                    (!v->lsc_valid || d > 2048)) {
+                    v->lsc_valid = false;
+                    uint32_t n = S3_LSC_FRAMES;
+                    if (n > v->play_len - lw) n = v->play_len - lw;
+                    uint32_t got = 0;
+                    while (got < n) {
+                        uint32_t want = n - got;
+                        if (want > S3_CHUNK_FRAMES) want = S3_CHUNK_FRAMES;
+                        uint32_t r = read_playback_frames(v, rv[i].f, lw + got,
+                                                          want, stage, stage);
+                        if (r == 0) break;
+                        memcpy(v->lsc + (size_t)got * 2, stage, r * 4);
+                        got += r;
+                        vTaskDelay(1);          // SD courtesy gap
+                    }
+                    v->lsc_start = lw;
+                    v->lsc_frames = got;
+                    v->lsc_valid = got > 0;
+                    worked = true;
+                }
+            }
+
             if (v->retrig_req) {
                 v->retrig_req = false;
                 v->dbg_retrig++;
@@ -445,9 +480,12 @@ static esp_err_t s3_start(void)
         s3_voice_t *v = &s3.v[i];
         v->head = heap_caps_malloc((size_t)S3_HEAD_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
         v->ring = heap_caps_malloc((size_t)S3_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+        // loop-start cache is OPTIONAL: without it, long-window wraps just
+        // keep the refill gap instead of failing the machine
+        v->lsc = heap_caps_malloc((size_t)S3_LSC_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
         if (!v->head || !v->ring) {
             ESP_LOGE(TAG, "PSRAM alloc failed (voice %d)", i);
-            for (int k = 0; k <= i; k++) { free(s3.v[k].head); free(s3.v[k].ring); }
+            for (int k = 0; k <= i; k++) { free(s3.v[k].head); free(s3.v[k].ring); free(s3.v[k].lsc); }
             return ESP_ERR_NO_MEM;
         }
         v->level = 1.0f;
@@ -485,15 +523,24 @@ static void s3_stop(void)
     for (int i = 0; i < S3_NVOICES; i++) {
         free(s3.v[i].head); s3.v[i].head = NULL;
         free(s3.v[i].ring); s3.v[i].ring = NULL;
+        free(s3.v[i].lsc);  s3.v[i].lsc = NULL;
     }
+}
+
+// does the loop-start cache cover playback-order frame f?
+static inline bool s3_lsc_has(const s3_voice_t *v, uint32_t f)
+{
+    return v->lsc_valid && f >= v->lsc_start &&
+           f - v->lsc_start < v->lsc_frames;
 }
 
 // fetch playback-order frame p (caller guarantees validity)
 static inline void s3_fetch(const s3_voice_t *v, uint32_t p, float *l, float *r)
 {
-    const int16_t *s = (p < v->head_frames)
-        ? v->head + (size_t)p * 2
-        : v->ring + (size_t)(p % S3_RING_FRAMES) * 2;
+    const int16_t *s;
+    if (p < v->head_frames)      s = v->head + (size_t)p * 2;
+    else if (s3_lsc_has(v, p))   s = v->lsc + (size_t)(p - v->lsc_start) * 2;
+    else                         s = v->ring + (size_t)(p % S3_RING_FRAMES) * 2;
     *l = (float)s[0];
     *r = (float)s[1];
 }
@@ -505,6 +552,7 @@ static inline void s3_fetch(const s3_voice_t *v, uint32_t p, float *l, float *r)
 static inline bool s3_frame_ok(const s3_voice_t *v, uint32_t f, bool resident)
 {
     if (f < v->head_frames) return true;
+    if (s3_lsc_has(v, f)) return true;     // loop-start cache: always readable
     if (v->loading) return false;
     if (f >= v->wpos) return false;
     if (resident) return true;
@@ -729,31 +777,35 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         cs = v->cs_sm;
         ln = v->ln_sm;
         float ce;
-        // QUANT2: the musical ladder — length picks a power-of-2 beat count
-        // (1/2/4/8/16/32, whatever fits the take) and start snaps to the
-        // phrase grid of that length, so every reachable window is loop-legal
+        // QUANT2: the musical ladder — length picks from 1/4, 1/2, 1, 2, 4,
+        // 8, 16, 32 beats (whatever fits the take). START anchors to the
+        // whole-beat grid INDEPENDENT of length: growing the loop extends
+        // the TAIL only (deriving start from length-sized slots yanked the
+        // start backward whenever the length stepped up — Arlo).
         if (v->crop_mode == S3_CROP_QUANT2 && v->bpm > 20.0f && v->play_len) {
             float bf = 60.0f * 44100.0f / v->bpm;        // frames per beat
             float nb = (float)v->play_len / bf;          // beats in the take
-            if (nb >= 1.0f) {
-                int nbi = (int)nb;
+            float nb4 = 4.0f * nb;                       // quarter-beats
+            if (nb4 >= 1.0f) {
+                int nb4i = (int)nb4;
                 int steps = 1;                           // ladder 2^0..2^(steps-1)
-                while ((1 << steps) <= nbi && steps < 7) steps++;
+                while ((1 << steps) <= nb4i && steps < 9) steps++;
                 // LENGTH control = selector across the ladder (cell hysteresis)
                 float lpos = ln * (float)steps;
                 v->q_ln = s3_cell_adopt(lpos, v->q_ln);
                 if (v->q_ln < 0) v->q_ln = 0;
                 if (v->q_ln > steps - 1) v->q_ln = steps - 1;
-                int lbeats = 1 << v->q_ln;
-                // START control = selector across the phrase slots
-                int slots = nbi / lbeats;
-                if (slots < 1) slots = 1;
-                float spos = (cs / 0.98f) * (float)slots;
-                v->q_cs = s3_cell_adopt(spos, v->q_cs);
+                int lq = 1 << v->q_ln;                   // window, quarter-beats
+                // START control = whole-beat anchor (length never moves it)
+                int nbi = (int)nb;
+                if (nbi < 1) nbi = 1;
+                float cb = (cs / 0.98f) * (float)nb;     // continuous beat pos
+                v->q_cs = s3_cell_adopt(cb, v->q_cs);
                 if (v->q_cs < 0) v->q_cs = 0;
-                if (v->q_cs > slots - 1) v->q_cs = slots - 1;
-                cs = (float)(v->q_cs * lbeats) / nb;
-                ln = (float)lbeats / nb;
+                if (v->q_cs > nbi - 1) v->q_cs = nbi - 1;
+                cs = (float)v->q_cs / nb;
+                ln = (float)lq / nb4;
+                // end = start + length, giving way at EOF (generic clamps below)
             }
         }
         // tempo-QUANTIZED crop: start and length snap to whole beats of the
@@ -829,6 +881,15 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
             else if (v->cs_moving) v->cs_moving--;
         }
 
+        // loop-start cache wish: a streamed LOOP whose start lies beyond the
+        // head wants ~0.5s of RAM at the window start (reader builds it) —
+        // wraps then play from RAM at ANY window length. Published only
+        // while the start is stable; the head already covers early starts.
+        v->lsc_want = (v->playmode == S3_MODE_LOOP && !v->cs_moving &&
+                       v->play_len > v->head_frames + S3_RING_FRAMES &&
+                       cs_f >= v->head_frames)
+                      ? cs_f : 0;
+
         // loop-seam crossfade length: the last xf frames of the window blend
         // into its first xf frames (takes are beat-exact but not amplitude-
         // matched at the seam — the raw splice clicked every wrap once the
@@ -857,16 +918,24 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                             // crossfade already blended in [cs, cs+xf):
                             // continue right after it — no double-hearing
                             v->pos = (double)(cs_f + xf);
-                            // PREFETCH: wrap landed in the HEAD but the ring
-                            // is stale (still holds the pre-wrap tail) —
-                            // rewind the stream NOW, while the head plays,
-                            // so the handoff at head-end is seamless. No
-                            // `loading`: audio never stops.
-                            if (v->play_len > v->head_frames &&
-                                cs_f + xf + 2048 < v->head_frames &&
-                                !s3_frame_ok(v, v->head_frames, resident) &&
+                            // PREFETCH: wrap landed in cheap RAM (head or
+                            // loop-start cache) but the ring beyond it is
+                            // stale (still holds the pre-wrap tail) —
+                            // rewind the stream NOW, while RAM plays, so
+                            // the handoff at the cache edge is seamless.
+                            // No `loading`: audio never stops.
+                            uint32_t cov = 0;      // RAM coverage from cs_f
+                            if (cs_f < v->head_frames) cov = v->head_frames;
+                            if (s3_lsc_has(v, cs_f)) {
+                                uint32_t le = v->lsc_start + v->lsc_frames;
+                                if (le > cov) cov = le;
+                            }
+                            if (v->play_len > v->head_frames && cov &&
+                                cov < v->play_len &&
+                                cs_f + xf + 2048 < cov &&
+                                !s3_frame_ok(v, cov, resident) &&
                                 !v->retrig_req) {
-                                v->seek_frame = v->head_frames;
+                                v->seek_frame = cov;
                                 v->retrig_req = true;
                             }
                         }
@@ -930,8 +999,11 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                     s3_fetch(v, p2, &m0, &n0);
                     s3_fetch(v, p2 + 1, &m1, &n1);
                     float k = (float)(ce_f - p) / (float)xf;   // 1 -> 0
-                    lraw = lraw * k + (m0 + (m1 - m0) * fr) * (1.0f - k);
-                    rraw = rraw * k + (n0 + (n1 - n0) * fr) * (1.0f - k);
+                    // equal-power: at 23ms a linear blend audibly dips
+                    // mid-fade on uncorrelated material
+                    float ko = sqrtf(k), ki = sqrtf(1.0f - k);
+                    lraw = lraw * ko + (m0 + (m1 - m0) * fr) * ki;
+                    rraw = rraw * ko + (n0 + (n1 - n0) * fr) * ki;
                 }
             }
             float l = lraw * lg * v->out_gain;

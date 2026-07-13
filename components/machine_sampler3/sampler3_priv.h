@@ -25,6 +25,7 @@
 #define S3_RATE        44100
 #define S3_HEAD_FRAMES (S3_RATE * 1)      // 1 s stereo head (~176 KB PSRAM)
 #define S3_RING_FRAMES (S3_RATE * 4)      // 4 s stereo ring (~706 KB PSRAM)
+#define S3_LSC_FRAMES  (S3_RATE / 2)      // 0.5 s loop-start cache (~88 KB)
 #define S3_NAME_LEN    24
 #define S3_NVOICES     2
 #define S3_WF_W        144                // waveform thumbnail columns
@@ -71,6 +72,17 @@ typedef struct {
     int16_t *head;                   // PSRAM, S3_HEAD_FRAMES * 2
     volatile uint32_t head_frames;   // valid playback-order frames in head
     volatile bool head_valid;        // false while (re)building the head
+    // -- loop-start cache: the head trick, MOVABLE. A streamed loop whose
+    //    start lies beyond the head caches ~0.5s at the window start; wraps
+    //    play from RAM while the stream rewinds behind them — gapless at
+    //    ANY window length (windows past ring reach used to pay a seek +
+    //    0.25s mute every pass). Reader builds it; engine publishes the
+    //    wish (lsc_want) only while the start is STABLE. ------------------
+    int16_t *lsc;                    // PSRAM, S3_LSC_FRAMES * 2 (NULL = none)
+    volatile uint32_t lsc_start;     // playback-order frame the cache begins at
+    volatile uint32_t lsc_frames;    // valid frames in the cache
+    volatile bool lsc_valid;
+    volatile uint32_t lsc_want;      // engine wish (0 = no cache needed)
     int16_t *ring;                   // PSRAM, S3_RING_FRAMES * 2
     volatile uint32_t wpos;          // stream write head (playback-order, absolute)
     // play cursor: double so through-zero varispeed can run it backwards.
