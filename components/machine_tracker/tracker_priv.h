@@ -43,6 +43,11 @@ typedef struct {
     volatile bool seek_req;
     volatile int  seek_pos;        // target pattern-order position
     volatile bool restart_req;
+    volatile int  nudge_req;       // STEP-NUDGE (sync mode): pending encoder
+                                   // detents; render applies whole-pulse row
+                                   // jumps on a row boundary. UI adds, render
+                                   // consumes; cleared on load/restart/scrub/
+                                   // sync-drop so stale detents never fire.
 
     // published module snapshot (render task writes after each render)
     volatile int  state;           // TRK_*
