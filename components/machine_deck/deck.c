@@ -160,7 +160,7 @@ int deck_load_track(const char *name)
     // cached analysis from the sidecar, if this track has been analysed before
     char jp[64];
     int dver = 0;                    // sidecar analysis version (missing = v1)
-    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", name);
+    sample_resolve_aux(name, ".JSN", jp, sizeof(jp));
     cJSON *root = readJSONFileAsCJSON(jp);
     if (root) {
         cJSON *j;
@@ -252,7 +252,7 @@ void deck_set_feel(float f)
     if (dk.bpm_raw > 0) dk.track_bpm = dk.bpm_raw * f;
     if (!dk.track[0]) return;
     char jp[64];
-    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", dk.track);
+    sample_resolve_aux(dk.track, ".JSN", jp, sizeof(jp));
     cJSON *root = readJSONFileAsCJSON(jp);
     if (!root) root = cJSON_CreateObject();
     cJSON_DeleteItemFromObjectCaseSensitive(root, "feel");

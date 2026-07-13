@@ -33,14 +33,16 @@ size_t sampfile_read_f(FIL *f, const sampfile_t *sf, int16_t *dst, size_t n)
 }
 
 static const char *const SF_EXTS_F[] = { ".RAW", ".WAV", ".AIF", ".AIFF" };
+static const char *const SF_DIRS_F[] = { "usr", "usr/REC", "usr/LOOPS" };
 
 int sample_resolve_f(const char *id, char *path, size_t path_len)
 {
     FILINFO fi;
-    for (int i = 0; i < 4; i++) {
-        snprintf(path, path_len, "usr/%s%s", id, SF_EXTS_F[i]);
-        if (f_stat(path, &fi) == FR_OK) return 0;
-    }
+    for (int d = 0; d < 3; d++)
+        for (int i = 0; i < 4; i++) {
+            snprintf(path, path_len, "%s/%s%s", SF_DIRS_F[d], id, SF_EXTS_F[i]);
+            if (f_stat(path, &fi) == FR_OK) return 0;
+        }
     snprintf(path, path_len, "usr/%s.RAW", id);
     return -1;
 }

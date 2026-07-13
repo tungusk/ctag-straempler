@@ -21,9 +21,12 @@ int sample_list_recent(char (**out)[24])
     int n = 0;
     sd_lock_take();
     // f_readdir hands over the timestamps in the SAME pass (a per-file stat()
-    // would re-scan the directory once per entry)
+    // would re-scan the directory once per entry). All pool folders feed the
+    // one dated list.
+    static const char *const dirs[] = {"usr", "usr/REC", "usr/LOOPS"};
+    for (int di = 0; di < 3; di++) {
     FF_DIR d;
-    if (f_opendir(&d, "usr") == FR_OK) {            // FatFS path: no /sdcard
+    if (f_opendir(&d, dirs[di]) == FR_OK) {         // FatFS path: no /sdcard
         FILINFO fi;
         while (f_readdir(&d, &fi) == FR_OK && fi.fname[0]) {
             char id[24];
@@ -52,6 +55,7 @@ int sample_list_recent(char (**out)[24])
             when[slot] = w;
         }
         f_closedir(&d);
+    }
     }
     sd_lock_give();
     // insertion sort, NEWEST FIRST — fresh takes land at the top of the browser

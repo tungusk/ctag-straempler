@@ -8,11 +8,12 @@
 #include "cJSON.h"
 #include "fileio.h"
 #include "slicer_priv.h"
+#include "sampfile.h"
 
 static float sidecar_bpm(const char *name)
 {
     char jp[64];
-    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", name);
+    sample_resolve_aux(name, ".JSN", jp, sizeof(jp));
     cJSON *root = readJSONFileAsCJSON(jp);
     float bpm = 0;
     if (root) {

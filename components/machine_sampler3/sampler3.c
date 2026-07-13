@@ -200,7 +200,7 @@ static void reader_task(void *pv)
                     if (s3.rec_stamp_req) {
                         s3.rec_stamp_req = false;
                         char jp[64];
-                        snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", id);
+                        sample_resolve_aux(id, ".JSN", jp, sizeof(jp));
                         cJSON *root = readJSONFileAsCJSON(jp);
                         if (!root) root = cJSON_CreateObject();
                         cJSON_DeleteItemFromObjectCaseSensitive(root, "bpm");
@@ -269,7 +269,7 @@ static void reader_task(void *pv)
                         // QUANT crop mode snaps its points to these beats
                         v->bpm = 0;
                         char jp[64];
-                        snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", v->name);
+                        sample_resolve_aux(v->name, ".JSN", jp, sizeof(jp));
                         cJSON *root = readJSONFileAsCJSON(jp);
                         if (root) {
                             cJSON *jb = cJSON_GetObjectItemCaseSensitive(root, "bpm");

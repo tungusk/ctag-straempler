@@ -246,15 +246,11 @@ int looper_save_track(int i)
     if (t->len == 0 || !t->buf) return -1;
 
     char name[16], path[48];
-    struct stat st;
-    for (int n = 0; n < 9999; n++) {
-        snprintf(name, sizeof(name), "LOOP_%04d", n);
-        snprintf(path, sizeof(path), "/sdcard/usr/%s.WAV", name);
-        if (stat(path, &st) == 0) continue;
-        char alt[48];   // don't collide with a RAW-era loop of the same index
-        snprintf(alt, sizeof(alt), "/sdcard/usr/%s.RAW", name);
-        if (stat(alt, &st) != 0) break;
-    }
+    // saves land SORTED in usr/LOOPS (folder org); numbering = one readdir
+    // MAX pass across every pool folder so legacy flat LOOP_ files count
+    mkdir("/sdcard/usr/LOOPS", 0777);        // idempotent
+    snprintf(name, sizeof(name), "LOOP_%04d", sample_next_index("LOOP_"));
+    snprintf(path, sizeof(path), "/sdcard/usr/LOOPS/%s.WAV", name);
     FILE *f = fopen(path, "wb");
     if (!f) { ESP_LOGE("LOOPER", "save: cannot open %s", path); return -1; }
     sampwav_start(f);             // saves are WAV: drag them straight into a DAW
@@ -276,7 +272,7 @@ int looper_save_track(int i)
     fclose(f);
 
     char jsn[48], field[24];
-    snprintf(jsn, sizeof(jsn), "/sdcard/usr/%s.JSN", name);
+    snprintf(jsn, sizeof(jsn), "/sdcard/usr/LOOPS/%s.JSN", name);
     cJSON *root = cJSON_CreateObject();
     snprintf(field, sizeof(field), "%s.wav", name);
     cJSON_AddStringToObject(root, "name", field);
