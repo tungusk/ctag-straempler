@@ -31,6 +31,40 @@ size_t sampfile_read(FILE *f, const sampfile_t *sf, int16_t *dst, size_t n)
     return got;
 }
 
+int sampwav_start(FILE *f)
+{
+    // canonical 44-byte header; sizes are placeholders until sampwav_finish
+    static const uint8_t hdr[44] = {
+        'R','I','F','F', 0xFF,0xFF,0xFF,0xFF, 'W','A','V','E',
+        'f','m','t',' ', 16,0,0,0,
+        1,0,                       // PCM
+        2,0,                       // stereo
+        0x44,0xAC,0,0,             // 44100
+        0x10,0xB1,2,0,             // byte rate 176400
+        4,0,                       // block align
+        16,0,                      // bits
+        'd','a','t','a', 0xFF,0xFF,0xFF,0xFF,
+    };
+    return fwrite(hdr, 1, 44, f) == 44 ? 0 : -1;
+}
+
+int sampwav_finish(FILE *f)
+{
+    if (fseek(f, 0, SEEK_END) != 0) return -1;
+    long sz = ftell(f);
+    if (sz < 44) return -1;
+    uint32_t data = (uint32_t)(sz - 44);
+    uint32_t riff = (uint32_t)(sz - 8);
+    uint8_t b[4];
+    b[0] = riff; b[1] = riff >> 8; b[2] = riff >> 16; b[3] = riff >> 24;
+    fseek(f, 4, SEEK_SET);
+    fwrite(b, 1, 4, f);
+    b[0] = data; b[1] = data >> 8; b[2] = data >> 16; b[3] = data >> 24;
+    fseek(f, 40, SEEK_SET);
+    fwrite(b, 1, 4, f);
+    return 0;
+}
+
 static const char *const SF_EXTS[] = { ".RAW", ".WAV", ".AIF", ".AIFF" };
 #define SF_N_EXTS 4
 
