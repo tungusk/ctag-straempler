@@ -124,7 +124,9 @@ The machines (all working; archives in `bin/`):
   abort-on-missing-file) but retains at least one residual race (WDT
   panic-in-panic minutes into record sessions) — fallback only, removal
   pending sampler3's full hardware verdict.
-- `machine_looper` — 4-track clock-synced RAM looper, save-to-library, per-track BP filter
+- `machine_looper` — 4-track clock-synced RAM looper, save-to-library, per-track
+  BP filter. House-style UI (2026-07-13): waveform-thumbnail lanes w/ state-colored
+  playhead + slice redraws, click-toggle Setup rows w/ [ value ] bracket edits
 - `machine_slicer` — one stereo sample, grid OR transient slicing + a
   sensitivity dial-in screen
 - `machine_granular` — 16-grain cloud over a mono sample (raised-cosine grains)
