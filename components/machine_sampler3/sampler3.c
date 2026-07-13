@@ -6,12 +6,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include <dirent.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "cJSON.h"
+#include "ff.h"          // raw FatFS: dated directory scan
 #include "machine.h"
 #include "audio.h"
 #include "recording.h"
@@ -436,33 +436,57 @@ void s3_toggle_arm(int vid)
 int s3_list_samples(char (**names)[S3_NAME_LEN])
 {
     static char (*list)[S3_NAME_LEN] = NULL;
-    static const int MAX = 224;
+    static const int MAX = 512;
+    static uint32_t when[512];        // FatFS date<<16|time per entry
     if (!list) list = heap_caps_malloc(MAX * S3_NAME_LEN, MALLOC_CAP_SPIRAM);
     int n = 0;
     sd_lock_take();
-    DIR *d = opendir("/sdcard/usr");
-    if (d) {
-        struct dirent *e;
-        while ((e = readdir(d)) && n < MAX) {
-            int l = strlen(e->d_name);
-            if (l > 4 && strcasecmp(e->d_name + l - 4, ".RAW") == 0 && l - 4 < S3_NAME_LEN) {
-                snprintf(list[n], S3_NAME_LEN, "%.*s", l - 4, e->d_name);
+    // raw FatFS scan: f_readdir hands over the timestamps in the SAME pass
+    // (a per-file stat() would re-scan the directory once per entry)
+    FF_DIR d;
+    if (f_opendir(&d, "usr") == FR_OK) {          // FatFS path: no /sdcard
+        FILINFO fi;
+        while (f_readdir(&d, &fi) == FR_OK && fi.fname[0]) {
+            int l = strlen(fi.fname);
+            if (!(l > 4 && strcasecmp(fi.fname + l - 4, ".RAW") == 0 &&
+                  l - 4 < S3_NAME_LEN))
+                continue;
+            uint32_t w = ((uint32_t)fi.fdate << 16) | fi.ftime;
+            int slot = n;
+            if (n >= MAX) {
+                // list full: evict the OLDEST if this file is newer. The old
+                // first-224-seen cap silently hid every fresh take once the
+                // library outgrew it ("can't find recordings above 140") —
+                // the drums-era lesson, again.
+                int oldest = 0;
+                for (int k = 1; k < MAX; k++)
+                    if (when[k] < when[oldest]) oldest = k;
+                if (w <= when[oldest]) continue;
+                slot = oldest;
+            } else {
                 n++;
             }
+            snprintf(list[slot], S3_NAME_LEN, "%.*s", l - 4, fi.fname);
+            when[slot] = w;
         }
-        closedir(d);
+        f_closedir(&d);
     }
     sd_lock_give();
-    // insertion sort — small list, keeps the browser stable/alphabetical
+    // insertion sort, NEWEST FIRST — fresh takes land at the top of the
+    // browser (Arlo); name breaks ties so equal-dated files stay stable
     for (int i = 1; i < n; i++) {
         char tmp[S3_NAME_LEN];
+        uint32_t tw = when[i];
         memcpy(tmp, list[i], S3_NAME_LEN);
         int j = i - 1;
-        while (j >= 0 && strcasecmp(list[j], tmp) > 0) {
+        while (j >= 0 && (when[j] < tw ||
+                          (when[j] == tw && strcasecmp(list[j], tmp) > 0))) {
             memcpy(list[j + 1], list[j], S3_NAME_LEN);
+            when[j + 1] = when[j];
             j--;
         }
         memcpy(list[j + 1], tmp, S3_NAME_LEN);
+        when[j + 1] = tw;
     }
     *names = list;
     return n;
@@ -692,7 +716,9 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                     if (v->play_len > v->head_frames &&
                         !s3_frame_ok(v, cs_f, resident)) {
                         v->loading = true;     // parks ring reads until refilled
-                        v->seek_frame = cs_f;  // reader clamps below head_frames
+                        v->seek_frame = cs_f > S3_XFADE_FRAMES + 2048
+                                     ? cs_f - S3_XFADE_FRAMES - 2048 : 0;
+                                       // pre-roll included; reader clamps
                         v->retrig_req = true;
                     }
                 }
@@ -882,21 +908,51 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         }
 
         // loop-start cache wish: a streamed LOOP whose start lies beyond the
-        // head wants ~0.5s of RAM at the window start (reader builds it) —
-        // wraps then play from RAM at ANY window length. Published only
-        // while the start is stable; the head already covers early starts.
+        // head wants ~0.5s of RAM starting one crossfade BEFORE the window
+        // start (the fade blends in the pre-roll) — wraps then play from RAM
+        // at ANY window length. Published only while the start is stable;
+        // the head already covers early starts.
         v->lsc_want = (v->playmode == S3_MODE_LOOP && !v->cs_moving &&
                        v->play_len > v->head_frames + S3_RING_FRAMES &&
                        cs_f >= v->head_frames)
-                      ? cs_f : 0;
+                      ? cs_f - S3_XFADE_FRAMES : 0;
 
-        // loop-seam crossfade length: the last xf frames of the window blend
-        // into its first xf frames (takes are beat-exact but not amplitude-
-        // matched at the seam — the raw splice clicked every wrap once the
-        // wraps went gapless)
+        // loop-seam crossfade length. PRE-ROLL construction: the last xf
+        // frames of the window blend with the content BEFORE the window
+        // start, and the wrap lands exactly ON the start — the loop period
+        // stays exactly W. (Blending the start itself in and landing after
+        // it SHORTENED every pass by xf: loops drifted early against the
+        // monitored source — Arlo.) No pre-roll before the file start, so
+        // full-take loops run unfaded (they're circular: their "pre-roll"
+        // IS the tail).
         uint32_t xf = S3_XFADE_FRAMES;
         if (ce_f > cs_f && xf > (ce_f - cs_f) / 4) xf = (ce_f - cs_f) / 4;
+        if (xf > cs_f) xf = cs_f;
         if (xf < 8) xf = 0;
+
+        // SEAM LATCH: the fade and the wrap must share ONE window geometry.
+        // FREE-mode CVs move the corners a few frames every block, and the
+        // fade zone spans ~16 blocks — mid-fade geometry shifts made the
+        // incoming pre-roll leg jump between blocks (occasional seam click).
+        // Latch on entering the fade zone; the wrap releases it, so live
+        // edits simply land on the next pass.
+        if (v->seam_on) {
+            if (!v->playing || rate <= 0 || v->playmode != S3_MODE_LOOP ||
+                v->pos < (double)v->seam_ce - 4.0 * (double)(v->seam_xf ? v->seam_xf : 64))
+                v->seam_on = false;              // context gone / end swept away
+        }
+        if (!v->seam_on && v->playing && rate > 0 &&
+            v->playmode == S3_MODE_LOOP && xf &&
+            v->pos >= (double)ce_f - (double)xf - (double)frames * 3.0 &&
+            v->pos < (double)ce_f) {
+            v->seam_cs = cs_f;
+            v->seam_ce = ce_f;
+            v->seam_xf = xf;
+            v->seam_on = true;
+        }
+        const uint32_t f_cs = v->seam_on ? v->seam_cs : cs_f;
+        const uint32_t f_ce = v->seam_on ? v->seam_ce : ce_f;
+        const uint32_t f_xf = v->seam_on ? v->seam_xf : xf;
 
         bool starved = false;
         for (int fno = 0; fno < frames; fno++) {
@@ -906,39 +962,44 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
             // behind the stream head) is pure cursor math — NO seek, NO gap.
             // Crop windows within ring reach loop and slide seamlessly.
             if (v->playing && v->head_valid) {
-                if (rate >= 0 && v->pos >= (double)ce_f - 1.0) {
+                if (rate >= 0 && v->pos >= (double)f_ce - 1.0) {
                     if (v->playmode == S3_MODE_LOOP) {
                         if (v->play_len > v->head_frames &&
-                            !s3_frame_ok(v, cs_f, resident)) {
-                            v->pos = (double)cs_f;
+                            !s3_frame_ok(v, f_cs, resident)) {
+                            v->pos = (double)f_cs;
                             v->loading = true;
-                            v->seek_frame = cs_f;
+                            v->seek_frame = f_cs > S3_XFADE_FRAMES + 2048
+                                          ? f_cs - S3_XFADE_FRAMES - 2048 : 0;
                             v->retrig_req = true;
                         } else {
-                            // crossfade already blended in [cs, cs+xf):
-                            // continue right after it — no double-hearing
-                            v->pos = (double)(cs_f + xf);
+                            // PHASE-EXACT wrap: subtract the window. The
+                            // fade already blended toward the pre-roll, so
+                            // this lands seamlessly at/just before cs and
+                            // the loop period is exactly W — no drift
+                            // against a synced source.
+                            v->pos -= (double)(f_ce - f_cs);
                             // PREFETCH: wrap landed in cheap RAM (head or
                             // loop-start cache) but the ring beyond it is
                             // stale (still holds the pre-wrap tail) —
                             // rewind the stream NOW, while RAM plays, so
                             // the handoff at the cache edge is seamless.
                             // No `loading`: audio never stops.
-                            uint32_t cov = 0;      // RAM coverage from cs_f
-                            if (cs_f < v->head_frames) cov = v->head_frames;
-                            if (s3_lsc_has(v, cs_f)) {
+                            uint32_t cov = 0;      // RAM coverage from f_cs
+                            if (f_cs < v->head_frames) cov = v->head_frames;
+                            if (s3_lsc_has(v, f_cs)) {
                                 uint32_t le = v->lsc_start + v->lsc_frames;
                                 if (le > cov) cov = le;
                             }
                             if (v->play_len > v->head_frames && cov &&
                                 cov < v->play_len &&
-                                cs_f + xf + 2048 < cov &&
+                                f_cs + 2048 < cov &&
                                 !s3_frame_ok(v, cov, resident) &&
                                 !v->retrig_req) {
                                 v->seek_frame = cov;
                                 v->retrig_req = true;
                             }
                         }
+                        v->seam_on = false;        // seam complete: live geometry
                     } else {
                         v->playing = false;
                     }
@@ -957,7 +1018,8 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                     } else if (!v->cs_moving && v->play_len > v->head_frames) {
                         v->pos = (double)cs_f;             // landed: one seek
                         v->loading = true;
-                        v->seek_frame = cs_f;
+                        v->seek_frame = cs_f > S3_XFADE_FRAMES + 2048
+                                          ? cs_f - S3_XFADE_FRAMES - 2048 : 0;
                         v->retrig_req = true;
                     }
                     // else: sweep in flight over unbuffered ground — keep
@@ -966,11 +1028,11 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
             }
             uint32_t p = (uint32_t)(v->pos < 0 ? 0 : v->pos);
             bool have = s3_frame_ok(v, p, resident) && s3_frame_ok(v, p + 1, resident) &&
-                        (p + 1) < ce_f;
+                        (p + 1) < f_ce;
             bool can_play = v->playing && !muted && v->head_valid &&
                             rate != 0.0f && have;
             if (v->playing && !muted && v->head_valid && !have && !v->loading &&
-                (p + 1) < ce_f)
+                (p + 1) < f_ce)
                 starved = true;
             float gt = can_play ? 1.0f : 0.0f;
             v->out_gain += (gt - v->out_gain) * 0.015f;
@@ -987,18 +1049,19 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
             float fr = (float)(v->pos - (double)p);
             float lraw = l0 + (l1 - l0) * fr;
             float rraw = r0 + (r1 - r0) * fr;
-            // loop-seam crossfade: inside the fade zone blend the incoming
-            // window start in (pure buffered reads — the capped stream keeps
-            // the whole window in RAM)
-            if (v->playmode == S3_MODE_LOOP && rate > 0 && xf &&
-                p >= ce_f - xf && p < ce_f) {
-                uint32_t p2 = cs_f + (p - (ce_f - xf));
+            // loop-seam crossfade: inside the fade zone blend in the
+            // PRE-ROLL (content before the window start), offset so the
+            // phase-exact wrap lands in perfect continuity: at p = ce-1 the
+            // incoming sits at cs-1, and the next frame is cs.
+            if (v->playmode == S3_MODE_LOOP && rate > 0 && f_xf &&
+                p >= f_ce - f_xf && p < f_ce) {
+                uint32_t p2 = f_cs - (f_ce - p);
                 if (s3_frame_ok(v, p2, resident) &&
                     s3_frame_ok(v, p2 + 1, resident)) {
                     float m0, n0, m1, n1;
                     s3_fetch(v, p2, &m0, &n0);
                     s3_fetch(v, p2 + 1, &m1, &n1);
-                    float k = (float)(ce_f - p) / (float)xf;   // 1 -> 0
+                    float k = (float)(f_ce - p) / (float)f_xf; // 1 -> 0
                     // equal-power: at 23ms a linear blend audibly dips
                     // mid-fade on uncorrelated material
                     float ko = sqrtf(k), ki = sqrtf(1.0f - k);
