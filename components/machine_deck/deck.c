@@ -697,8 +697,8 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     s_cv6 = cvmed_step(&s_m6, io->cv[5]);
     s_cv7 = cvmed_step(&s_m7, io->cv[6]);
     bool d1 = !(io->trig_level & 1), d2 = !(io->trig_level & 2);
-    tg_event_t e1 = trig_gate_step(&s_tg1, d1, nfr);
-    tg_event_t e2 = trig_gate_step(&s_tg2, d2, nfr);
+    tg_event_t e1 = trig_gate_step_ex(&s_tg1, d1, io->trig_rising & 1, nfr);
+    tg_event_t e2 = trig_gate_step_ex(&s_tg2, d2, io->trig_rising & 2, nfr);
     // BOTH-TRIG RESYNC: arms at 0.35 s (ahead of either gate's own 0.6 s hold),
     // fires on release. While it owns the trigs, their individual events are
     // swallowed — otherwise the same gesture would also stop the deck and flip

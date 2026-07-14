@@ -49,6 +49,18 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 .rdot{width:16px;height:16px;border-radius:50%;background:#2a2a2a;border:1px solid #444;margin-bottom:2px}
 .rdot.on{background:#a00;border-color:#f44}
 .btn.cur{background:#0af;color:#000;border-color:#0af}
+.ren{cursor:pointer;border-bottom:1px dotted #555}
+.ren:hover{color:#0af;border-bottom-color:#0af}
+.bar{background:#181818;border:1px solid #333;height:14px;position:relative;margin:4px 0}
+.bar>i{display:block;height:100%;background:#0af}
+.card{border:1px solid #262626;background:#141414;padding:8px 10px;margin:8px 0}
+.card h4{margin:0 0 6px;color:#7fd4ff;font-weight:normal;font-size:12px;letter-spacing:1px}
+.kv{color:#9ab}.kv b{color:#ddd;font-weight:normal}
+.scope{width:100%;border-collapse:collapse;font-size:11px}
+.scope td{padding:2px 4px;border-bottom:1px solid #1c1c1c}
+.mtr{display:inline-block;width:120px;height:8px;background:#181818;border:1px solid #333;vertical-align:middle}
+.mtr>i{display:block;height:100%;background:#3a7}
+.spk{color:#f55;font-weight:bold}
 </style>
 </head>
 <body>
@@ -67,8 +79,19 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <div class="tab on" id="ft0" onclick="filesTab(0)">Samples</div>
     <div class="tab" id="ft1" onclick="filesTab(1)">Modules</div>
   </div>
+  <div style="margin-bottom:6px;display:flex;gap:8px;align-items:center">
+    <label style="color:#888">sort
+      <select id="fsort" onchange="loadFiles()">
+        <option value="new">newest</option>
+        <option value="name">name</option>
+        <option value="bpm">bpm</option>
+        <option value="size">size</option>
+      </select>
+    </label>
+    <span style="color:#555">click a name to rename</span>
+  </div>
   <table id="ftab">
-    <thead><tr><th>Name</th><th>Size</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>BPM</th><th>Length</th><th>Size</th><th></th></tr></thead>
     <tbody id="ftb"></tbody>
   </table>
   <table id="mtab" style="display:none">
@@ -77,6 +100,18 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   </table>
 </div>
 <div class="pane" id="p1">
+  <!-- CONVERT-ON-IMPORT was invisible: an upload silently kicks a conversion pass
+       (MP3 / 48k / 24-bit -> native WAV) and GET /import has always reported its
+       progress. Nothing ever read it. -->
+  <div class="card" id="impcard" style="display:none">
+    <h4>IMPORT / CONVERT</h4>
+    <div class="kv" id="impcur">idle</div>
+    <div class="bar"><i id="impbar" style="width:0%"></i></div>
+  </div>
+  <div style="margin:6px 0">
+    <button class="btn" onclick="rescan()">rescan library</button>
+    <span class="kv" id="impmsg" style="margin-left:8px"></span>
+  </div>
   <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
     Drop files here (one or many): audio (wav/mp3/flac/ogg/m4a &#8594; converted), 16-bit 44.1kHz stereo RAW, or <b>tracker modules</b> (MOD/XM/IT/&#8230; &#8594; usr/MODS). Review &amp; rename below, then Upload.
   </div>
@@ -208,17 +243,51 @@ function delMod(name){
   });
 }
 
+function mmss(sec){
+  if(!sec)return '';
+  var m=Math.floor(sec/60),s=sec%60;
+  return m+':'+(s<10?'0':'')+s;
+}
+
 function loadFiles(){
   fetch('/files').then(function(r){return r.json();}).then(function(d){
+    var files=(d.files||[]).slice();
+    var by=(document.getElementById('fsort')||{}).value||'new';
+    files.sort(function(a,b){
+      if(by==='name')return String(a.name).localeCompare(String(b.name));
+      if(by==='bpm')return (b.bpm||0)-(a.bpm||0);
+      if(by==='size')return (b.size||0)-(a.size||0);
+      return (b.mtime||0)-(a.mtime||0);            // newest first (the browser default)
+    });
     var tb=document.getElementById('ftb'),h='';
-    (d.files||[]).forEach(function(f){
-      h+='<tr><td>'+esc(f.name)+'</td><td>'+(f.size?(Math.round(f.size/1024))+'KB':'')+'</td><td style="white-space:nowrap">'
+    files.forEach(function(f){
+      var bpm=f.bpm?f.bpm.toFixed(1):'<span style="color:#666">--</span>';
+      h+='<tr><td><span class="ren" title="rename" onclick="renamePrompt(\''+esc(f.name)+'\')">'+esc(f.name)+'</span></td>'
+        +'<td>'+bpm+'</td>'
+        +'<td style="color:#9ab">'+mmss(f.dur)+'</td>'
+        +'<td>'+(f.size?(Math.round(f.size/1024))+'KB':'')+'</td>'
+        +'<td style="white-space:nowrap">'
         +'<a class="btn" style="text-decoration:none" href="/files/raw?name='+encodeURIComponent(f.name)+'" download="'+esc(f.name)+'.RAW">&#11015;</a> '
         +'<button class="btn del" onclick="del(\''+esc(f.name)+'\')">&#10005;</button></td></tr>';
     });
-    tb.innerHTML=h||'<tr><td colspan="3" style="color:#555;padding:12px">No files yet</td></tr>';
+    tb.innerHTML=h||'<tr><td colspan="5" style="color:#555;padding:12px">No files yet</td></tr>';
     loadSysinfo();
-  }).catch(function(){document.getElementById('ftb').innerHTML='<tr><td colspan="3" class="er">Failed to load</td></tr>';});
+  }).catch(function(){document.getElementById('ftb').innerHTML='<tr><td colspan="5" class="er">Failed to load</td></tr>';});
+}
+
+// RENAME. The firmware moves the audio, its .JSN sidecar (which carries the bpm/grid
+// stamp) and any .OT slice map together — renaming only the audio would orphan the
+// analysis and the deck would then refuse to loop the track ("no grid").
+function renamePrompt(name){
+  var to=prompt('Rename "'+name+'" to (1-8 chars, A-Z 0-9 _):',name);
+  if(!to)return;
+  to=to.toUpperCase().replace(/[^A-Z0-9_]/g,'').slice(0,8);
+  if(!to||to===name)return;
+  fetch('/files/rename?name='+encodeURIComponent(name)+'&to='+encodeURIComponent(to),{method:'POST'})
+    .then(function(r){
+      if(r.ok){loadFiles();return;}
+      return r.text().then(function(t){alert('Rename failed: '+t);});
+    }).catch(function(){alert('Rename failed');});
 }
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
@@ -334,6 +403,7 @@ function doBatchUpload(){
     pr.style.display='none';pr.value=0;
     bm.className='msg '+(err?'er':'ok');bm.textContent=msg;
     showBatchBtns(true);loadFiles();loadMods();
+    pollImport();   // an upload KICKS a convert-on-import pass — show it, don't hide it
     if(!err&&!batchCancel)setTimeout(clearBatch,1500);
   }
   var okcb=function(){ok++;i++;next();};
@@ -682,6 +752,89 @@ function blUpload(){
   }).catch(function(){m.className='msg er';m.textContent='Network error';});
 }
 
+
+// ---- IMPORT / CONVERT progress -------------------------------------------------
+// GET /import has always returned {busy,done,fail,seen,pct,cur}; the page never asked.
+var impTimer=null;
+function pollImport(){
+  fetch('/import').then(function(r){return r.json();}).then(function(d){
+    var card=document.getElementById('impcard');
+    if(d.busy){
+      card.style.display='block';
+      document.getElementById('impbar').style.width=(d.pct||0)+'%';
+      document.getElementById('impcur').textContent=
+        'converting '+(d.cur||'')+'   '+(d.done||0)+'/'+(d.seen||0)+(d.fail?('   failed '+d.fail):'');
+      if(!impTimer)impTimer=setInterval(pollImport,700);
+    }else{
+      if(impTimer){clearInterval(impTimer);impTimer=null;}
+      if(d.seen){
+        card.style.display='block';
+        document.getElementById('impbar').style.width='100%';
+        document.getElementById('impcur').textContent=
+          'done — '+(d.done||0)+' converted'+(d.fail?(', '+d.fail+' failed'):'')+' of '+d.seen+' scanned';
+        loadFiles();
+      }else{card.style.display='none';}
+    }
+  }).catch(function(){});
+}
+function rescan(){
+  document.getElementById('impmsg').textContent='scanning...';
+  fetch('/import',{method:'POST'}).then(function(){
+    document.getElementById('impmsg').textContent='';
+    pollImport();
+  }).catch(function(){document.getElementById('impmsg').textContent='failed';});
+}
+
+// ---- BEATLISTEN ----------------------------------------------------------------
+var BL_MODE=['off','KICK','FLUX'],BL_ST=['idle','hunting','LOCKED'];
+function updateBl(d){
+  var b=d.bl,e=document.getElementById('blbox');
+  if(!e)return;
+  if(!b){e.textContent='not reporting';return;}
+  var mode=BL_MODE[b.m]||('mode '+b.m), st=BL_ST[b.st]||('state '+b.st);
+  e.innerHTML='<b>'+esc(mode)+'</b> &middot; '+esc(st)
+    +'<br>bpm <b>'+(b.bpm?b.bpm.toFixed(1):'--')+'</b>'
+    +' &nbsp; conf <b>'+(b.cf?b.cf.toFixed(2):'--')+'</b>'
+    +' &nbsp; cost <b>'+(b.us||0)+' us</b>';
+}
+
+// ---- CV SCOPE with SPIKE DETECTION ---------------------------------------------
+// This is the instrument that would have found today's bug in seconds: CV7 sat at a
+// steady ~1221 and reported ONE sample of 4 — and because CV7 is the crossfader (a
+// GAIN), that single sample was an audible click on both decks.
+// A spike is a sample that departs hugely from the channel's own recent median. We
+// compare against the median (not the mean) for the same reason the firmware does: a
+// mean is dragged by the very outlier we are trying to catch.
+var cvHist=[],cvSpikes=[],cvLast=[];
+for(var ci=0;ci<8;ci++){cvHist.push([]);cvSpikes.push(0);cvLast.push('');}
+function median(a){var b=a.slice().sort(function(x,y){return x-y;});return b[Math.floor(b.length/2)];}
+function scopeReset(){for(var i=0;i<8;i++){cvSpikes[i]=0;cvLast[i]='';}}
+function updateScope(cv){
+  var tb=document.getElementById('scopetb');
+  if(!tb||!cv)return;
+  var h='',now=new Date().toLocaleTimeString();
+  for(var i=0;i<8;i++){
+    var v=cv[i]||0,hist=cvHist[i];
+    if(hist.length>=9){
+      var med=median(hist);
+      // 800 counts is far above knob jitter (a few counts) and far below a real sweep
+      // being mistaken for a spike, because a sweep moves the median with it.
+      if(Math.abs(v-med)>800){cvSpikes[i]++;cvLast[i]=v+' @ '+now;}
+    }
+    hist.push(v);
+    if(hist.length>15)hist.shift();
+    var pct=Math.round(v/4095*100);
+    h+='<tr><td style="color:#888">CV'+(i+1)+'</td>'
+      +'<td style="width:44px;text-align:right">'+v+'</td>'
+      +'<td><span class="mtr"><i style="width:'+pct+'%"></i></span></td>'
+      +'<td>'+(cvSpikes[i]?('<span class="spk">spikes '+cvSpikes[i]+'</span>'):'<span style="color:#3a3">clean</span>')+'</td>'
+      +'<td style="color:#666;font-size:10px">'+esc(cvLast[i]||'')+'</td></tr>';
+  }
+  tb.innerHTML=h;
+  var hint=document.getElementById('scopehint');
+  if(hint)hint.textContent='leave it running with your hands off the panel';
+}
+
 function pollStatus(){
   fetch('/status').then(function(r){return r.json();}).then(function(d){
     curMach=d.machine||'';
@@ -698,9 +851,12 @@ function pollStatus(){
     var ot=document.getElementById('otdl');
     if(ot)ot.style.display=(d.machine==='Slicer')?'inline':'none';
     updateRemote(d);
+    updateBl(d);
+    updateScope(d.cv);
   }).catch(function(){});
 }
 setInterval(pollStatus,500);
+pollImport();
 tab(3);          // Remote is the default tab
 pollStatus();
 </script>

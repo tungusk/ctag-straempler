@@ -653,8 +653,8 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     // MOMENTARY loop (the long release toggles back out).
     static trig_gate_t tg1, tg2;
     const int nfr = MACHINE_BLOCK / 2;
-    tg_event_t e1 = trig_gate_step(&tg1, !(io->trig_level & 1), nfr);
-    tg_event_t e2 = trig_gate_step(&tg2, !(io->trig_level & 2), nfr);
+    tg_event_t e1 = trig_gate_step_ex(&tg1, !(io->trig_level & 1), io->trig_rising & 1, nfr);
+    tg_event_t e2 = trig_gate_step_ex(&tg2, !(io->trig_level & 2), io->trig_rising & 2, nfr);
     if (e1 == TG_REL_SHORT) trk.playing = !trk.playing;
     else if (e1 == TG_REL_LONG) trk.restart_req = true;
     if (e2 == TG_PRESS || e2 == TG_REL_LONG) trk.loop_toggle_req = true;
