@@ -14,6 +14,7 @@
 #include "ui_events.h"
 #include "tft.h"
 #include "tftspi.h"
+#include <esp_http_server.h>
 #include "machine.h"
 #include "clock.h"
 #include "beatlisten.h"
@@ -294,10 +295,11 @@ static int looper_live_handler(int it_id, int event, void *ev_data){
 // turn with an explicit "[ value ]" bracket while editing. Value edits and
 // toggles repaint ONE row; only navigation repaints the page.
 static const char *setup_labels[] = {"Sync", "Clock Src", "Bars", "Monitor",
-                                     "BP Filter", "Save Trk", "Bounce"};
-#define SETUP_N 7
-#define SETUP_SAVE_ROW 5
-#define SETUP_BOUNCE_ROW 6
+                                     "BP Filter", "Clock PPQ", "Save Trk", "Bounce"};
+#define SETUP_N 8
+#define SETUP_PPQ_ROW 5
+#define SETUP_SAVE_ROW 6
+#define SETUP_BOUNCE_ROW 7
 #define SETUP_IS_TOGGLE(i) ((i) == 0 || (i) == 3 || (i) == 4)
 #define SETUP_ROW_Y(i) (TFT_getfontheight() + 12 + (i) * (TFT_getfontheight() + 8))
 static const char *s_save_msg = "";   // transient result shown on the Save row
@@ -310,9 +312,10 @@ static void setup_value_str(int i, char *v, size_t n){
         case 2: snprintf(v, n, "%d", lp.bars); break;
         case 3: snprintf(v, n, "%s", lp.monitor ? "ON" : "OFF"); break;
         case 4: snprintf(v, n, "%s", lp.filter_on ? "ON" : "OFF"); break;
-        case 5: snprintf(v, n, "%s trk %d",
+        case 5: snprintf(v, n, "%d", looper_get_ppq()); break;
+        case 6: snprintf(v, n, "%s trk %d",
                          s_save_msg[0] ? s_save_msg : "press:", lp.sel + 1); break;
-        case 6: snprintf(v, n, "%s",
+        case 7: snprintf(v, n, "%s",
                          s_bounce_msg[0] ? s_bounce_msg : "press: all->1"); break;
         default: v[0] = 0;
     }
@@ -336,6 +339,13 @@ static void setup_adj(int i, int dir){
             break;
         }
         case 3: lp.monitor = !lp.monitor; break;
+        case 5: {   // Clock PPQ ladder — Arlo's jig clocks at 8
+            static const int lad[] = {1, 2, 4, 8};
+            int k = 0, cur = looper_get_ppq();
+            for (int q = 0; q < 4; q++) if (lad[q] == cur) k = q;
+            looper_set_ppq((float)lad[(k + (dir > 0 ? 1 : 3)) % 4]);
+            break;
+        }
         case 4: lp.filter_on = !lp.filter_on; break;
     }
 }
@@ -445,6 +455,8 @@ static int looper_main_event(int event, void *ev_data){
 static const char *const looper_main_items[] = {"Live", "Setup"};
 static const int looper_main_targets[] = {M_LOOPER_LIVE, M_LOOPER_SETUP};
 
+extern const httpd_uri_t looper_web_uris[];
+
 const machine_ui_t looper_menu_ui = {
     .main_items = looper_main_items,
     .main_targets = looper_main_targets,
@@ -452,4 +464,6 @@ const machine_ui_t looper_menu_ui = {
     .register_pages = looper_register_pages,
     .main_event = looper_main_event,
     .boot_target = M_LOOPER_LIVE,
+    .web_uris = looper_web_uris,
+    .n_web_uris = 1,
 };

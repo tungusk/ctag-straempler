@@ -31,11 +31,20 @@ static clockin_t s_ci;
 // CV, TR (the looper masks its clock trig out of button handling) or AUDIO
 // (the beat listener's synthesized grid).
 
+// PPQ accessors for the menu (s_ci stays private to the engine)
+int looper_get_ppq(void) { return (int)(s_ci.ppb + 0.5f); }
+void looper_set_ppq(float q) { clockin_set_ppb(&s_ci, q); }
+
 // ---- track helpers --------------------------------------------------------
 static uint32_t bar_frames(void)
 {
     if (!s_ci.clk.period) return 0;
-    return s_ci.clk.period * 4u * (uint32_t)(lp.bars > 0 ? lp.bars : 1);
+    // period is per PULSE; a 4/4 bar is 4 beats x ppb pulses each (the PPQ
+    // row — Arlo's jig clocks at 8 PPQ and the old fixed-1 assumption meant
+    // the looper could never lock it)
+    uint32_t ppb = (uint32_t)(s_ci.ppb + 0.5f);
+    if (ppb < 1) ppb = 1;
+    return s_ci.clk.period * 4u * ppb * (uint32_t)(lp.bars > 0 ? lp.bars : 1);
 }
 
 static void track_start_record(lp_track_t *t)
@@ -186,13 +195,34 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     lp.bpm = s_ci.clk.bpm;                  // mirror to the UI-facing fields
     lp.locked = s_ci.clk.locked;            // (also reflects clock-stop promptly)
 
+    // /status diag (the deck's house pattern): sync/lock/ppq + track states,
+    // so the web can SEE why an arm is or isn't converting to a record
+    {
+        static int s_diag = 0;
+        if (++s_diag >= 480) {              // ~350 ms cadence
+            s_diag = 0;
+            static const char st_ch[] = {'E', 'A', 'R', 'P', 'S'};
+            char d[64];
+            snprintf(d, sizeof(d), "%s%s q%d b%.1f f%lu T%c%c%c%c",
+                     lp.sync_on ? "SYN " : "free ",
+                     lp.locked ? "LOCK" : "----",
+                     (int)(s_ci.ppb + 0.5f), lp.bpm,
+                     (unsigned long)s_ci.raw_fires,
+                     st_ch[lp.tr[0].state], st_ch[lp.tr[1].state],
+                     st_ch[lp.tr[2].state], st_ch[lp.tr[3].state]);
+            audio_status_set_voices("looper", d);
+        }
+    }
+
     for (int f = 0; f < frames; f++) {
         bool bar_edge = false;
         if (f == 0 && clk_acc) {
             // each clock pulse = one quarter; a bar (4/4) is every 4 pulses.
             // Armed tracks start on the next bar boundary; the record LENGTH
             // (bars) is handled separately by track_start_record's target.
-            if (s_ci.clk.locked && (s_ci.clk.ring_n % 4) == 0)
+            int ppb = (int)(s_ci.ppb + 0.5f);
+            if (ppb < 1) ppb = 1;
+            if (s_ci.clk.locked && (s_ci.clk.ring_n % (4 * ppb)) == 0)
                 bar_edge = true;
         }
 
@@ -254,13 +284,21 @@ int looper_save_track(int i)
     // saves land SORTED in usr/LOOPS (folder org); numbering = one readdir
     // MAX pass across every pool folder so legacy flat LOOP_ files count
     mkdir("/sdcard/usr/LOOPS", 0777);        // idempotent
-    snprintf(name, sizeof(name), "LOOP_%04d", sample_next_index("LOOP_"));
+    // 8 chars, not 9: this build is FATFS_LFN_NONE (8.3 only), so the
+    // original "LOOP_%04d" stem could never be created — fopen failed on
+    // every save and the path shipped unexercised. LOOP%04d matches the
+    // REC_%04d width convention.
+    snprintf(name, sizeof(name), "LOOP%04d", sample_next_index("LOOP"));
     snprintf(path, sizeof(path), "/sdcard/usr/LOOPS/%s.WAV", name);
     FILE *f = fopen(path, "wb");
     if (!f) { ESP_LOGE("LOOPER", "save: cannot open %s", path); return -1; }
     sampwav_start(f);             // saves are WAV: drag them straight into a DAW
 
-    int32_t *chunk = heap_caps_malloc(512 * sizeof(int32_t), MALLOC_CAP_INTERNAL);
+    // MALLOC_CAP_DMA (not bare _INTERNAL): _INTERNAL alone can return the
+    // 32-bit-only IRAM heap under memory pressure, and fwrite()'s memmove
+    // byte-copies the buffer -> LoadStoreError on IRAM. DMA memory is
+    // byte-accessible internal DRAM, matching deck.c/dualdeck.c's WAV chunk.
+    int32_t *chunk = heap_caps_malloc(512 * sizeof(int32_t), MALLOC_CAP_DMA);
     if (!chunk) { fclose(f); return -1; }
     uint32_t pos = 0, left = t->len;
     while (left) {
@@ -287,6 +325,11 @@ int looper_save_track(int i)
     cJSON_AddStringToObject(root, "username", "myself");
     cJSON_AddStringToObject(root, "url", "local");
     cJSON_AddStringToObject(root, "license", "own license");
+    // tempo stamp when the loop was cut against a locked clock — dualdeck
+    // and the deck read this to grid the loop without an analysis pass
+    float bpm = clockin_beat_bpm(&s_ci);
+    if (bpm > 20.0f && bpm < 320.0f)
+        cJSON_AddNumberToObject(root, "bpm", bpm);
     char *s = cJSON_Print(root);
     cJSON_Delete(root);
     if (s) { writeJSONFile(jsn, s); free(s); }
@@ -375,6 +418,7 @@ static cJSON *looper_preset_save(void)
     cJSON *o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "sync", lp.sync_on);
     cJSON_AddNumberToObject(o, "clk_src", lp.clk_src);
+    cJSON_AddNumberToObject(o, "ppq", s_ci.ppb);
     cJSON_AddNumberToObject(o, "bars", lp.bars);
     cJSON_AddBoolToObject(o, "monitor", lp.monitor);
     cJSON_AddBoolToObject(o, "filter", lp.filter_on);
@@ -389,6 +433,10 @@ static void looper_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) {
         int cs = j->valueint;              // 0..7 CV, 8/9 TR, 10 AUDIO (clock.h)
         lp.clk_src = (cs >= 0 && cs < CLK_SRC_COUNT) ? cs : 7;
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppq")) && cJSON_IsNumber(j)) {
+        float q = (float)j->valuedouble;
+        clockin_set_ppb(&s_ci, (q == 1 || q == 2 || q == 4 || q == 8) ? q : 1.0f);
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "bars")) && cJSON_IsNumber(j))    lp.bars = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor")))                  lp.monitor = cJSON_IsTrue(j);

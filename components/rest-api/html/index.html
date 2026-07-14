@@ -75,6 +75,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <h1>ctag-straempler</h1>
   <div class="tabs">
     <div class="tab on" id="t3" onclick="tab(3)">Remote</div>
+    <div class="tab" id="t5" onclick="tab(5)">Listener</div>
     <div class="tab" id="t0" onclick="tab(0)">Files</div>
     <div class="tab" id="t1" onclick="tab(1)">Upload</div>
     <div class="tab" id="t2" onclick="tab(2)">Freesound</div>
@@ -193,7 +194,31 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   </div>
   <div class="msg" id="sm"></div>
   <div class="card">
+    <h4>CLOCK</h4>
+    <div class="kv">device time <b id="devtime">--</b> <span style="color:#555">(SNTP, shown at UTC+shift)</span></div>
+    <label>Timezone shift (hours vs UTC, -12..+14) &#8212; saved with Save above</label>
+    <input id="stz" type="number" min="-12" max="14" step="1" style="width:90px">
+  </div>
+  <div class="card">
+    <h4>ABOUT</h4>
+    <div class="kv">firmware <b id="abver">--</b></div>
+    <div class="kv" style="margin-top:4px">CTAG Str&#228;mpler &#8212; upstream by Robert Manzke (CC BY-NC-SA 4.0); v09-machines fork by Arlo + Claude</div>
+  </div>
+  <label style="margin-top:18px">Boot logo (any image &#8212; converted in-browser to the exact 320x240 BMP the module needs)</label>
+  <input type="file" id="blf" accept="image/*" onchange="blPick(this.files[0])">
+  <canvas id="blc" width="320" height="240" style="display:none;border:1px solid #333;margin-top:6px;max-width:100%"></canvas>
+  <div class="row" id="blrow" style="display:none">
+    <button class="btn" onclick="blUpload()">Upload boot logo</button>
+  </div>
+  <div class="msg" id="blm"></div>
+</div>
+<div class="pane" id="p5">
+  <div class="card">
     <h4>LISTENER</h4>
+    <div class="kv" id="blbox">--</div>
+  </div>
+  <div class="card">
+    <h4>CONTROLS</h4>
     <div class="row">
       <div><label>Mode</label>
         <select id="blmode" onchange="blSet()">
@@ -211,18 +236,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     </div>
     <div class="msg" id="blsm"></div>
   </div>
-  <div class="card">
-    <h4>ABOUT</h4>
-    <div class="kv">firmware <b id="abver">--</b></div>
-    <div class="kv" style="margin-top:4px">CTAG Str&#228;mpler &#8212; upstream by Robert Manzke (CC BY-NC-SA 4.0); v09-machines fork by Arlo + Claude</div>
-  </div>
-  <label style="margin-top:18px">Boot logo (any image &#8212; converted in-browser to the exact 320x240 BMP the module needs)</label>
-  <input type="file" id="blf" accept="image/*" onchange="blPick(this.files[0])">
-  <canvas id="blc" width="320" height="240" style="display:none;border:1px solid #333;margin-top:6px;max-width:100%"></canvas>
-  <div class="row" id="blrow" style="display:none">
-    <button class="btn" onclick="blUpload()">Upload boot logo</button>
-  </div>
-  <div class="msg" id="blm"></div>
+  <div class="msg">GROOVE = tempo model (steady grid, never octave-hops); PULSE/KICK/FLUX = raw onset pulses. Machines follow via Clock Src = AUDIO.</div>
 </div>
 <div class="sbar">
   <div class="cv" id="cvb"></div>
@@ -241,7 +255,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 <script>
 
 function tab(n){
-  for(var i=0;i<5;i++){
+  for(var i=0;i<6;i++){
     document.getElementById('t'+i).className='tab'+(i===n?' on':'');
     document.getElementById('p'+i).className='pane'+(i===n?' on':'');
   }
@@ -594,6 +608,12 @@ function loadSysinfo(){
     var bm=document.getElementById('blmode');if(bm&&d.blisten!=null)bm.value=String(d.blisten);
     var bo=document.getElementById('blout');if(bo&&d.blout!=null)bo.value=String(d.blout);
     var av=document.getElementById('abver');if(av&&d.version)av.textContent=d.version;
+    var tz=document.getElementById('stz');if(tz&&d.tz!=null&&document.activeElement!==tz)tz.value=d.tz;
+    var dt=document.getElementById('devtime');
+    if(dt&&d.time){
+      var t=new Date((d.time+(d.tz||0)*3600)*1000);
+      dt.textContent=t.toISOString().replace('T',' ').slice(0,19);
+    }
     var dk=document.getElementById('disk');
     if(dk){
       dk.textContent=d.total?('SD '+Math.round(d.free/1048576)+'/'+Math.round(d.total/1048576)+'MB'):'';
@@ -614,7 +634,7 @@ function blRelock(){
   });
 }
 function saveSet(){
-  var body=JSON.stringify({ssid:document.getElementById('ss').value,passwd:document.getElementById('sp').value,apikey:document.getElementById('sa').value,hostname:document.getElementById('sh').value,remote:document.getElementById('srem').checked?1:0});
+  var body=JSON.stringify({ssid:document.getElementById('ss').value,passwd:document.getElementById('sp').value,apikey:document.getElementById('sa').value,hostname:document.getElementById('sh').value,remote:document.getElementById('srem').checked?1:0,tz:parseInt(document.getElementById('stz').value||'0',10)});
   fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(function(r){
     var m=document.getElementById('sm');
     m.className='msg '+(r.ok?'ok':'er');
