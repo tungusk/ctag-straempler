@@ -519,7 +519,7 @@ static esp_err_t dualdeck_start(void)
     clockin_reset(&dd.ci, dd_ppb[dd.ppb_idx]);
     s_run = true;
     xTaskCreate(reader_task, "dd_reader", 4096, NULL, 6, NULL);
-    audio_status_set_voices("dualdeck", "");
+    audio_status_set_voices("doubledecker", "");
     return ESP_OK;
 }
 
@@ -844,7 +844,7 @@ static void dualdeck_preset_load(const cJSON *node)
 extern const machine_ui_t dualdeck_menu_ui;
 
 const machine_t machine_dualdeck = {
-    .name = "DualDeck",
+    .name = "DoubleDecker",
     .start = dualdeck_start,
     .stop = dualdeck_stop,
     .process = dualdeck_process,
