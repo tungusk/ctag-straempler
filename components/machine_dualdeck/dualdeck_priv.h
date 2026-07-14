@@ -16,9 +16,10 @@
 //   TR2 = FOCUSED deck LOOP: press = toggle (beat-true), hold = momentary
 //   NOTE the trade: trigs address the focused deck (encoder picks), so a
 //   sequencer can't independently gate both decks — grammar consistency won
-//   knob6/CV6 = equal-power crossfade A<->B (takeover fade auto-moves it on a
+//   knob6/CV6 = master DJ filter on the summed mix (the deck's LP/HP sweep) —
+//               the sweep lives on CV6 in every machine; consistency wins
+//   knob7/CV7 = equal-power crossfade A<->B (takeover fade auto-moves it on a
 //               deck start; moving the knob past a deadband grabs it back)
-//   knob7/CV7 = master DJ filter on the summed mix (the deck's LP/HP sweep)
 //   encoder   = focus (turn) / track browser for the focused deck (press) /
 //               Setup (long)
 //
@@ -34,10 +35,21 @@
 #define DD_RING_FRAMES (DD_RATE * 6)          // 6 s stereo PSRAM ring x2 (~2.1 MB)
 #define DD_LOW_WATER   (DD_RATE / 3)
 #define DD_NAME_LEN    24
-#define DD_WF_W        120                    // per-panel waveform columns
+#define DD_WF_W        120                    // waveform columns per deck
+enum { DD_LAY_V = 0, DD_LAY_H = 1 };   // stacked single-decks / side-by-side panels
 
 typedef struct {
-    // streaming (reader owns wpos + all seeks; engine advances rpos while playing)
+    // streaming — PLAYBACK-ORDER frame space (the deck's 2026-07-13 loop
+    // rework, transplanted). wpos/rpos are monotonic PLAYBACK counters, not
+    // file frames: the READER owns the playback->file mapping, so a loop is a
+    // MAPPING (not a cursor wrap) and its length is bounded by the TRACK, not
+    // by the ring.
+    //
+    //   file_frame(p) = loop_active ? loop_start + ((p - map_p0) % loop_len_fr)
+    //                               : map_f0 + (p - map_p0)
+    //
+    // Ring slot is p % DD_RING_FRAMES, so counters are NEVER rebased — every
+    // transition rewrites the MAPPING instead.
     int16_t *ring;                 // PSRAM, DD_RING_FRAMES * 2
     volatile uint32_t wpos;
     volatile uint32_t rpos_i;
@@ -51,6 +63,10 @@ typedef struct {
     sampfile_t sf;                 // container descriptor (reader-owned)
     char pending[DD_NAME_LEN];
     char track[DD_NAME_LEN];       // loaded track id ("" = none)
+    volatile uint32_t map_p0, map_f0;   // mapping origin (playback / file)
+    volatile uint32_t ui_fpos;     // published FILE position of the play cursor
+    volatile uint32_t ui_lstart, ui_llen;   // the window the UI should DRAW
+                                            // (pending one if a move is scheduled)
 
     // grid + sync (sidecar stamp; no analysis in this machine)
     volatile float track_bpm;      // 0 = unstamped -> free-run "no grid"
@@ -60,15 +76,28 @@ typedef struct {
     volatile bool arm_start;       // start/restart from the cue
     volatile bool arm_stop;        // stop + re-park at the cue
 
-    // per-deck QUANTx2-style LOOP (the deck's KO-II loop, transplanted):
-    // TR2 press = toggle on the FOCUSED deck (unified TR grammar), engage
-    // anchors on the nearest grid beat (ring-resident by the lead cap),
-    // engine wraps by whole windows, release = seamless flag drop (a
-    // bar-quantized restart already covers "get back to song position")
+    // TRACK LOOP as a streamed window (deck parity): the reader wraps its own
+    // reads at the last WHOLE BEAT instead of seeking to the cue at EOF. The
+    // old EOF seek muted, re-buffered and RESET the PLL every pass — the deck's
+    // "it re-detects tempo at the beginning of every cycle".
+    volatile uint32_t tl_start;    // = grid_offset
+    volatile uint32_t tl_len;      // whole beats of track (0 = disabled)
+
+    // per-deck KO-II LOOP — STREAMED (deck rework, transplanted): TR2 press =
+    // toggle on the FOCUSED deck (unified TR grammar). Engage anchors on the
+    // grid beat AT OR BEFORE the cursor and only rewrites the MAPPING; the
+    // READER wraps its own file reads at the window end and crossfades the
+    // seam, so the window can be ANY length (1/4 .. 256 beats) — the ring
+    // stopped being the ceiling. Release = rebase to linear, no duck.
     volatile bool loop_active;
-    volatile uint32_t loop_start;  // frames, absolute
-    volatile uint32_t loop_len_fr;
-    volatile int  loop_beats;      // display
+    volatile uint32_t loop_start;  // window start (FILE frames)
+    volatile uint32_t loop_len_fr; // window length (frames) — any length
+    volatile int  loop_beats;      // display, in QUARTER-beats
+    // a window move/resize is SCHEDULED at the reader's frontier: buffered audio
+    // plays out, the reader starts the new window, the cursor commits on arrival.
+    // Truncating the read-ahead instead starved the ring — and a starve freezes
+    // the cursor while the clock runs on, which is a PHASE SLIP, not a dropout.
+    volatile uint32_t rm_start, rm_len, rm_p0, rm_at;   // rm_at 0 = none
 
     // PLL (deck math, per deck, against the shared clock)
     float phase_int;
@@ -108,8 +137,9 @@ typedef struct {
     volatile bool manual;          // knob is live (grabbed / no auto pending)
     volatile int fade_beats;       // Setup: 0 = cut, else 1/4/8 beats
 
-    volatile int loop_len_beats;   // Setup ladder {1,2,4,8,16}; per-deck len
-                                   // freezes at engage
+    volatile int loop_len_beats;   // Setup ladder, in QUARTER-beats (dd_loop_q);
+                                   // per-deck length freezes at engage
+    volatile int layout;           // DD_LAY_V (stacked decks) / DD_LAY_H (panels)
 
     // master DJ filter (knob7 on the summed mix; deck sweep, fixed q)
     volatile int filt_cv;
@@ -121,6 +151,10 @@ typedef struct {
 extern dd_state_t dd;
 extern const float dd_ppb[6];
 extern const char *const dd_ppb_names[6];
+// loop-length ladder in QUARTER-beats (the deck's, verbatim): 1/4 .. 256 beats
+#define DD_LOOP_STEPS 11
+extern const int dd_loop_q[DD_LOOP_STEPS];
+void dd_fmt_beats(int q, char *out, int n);   // 1 -> "1/4", 2 -> "1/2", 4 -> "1"
 
 // UI-side (SD-touching; UI/background tasks only)
 int  dualdeck_load_track(int deck, const char *name);
