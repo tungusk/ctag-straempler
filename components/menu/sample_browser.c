@@ -24,7 +24,7 @@ static struct {
     int  n, sel;
 } b;
 
-static const char *const k_rows[BR_ROWS] = {"all", "pool", "REC", "LOOPS", "SLICES"};
+static const char *const k_rows[BR_ROWS] = {"ALL", "POOL", "REC", "LOOPS", "SLICES"};
 
 static void folder_draw(void)
 {
