@@ -311,7 +311,7 @@ static int dd_min_q(void)
 #define DD_PICKUP  120        // counts of movement that grab a loop knob
 #define DD_PASSTOL 90         // how close a knob must come to reclaim its param
 static int s_cv6_ref[2] = {-2, -2}, s_cv7_ref[2] = {-2, -2};   // loop window / length grabs
-static int s_pk6 = -2, s_pk7 = -2;           // filter / fader pass-through
+static int s_catch_x = 0, s_catch_f = 0;     // blocks of gentle catch-up after a borrow
 static int s_mv6[2] = {0, 0}, s_mv7[2] = {0, 0};   // move debounce (ADC spikes)
 static int s_c6_last[2] = {-1, -1};          // knob position the last move was made AT
 static int s_len_idx[2] = {4, 4};            // ladder index while looping
@@ -355,8 +355,8 @@ void dualdeck_loop_toggle(int deck)
         v->rm_at = 0;
         v->loop_active = false;             // mapping written BEFORE the flag
         if (v->wpos > valid_to) v->wpos = valid_to;
-        s_pk6 = s_pk7 = -1;                 // filter + fader stay put until the
-                                            // knobs come back through them
+        s_catch_x = s_catch_f = 420;        // ~0.6 s of gentle catch-up to the
+                                            // knobs, which are live immediately
         s_cv6_ref[deck & 1] = s_cv7_ref[deck & 1] = -2;
         return;
     }
@@ -708,23 +708,22 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         }
     }
 
-    // ---- PASS-THROUGH pickup for a knob a loop borrowed: it stays inert until it
-    // comes back THROUGH the value the engine is still using, so leaving a loop can
-    // never step the mix or slam the filter.
-    if (!flt_taken && s_pk6 != -2) {
-        int d = c_flt - dd.filt_cv;
-        if (d < 0) d = -d;
-        if (d <= DD_PASSTOL) s_pk6 = -2;
-    }
-    if (!fad_taken && s_pk7 != -2) {
-        int d = c_fad - (int)(dd.xf * 4095.0f);      // the fader's LIVE position
-        if (d < 0) d = -d;
-        if (d <= DD_PASSTOL) s_pk7 = -2;
-    }
-    bool flt_live = !flt_taken && s_pk6 == -2;
-    bool xf_live  = !fad_taken && s_pk7 == -2;
-    int c7 = c_fad, c6 = c_flt;
-    (void)c6;
+    // ---- COMING BACK from a borrow. NOT pass-through pickup: that is right for
+    // the deck's SPEED knob (a jump there slams the tempo) but wrong for a fader,
+    // where a jump is merely a gain step — and it left the crossfader DEAD until
+    // you swept it back through the mix's current position, which is the last
+    // thing you want mid-set (Arlo: "the crossfader doesnt seem to work now").
+    //
+    // The knob is LIVE the instant the loop lets go. What is slowed is the ENGINE:
+    // for ~0.6 s after a release the mix and the cutoff CATCH UP to wherever the
+    // knob now sits, gently. No jump, no dead control.
+    if (!fad_taken && s_catch_x > 0) s_catch_x--;
+    if (!flt_taken && s_catch_f > 0) s_catch_f--;
+    bool flt_live = !flt_taken;
+    bool xf_live  = !fad_taken;
+    float xf_slew  = (s_catch_x > 0) ? 0.004f : 0.2f;   // ~0.6 s catch-up, else snappy
+    float flt_slew = (s_catch_f > 0) ? 0.01f  : 0.2f;
+    int c7 = c_fad;
 
     // ---- crossfade: three states — AUTO (takeover fade in flight), HELD
     // (fade landed; the mix stays put wherever automation left it), MANUAL
@@ -751,8 +750,8 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         if (dd.xf == xf_target) dd.auto_active = false;   // -> HELD, not manual
     } else if (dd.manual && xf_live) {
         float xf_target = (float)dd.xf_cv / 4095.0f;
-        // gentle slew so a jumpy ADC read never steps the mix
-        dd.xf += 0.2f * (xf_target - dd.xf);
+        // slewed, so neither a jumpy ADC read nor a return from a loop steps the mix
+        dd.xf += xf_slew * (xf_target - dd.xf);
     }
     if (dd.xf < 0) dd.xf = 0;
     if (dd.xf > 1) dd.xf = 1;
@@ -763,8 +762,8 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // ---- master DJ filter on knob6 (Arlo: "reverse the cv6/7 assignments, that
     // way filter freq stays on cv6 like other machines" — the deck, drums and
     // looper all put the sweep there; crossfade moves to knob7)
-    if (flt_live) dd.filt_cv = c_flt;  // else FROZEN (a loop has the knob, or the
-    int fcv = dd.filt_cv;              // knob has not come back through it yet)
+    if (flt_live) dd.filt_cv = c_flt;  // else FROZEN: a loop is holding this knob
+    int fcv = dd.filt_cv;
     int mode = 0;
     float fc = 0;
     if (fcv < 2048 - 150) {
@@ -778,7 +777,7 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     }
     dd.flt_mode = mode;
     float f_target = mode ? svf_coef(fc, (float)DD_RATE, 1.2f) : 0;
-    dd.flt_f += 0.2f * (f_target - dd.flt_f);
+    dd.flt_f += flt_slew * (f_target - dd.flt_f);
     const float q = 0.9f;
 
     // ---- per-deck rate for this block
