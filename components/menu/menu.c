@@ -675,6 +675,8 @@ static void menuMachineBindNow(void){
 void initMenu(xQueueHandle ev_queue){
     s_ev_queue = ev_queue;
     recording_set_arm_monitor(configGetIntSetting("rec_monitor", 1) != 0);
+    beatlisten_set_mode(configGetIntSetting("blisten", 0));
+    beatlisten_set_out(configGetIntSetting("blisten_out", 0));
     initTimeshift(&tz_shift);
     TFT_fillScreen(TFT_BLACK);
     TFT_resetclipwin();

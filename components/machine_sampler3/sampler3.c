@@ -1112,7 +1112,7 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
 
     // ---- CV clock: the shared conditioned front-end (Schmitt + floor +
     // detector + ghost gate), pulses-per-beat carried in the service --------
-    bool edge = clockin_block(&s3.ci, io->cv[s3.clk_src & 7], frames);
+    bool edge = clockin_block(&s3.ci, clock_source_level(s3.clk_src, io), frames);
 
     // internal clock: when no external clock is locked (external always wins),
     // a settable-BPM metronome supplies the sync pulses — the whole synced
@@ -1270,7 +1270,7 @@ static void s3_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor"))) s3.monitor = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "arm_mutes"))) s3.arm_mutes = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j))
-        s3.clk_src = j->valueint & 7;
+        s3.clk_src = clock_source_clamp_cv_audio(j->valueint);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "int_bpm")) && cJSON_IsNumber(j)) {
         float b = (float)j->valuedouble;
         s3.int_bpm = (b >= 40.0f && b <= 240.0f) ? b : 0;

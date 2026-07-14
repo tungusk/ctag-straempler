@@ -11,6 +11,7 @@
 #include "audio.h"
 #include "recording.h"
 #include "machine.h"
+#include "beatlisten.h"
 #include "spi_per.h"
 #include "i2s_per.h"
 #include "pin_defs.h"
@@ -81,12 +82,19 @@ static void audio_task(void *pvParams)
         i2s_read(I2S_NUM_0, in, 256, &nb, portMAX_DELAY);
         if (recording_is_active())
             recording_push(in);
+        // beat listener: core input tap like the recorder's, runs every block
+        // regardless of machine (OFF = one branch). Runs BEFORE the machine so
+        // this block's synthesized clock level is what the machine consumes.
+        beatlisten_push(in);
 
         const machine_t *m = machine_active();
         if (m)
             m->process(out, in, &io);
         else
             memset(out, 0, sizeof(out));
+
+        // optional clock OUT: overwrite one channel with beat pulses
+        beatlisten_out_render(out);
 
         i2s_write(I2S_NUM_0, out, BUF_SZ * 4, &nb, portMAX_DELAY);
     }
@@ -98,6 +106,7 @@ void initAudio(void)
     initSpiPer(control_queue);
     init_i2s();
     recording_init();
+    beatlisten_init();
     ESP_LOGI("AUDIO", "Starting audio task");
     xTaskCreatePinnedToCore(audio_task, "audio_task", 4096, NULL, 23, &audio_task_h, 1);
 }

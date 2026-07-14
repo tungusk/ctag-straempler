@@ -987,7 +987,7 @@ filter_done:;                // mild resonance, DJ-ish
     // scaled and, ON an actual mult/div change, drops the lock for a clean
     // 2-pulse relock instead of letting the guards defend the stale period.
     clockin_set_ppb(&dk.ci, DK_PPB_RAW());   // gates take the RAW setting
-    clockin_block(&dk.ci, io->cv[dk.clk_src & 7], frames);
+    clockin_block(&dk.ci, clock_source_level(dk.clk_src, io), frames);
 }
 
 // ---- preset -------------------------------------------------------------------
@@ -1015,7 +1015,8 @@ static void deck_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop_freeze"))) dk.loop_freeze = cJSON_IsTrue(j);
     // must land before the track restore below so it gates the boot-time load
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "auto_an"))) dk.auto_an = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) dk.clk_src = j->valueint & 7;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j))
+        dk.clk_src = clock_source_clamp_cv_audio(j->valueint);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
         dk.ppb_idx = j->valueint;
         if (dk.ppb_idx < 0) dk.ppb_idx = 0;

@@ -15,6 +15,8 @@
 #include "machine.h"
 #include "audio.h"
 #include "sample_ram.h"
+#include "beatlisten.h"
+#include "menu_config.h"
 #include "deck_priv.h"
 
 static const color_t ACCENT = {40, 200, 230};
@@ -126,7 +128,7 @@ static void draw_info(void){
     if (dk.sync){
         if (dk.ci.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK",
                                     ext_bpm_disp());
-        else snprintf(s2, sizeof(s2), "ext: waiting for clock on CV%d", dk.clk_src + 1);
+        else snprintf(s2, sizeof(s2), "ext: waiting for clock on %s", clock_source_name(dk.clk_src));
     } else s2[0] = 0;
     if (strcmp(s1, s_info1) != 0){
         strcpy(s_info1, s1);
@@ -372,7 +374,7 @@ static void setup_value_str(int i, char *v, size_t n){
     switch(i){
         case 0: snprintf(v, n, "%s", dk.track[0] ? dk.track : "(none)"); break;
         case 1: snprintf(v, n, "%s", dk.sync ? "ON" : "OFF"); break;
-        case 2: snprintf(v, n, "CV%d", dk.clk_src + 1); break;
+        case 2: snprintf(v, n, "%s", clock_source_name(dk.clk_src)); break;
         case 3: snprintf(v, n, "%s", dk_ppb_names[dk.ppb_idx]); break;
         case 4: snprintf(v, n, "%s", dk.loop ? "ON" : "OFF"); break;
         case 5:
@@ -423,7 +425,16 @@ static void setup_redraw(int pos, int sel){
 static void setup_adj(int i, int dir){
     switch(i){
         case 1: dk.sync = !dk.sync; break;
-        case 2: dk.clk_src = (dk.clk_src + (dir > 0 ? 1 : 7)) & 7; break;
+        case 2:
+            // CV1..8 + AUDIO only — the deck's trigs belong to the transport.
+            // Picking AUDIO switches the listener on (GROOVE) if it was off:
+            // a clock source that silently reads 0 is a trap, not a feature.
+            dk.clk_src = clock_source_cycle_cv_audio(dk.clk_src, dir);
+            if (dk.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
+                beatlisten_set_mode(BL_GROOVE);
+                configSetIntSetting("blisten", BL_GROOVE);
+            }
+            break;
         case 3: dk.ppb_idx += dir; if (dk.ppb_idx < 0) dk.ppb_idx = 0; if (dk.ppb_idx > 5) dk.ppb_idx = 5; break;
         case 4: dk.loop = !dk.loop; break;
         case 5: {
