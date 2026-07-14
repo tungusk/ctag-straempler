@@ -852,12 +852,12 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
 // mode the selectors do nothing, so the page doesn't mention them at all and
 // the encoder walks straight past.
 enum { R_PADEDIT = 0, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL,
-       R_KNOB, R_FILTER, R_REVERB, R_RVMIX, R_COUNT };
+       R_KNOB, R_FILTER, R_REVERB, R_RVMIX, R_RVTAP, R_COUNT };
 
 static const char *setup_labels[R_COUNT] = {"Pad Setup", "Trigger",
                                             "Sensi", "Sel CV TR1", "Sel CV TR2",
                                             "Velocity", "Knob 6/7", "Filter",
-                                            "Reverb", "Rev Return"};
+                                            "Reverb", "Rev Return", "Send Tap"};
 // everything is a small option set except the two selector CVs (none + 8
 // channels), which stay click-to-edit
 #define SETUP_IS_TOGGLE(id) ((id) != R_PADEDIT && (id) != R_SEL1 && (id) != R_SEL2 && (id) != R_RVMIX)
@@ -893,6 +893,7 @@ static void setup_value_str(int id, char *v, size_t n){
             else snprintf(v, n, "%s %dus", reverb_mode_name(dr.rv.mode), dr.rv.cost_us);
             break;
         case R_RVMIX: snprintf(v, n, "%d%%", (int)(dr.rv.wet * 100 + 0.5f)); break;   // RETURN
+        case R_RVTAP: snprintf(v, n, "%s", dr.rv_post ? "post-filter" : "pre-filter"); break;
         default: v[0] = 0;
     }
 }
@@ -950,6 +951,7 @@ static void setup_adj(int id, int dir){
             break;
         }
         case R_RVMIX: reverb_set_mix(&dr.rv, dr.rv.wet + (float)dir * 0.05f); break;
+        case R_RVTAP: dr.rv_post = !dr.rv_post; break;   // flip it while playing
     }
 }
 

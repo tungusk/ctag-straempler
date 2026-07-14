@@ -182,8 +182,14 @@ typedef struct {
     reverb_t rv;
     // the reverb is a SEND bus, not an insert (Arlo, ear test: "we don't want
     // to send a big kick drum through the reverb"). Each pad decides how much
-    // of itself goes in (rv_send 0..255); the master Rev Mix row is the RETURN
-    // level. Dry always passes at full level.
+    // of itself goes in (rv_send 0..255); the master Rev Return row is the
+    // return level. Dry always passes at full level.
+    volatile bool rv_post;        // Send Tap: false = PRE-filter (the tail
+                                  // blooms through a closed filter — the DJ
+                                  // sweep), true = POST-filter (the tank sits
+                                  // in the filter's shadow, channel-strip
+                                  // style). Flip while playing; the tank state
+                                  // is continuous either way.
 
     // knob take-over state for the PADS (was function-static in drum_process,
     // where it survived stop()/start() and let a machine re-entry inherit the

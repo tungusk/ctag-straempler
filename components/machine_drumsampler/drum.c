@@ -448,12 +448,24 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         if (ro32 > 32767) ro32 = 32767; else if (ro32 < -32768) ro32 = -32768;
         out[f * 2]     = lo32 << 16;
         out[f * 2 + 1] = ro32 << 16;
+        if (dr.rv_post && flt_live && dr.flt_mode) {
+            // POST tap: re-derive the send from the FILTERED mix, keeping each
+            // pad's send weighting. The filter is linear, so filtering the
+            // pre-send bus is equivalent to scaling the filtered mix by the
+            // bus/dry ratio — cheaper and phase-true (no second SVF pair).
+            int32_t dl = accL[f], dr_ = accR[f];
+            if (dl > 32767) dl = 32767; else if (dl < -32768) dl = -32768;
+            if (dr_ > 32767) dr_ = 32767; else if (dr_ < -32768) dr_ = -32768;
+            sndL[f] = dl ? (int32_t)(((int64_t)sndL[f] * lo32) / dl) : 0;
+            sndR[f] = dr_ ? (int32_t)(((int64_t)sndR[f] * ro32) / dr_) : 0;
+        }
     }
     if (rv_live) {
         // SEND bus: only what the pads sent goes into the tank; the dry mix
         // (already filtered) passes untouched and the return is added on top.
-        // The send is pre-FILTER by design — the filter is a performance sweep
-        // on the dry kit, not a tone control on the reverb feed.
+        // Send Tap (Setup) decides whether the bus was taken before the filter
+        // (tail blooms through a closed sweep) or after it (tank ducks with
+        // the kit) — the loop above rescales the bus for the POST case.
         int16_t send[MACHINE_BLOCK];
         for (int f = 0; f < frames; f++) {
             int32_t sl = sndL[f], sr = sndR[f];
@@ -555,6 +567,7 @@ static cJSON *drum_preset_save(void)
     cJSON_AddBoolToObject(o, "cvmod", dr.cv_mod);
     cJSON_AddNumberToObject(o, "rv", dr.rv.mode);     // master reverb mode
     cJSON_AddNumberToObject(o, "rvmx", (int)(dr.rv.wet * 100 + 0.5f));   // RETURN level
+    cJSON_AddBoolToObject(o, "rvpost", dr.rv_post);   // send tap pre/post filter
     cJSON_AddNumberToObject(o, "rvus", dr.rv.cost_us); // info only (cost meter)
     cJSON_AddBoolToObject(o, "flt", dr.flt_box);      // master filter box exists
     cJSON_AddBoolToObject(o, "flton", dr.flt_on);     // ...and is engaged
@@ -606,6 +619,7 @@ static void drum_preset_load(const cJSON *node)
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx")) && cJSON_IsNumber(j))
         reverb_set_mix(&dr.rv, (float)j->valueint / 100.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvpost"))) dr.rv_post = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flt")))    dr.flt_box = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flton")))  dr.flt_on = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fcv")) && cJSON_IsNumber(j)) {
