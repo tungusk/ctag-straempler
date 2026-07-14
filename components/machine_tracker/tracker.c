@@ -637,13 +637,15 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     // loop window from CV: CV7 (idx 6) = length selector, CV6 (idx 5) = position.
     // Deadband the raw CVs so ADC noise can't jitter length/position — otherwise
     // the loop resizes/relocates every block and retriggers constantly.
-    // Arlo: "can we enable longer loops too". A pattern is typically 64 rows, so
-    // the old 32-step ceiling could not even hold ONE pattern — the ladder now
-    // runs to 256 steps (several patterns). The window is clamped to the song
-    // and snapped to whole beats when synced, so long rungs simply cap out on
-    // short modules instead of misbehaving.
-    static const int loop_len_tbl[10] = {1, 2, 4, 8, 16, 32, 64, 128, 192, 256};
-    #define TRK_LEN_STEPS 10
+    // THE CV7 LADDER. Below one step it stops being a pattern loop and becomes a
+    // RETRIG (audio-domain stutter — see retrig_div in the header); at one step
+    // and above it is the pattern-cursor loop, now up to 256 steps because a
+    // pattern is typically 64 rows and the old 32-step ceiling could not hold even
+    // one. Windows clamp to the song and snap to whole beats when synced, so long
+    // rungs cap out gracefully on short modules.
+    static const int lad_len[14] = {1, 1, 1, 1,  1, 2, 4, 8, 16, 32, 64, 128, 192, 256};
+    static const int lad_div[14] = {16, 8, 4, 2, 0, 0, 0, 0,  0,  0,  0,   0,   0,   0};
+    #define TRK_LEN_STEPS 14
     static int cv_len_h = -1, cv_pos_h = -1;
     int cv_len = io->cv[6], cv_pos = io->cv[5];
     if (cv_len_h < 0) cv_len_h = cv_len;
@@ -653,14 +655,46 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     int li = cv_len_h * TRK_LEN_STEPS / 4096;
     if (li < 0) li = 0;
     if (li > TRK_LEN_STEPS - 1) li = TRK_LEN_STEPS - 1;
-    trk.loop_len = loop_len_tbl[li];
+    trk.loop_len = lad_len[li];
+    trk.retrig_div = trk.loop_engage ? lad_div[li] : 0;   // retrig lives INSIDE the loop
     trk.loop_pos_cv = cv_pos_h;
+
+    // ---- RETRIG: wrap a short window of ALREADY-RENDERED audio.
+    // The window is a musical fraction of a STEP (a row = `speed` ticks, and 24
+    // ticks make a beat at any speed, so step = beat * speed / 24).
+    static uint32_t rt_start = 0, rt_len = 0, rt_k = 0;
+    static int rt_div_prev = 0;
+    uint32_t want_len = 0;
+    if (trk.retrig_div > 0) {
+        int bpm = trk.cur_bpm > 20 ? trk.cur_bpm : 125;
+        int spd = trk.ph_speed > 0 ? trk.ph_speed : 6;
+        float beat_fr = (float)TRK_RATE * 60.0f / (float)bpm;
+        float step_fr = beat_fr * (float)spd / 24.0f;
+        want_len = (uint32_t)(step_fr / (float)trk.retrig_div);
+        if (want_len < 256) want_len = 256;                    // ~6ms floor
+        if (want_len > TRK_RING_FRAMES / 3) want_len = TRK_RING_FRAMES / 3;
+    }
+    // (re)arm on entry, and whenever the division changes — so turning the knob
+    // re-grabs the freshest audio instead of stuttering something stale
+    if (want_len && (rt_div_prev != trk.retrig_div || !rt_len)) {
+        uint32_t have = trk.rpos;                    // how much is behind the cursor
+        uint32_t len = want_len < have ? want_len : have;
+        if (len >= 256) {
+            rt_start = trk.rpos - len;               // repeat what you JUST heard
+            rt_len = len;
+            rt_k = 0;
+        }
+    }
+    if (!want_len) rt_len = 0;                       // released: back to normal play
+    rt_div_prev = trk.retrig_div;
+    trk.retrig_len = rt_len;
+    bool retrig = (rt_len > 0);
 
     int frames = MACHINE_BLOCK / 2;
     static int16_t last_l = 0, last_r = 0;
     bool starved = false;
     for (int fno = 0; fno < frames; fno++) {
-        bool can_play = trk.playing && !trk.loading && trk.rpos + 1 < trk.wpos;
+        bool can_play = trk.playing && !trk.loading && (retrig || trk.rpos + 1 < trk.wpos);
         if (!can_play && trk.playing && !trk.loading && !trk.seek_req && trk.wpos > 0
             && trk.rpos + 1 >= trk.wpos)
             starved = true;
@@ -673,13 +707,19 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
             out[fno * 2 + 1] = (int32_t)last_r << 16;
             continue;
         }
-        uint32_t i = trk.rpos % TRK_RING_FRAMES;
+        // RETRIG: read the frozen window instead, and do NOT advance rpos. That
+        // freeze is load-bearing: it stalls the renderer (which fills only while
+        // wpos - rpos < fill_ahead), so libxmp's clock stops, the window cannot be
+        // overwritten by fresh audio, and the song resumes exactly where it froze.
+        uint32_t i = retrig ? ((rt_start + (rt_k % rt_len)) % TRK_RING_FRAMES)
+                            : (trk.rpos % TRK_RING_FRAMES);
         int16_t l = (int16_t)(trk.ring[i * 2]     * trk.out_gain);
         int16_t r = (int16_t)(trk.ring[i * 2 + 1] * trk.out_gain);
         last_l = l; last_r = r;
         out[fno * 2]     = (int32_t)l << 16;
         out[fno * 2 + 1] = (int32_t)r << 16;
-        trk.rpos++;
+        if (retrig) rt_k++;
+        else        trk.rpos++;
     }
     if (starved) trk.dbg_starve++;
 
