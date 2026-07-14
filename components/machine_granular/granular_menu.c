@@ -12,6 +12,7 @@
 #include "tftspi.h"
 #include "machine.h"
 #include "sample_ram.h"
+#include "sample_browser.h"
 #include "granular_priv.h"
 
 static const color_t BG   = {5, 9, 28};
@@ -105,15 +106,6 @@ static int gran_live_handler(int it_id, int event, void *ev_data){
 static const char *setup_labels[] = {"Grain ms", "Density", "Spray", "Spread", "Sample"};
 #define GR_SETUP_N 5
 
-static char (*s_samples)[24] = NULL;    // shared sorted library list (sample_ram)
-static int  s_n_samples = 0, s_sample_idx = 0;
-
-static void refresh_samples(void){
-    s_n_samples = sample_list_shared(&s_samples);
-    s_sample_idx = 0;
-    for (int i = 0; i < s_n_samples; i++) if (strcmp(s_samples[i], gr.sample) == 0) { s_sample_idx = i; break; }
-}
-
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
     _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
@@ -151,7 +143,7 @@ static void adj(int i, int dir){
 static int gran_setup_handler(int it_id, int event, void *ev_data){
     static int pos = 0, sel = 0;
     switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; refresh_samples(); setup_redraw(pos, sel); break;
+        case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
         case EV_FWD:
             if(sel){ if(pos >= 0 && pos < 4) adj(pos, +1); }
             else { pos++; if(pos >= GR_SETUP_N) pos = -1; }
@@ -164,7 +156,7 @@ static int gran_setup_handler(int it_id, int event, void *ev_data){
             break;
         case EV_SHORT_PRESS:
             if(pos == -1) return M_MORE;   // System affordance
-            if(pos == 4){ refresh_samples(); return M_GRAN_LOAD; }
+            if(pos == 4) return M_GRAN_LOAD;
             sel = !sel; setup_redraw(pos, sel);
             break;
         case EV_LONG_PRESS: return M_GRAN_LIVE;   // toggle Setup -> Live
@@ -173,43 +165,12 @@ static int gran_setup_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
-// ---- Load browser (centered, big selected name) ---------------------------
-static void load_redraw(void){
-    TFT_resetclipwin(); TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
-    _bg = TFT_BLACK; _fg = TFT_LIGHTGREY;
-    char h[32]; snprintf(h, sizeof(h), "Load Sample  (%d/%d)", s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
-    TFT_print(h, _width / 2 - TFT_getStringWidth(h) / 2, 4);
-    if (!s_n_samples){ char *m = "no samples in usr/"; TFT_print(m, _width / 2 - TFT_getStringWidth(m) / 2, _height / 2); return; }
-    int cy = _height / 2;
-    Font f = cfont; TFT_setFont(DEJAVU24_FONT, NULL);
-    int bigfh = TFT_getfontheight(); _fg = TFT_WHITE;
-    char *selnm = s_samples[s_sample_idx];
-    TFT_print(selnm, _width / 2 - TFT_getStringWidth(selnm) / 2, cy - bigfh / 2);
-    cfont = f;
-    _fg = (color_t){110, 110, 110};
-    for (int k = 1; k <= 4; k++){
-        int up = s_sample_idx - k, dn = s_sample_idx + k;
-        int yup = cy - bigfh / 2 - k * (fh + 4) - 4;
-        int ydn = cy + bigfh / 2 + (k - 1) * (fh + 4) + 6;
-        if (up >= 0){ char *n = s_samples[up]; TFT_print(n, _width / 2 - TFT_getStringWidth(n) / 2, yup); }
-        if (dn < s_n_samples){ char *n = s_samples[dn]; TFT_print(n, _width / 2 - TFT_getStringWidth(n) / 2, ydn); }
-    }
-    _fg = (color_t){90, 90, 90}; TFT_setFont(DEF_SMALL_FONT, NULL);
-    char *hint = "turn:browse  press:load  hold:cancel";
-    TFT_print(hint, _width / 2 - TFT_getStringWidth(hint) / 2, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
-}
-
+// ---- Load browser: the shared two-level widget (folders -> big-name list) --
 static int gran_load_handler(int it_id, int event, void *ev_data){
-    switch(event){
-        case EV_ENTERED_MENU: refresh_samples(); load_redraw(); break;
-        case EV_FWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + 1) % s_n_samples; load_redraw(); } break;
-        case EV_BWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + s_n_samples - 1) % s_n_samples; load_redraw(); } break;
-        case EV_SHORT_PRESS: if(s_n_samples) granular_load(s_samples[s_sample_idx]); return M_GRAN_SETUP;
-        case EV_LONG_PRESS: return M_GRAN_SETUP;
-        default: break;
-    }
+    if (event == EV_ENTERED_MENU){ sample_browser_enter(false, "Load Sample", gr.sample); return 0; }
+    int r = sample_browser_event(event);
+    if (r == 1){ granular_load((char*)sample_browser_selected()); return M_GRAN_SETUP; }
+    if (r == 2) return M_GRAN_SETUP;
     return 0;
 }
 

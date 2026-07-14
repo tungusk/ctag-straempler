@@ -17,23 +17,12 @@
 #include "sample_ram.h"
 #include "beatlisten.h"
 #include "menu_config.h"
+#include "sample_browser.h"
 #include "deck_priv.h"
 
 static const color_t ACCENT = {40, 200, 230};
 
-static char (*s_samples)[24] = NULL;
-static int  s_n_samples = 0, s_sample_idx = 0;
 static int  s_load_ret = M_DECK_SETUP;   // page the load browser returns to
-
-static void refresh_samples(void){
-    // dated list, like the sampler: 512 entries, NEWEST FIRST — a fresh
-    // upload is the track you want to cue, and it used to fall off the
-    // bottom of a 224-name alphabetical list
-    s_n_samples = sample_list_recent(&s_samples);
-    s_sample_idx = 0;
-    for (int i = 0; i < s_n_samples; i++)
-        if (strcmp(s_samples[i], dk.track) == 0) { s_sample_idx = i; break; }
-}
 
 // auto-analysis queued behind a still-running previous run (rapid loads)
 static void an_auto_poll(void){
@@ -338,8 +327,7 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             break;
         }
         case EV_SHORT_PRESS:                         // press = track browser
-            refresh_samples();                       // (TR1/TR2 are the transport)
-            s_load_ret = M_DECK_LIVE;
+            s_load_ret = M_DECK_LIVE;                // (TR1/TR2 are the transport)
             return M_DECK_LOAD;
         case EV_FWD:
             if (dk.ci.clk.locked && dk.sync) {          // locked+synced: fine phase nudge
@@ -500,7 +488,7 @@ static int deck_setup_handler(int it_id, int event, void *ev_data){
         }
         case EV_SHORT_PRESS:
             if(pos == -1) return M_MORE;                       // System affordance
-            if(pos == 0){ refresh_samples(); s_load_ret = M_DECK_SETUP; return M_DECK_LOAD; }
+            if(pos == 0){ s_load_ret = M_DECK_SETUP; return M_DECK_LOAD; }
             if(pos == 7){ deck_analyze_start(); setup_redraw(pos, sel); break; }
             if(SETUP_IS_TOGGLE(pos)){
                 setup_adj(pos, +1);                   // toggles flip on the click
@@ -516,57 +504,17 @@ static int deck_setup_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
-// ---- Load browser ---------------------------------------------------------------
-static void load_redraw(void){
-    TFT_resetclipwin();
-    TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
-    _bg = TFT_BLACK; _fg = TFT_LIGHTGREY;
-    char h[48];
-    snprintf(h, sizeof(h), "Load Track  (%d/%d)", s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
-    TFT_print(h, _width / 2 - TFT_getStringWidth(h) / 2, 4);
-    if (!s_n_samples){
-        char *m = "no files in usr/";
-        TFT_print(m, _width / 2 - TFT_getStringWidth(m) / 2, _height / 2);
-        return;
-    }
-    int cy = _height / 2;
-    Font f = cfont;
-    TFT_setFont(DEJAVU24_FONT, NULL);
-    int bigfh = TFT_getfontheight();
-    _fg = TFT_WHITE;
-    char *selnm = s_samples[s_sample_idx];
-    TFT_print(selnm, _width / 2 - TFT_getStringWidth(selnm) / 2, cy - bigfh / 2);
-    cfont = f;
-    _fg = (color_t){110, 110, 110};
-    for (int k = 1; k <= 4; k++){
-        int up = s_sample_idx - k, dn = s_sample_idx + k;
-        int yup = cy - bigfh / 2 - k * (fh + 4) - 4;
-        int ydn = cy + bigfh / 2 + (k - 1) * (fh + 4) + 6;
-        if (up >= 0){ char *nn = s_samples[up]; TFT_print(nn, _width / 2 - TFT_getStringWidth(nn) / 2, yup); }
-        if (dn < s_n_samples){ char *nn = s_samples[dn]; TFT_print(nn, _width / 2 - TFT_getStringWidth(nn) / 2, ydn); }
-    }
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    char *hint = "turn:browse  press:load  hold:cancel";
-    TFT_print(hint, _width / 2 - TFT_getStringWidth(hint) / 2, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
-}
-
+// ---- Load browser: the shared two-level widget (folders -> big-name list) --
 static int deck_load_handler(int it_id, int event, void *ev_data){
-    switch(event){
-        case EV_ENTERED_MENU: load_redraw(); break;
-        case EV_FWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + 1) % s_n_samples; load_redraw(); } break;
-        case EV_BWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + s_n_samples - 1) % s_n_samples; load_redraw(); } break;
-        case EV_SHORT_PRESS:
-            // re-selecting the loaded track is a no-op (don't reload/re-settle)
-            if(s_n_samples && strcmp(s_samples[s_sample_idx], dk.track) != 0)
-                deck_load_track(s_samples[s_sample_idx]);
-            return s_load_ret;
-        case EV_LONG_PRESS:
-            return s_load_ret;
-        default: break;
+    if (event == EV_ENTERED_MENU){ sample_browser_enter(true, "Load Track", dk.track); return 0; }
+    int r = sample_browser_event(event);
+    if (r == 1){
+        // re-selecting the loaded track is a no-op (don't reload/re-settle)
+        const char *sel = sample_browser_selected();
+        if (strcmp(sel, dk.track) != 0) deck_load_track((char*)sel);
+        return s_load_ret;
     }
+    if (r == 2) return s_load_ret;
     return 0;
 }
 

@@ -15,6 +15,7 @@
 #include "tftspi.h"
 #include "machine.h"
 #include "sample_ram.h"
+#include "sample_browser.h"
 #include "drum_priv.h"
 
 // the sampler's colour scheme, exactly: BLACK screen, and the pads carry the
@@ -34,17 +35,6 @@ static uint8_t s_flash_col[DR_PADS];
 static int s_load_ret = M_DRUM_PADS;   // page the sample browser returns to
 static int s_layer = 0;                // Pads page + browser: which layer they edit
 
-// shared sorted library list (sample_ram) — big cards hold >200 samples
-static char (*s_samples)[24] = NULL;
-static int  s_n_samples = 0, s_sample_idx = 0;
-
-static void refresh_samples(void){
-    s_n_samples = sample_list_recent(&s_samples);   // 512, newest first — as everywhere
-    s_sample_idx = 0;
-    const char *cur = dr.pad[dr.sel_pad].ly[s_layer].sample;
-    for (int i = 0; i < s_n_samples; i++)
-        if (strcmp(s_samples[i], cur) == 0) { s_sample_idx = i; break; }
-}
 
 // ---- Live page: pad grid ----------------------------------------------------
 static bool s_lit[DR_PADS][DR_LAYERS];
@@ -525,8 +515,7 @@ static int drum_live_handler(int it_id, int event, void *ev_data){
                 break;
             }
             if (!dr.pad[dr.sel_pad].layered) s_layer = 0;   // load into the selected
-            refresh_samples();                              // half (A, or B)
-            s_load_ret = M_DRUM_LIVE;
+            s_load_ret = M_DRUM_LIVE;                       // half (A, or B)
             return M_DRUM_LOAD;
         case EV_LONG_PRESS: return M_DRUM_SETUP;   // Live <-> Setup, no hub
         default: break;
@@ -764,7 +753,7 @@ static int drum_pads_handler(int it_id, int event, void *ev_data){
         }
         case EV_SHORT_PRESS: {
             int id = s_prows[pos];
-            if(id == PR_SAMPLE){ refresh_samples(); s_load_ret = M_DRUM_PADS; return M_DRUM_LOAD; }
+            if(id == PR_SAMPLE){ s_load_ret = M_DRUM_PADS; return M_DRUM_LOAD; }
             if(PADS_IS_TOGGLE(id)){
                 pads_adj(id, +1);                    // small option set: flip in place
                 // pad / layer / layering all change what the whole page shows —
@@ -785,64 +774,27 @@ static int drum_pads_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
-// ---- Load browser (center-justified, slot -1 = clear) ------------------------
-static void load_redraw(void){
-    TFT_resetclipwin();
-    TFT_fillScreen(SCREEN_BG);
-    int fh = TFT_getfontheight();
-    _bg = SCREEN_BG; _fg = TFT_LIGHTGREY;
-    char h[64];
-    if (dr.pad[dr.sel_pad].layered)
-        snprintf(h, sizeof(h), "Pad %d%c  (%d/%d)", dr.sel_pad + 1, s_layer ? 'B' : 'A',
-                 s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
-    else
-        snprintf(h, sizeof(h), "Pad %d  (%d/%d)", dr.sel_pad + 1,
-                 s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
-    TFT_print(h, _width / 2 - TFT_getStringWidth(h) / 2, 4);
-    if (!s_n_samples){
-        char *m = "no samples in usr/";
-        TFT_print(m, _width / 2 - TFT_getStringWidth(m) / 2, _height / 2);
-        return;
-    }
-    int cy = _height / 2;
-    Font f = cfont;
-    TFT_setFont(DEJAVU24_FONT, NULL);
-    int bigfh = TFT_getfontheight();
-    _fg = TFT_WHITE;
-    char *selnm = s_samples[s_sample_idx];
-    TFT_print(selnm, _width / 2 - TFT_getStringWidth(selnm) / 2, cy - bigfh / 2);
-    cfont = f;
-    _fg = (color_t){110, 110, 110};
-    for (int k = 1; k <= 4; k++){
-        int up = s_sample_idx - k, dn = s_sample_idx + k;
-        int yup = cy - bigfh / 2 - k * (fh + 4) - 4;
-        int ydn = cy + bigfh / 2 + (k - 1) * (fh + 4) + 6;
-        if (up >= 0){ char *n = s_samples[up]; TFT_print(n, _width / 2 - TFT_getStringWidth(n) / 2, yup); }
-        if (dn < s_n_samples){ char *n = s_samples[dn]; TFT_print(n, _width / 2 - TFT_getStringWidth(n) / 2, ydn); }
-    }
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    char *hint = "turn:browse  press:load  hold:cancel";
-    TFT_print(hint, _width / 2 - TFT_getStringWidth(hint) / 2, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
-}
-
+// ---- Load browser: the shared two-level widget (folders -> big-name list) --
 static int drum_load_handler(int it_id, int event, void *ev_data){
-    switch(event){
-        case EV_ENTERED_MENU: load_redraw(); break;
-        case EV_FWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + 1) % s_n_samples; load_redraw(); } break;
-        case EV_BWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + s_n_samples - 1) % s_n_samples; load_redraw(); } break;
-        case EV_SHORT_PRESS:
-            // re-loading the sample the layer already holds costs an SD read and
-            // rebuilds the thumbnail for nothing (Arlo) — confirming is a no-op
-            if(s_n_samples &&
-               strcmp(s_samples[s_sample_idx], dr.pad[dr.sel_pad].ly[s_layer].sample) != 0)
-                drum_load_layer(dr.sel_pad, s_layer, s_samples[s_sample_idx]);
-            return s_load_ret;
-        case EV_LONG_PRESS:
-            return s_load_ret;       // cancel without loading
-        default: break;
+    if (event == EV_ENTERED_MENU){
+        char t[32];
+        if (dr.pad[dr.sel_pad].layered)
+            snprintf(t, sizeof(t), "Pad %d%c", dr.sel_pad + 1, s_layer ? 'B' : 'A');
+        else
+            snprintf(t, sizeof(t), "Pad %d", dr.sel_pad + 1);
+        sample_browser_enter(true, t, dr.pad[dr.sel_pad].ly[s_layer].sample);
+        return 0;
     }
+    int r = sample_browser_event(event);
+    if (r == 1){
+        // re-loading the sample the layer already holds costs an SD read and
+        // rebuilds the thumbnail for nothing (Arlo) — confirming is a no-op
+        const char *sel = sample_browser_selected();
+        if (strcmp(sel, dr.pad[dr.sel_pad].ly[s_layer].sample) != 0)
+            drum_load_layer(dr.sel_pad, s_layer, (char*)sel);
+        return s_load_ret;
+    }
+    if (r == 2) return s_load_ret;   // cancel without loading
     return 0;
 }
 
