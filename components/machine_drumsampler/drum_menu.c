@@ -561,11 +561,12 @@ static void row_draw(int i, int pos, int sel, const char *label, const char *raw
 // when B layers are on). The old index-keyed toggle macro would have silently
 // mis-assigned click behaviour the moment a row was inserted.
 enum { PR_PAD = 0, PR_LAYERED, PR_LAYER, PR_SAMPLE, PR_TRIG, PR_LEVEL, PR_PAN,
-       PR_DECAY, PR_CW, PR_RETRIG, PR_ENABLED, PR_COUNT };
+       PR_SEND, PR_DECAY, PR_CW, PR_RETRIG, PR_ENABLED, PR_COUNT };
 
 static const char *pads_labels[PR_COUNT] = {"Pad", "B Layer", "Layer", "Sample",
-                                            "Trig In", "Level", "Pan", "Decay",
-                                            "Knob7 CW", "Retrig", "Enabled"};
+                                            "Trig In", "Level", "Pan", "Rev Send",
+                                            "Decay", "Knob7 CW", "Retrig",
+                                            "Enabled"};
 // small option sets flip on a click; ranges keep click-to-edit
 #define PADS_IS_TOGGLE(id) ((id) == PR_PAD || (id) == PR_LAYERED || \
                             (id) == PR_LAYER || (id) == PR_CW || (id) == PR_ENABLED)
@@ -602,6 +603,11 @@ static void pads_value_str(int id, char *v, size_t n){
             else snprintf(v, n, "%d%%", pct);
             break;
         }
+        case PR_SEND:
+            if (dr.rv.mode == RV_OFF) snprintf(v, n, "%d%% (rev off)",
+                                               (int)p->rv_send * 100 / 255);
+            else snprintf(v, n, "%d%%", (int)p->rv_send * 100 / 255);
+            break;
         case PR_PAN:
             if (p->pan == 128) snprintf(v, n, "C");
             else if (p->pan < 128) snprintf(v, n, "L%d", (128 - p->pan) * 100 / 128);
@@ -685,6 +691,13 @@ static void pads_adj(int id, int dir){
             if (lv < 0) lv = 0;
             if (lv > DR_LEVEL_MAX) lv = DR_LEVEL_MAX;   // past unity = drive
             p->level = (uint16_t)lv;
+            break;
+        }
+        case PR_SEND: {
+            int sd = (int)p->rv_send + dir * 16;   // ~6% steps
+            if (sd < 0) sd = 0;
+            if (sd > 255) sd = 255;
+            p->rv_send = (uint8_t)sd;
             break;
         }
         case PR_PAN: {
@@ -844,7 +857,7 @@ enum { R_PADEDIT = 0, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL,
 static const char *setup_labels[R_COUNT] = {"Pad Setup", "Trigger",
                                             "Sensi", "Sel CV TR1", "Sel CV TR2",
                                             "Velocity", "Knob 6/7", "Filter",
-                                            "Reverb", "Rev Mix"};
+                                            "Reverb", "Rev Return"};
 // everything is a small option set except the two selector CVs (none + 8
 // channels), which stay click-to-edit
 #define SETUP_IS_TOGGLE(id) ((id) != R_PADEDIT && (id) != R_SEL1 && (id) != R_SEL2 && (id) != R_RVMIX)
@@ -879,7 +892,7 @@ static void setup_value_str(int id, char *v, size_t n){
             if (dr.rv.mode == RV_OFF) snprintf(v, n, "OFF");
             else snprintf(v, n, "%s %dus", reverb_mode_name(dr.rv.mode), dr.rv.cost_us);
             break;
-        case R_RVMIX: snprintf(v, n, "%d%%", (int)(dr.rv.wet * 100 + 0.5f)); break;
+        case R_RVMIX: snprintf(v, n, "%d%%", (int)(dr.rv.wet * 100 + 0.5f)); break;   // RETURN
         default: v[0] = 0;
     }
 }

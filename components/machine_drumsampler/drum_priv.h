@@ -79,6 +79,8 @@ typedef struct {
     // there = overdrive). Old presets stored 0..255, which still means 0..100 %.
     volatile uint16_t level;
     volatile uint8_t pan;         // 0..255, 128 = centre (linear pan)
+    volatile uint8_t rv_send;     // 0..255 REVERB SEND (0 = dry, the default:
+                                  // a kick belongs out of the tank)
     volatile uint16_t decay_ms;   // linear decay envelope; 0 = play full sample
     // knob7 is neutral at noon: counter-clockwise chokes the decay, clockwise
     // drives ONE of these two, per pad (DR_CW_ATTACK / DR_CW_START)
@@ -178,6 +180,10 @@ typedef struct {
     // (an OFF reverb costs no PSRAM); menu/preset own mode+mix, engine only
     // calls reverb_block_i32 (self-gating on mode/slab).
     reverb_t rv;
+    // the reverb is a SEND bus, not an insert (Arlo, ear test: "we don't want
+    // to send a big kick drum through the reverb"). Each pad decides how much
+    // of itself goes in (rv_send 0..255); the master Rev Mix row is the RETURN
+    // level. Dry always passes at full level.
 
     // knob take-over state for the PADS (was function-static in drum_process,
     // where it survived stop()/start() and let a machine re-entry inherit the
