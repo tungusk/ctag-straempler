@@ -29,9 +29,12 @@ const char *const dk_ppb_names[6] = {"1 per 4 beats", "1 per 2 beats", "1 per be
 
 #define DK_XFADE 256          // ~5.8 ms seam fade — a click-killer, not a blur
 #define DK_PICKUP 120         // knob counts of movement that GRAB a frozen knob
-#define DK_LOOP_LEAD (DK_RATE / 2)   // read-ahead while looping: 0.5 s. Short on
-                                     // purpose — it is the LATENCY of a window
-                                     // move, and the ring covers it with audio
+// Read-ahead while looping. This IS the latency of a length/window change, so
+// it wants to be small — but it must stay ABOVE DK_LOW_WATER, or the reader
+// parks below the level the engine treats as "buffered" and the ring starves
+// continuously (bench: 0.25 s cap -> 32k starve blocks in 20 s). 0.5 s is the
+// proven floor; the CV7 responsiveness fix does the rest.
+#define DK_LOOP_LEAD (DK_RATE / 2)
 #define DK_MOVE_KEEP (DK_RATE / 6)   // ~0.17 s of read-ahead kept on a move: the
                                      // gap between "instant" and "starving"
 
@@ -152,7 +155,17 @@ static void reader_task(void *pv)
         if (f && !s_track_req && !dk.seek_req) {
             uint32_t win_st = 0, win_len = 0;
             bool lp = dk_window(&win_st, &win_len);
-            uint32_t lead = dk.wpos - dk.rpos_i;
+            // SIGNED: if the frontier ever ends up behind the cursor, an
+            // unsigned lead underflows to ~4e9, the reader decides it is far
+            // ahead and never fills again — a silent permanent starve. Heal it.
+            int32_t slead = (int32_t)(dk.wpos - dk.rpos_i);
+            if (slead < 0) {
+                ESP_LOGW(TAG, "ring lead went negative (%ld) — resyncing", (long)slead);
+                dk.wpos = dk.rpos_i;
+                cur_ff = (uint32_t)-1;
+                slead = 0;
+            }
+            uint32_t lead = (uint32_t)slead;
             // lead cap: a modest read-ahead normally (>=1 s of history stays
             // resident behind rpos — the loop anchor may sit a beat back), and
             // a SHORT one while looping, because that lead IS the latency of a
@@ -480,6 +493,15 @@ static void deck_loop_toggle(void)
     }
     if (!len || st + (int64_t)len > (int64_t)dk.file_frames) return;
     int lb = dk_loop_q[s_loop_len_idx];         // quarter-beats (UI formats it)
+    // The window may be SHORTER than a beat, in which case the cursor's offset
+    // into the beat can exceed the whole window. Slide the start forward by
+    // whole windows so the cursor lands INSIDE it (still phase-true: the start
+    // stays beat + k*window, and a window is a whole number of clock pulses).
+    // Getting this wrong put wpos BEHIND rpos, the unsigned lead underflowed,
+    // and the reader stopped filling forever — a permanent starve (bench).
+    if ((uint32_t)(ff - (uint32_t)st) >= len)
+        st += (int64_t)(((uint32_t)(ff - (uint32_t)st)) / len) * (int64_t)len;
+    if (st + (int64_t)len > (int64_t)dk.file_frames) return;
     uint32_t off = ff - (uint32_t)st;             // cursor's offset into the window
     dk.loop_start = (uint32_t)st;
     dk.loop_len_fr = len;
@@ -582,46 +604,70 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     // few blocks so a WiFi ADC spike can't jump the window (dualdeck lesson).
     static int s_cv6_ref = -1, s_cv7_ref = -1, s_mv6 = 0, s_mv7 = 0;
     if (dk.loop_active) {
-        if (s_cv6_ref < 0) { s_cv6_ref = io->cv[5]; s_cv7_ref = io->cv[6]; s_mv6 = s_mv7 = 0; }
+        if (s_cv6_ref == -1) { s_cv6_ref = io->cv[5]; s_mv6 = 0; }   // arm: dead until moved
+        if (s_cv7_ref == -1) { s_cv7_ref = io->cv[6]; s_mv7 = 0; }   // arm: dead until moved
         uint32_t beat_tf_lp = (dk.track_bpm > 20.0f)
             ? (uint32_t)(60.0f * DK_RATE / dk.track_bpm) : 0;
-        // CV7 = LENGTH ladder (1..256 beats)
-        int steps7 = (io->cv[6] - s_cv7_ref) / 512;
-        if (steps7 != 0 && beat_tf_lp) {
-            if (++s_mv7 >= 3) {                  // persist: a WiFi ADC spike is 1 block
-                s_mv7 = 0;
-                int ni = s_loop_len_idx + steps7;
-                int minq = dk_min_q();
+        // CV7 = LENGTH ladder, ABSOLUTE: the knob's position IS the rung, so the
+        // whole ladder is one sweep and a small turn moves a rung (the old
+        // relative deltas needed 512 counts per step — "real slow", Arlo).
+        // Grab-then-track: the knob is dead until it MOVES past the deadband,
+        // so engaging a loop can't slam the length to wherever the knob sits.
+        if (beat_tf_lp) {
+            int c7 = io->cv[6];
+            if (s_cv7_ref >= 0 &&
+                (c7 - s_cv7_ref > DK_PICKUP || s_cv7_ref - c7 > DK_PICKUP))
+                s_cv7_ref = -2;                  // grabbed: knob is live now
+            if (s_cv7_ref == -2) {
+                int ni = c7 * DK_LOOP_STEPS / 4096;
                 if (ni < 0) ni = 0;
                 if (ni > DK_LOOP_STEPS - 1) ni = DK_LOOP_STEPS - 1;
+                int minq = dk_min_q();
                 while (ni < DK_LOOP_STEPS - 1 && dk_loop_q[ni] < minq) ni++;
-                uint32_t nl = dk_len_for(ni, beat_tf_lp);
-                if (ni != s_loop_len_idx && nl &&
-                    dk.loop_start + nl <= dk.file_frames) {
-                    s_loop_len_idx = ni;
-                    dk.loop_len_beats = dk_loop_q[ni];
-                    deck_loop_remap(dk.loop_start, nl);
+                // hysteresis: only move when the knob is clear of the boundary,
+                // so ADC noise can't flap the length
+                int lo = ni * 4096 / DK_LOOP_STEPS, hi = (ni + 1) * 4096 / DK_LOOP_STEPS;
+                bool solid = (c7 > lo + 40) && (c7 < hi - 40);
+                if (ni != s_loop_len_idx && solid && ++s_mv7 >= 3) {
+                    s_mv7 = 0;
+                    uint32_t nl = dk_len_for(ni, beat_tf_lp);
+                    if (nl && dk.loop_start + nl <= dk.file_frames) {
+                        s_loop_len_idx = ni;
+                        dk.loop_len_beats = dk_loop_q[ni];
+                        deck_loop_remap(dk.loop_start, nl);
+                    }
+                } else if (ni == s_loop_len_idx) s_mv7 = 0;
+            }
+        }
+        // CV6 = WINDOW position, ABSOLUTE across the WHOLE TRACK (Arlo: "cv6
+        // loop start seems to not travel very far" — it used to step one window
+        // per 128 counts, so a full sweep crossed only a fraction of a long
+        // track). The knob now maps to a window INDEX from the downbeat, so one
+        // sweep spans the track and the landing stays phase-true (a whole
+        // number of windows from the grid = a whole number of clock pulses).
+        // Grab-then-track, so engaging a loop can't fling the window.
+        {
+            int c6 = io->cv[5];
+            if (s_cv6_ref >= 0 &&
+                (c6 - s_cv6_ref > DK_PICKUP || s_cv6_ref - c6 > DK_PICKUP))
+                s_cv6_ref = -2;                          // grabbed
+            if (s_cv6_ref == -2 && dk.loop_len_fr) {
+                uint32_t span = (dk.file_frames > dk.grid_offset)
+                              ? dk.file_frames - dk.grid_offset : 0;
+                uint32_t nwin = span / dk.loop_len_fr;    // windows in the track
+                if (nwin) {
+                    uint32_t idx = (uint32_t)((uint64_t)c6 * nwin / 4096);
+                    if (idx >= nwin) idx = nwin - 1;
+                    uint32_t ns = dk.grid_offset + idx * dk.loop_len_fr;
+                    if (ns != dk.loop_start && ++s_mv6 >= 3) {
+                        s_mv6 = 0;
+                        if (ns + dk.loop_len_fr <= dk.file_frames)
+                            deck_loop_remap(ns, dk.loop_len_fr);
+                    } else if (ns == dk.loop_start) s_mv6 = 0;
                 }
-                s_cv7_ref += steps7 * 512;
             }
-        } else if (steps7 == 0) s_mv7 = 0;
-        // CV6 = WINDOW position, in whole-window blocks (phase-true by
-        // construction: a whole window is an integer number of clock segments)
-        int blocks6 = (io->cv[5] - s_cv6_ref) / 128;
-        if (blocks6 != 0) {
-            if (++s_mv6 >= 3) {
-                s_mv6 = 0;
-                int64_t ns = (int64_t)dk.loop_start +
-                             (int64_t)blocks6 * (int64_t)dk.loop_len_fr;
-                if (ns < 0) ns = 0;
-                if (ns + dk.loop_len_fr > (int64_t)dk.file_frames)
-                    ns = (int64_t)dk.file_frames - dk.loop_len_fr;
-                if (ns >= 0 && (uint32_t)ns != dk.loop_start)
-                    deck_loop_remap((uint32_t)ns, dk.loop_len_fr);
-                s_cv6_ref += blocks6 * 128;
-            }
-        } else s_mv6 = 0;
-    } else { s_cv6_ref = -1; s_cv7_ref = -1; }
+        }
+    } else { s_cv6_ref = -1; s_cv7_ref = -1; }   // re-arm both for the next engage
 
     int mode = dk.flt_mode;                  // frozen while looping
     const float q = 0.9f;
