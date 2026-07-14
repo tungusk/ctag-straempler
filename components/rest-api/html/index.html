@@ -81,17 +81,23 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   </div>
   <div style="margin-bottom:6px;display:flex;gap:8px;align-items:center">
     <label style="color:#888">sort
-      <select id="fsort" onchange="loadFiles()">
+      <select id="fsort" onchange="setSort(this.value,null)">
         <option value="new">newest</option>
         <option value="name">name</option>
         <option value="bpm">bpm</option>
+        <option value="dur">length</option>
         <option value="size">size</option>
       </select>
     </label>
     <span style="color:#555">click a name to rename</span>
   </div>
   <table id="ftab">
-    <thead><tr><th>Name</th><th>BPM</th><th>Length</th><th>Size</th><th></th></tr></thead>
+    <thead><tr>
+      <th id="th-name" style="cursor:pointer" onclick="setSort('name',1)">Name</th>
+      <th id="th-bpm" style="cursor:pointer" onclick="setSort('bpm',1)">BPM</th>
+      <th id="th-dur" style="cursor:pointer" onclick="setSort('dur',1)">Length</th>
+      <th id="th-size" style="cursor:pointer" onclick="setSort('size',1)">Size</th>
+      <th></th></tr></thead>
     <tbody id="ftb"></tbody>
   </table>
   <table id="mtab" style="display:none">
@@ -249,45 +255,85 @@ function mmss(sec){
   return m+':'+(s<10?'0':'')+s;
 }
 
+var libFiles=[];   // last /files fetch, so an edit-mode re-render never refetches
+var libEdit=null;  // file name being renamed IN PLACE (null = none)
 function loadFiles(){
   fetch('/files').then(function(r){return r.json();}).then(function(d){
-    var files=(d.files||[]).slice();
-    var by=(document.getElementById('fsort')||{}).value||'new';
-    files.sort(function(a,b){
-      if(by==='name')return String(a.name).localeCompare(String(b.name));
-      if(by==='bpm')return (b.bpm||0)-(a.bpm||0);
-      if(by==='size')return (b.size||0)-(a.size||0);
-      return (b.mtime||0)-(a.mtime||0);            // newest first (the browser default)
-    });
-    var tb=document.getElementById('ftb'),h='';
-    files.forEach(function(f){
-      var bpm=f.bpm?f.bpm.toFixed(1):'<span style="color:#666">--</span>';
-      h+='<tr><td><span class="ren" title="rename" onclick="renamePrompt(\''+esc(f.name)+'\')">'+esc(f.name)+'</span></td>'
-        +'<td>'+bpm+'</td>'
-        +'<td style="color:#9ab">'+mmss(f.dur)+'</td>'
-        +'<td>'+(f.size?(Math.round(f.size/1024))+'KB':'')+'</td>'
-        +'<td style="white-space:nowrap">'
-        +'<a class="btn" style="text-decoration:none" href="/files/raw?name='+encodeURIComponent(f.name)+'" download="'+esc(f.name)+'.RAW">&#11015;</a> '
-        +'<button class="btn del" onclick="del(\''+esc(f.name)+'\')">&#10005;</button></td></tr>';
-    });
-    tb.innerHTML=h||'<tr><td colspan="5" style="color:#555;padding:12px">No files yet</td></tr>';
+    libFiles=(d.files||[]).slice();
+    libEdit=null;
+    renderFiles();
     loadSysinfo();
   }).catch(function(){document.getElementById('ftb').innerHTML='<tr><td colspan="5" class="er">Failed to load</td></tr>';});
 }
 
-// RENAME. The firmware moves the audio, its .JSN sidecar (which carries the bpm/grid
-// stamp) and any .OT slice map together — renaming only the audio would orphan the
-// analysis and the deck would then refuse to loop the track ("no grid").
-function renamePrompt(name){
-  var to=prompt('Rename "'+name+'" to (1-8 chars, A-Z 0-9 _):',name);
-  if(!to)return;
-  to=to.toUpperCase().replace(/[^A-Z0-9_]/g,'').slice(0,8);
-  if(!to||to===name)return;
+// sort state: source of truth here, dropdown + header arrows follow.
+// libDir 1 = the column's natural direction, -1 = reversed.
+var libSort='new',libDir=1;
+function setSort(by,fromHeader){
+  if(fromHeader&&by===libSort)libDir=-libDir;   // same header again = flip
+  else{libSort=by;libDir=1;}
+  var sel=document.getElementById('fsort');
+  if(sel)sel.value=libSort;
+  ['name','bpm','dur','size'].forEach(function(k){
+    var th=document.getElementById('th-'+k);
+    // arrow shows the EFFECTIVE order: name's natural is ascending, numerics descending
+    var up=(k==='name')===(libDir>0);
+    if(th)th.textContent=th.textContent.replace(/[ ▲▼]+$/,'')
+      +(k===libSort?(up?' ▲':' ▼'):'');
+  });
+  renderFiles();
+}
+function renderFiles(){
+  var files=libFiles.slice();
+  var by=libSort,d=libDir;
+  files.sort(function(a,b){
+    var r;
+    if(by==='name')r=String(a.name).localeCompare(String(b.name));
+    else if(by==='bpm')r=(b.bpm||0)-(a.bpm||0);
+    else if(by==='dur')r=(b.dur||0)-(a.dur||0);
+    else if(by==='size')r=(b.size||0)-(a.size||0);
+    else r=(b.mtime||0)-(a.mtime||0);            // newest first (the browser default)
+    return r*d;
+  });
+  var tb=document.getElementById('ftb'),h='';
+  files.forEach(function(f){
+    var bpm=f.bpm?f.bpm.toFixed(1):'<span style="color:#666">--</span>';
+    var nameCell;
+    if(f.name===libEdit){   // inline edit box, same idiom as the batch list
+      nameCell='<input id="lrn" value="'+esc(f.name)+'" maxlength="8" style="width:84px;padding:2px 4px;background:#000;color:#fff;border:1px solid #0af" '
+        +'onkeydown="if(event.key===\'Enter\')libCommit(\''+esc(f.name)+'\');else if(event.key===\'Escape\')libCancel()">'
+        +' <button class="btn" onclick="libCommit(\''+esc(f.name)+'\')">OK</button>';
+    }else{
+      nameCell='<span class="ren" title="rename in place" onclick="libRename(\''+esc(f.name)+'\')">'+esc(f.name)+'</span>';
+    }
+    h+='<tr><td>'+nameCell+'</td>'
+      +'<td>'+bpm+'</td>'
+      +'<td style="color:#9ab">'+mmss(f.dur)+'</td>'
+      +'<td>'+(f.size?(Math.round(f.size/1024))+'KB':'')+'</td>'
+      +'<td style="white-space:nowrap">'
+      +'<a class="btn" style="text-decoration:none" href="/files/raw?name='+encodeURIComponent(f.name)+'" download="'+esc(f.name)+'.RAW">&#11015;</a> '
+      +'<button class="btn del" onclick="del(\''+esc(f.name)+'\')">&#10005;</button></td></tr>';
+  });
+  tb.innerHTML=h||'<tr><td colspan="5" style="color:#555;padding:12px">No files yet</td></tr>';
+  if(libEdit!==null){var el=document.getElementById('lrn');if(el){el.focus();el.select();}}
+}
+
+// RENAME (in place). The firmware moves the audio, its .JSN sidecar (which carries the
+// bpm/grid stamp) and any .OT slice map together — renaming only the audio would orphan
+// the analysis and the deck would then refuse to loop the track ("no grid").
+function libRename(name){libEdit=name;renderFiles();}
+function libCancel(){libEdit=null;renderFiles();}
+function libCommit(name){
+  var el=document.getElementById('lrn');
+  libEdit=null;
+  if(!el){renderFiles();return;}
+  var to=el.value.toUpperCase().replace(/[^A-Z0-9_]/g,'').slice(0,8);
+  if(!to||to===name){renderFiles();return;}
   fetch('/files/rename?name='+encodeURIComponent(name)+'&to='+encodeURIComponent(to),{method:'POST'})
     .then(function(r){
       if(r.ok){loadFiles();return;}
-      return r.text().then(function(t){alert('Rename failed: '+t);});
-    }).catch(function(){alert('Rename failed');});
+      return r.text().then(function(t){alert('Rename failed: '+t);renderFiles();});
+    }).catch(function(){alert('Rename failed');renderFiles();});
 }
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
