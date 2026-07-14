@@ -101,6 +101,9 @@ static esp_err_t files_get_handler(httpd_req_t *req)
 
     static const char *const jdirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
                                         "/sdcard/usr/LOOPS"};
+    // short folder tag streamed with each entry so the browser can SHOW the
+    // card's organization instead of flattening it (pool / takes / loops)
+    static const char *const jdir_tag[] = {"pool", "REC", "LOOPS"};
     // INTERNAL RAM, reused for every sidecar. Never PSRAM: SDMMC DMA cannot target it,
     // which is the whole reason sidecars were skipped here in the first place.
     static char sidecar_buf[512];
@@ -170,6 +173,7 @@ static esp_err_t files_get_handler(httpd_req_t *req)
             // print it small, stream it, free it — flat memory footprint
             cJSON *o = cJSON_CreateObject();
             cJSON_AddStringToObject(o, "name", id);
+            cJSON_AddStringToObject(o, "dir", jdir_tag[di]);
             cJSON_AddStringToObject(o, "description", "");
             cJSON_AddStringToObject(o, "tags", "");
             cJSON_AddNumberToObject(o, "size", fsize);
