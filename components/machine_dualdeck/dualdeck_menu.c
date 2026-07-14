@@ -87,7 +87,9 @@ static void deck_info_str(int i, char *out, size_t n, bool rev){
     dd_deck_t *v = &dd.d[i];
     char st[20];
     int stt = tbar_state(i);
-    if (v->loop_active){
+    if (v->resync_armed){              // both trigs held: the beat lands on release
+        snprintf(st, sizeof(st), "RESYNC");
+    } else if (v->loop_active){
         char b[8];
         dd_fmt_beats(v->loop_beats, b, sizeof(b));
         snprintf(st, sizeof(st), "LOOP %s", b);

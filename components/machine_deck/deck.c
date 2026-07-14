@@ -27,6 +27,10 @@ const float dk_ppb[6] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 #define SYNC_SLEW_MAX  0.15f     // max +/-15% rate bend (~2.4 semitones), no dropout
 const char *const dk_ppb_names[6] = {"1 per 4 beats", "1 per 2 beats", "1 per beat", "2 per beat", "4 per beat", "8 per beat"};
 
+// fixed-TIME lock lead: the output chain lands beats a constant ~13 ms late
+// (I2S/DAC latency + block-quantized edge capture + grid-anchor bias). Lead the
+// target by the same amount, expressed in pulse phase so it tracks any rate.
+#define DK_LAG_LEAD_FR (0.0131f * 44100.0f)
 #define DK_XFADE 256          // ~5.8 ms seam fade — a click-killer, not a blur
 #define DK_PICKUP 120         // knob counts of movement that GRAB a loop knob
 // PASS-THROUGH pickup on loop EXIT (Arlo: "i want cv7 to have to pickup on loop
@@ -555,6 +559,50 @@ static void deck_loop_remap(uint32_t new_start, uint32_t new_len)
     dk.rm_at = at ? at : 1;                       // 0 means "none"
 }
 
+// RESYNC — the both-trig gesture (Arlo: "long press both tr1 tr2 forces resync
+// of the pll with beat landing on release"). Hold TR1+TR2, and on RELEASE the
+// deck's beat lands exactly THERE. Two things have to happen together or it
+// does not stick:
+//
+//   1. the TRACK moves to the nearest beat boundary — via the capped rate bend
+//      (sync_slew), never a seek, so nothing drops and nothing clicks;
+//   2. the PLL's LOCK POINT moves with it (phase_offset := the clock phase at
+//      the release instant, plus the output-chain lead). Without this the loop
+//      would spend the next few seconds hauling the beat back to wherever the
+//      grid stamp thought it was, and the gesture would silently undo itself.
+//
+// So this is also the manual NUDGE: a bad grid stamp is corrected by feel, on
+// the beat, with no knob to steal. Audio-task safe (float math + a slew).
+void deck_resync_now(void)
+{
+    if (!dk.playing || !dk.track[0] || !dk.file_frames) return;
+    if (dk.track_bpm <= 20.0f) return;
+    uint32_t beat_tf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
+    if (!beat_tf) return;
+
+    // 1. how far is the cursor from a beat? Go to the NEARER one, so the pull
+    //    is never more than half a beat and the bend stays inaudible.
+    int64_t rel = (int64_t)dk_map(dk.rpos_i) - (int64_t)dk.grid_offset;
+    int64_t off = rel % (int64_t)beat_tf;
+    if (off < 0) off += beat_tf;
+    float shift = (off <= beat_tf / 2) ? -(float)off        // retard to this beat
+                                       : (float)(beat_tf - off);  // advance to the next
+    dk.sync_slew = shift;
+
+    // 2. the release instant IS the beat: park the lock point on the clock
+    //    phase it happened at (the lead keeps the AUDIBLE beat where the ear
+    //    expects it — the output chain lands beats ~13 ms late).
+    if (dk.sync && dk.ci.clk.locked && dk.ci.clk.period > 0) {
+        float p_ext = (float)dk.ci.clk.since / (float)dk.ci.clk.period;
+        if (p_ext > 1.0f) p_ext = 1.0f;
+        float lead = DK_LAG_LEAD_FR / (float)dk.ci.clk.period;
+        float po = p_ext + lead;
+        po -= floorf(po);                      // wrap to [0,1)
+        dk.phase_offset = po;
+    }
+    dk.phase_int = 0.0f;                       // start the new lock clean
+}
+
 // ---- engine -----------------------------------------------------------------
 static esp_err_t deck_start(void)
 {
@@ -606,11 +654,22 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     // grave marker for a future binding.
     static trig_gate_t tg1, tg2;
     const int nfr = MACHINE_BLOCK / 2;
-    tg_event_t e1 = trig_gate_step(&tg1, !(io->trig_level & 1), nfr);
-    tg_event_t e2 = trig_gate_step(&tg2, !(io->trig_level & 2), nfr);
-    if (e1 == TG_REL_SHORT) deck_toggle_play();
-    else if (e1 == TG_REL_LONG) deck_restart();
-    if (e2 == TG_PRESS || e2 == TG_REL_LONG) deck_loop_toggle();
+    bool d1 = !(io->trig_level & 1), d2 = !(io->trig_level & 2);
+    tg_event_t e1 = trig_gate_step(&tg1, d1, nfr);
+    tg_event_t e2 = trig_gate_step(&tg2, d2, nfr);
+    // BOTH-TRIG RESYNC: arms at 0.35 s (ahead of either gate's own 0.6 s hold),
+    // fires on release. While it owns the trigs, their individual events are
+    // swallowed — otherwise the same gesture would also stop the deck and flip
+    // the loop on its way past.
+    static trig_combo_t tc;
+    tc_event_t ec = trig_combo_step(&tc, d1, d2, nfr);
+    if (ec == TC_FIRE) deck_resync_now();
+    dk.resync_armed = (ec == TC_ARMED) ? true : (trig_combo_busy(&tc) ? dk.resync_armed : false);
+    if (!trig_combo_busy(&tc)) {
+        if (e1 == TG_REL_SHORT) deck_toggle_play();
+        else if (e1 == TG_REL_LONG) deck_restart();
+        if (e2 == TG_PRESS || e2 == TG_REL_LONG) deck_loop_toggle();
+    }
 
     // While LOOPING the two good knobs become the loop's: CV7 = length ladder
     // (1..16 beats), CV6 = whole-window start moves. The filter/speed reads
@@ -777,7 +836,6 @@ filter_done:;                // mild resonance, DJ-ish
             // cmd 18.5 -> -9.5 ms; zero-crossing ~13 ms). The between-settle
             // baseline wanders ±3-5 ms, so exact zero is a moving target —
             // this centers it (musically dead-on)
-            #define DK_LAG_LEAD_FR (0.0131f * 44100.0f)
             float lead = DK_LAG_LEAD_FR / (float)dk.ci.clk.period;
             float err = p_ext - p_trk - dk.phase_offset + lead;   // NUDGE trims the lock point
             err -= floorf(err);                            // wrap to [0,1)

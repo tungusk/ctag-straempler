@@ -104,6 +104,7 @@ typedef struct {
                                    // error (imperfect track_bpm) -> no drift
     volatile float phase_offset;   // NUDGE: manual phase trim the loop locks to
                                    // (pulse-phase units [0,1); the loop holds it)
+    volatile bool resync_armed;    // both-trig RESYNC gesture is armed (UI)
     volatile float sync_slew;      // SYNC catch-up: frames left to shift via a
                                    // brief rate bend (no seek/dropout); 0 = idle
     volatile float speed_mult;     // knob7 while synced: x0.5 / x1 / x2, still locked
@@ -183,6 +184,7 @@ void deck_toggle_play(void);              // play/pause (resumes at the cue poin
 void deck_restart(void);                  // jump to the downbeat
 void deck_seek_beats(int beats);          // grid-snapped scrub (± whole beats)
 void deck_sync_now(void);                 // hard-snap grid phase to the clock now
+void deck_resync_now(void);               // BOTH-TRIG gesture: the beat lands NOW
 void deck_set_feel(float f);              // x0.5/1/2; reapplies bpm + writes sidecar
 int  deck_analyze_start(void);            // spawn BPM/grid analysis of the track
 void deck_analysis_commit(void);          // adopt an_bpm/an_grid + write sidecar
