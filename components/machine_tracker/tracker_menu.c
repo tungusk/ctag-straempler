@@ -57,45 +57,56 @@ static const char *state_word(void){
     }
 }
 
-// transport bar: full width, green playing / blue stopped background, white
-// position marker. _bg is a shared global — restore it after (hint line was
-// blue-on-blue in the deck until this was fixed).
-#define TBAR_X 8
-#define TBAR_Y 100
-#define TBAR_H 12
-#define TBAR_W (_width - 16)
+// TRANSPORT BAR — a 1px RULE with a scrubber crossing it (Arlo; the DoubleDecker
+// idiom). While looping, the LOOP WINDOW is the lit part of the rule and the rest
+// goes dim, so the loop's SIZE and where it sits both read at a glance.
+//
+// Both the window and the playhead are measured in STEPS. They used to disagree:
+// the head came from module TIME while the window came from step positions, so on
+// any module whose tempo moves the two axes drift apart and the window never sat
+// where the head actually was (Arlo: "i'm not seeing the loop size").
+#define TBAR_X  8
+#define TBAR_Y  100          // the rule's line
+#define TBAR_H  12           // the band the scrubber sweeps (erase geometry)
+#define TBAR_W  (_width - 16)
+#define TBAR_RULE 2          // a 2px line (Arlo: 1px read too faint)
+#define TBAR_HEAD_W 3
+
+static const color_t BAR_DIM = {40, 44, 60};   // the rule outside the loop
 
 static color_t tbar_bg(void){
     if (trk.state == TRK_FAIL) return (color_t){120, 40, 40};
-    if (trk.loop_engage)       return (color_t){150, 45, 95};   // pink = loop mode
-    return trk.playing ? (color_t){25, 120, 50} : (color_t){30, 60, 140};
+    if (trk.loop_engage)       return (color_t){235, 120, 175};   // pink = loop mode
+    return trk.playing ? (color_t){25, 200, 90} : (color_t){60, 110, 190};
 }
 
-static void draw_bar_frame(void){
-    TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, tbar_bg());
-    _fg = (color_t){70, 70, 90};
-    TFT_drawRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, _fg);
-    _bg = TFT_BLACK;
-    s_last_barx = -1;
-    s_last_loopa = -1; s_last_loopb = -1;
-    s_bar_state = trk.playing ? 1 : 0;
-    s_bar_loop  = trk.loop_engage ? 1 : 0;
+// the playhead's position, in per-mille of the song — in STEPS, the same axis the
+// loop window uses (falls back to time only if the step map is missing)
+static int bar_pos_pm(void){
+    if (trk.total_steps && trk.n_orders && trk.cur_pos >= 0 &&
+        trk.cur_pos < trk.n_orders){
+        uint32_t st = trk.order_step0[trk.cur_pos] + (uint32_t)trk.cur_row;
+        if (st > trk.total_steps) st = trk.total_steps;
+        return (int)((uint64_t)st * 1000 / trk.total_steps);
+    }
+    if (trk.total_ms > 0) return (int)((int64_t)trk.time_ms * 1000 / trk.total_ms);
+    return 0;
 }
 
-// bar background for a slice: while looping the bar DARKENS outside the loop
-// window (Arlo) so the window reads as the live region at a glance — no band,
-// no colour change, just contrast. The playhead keeps sweeping over it.
-static const color_t BAR_DIM = {26, 26, 34};
+static int bar_x_of(int pm){ return TBAR_X + 2 + pm * (TBAR_W - 8) / 1000; }
 
+// paint the RULE across [sx, sx+sw): lit inside the loop window, dim outside
+// (and lit end to end when there is no loop). This is also the playhead's erase.
 static void bar_paint_bg(int sx, int sw){
     if (sw <= 0) return;
+    int ry = TBAR_Y + TBAR_H / 2;
+    TFT_fillRect(sx, TBAR_Y, sw, TBAR_H, TFT_BLACK);      // clear the whole band
     if (!trk.loop_engage){
-        TFT_fillRect(sx, TBAR_Y + 1, sw, TBAR_H - 2, tbar_bg());
+        TFT_fillRect(sx, ry, sw, TBAR_RULE, tbar_bg());
         return;
     }
-    int a = TBAR_X + 2 + trk.loop_a_pm * (TBAR_W - 8) / 1000;
-    int b = TBAR_X + 2 + trk.loop_b_pm * (TBAR_W - 8) / 1000;
-    if (b < a + 3) b = a + 3;
+    int a = bar_x_of(trk.loop_a_pm), b = bar_x_of(trk.loop_b_pm);
+    if (b < a + 2) b = a + 2;                             // a tiny loop still reads
     int x = sx, end = sx + sw;
     while (x < end){
         int run;
@@ -103,32 +114,43 @@ static void bar_paint_bg(int sx, int sw){
         if (x < a)      { run = a < end ? a : end; c = BAR_DIM; }
         else if (x < b) { run = b < end ? b : end; c = tbar_bg(); }
         else            { run = end;               c = BAR_DIM; }
-        if (run > x) TFT_fillRect(x, TBAR_Y + 1, run - x, TBAR_H - 2, c);
+        if (run > x) TFT_fillRect(x, ry, run - x, TBAR_RULE, c);
         x = run;
     }
+    // end posts: the loop's EDGES, so its length is unmistakable
+    color_t lc = tbar_bg();
+    TFT_fillRect(a, ry - 3, 1, 7, lc);
+    TFT_fillRect(b, ry - 3, 1, 7, lc);
+}
+
+static void draw_bar_frame(void){
+    bar_paint_bg(TBAR_X, TBAR_W);
+    _bg = TFT_BLACK;
+    s_last_barx = -1;
+    s_last_loopa = -1; s_last_loopb = -1;
+    s_bar_state = trk.playing ? 1 : 0;
+    s_bar_loop  = trk.loop_engage ? 1 : 0;
 }
 
 static void draw_bar(void){
     int a = -1, b = -1;
     if (trk.loop_engage){
-        a = TBAR_X + 2 + trk.loop_a_pm * (TBAR_W - 8) / 1000;
-        b = TBAR_X + 2 + trk.loop_b_pm * (TBAR_W - 8) / 1000;
-        if (b < a + 3) b = a + 3;
+        a = bar_x_of(trk.loop_a_pm);
+        b = bar_x_of(trk.loop_b_pm);
+        if (b < a + 2) b = a + 2;
     }
     if ((trk.playing ? 1 : 0) != s_bar_state ||
         (trk.loop_engage ? 1 : 0) != s_bar_loop ||
         a != s_last_loopa || b != s_last_loopb){
-        draw_bar_frame();                       // frame + state caches
-        bar_paint_bg(TBAR_X + 1, TBAR_W - 2);   // dim/live regions
+        draw_bar_frame();
         s_last_loopa = a; s_last_loopb = b;
         s_last_barx = -1;
     }
-    if (trk.total_ms <= 0) return;
-    int frac = (int)((int64_t)trk.time_ms * (TBAR_W - 8) / trk.total_ms);
-    int x = TBAR_X + 2 + frac;
+    int x = bar_x_of(bar_pos_pm());
     if (x == s_last_barx) return;
-    if (s_last_barx > 0) bar_paint_bg(s_last_barx, 4);   // erase into the right bg
-    TFT_fillRect(x, TBAR_Y + 1, 4, TBAR_H - 2, (color_t){235, 235, 235});
+    if (s_last_barx > 0) bar_paint_bg(s_last_barx - 1, TBAR_HEAD_W + 2);   // erase
+    // the scrubber CROSSES the rule (a few px each side), like the fader
+    TFT_fillRect(x, TBAR_Y + 2, TBAR_HEAD_W, TBAR_H - 4, (color_t){245, 245, 245});
     s_last_barx = x;
 }
 
