@@ -268,7 +268,10 @@ void deck_toggle_play(void)
     if (!dk.track[0]) return;
     // resume from the current (possibly scrubbed) position — the cue point;
     // TR1 is the "from the top of the grid" restart
-    uint32_t to = dk.rpos_i;
+    // resume at the cursor's FILE position — rpos_i is a playback counter now
+    // (the loop rework), and seeking to it jumped the playhead forward by the
+    // counter/file skew (Arlo, bench: "the playhead jumps forward substantially")
+    uint32_t to = dk_map(dk.rpos_i);
     if (to >= dk.file_frames)
         to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;
     dk.loading = true;
@@ -288,7 +291,7 @@ void deck_seek_beats(int beats)
         : DK_RATE;                              // no grid yet: 1 s steps
     // snap current position to the nearest grid beat, then step whole beats —
     // scrubbing during sync'd playback lands phase-true by construction
-    int64_t rel = (int64_t)dk.rpos_i - (int64_t)dk.grid_offset;
+    int64_t rel = (int64_t)dk_map(dk.rpos_i) - (int64_t)dk.grid_offset;
     int64_t idx = (rel >= 0) ? (rel + beat_tf / 2) / beat_tf
                              : -(((-rel) + beat_tf / 2) / beat_tf);
     int64_t tgt = (int64_t)dk.grid_offset + (idx + beats) * (int64_t)beat_tf;
@@ -334,7 +337,7 @@ void deck_sync_now(void)
     if (seg_tf < 1.0f) return;
     float p_ext = (float)dk.ci.clk.since / (float)dk.ci.clk.period;
     if (p_ext > 1.0f) p_ext = 1.0f;
-    int64_t rel = (int64_t)dk.rpos_i - (int64_t)dk.grid_offset;
+    int64_t rel = (int64_t)dk_map(dk.rpos_i) - (int64_t)dk.grid_offset;
     float p_trk = fmodf((float)rel, seg_tf) / seg_tf;
     if (p_trk < 0) p_trk += 1.0f;
     float dphase = (p_ext - dk.phase_offset) - p_trk;   // move to the offset target
@@ -610,7 +613,11 @@ filter_done:;                // mild resonance, DJ-ish
             float base = seg_tf / (float)dk.ci.clk.period;        // nominal rate
             float p_ext = (float)dk.ci.clk.since / (float)dk.ci.clk.period;
             if (p_ext > 1.0f) p_ext = 1.0f;
-            float p_trk = fmodf((float)((int64_t)dk.rpos_i - (int64_t)dk.grid_offset), seg_tf) / seg_tf;
+            // FILE position, not the playback counter: the counter carries a
+            // seek/loop skew, and locking against it puts the beat grid on a
+            // shifted reference (E still reads 0 — a silent wrongness)
+            float p_trk = fmodf((float)((int64_t)dk_map(dk.rpos_i) - (int64_t)dk.grid_offset),
+                                seg_tf) / seg_tf;
             if (p_trk < 0) p_trk += 1.0f;
             // fixed-TIME lock lead: the output chain lands beats a constant
             // ~10.5 ms late (I2S/DAC latency + block-quantized edge capture +
