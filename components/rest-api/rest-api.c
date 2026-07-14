@@ -147,7 +147,7 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     // no allocation, flat memory, and the socket-abort path is untouched.
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_send_chunk(req, "{\"files\":[", HTTPD_RESP_USE_STRLEN);
+    // the opening brace rides in the output batcher below (obuf)
 
     static const char *const jdirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
                                         "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES"};
@@ -158,123 +158,136 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     // INTERNAL RAM, reused for every sidecar. Never PSRAM: SDMMC DMA cannot target it,
     // which is the whole reason sidecars were skipped here in the first place.
     static char sidecar_buf[512];
+    // output batcher (internal RAM, reused per request — one client at a time)
+    static char obuf[3072];
+    int obuf_len = 0;
+    obuf_len = snprintf(obuf, sizeof(obuf), "{\"files\":[");
     bool first = true;
     bool dead = false;   // client hung up mid-stream — stop sending (same
                          // disease as the /files/raw abort fix: a dead socket
                          // must not keep the worker pumping chunks at it)
-    for (int di = 0; di < JN_DIRS && !dead; di++) {
-    sd_lock_take();
-    DIR *d = opendir(jdirs[di]);
-    sd_lock_give();
-    if (d) {
+
+    // ONE raw-FatFS pass per folder. stat()-by-name is a LINEAR scan of the
+    // FAT directory, so per-entry stats made the walk O(n^2) — measured
+    // ~72 ms/entry, ~18-20 s for 254 files, and neither the bpm cache nor
+    // send batching moved it. f_readdir hands back name+size+timestamp in
+    // the same pass (the sample_list_recent lesson); the only per-entry
+    // opens left are sidecar READS on bpm-cache misses. mtime is now the
+    // FAT-packed date<<16|time — a sort key, which is all the web uses.
+    typedef struct {
+        char     id[24];
+        uint32_t asize;          // audio container size (0 = none seen)
+        uint32_t amt;            // audio FAT date<<16|time
+        uint32_t jmt, jsz;       // sidecar stamp+size (bpm cache key)
+        uint8_t  jsn, ot;
+    } fidx_t;
+    #define FIDX_MAX 512
+    static fidx_t *idx = NULL;   // PSRAM, one folder at a time (~22 KB)
+    if (!idx) idx = heap_caps_malloc(FIDX_MAX * sizeof(fidx_t), MALLOC_CAP_SPIRAM);
+    static const char *const fdirs[] = {"usr", "usr/REC", "usr/LOOPS", "usr/SLICES"};
+
+    for (int di = 0; idx && di < JN_DIRS && !dead; di++) {
+        int n_idx = 0;
+        FF_DIR d;
+        // hold the bus for the WHOLE name-only scan (the sample_list rule):
+        // per-dirent take/give was ~500 lock cycles + SD re-seeks and left the
+        // walk at ~3 s; a held sequential dir read is ~100 ms per folder
+        sd_lock_take();
+        FRESULT fr = f_opendir(&d, fdirs[di]);
+        if (fr != FR_OK) { sd_lock_give(); continue; }
         for (;;) {
-            // grab the SD bus only for the readdir step, release between entries
-            sd_lock_take();
-            struct dirent *ent = readdir(d);
-            sd_lock_give();
-            if (ent == NULL) break;
-            if (ent->d_type != DT_REG) continue;
-            int len = strlen(ent->d_name);
-            if (len < 5) continue;
-            // only list .JSN sidecars — each represents a complete sample
-            if (strcasecmp(ent->d_name + len - 4, ".JSN") != 0) continue;
-
-            // id = sidecar name without the .JSN extension
-            char id[260] = {0};
-            strncpy(id, ent->d_name, len - 4);
-
-            // DIRECT paths only in this loop. The walk already knows the dir,
-            // and pieces travel together (move/rename sweep them as one), so
-            // the up-to-16-stat sample_resolve() per lookup — ~50 SD ops per
-            // entry across audio+JSN+OT, the whole reason the page took ~10 s
-            // on a 270-file card — is replaced by a handful of same-dir stats.
-            char p[320];
-            struct stat st;
-            long fsize = 0, mtime = 0;
-            static const char *const a_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF"};
-            sd_lock_take();
-            for (int e = 0; e < 4; e++) {
-                snprintf(p, sizeof(p), "%s/%s%s", jdirs[di], id, a_exts[e]);
-                if (stat(p, &st) == 0) { fsize = st.st_size; mtime = (long)st.st_mtime; break; }
+            FILINFO fi;
+            FRESULT r = f_readdir(&d, &fi);
+            if (r != FR_OK || !fi.fname[0]) break;
+            if (fi.fattrib & AM_DIR) continue;
+            char *dot = strrchr(fi.fname, '.');
+            if (!dot || dot == fi.fname) continue;
+            size_t sl = (size_t)(dot - fi.fname);
+            if (sl >= sizeof(((fidx_t *)0)->id)) continue;
+            int cls;                              // 0 audio, 1 sidecar, 2 slice map
+            if (!strcasecmp(dot, ".RAW") || !strcasecmp(dot, ".WAV") ||
+                !strcasecmp(dot, ".AIF") || !strcasecmp(dot, ".AIFF")) cls = 0;
+            else if (!strcasecmp(dot, ".JSN")) cls = 1;
+            else if (!strcasecmp(dot, ".OT")) cls = 2;
+            else continue;
+            // find-or-add by stem (RAM-only linear probe; a folder tops out
+            // at a few hundred entries — microseconds, not SD time)
+            int k = -1;
+            for (int i = 0; i < n_idx; i++)
+                if (!strncasecmp(idx[i].id, fi.fname, sl) && idx[i].id[sl] == 0) { k = i; break; }
+            if (k < 0) {
+                if (n_idx >= FIDX_MAX) continue;
+                k = n_idx++;
+                memset(&idx[k], 0, sizeof(idx[k]));
+                memcpy(idx[k].id, fi.fname, sl);
             }
-            // slice map: same dir first; legacy drop_ot parked OTs in usr/
-            int has_ot = 0;
-            snprintf(p, sizeof(p), "%s/%s.OT", jdirs[di], id);
-            has_ot = (stat(p, &st) == 0) ? 1 : 0;
-            if (!has_ot && di != 0) {
-                snprintf(p, sizeof(p), "%s/%s.OT", jdirs[0], id);
-                has_ot = (stat(p, &st) == 0) ? 1 : 0;
-            }
-            sd_lock_give();
+            uint32_t w = ((uint32_t)fi.fdate << 16) | fi.ftime;
+            if (cls == 0) { if (!idx[k].asize) { idx[k].asize = fi.fsize; idx[k].amt = w; } }
+            else if (cls == 1) { idx[k].jsn = 1; idx[k].jmt = w; idx[k].jsz = fi.fsize; }
+            else idx[k].ot = 1;
+        }
+        f_closedir(&d);
+        sd_lock_give();
 
-            // the sidecar's bpm, behind a PSRAM cache keyed on the sidecar's
-            // (mtime,size): unchanged sidecars cost ONE stat instead of an
-            // open+read+parse. Re-analysis rewrites the .JSN, so the key moves
-            // and the entry re-reads — no invalidation hooks to forget.
+        for (int i = 0; i < n_idx && !dead; i++) {
+            if (!idx[i].jsn) continue;   // a .JSN marks a complete sample
+            // bpm behind the PSRAM cache keyed on the sidecar's stamp+size:
+            // a rewritten .JSN moves the key and self-invalidates
             float bpm = 0.0f;
-            {
+            if (!sidecar_cache_get(idx[i].id, di, idx[i].jmt, idx[i].jsz, &bpm)) {
                 char jp[320];
-                snprintf(jp, sizeof(jp), "%s/%s", jdirs[di], ent->d_name);
-                struct stat jst;
+                snprintf(jp, sizeof(jp), "%s/%s.JSN", jdirs[di], idx[i].id);
                 sd_lock_take();
-                bool have_j = (stat(jp, &jst) == 0);
-                sd_lock_give();
-                if (have_j && sidecar_cache_get(id, di, (uint32_t)jst.st_mtime,
-                                                (uint32_t)jst.st_size, &bpm)) {
-                    // cache hit — bpm filled
-                } else if (have_j) {
-                    sd_lock_take();
-                    FILE *jf = fopen(jp, "rb");
-                    if (jf) {
-                        size_t got = fread(sidecar_buf, 1, sizeof(sidecar_buf) - 1, jf);
-                        fclose(jf);
-                        sidecar_buf[got] = 0;
-                        const char *b = strstr(sidecar_buf, "\"bpm\"");
-                        if (b) {
-                            b = strchr(b, ':');
-                            if (b) bpm = strtof(b + 1, NULL);
-                        }
-                    }
-                    sd_lock_give();
-                    sidecar_cache_put(id, di, (uint32_t)jst.st_mtime,
-                                      (uint32_t)jst.st_size, bpm);
+                FILE *jf = fopen(jp, "rb");
+                if (jf) {
+                    size_t got = fread(sidecar_buf, 1, sizeof(sidecar_buf) - 1, jf);
+                    fclose(jf);
+                    sidecar_buf[got] = 0;
+                    const char *b = strstr(sidecar_buf, "\"bpm\"");
+                    if (b) { b = strchr(b, ':'); if (b) bpm = strtof(b + 1, NULL); }
                 }
+                sd_lock_give();
+                sidecar_cache_put(idx[i].id, di, idx[i].jmt, idx[i].jsz, bpm);
             }
-            // duration: stereo 16-bit at 44.1k is the pool's native shape, so bytes/4
-            // is frames. A WAV/AIFF header is a rounding error at this scale — this is
-            // a browsing aid, not a timeline.
-            int dur = fsize > 0 ? (int)(fsize / (4L * 44100L)) : 0;
+            // duration: stereo 16-bit at 44.1k is the pool's native shape, so
+            // bytes/4 is frames — a browsing aid, not a timeline
+            int dur = idx[i].asize ? (int)(idx[i].asize / (4UL * 44100UL)) : 0;
 
-            // build ONE tiny object (cJSON just for correct string escaping),
-            // print it small, stream it, free it — flat memory footprint
             cJSON *o = cJSON_CreateObject();
-            cJSON_AddStringToObject(o, "name", id);
+            cJSON_AddStringToObject(o, "name", idx[i].id);
             cJSON_AddStringToObject(o, "dir", jdir_tag[di]);
             cJSON_AddStringToObject(o, "description", "");
             cJSON_AddStringToObject(o, "tags", "");
-            cJSON_AddNumberToObject(o, "size", fsize);
+            cJSON_AddNumberToObject(o, "size", idx[i].asize);
             cJSON_AddNumberToObject(o, "bpm", bpm);
             cJSON_AddNumberToObject(o, "dur", dur);
-            cJSON_AddNumberToObject(o, "mtime", mtime);
-            cJSON_AddNumberToObject(o, "ot", has_ot);
+            cJSON_AddNumberToObject(o, "mtime", idx[i].amt);
+            cJSON_AddNumberToObject(o, "ot", idx[i].ot);
             char *os = cJSON_PrintUnformatted(o);
             cJSON_Delete(o);
             if (os) {
-                if (!first && httpd_resp_send_chunk(req, ",", 1) != ESP_OK) dead = true;
-                if (!dead && httpd_resp_send_chunk(req, os, HTTPD_RESP_USE_STRLEN) != ESP_OK) dead = true;
+                // batched output: ~500 per-entry chunked sends were ~500 tiny
+                // TCP writes — fill a buffer, flush in ~3 KB chunks
+                int ol = strlen(os);
+                if (obuf_len + ol + 2 > (int)sizeof(obuf) - 4) {
+                    if (httpd_resp_send_chunk(req, obuf, obuf_len) != ESP_OK) dead = true;
+                    obuf_len = 0;
+                }
+                if (!dead) {
+                    if (!first) obuf[obuf_len++] = ',';
+                    memcpy(obuf + obuf_len, os, ol);
+                    obuf_len += ol;
+                }
                 free(os);
                 first = false;
-                if (dead) break;
             }
         }
-        sd_lock_take();
-        closedir(d);
-        sd_lock_give();
-    }
     }
 
     if (dead) return ESP_FAIL;             // socket gone — no trailer to send
-    httpd_resp_send_chunk(req, "]}", HTTPD_RESP_USE_STRLEN);
+    memcpy(obuf + obuf_len, "]}", 2);      // room reserved by the flush margin
+    obuf_len += 2;
+    httpd_resp_send_chunk(req, obuf, obuf_len);
     httpd_resp_send_chunk(req, NULL, 0);   // end of stream
     return ESP_OK;
 }
