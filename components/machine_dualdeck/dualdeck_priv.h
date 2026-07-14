@@ -146,6 +146,20 @@ typedef struct {
                                    // per-deck length freezes at engage
     volatile int layout;           // DD_LAY_V (stacked decks) / DD_LAY_H (panels)
 
+    // CV MATRIX (Arlo: "selectable cv for the functions assignable in each deck.
+    // sub menu like the drums"). Every performable function names its own CV
+    // channel, and the two loops get their OWN pair per deck — so with the loops
+    // on free channels both decks can be worked at once, instead of the trigs'
+    // focused-deck compromise. Defaults reproduce the old fixed wiring exactly:
+    // filter on CV6, fader on CV7, and both loops BORROWING those same two.
+    // The borrow is not special-cased any more: it simply IS what happens when a
+    // loop shares a channel with the filter or the fader — the sharing knob goes
+    // to the loop while it is engaged and comes back by pass-through pickup.
+    volatile int cv_fader;         // 0..7
+    volatile int cv_filt;
+    volatile int cv_lpos[2];       // per deck: loop window position
+    volatile int cv_llen[2];       // per deck: loop length
+
     // master DJ filter (knob7 on the summed mix; deck sweep, fixed q)
     volatile int filt_cv;
     float flt_f;

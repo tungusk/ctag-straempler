@@ -21,6 +21,7 @@
 #include "recording.h"
 #include "menu_types.h"
 #include "menutft_utils.h"
+#include "beatlisten.h"
 #include "gpio.h"
 #include "audio.h"
 #include "wifi.h"
@@ -39,8 +40,8 @@ static void autosave_kick(void);
 static xQueueHandle s_ev_queue = NULL;
 
 // core menu labels (machine-independent pages)
-static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "IP"};
-static const int n_settings_menus = 6;
+static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "Listen", "ClkOut", "IP"};
+static const int n_settings_menus = 8;
 
 static void incSettingsItem(int *tz, int index){
     if (index == SID_TIMEZONE) { if(*tz + 1 >= 12) *tz = 12; else (*tz)++; }
@@ -284,11 +285,20 @@ static int machine_sel_def_handler(int it_id, int event, void* event_data){
     return 0; // remain in current menu
 }
 
+// P1 cycles only the implemented listen modes (KICK/FLUX land in P2)
+static int listen_cycle(int cur, int dir){
+    static const int order[] = {BL_OFF, BL_PULSE, BL_GROOVE};
+    int k = 0;
+    for (int i = 0; i < 3; i++) if (order[i] == cur) k = i;
+    return order[(k + (dir > 0 ? 1 : 2)) % 3];
+}
+
 static int settings_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE};
+    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE, SID_LISTEN, SID_CLKOUT};
     const int items = sizeof(menu_items)/sizeof(int);
     static int menu_pos = 0, selected = 0;
     static int remote_on = 1;
+    static int listen_mode = 0, clkout_ch = 0;
     static cJSON *cfgData = NULL, *settings = NULL;
     switch(event){
         case EV_ENTERED_MENU:
@@ -312,6 +322,11 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 }
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
+                // live service values are the truth (boot-applied from settings)
+                listen_mode = beatlisten_get_mode();
+                clkout_ch = beatlisten_get_out();
+                menuTFTPrintListen(settings_menus, &n_settings_menus, &listen_mode);
+                menuTFTPrintClkOut(settings_menus, &n_settings_menus, &clkout_ch);
                 menuTFTPrintIP(settings_menus, &n_settings_menus);
             }else ESP_LOGE("UI", "couldn't fetch cfgData from state or file");
             break;
@@ -324,6 +339,12 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             }else if(menu_items[menu_pos] == SID_REMOTE){
                 remote_on = !remote_on;
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
+            }else if(menu_items[menu_pos] == SID_LISTEN){
+                listen_mode = listen_cycle(listen_mode, +1);
+                menuTFTPrintListen(settings_menus, &n_settings_menus, &listen_mode);
+            }else if(menu_items[menu_pos] == SID_CLKOUT){
+                clkout_ch = (clkout_ch + 1) % 3;
+                menuTFTPrintClkOut(settings_menus, &n_settings_menus, &clkout_ch);
             }else{
                 incSettingsItem(&tz_shift, menu_items[menu_pos]);
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
@@ -338,6 +359,12 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             }else if(menu_items[menu_pos] == SID_REMOTE){
                 remote_on = !remote_on;
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
+            }else if(menu_items[menu_pos] == SID_LISTEN){
+                listen_mode = listen_cycle(listen_mode, -1);
+                menuTFTPrintListen(settings_menus, &n_settings_menus, &listen_mode);
+            }else if(menu_items[menu_pos] == SID_CLKOUT){
+                clkout_ch = (clkout_ch + 2) % 3;
+                menuTFTPrintClkOut(settings_menus, &n_settings_menus, &clkout_ch);
             }else{
                 decSettingsItem(&tz_shift, menu_items[menu_pos]);
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
@@ -345,7 +372,8 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             break;
         case EV_SHORT_PRESS:
             if(menu_pos == -1) return M_ABOUT;   // About affordance
-            if(menu_items[menu_pos] != SID_TIMEZONE && menu_items[menu_pos] != SID_REMOTE){
+            if(menu_items[menu_pos] != SID_TIMEZONE && menu_items[menu_pos] != SID_REMOTE &&
+               menu_items[menu_pos] != SID_LISTEN && menu_items[menu_pos] != SID_CLKOUT){
                 _state_json = (void*) cfgData;
                 _state_data = (void*) &menu_pos;
                 return M_SETTINGS_INPUT;
@@ -362,6 +390,13 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             cJSON_DeleteItemFromObjectCaseSensitive(settings, "remote");
             cJSON_AddNumberToObject(settings, "remote", remote_on);
             rest_remote_enable(remote_on);
+            //persist + apply the beat listener (mode change implies relock)
+            cJSON_DeleteItemFromObjectCaseSensitive(settings, "blisten");
+            cJSON_AddNumberToObject(settings, "blisten", listen_mode);
+            cJSON_DeleteItemFromObjectCaseSensitive(settings, "blisten_out");
+            cJSON_AddNumberToObject(settings, "blisten_out", clkout_ch);
+            beatlisten_set_mode(listen_mode);
+            beatlisten_set_out(clkout_ch);
             //save current settings on menu exit
             writeJSONFile("/sdcard/CONFIG.jsn", cJSON_Print(cfgData));
             //set token 

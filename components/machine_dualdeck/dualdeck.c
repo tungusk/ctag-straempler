@@ -310,11 +310,11 @@ static int dd_min_q(void)
 //   pickups:     -2 = live,           -1 = armed (dead until it CROSSES back)
 #define DD_PICKUP  120        // counts of movement that grab a loop knob
 #define DD_PASSTOL 90         // how close a knob must come to reclaim its param
-static int s_cv6_ref = -2, s_cv7_ref = -2;   // loop window / length grabs
+static int s_cv6_ref[2] = {-2, -2}, s_cv7_ref[2] = {-2, -2};   // loop window / length grabs
 static int s_pk6 = -2, s_pk7 = -2;           // filter / fader pass-through
-static int s_mv6 = 0, s_mv7 = 0;             // move debounce (ADC spikes)
-static int s_c6_last = -1;                   // knob6 position the last move was made AT
-static int s_len_idx = 4;                    // ladder index while looping
+static int s_mv6[2] = {0, 0}, s_mv7[2] = {0, 0};   // move debounce (ADC spikes)
+static int s_c6_last[2] = {-1, -1};          // knob position the last move was made AT
+static int s_len_idx[2] = {4, 4};            // ladder index while looping
 
 // a window move/resize takes effect AT THE READER'S FRONTIER: buffered audio
 // plays out, the reader starts the new window, the cursor commits on arrival.
@@ -357,6 +357,7 @@ void dualdeck_loop_toggle(int deck)
         if (v->wpos > valid_to) v->wpos = valid_to;
         s_pk6 = s_pk7 = -1;                 // filter + fader stay put until the
                                             // knobs come back through them
+        s_cv6_ref[deck & 1] = s_cv7_ref[deck & 1] = -2;
         return;
     }
     // ENGAGE. Gates: mid-air states and gridless tracks can't loop.
@@ -401,10 +402,10 @@ void dualdeck_loop_toggle(int deck)
     v->loop_start = (uint32_t)st;
     v->loop_len_fr = len;
     v->loop_beats = dd_loop_q[k];                 // QUARTER-beats (UI formats it)
-    s_len_idx = k;
-    s_cv6_ref = s_cv7_ref = -1;                   // loop knobs: dead until MOVED,
-    s_mv6 = s_mv7 = 0;                            // so engaging can't fling the window
-    s_c6_last = -1;
+    s_len_idx[deck & 1] = k;
+    s_cv6_ref[deck & 1] = s_cv7_ref[deck & 1] = -1;   // dead until MOVED, so engaging
+    s_mv6[deck & 1] = s_mv7[deck & 1] = 0;            // can't fling the window
+    s_c6_last[deck & 1] = -1;
     v->map_p0 = v->rpos_i - off;                  // keeps map(rpos) == ff
     v->rm_at = 0;                                 // no stale scheduled window
     v->loop_active = true;                        // set LAST (write ordering)
@@ -556,6 +557,10 @@ static esp_err_t dualdeck_start(void)
     dd.fade_beats = -1;             // takeover OFF by default
     dd.loop_len_beats = 16;         // QUARTER-beats = 4 beats (ladder v2)
     dd.layout = DD_LAY_V;           // stacked single-decks
+    dd.cv_filt = 5;                 // CV6 — the house sweep channel
+    dd.cv_fader = 6;                // CV7
+    dd.cv_lpos[0] = dd.cv_lpos[1] = 5;   // loops BORROW those two by default:
+    dd.cv_llen[0] = dd.cv_llen[1] = 6;   // exactly the old fixed wiring
     dd.xf = 0.0f;
     dd.manual = true;
     clockin_reset(&dd.ci, dd_ppb[dd.ppb_idx]);
@@ -623,86 +628,103 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // ---- LOOP KNOBS: while the FOCUSED deck loops, CV6/CV7 belong to the loop
     // (window / length) — the same deck the trigs address. Everything is done on
     // the LIVE (pending-aware) window, or a move reschedules itself forever.
-    // MEDIAN-OF-5 (cvsmooth.h). CV7 is the CROSSFADER — it multiplies the whole
-    // mix — so a single stray ADC sample (the channel reads a steady 1221 and then
-    // throws ONE sample of 4) yanks the gain toward zero for a block and snaps
-    // back: a broadband click, on BOTH decks, on any track, masked by a low-pass.
-    // That is exactly the click Arlo heard. A median rejects the outlier; slewing
-    // alone only smears it.
-    static cvmed_t m6, m7;
-    int c6 = cvmed_step(&m6, io->cv[5]);
-    int c7 = cvmed_step(&m7, io->cv[6]);
-    dd_deck_t *fv = &dd.d[dd.focus];
-    bool borrow = fv->loop_active && fv->track_bpm > 20.0f && fv->file_frames;
-    if (borrow) {
-        uint32_t beat_tf = (uint32_t)(60.0f * DD_RATE / fv->track_bpm);
-        if (beat_tf) {
-            // ARM: seize the reference the block after engage. Without this the
-            // refs sat at -1 forever and the loop knobs never went live at all
-            // (the deck does this; I ported the grab test and not the arm).
-            if (s_cv6_ref == -1) { s_cv6_ref = c6; s_mv6 = 0; }
-            if (s_cv7_ref == -1) { s_cv7_ref = c7; s_mv7 = 0; }
-            // CV7 = LENGTH. Grab-then-track: dead until the knob MOVES, so
-            // engaging a loop can't instantly resize it.
-            if (s_cv7_ref >= 0 &&
-                (c7 - s_cv7_ref > DD_PICKUP || s_cv7_ref - c7 > DD_PICKUP)) s_cv7_ref = -2;
-            if (s_cv7_ref == -2) {
-                int minq = dd_min_q();
-                int ni = (int)((uint64_t)c7 * DD_LOOP_STEPS / 4096);
-                if (ni >= DD_LOOP_STEPS) ni = DD_LOOP_STEPS - 1;
-                while (ni < DD_LOOP_STEPS - 1 && dd_loop_q[ni] < minq) ni++;
-                if (ni != s_len_idx && ++s_mv7 >= 3) {
-                    s_mv7 = 0;
-                    uint32_t nl = (uint32_t)((uint64_t)dd_loop_q[ni] * beat_tf / 4);
-                    uint32_t cs = dd_live_start(fv);
-                    if (nl && cs + nl <= fv->file_frames) {
-                        s_len_idx = ni;
-                        fv->loop_beats = dd_loop_q[ni];
-                        dd_loop_remap(fv, cs, nl);
-                    }
-                } else if (ni == s_len_idx) s_mv7 = 0;
-            }
-            // CV6 = WINDOW, absolute across the whole track (one sweep spans it).
-            // It acts only when the KNOB moves: re-evaluating it on a CV7 length
-            // change would re-quantize the same knob position onto the new,
-            // coarser window grid and drag the start backwards.
-            if (s_cv6_ref >= 0 &&
-                (c6 - s_cv6_ref > DD_PICKUP || s_cv6_ref - c6 > DD_PICKUP)) s_cv6_ref = -2;
-            uint32_t llen = dd_live_len(fv);
-            int moved = (s_c6_last < 0) || (c6 - s_c6_last > 24) || (s_c6_last - c6 > 24);
-            if (s_cv6_ref == -2 && llen && moved) {
-                uint32_t span = (fv->file_frames > fv->grid_offset)
-                              ? fv->file_frames - fv->grid_offset : 0;
-                uint32_t nwin = span / llen;
-                if (nwin) {
-                    uint32_t idx = (uint32_t)((uint64_t)c6 * nwin / 4096);
-                    if (idx >= nwin) idx = nwin - 1;
-                    uint32_t ns = fv->grid_offset + idx * llen;
-                    if (ns != dd_live_start(fv) && ++s_mv6 >= 3) {
-                        s_mv6 = 0;
-                        s_c6_last = c6;
-                        if (ns + llen <= fv->file_frames) dd_loop_remap(fv, ns, llen);
-                    } else if (ns == dd_live_start(fv)) { s_mv6 = 0; s_c6_last = c6; }
+    // MEDIAN-OF-5 on every channel (cvsmooth.h). The ADC throws lone outliers — a
+    // channel sits at a steady 1221 and then reports ONE sample of 4 — and the
+    // fader multiplies the WHOLE mix, so a single spike is a broadband click on
+    // both decks. A median rejects the outlier; slewing only smears it.
+    static cvmed_t med[8];
+    int cvv[8];
+    for (int k = 0; k < 8; k++) cvv[k] = cvmed_step(&med[k], io->cv[k]);
+
+    // ---- CV MATRIX. Each function reads the channel it was assigned. A loop
+    // BORROWS a knob only when it happens to share that knob's channel — which is
+    // the default wiring (both loops on CV6/CV7, the filter and fader's channels),
+    // and is simply not the case once you move a loop onto a free CV.
+    int c_flt = cvv[dd.cv_filt & 7];
+    int c_fad = cvv[dd.cv_fader & 7];
+    bool flt_taken = false, fad_taken = false;
+    for (int i = 0; i < 2; i++) {
+        dd_deck_t *v = &dd.d[i];
+        if (!v->loop_active) continue;
+        int lp = dd.cv_lpos[i] & 7, ll = dd.cv_llen[i] & 7;
+        if (lp == (dd.cv_filt & 7) || ll == (dd.cv_filt & 7)) flt_taken = true;
+        if (lp == (dd.cv_fader & 7) || ll == (dd.cv_fader & 7)) fad_taken = true;
+    }
+
+    // ---- LOOP KNOBS, per deck (they no longer have to be the focused one: with
+    // the loops on their own channels, both decks can be worked at once).
+    for (int i = 0; i < 2; i++) {
+        dd_deck_t *v = &dd.d[i];
+        if (!v->loop_active || v->track_bpm <= 20.0f || !v->file_frames) continue;
+        uint32_t beat_tf = (uint32_t)(60.0f * DD_RATE / v->track_bpm);
+        if (!beat_tf) continue;
+        int c6 = cvv[dd.cv_lpos[i] & 7];       // window position
+        int c7 = cvv[dd.cv_llen[i] & 7];       // window length
+        // ARM: seize the reference the block after engage, so the knobs are DEAD
+        // until they MOVE and engaging can never fling the window.
+        if (s_cv6_ref[i] == -1) { s_cv6_ref[i] = c6; s_mv6[i] = 0; }
+        if (s_cv7_ref[i] == -1) { s_cv7_ref[i] = c7; s_mv7[i] = 0; }
+        // CV len = the ladder. Grab-then-track.
+        if (s_cv7_ref[i] >= 0 &&
+            (c7 - s_cv7_ref[i] > DD_PICKUP || s_cv7_ref[i] - c7 > DD_PICKUP)) s_cv7_ref[i] = -2;
+        if (s_cv7_ref[i] == -2) {
+            int minq = dd_min_q();
+            int ni = (int)((uint64_t)c7 * DD_LOOP_STEPS / 4096);
+            if (ni >= DD_LOOP_STEPS) ni = DD_LOOP_STEPS - 1;
+            while (ni < DD_LOOP_STEPS - 1 && dd_loop_q[ni] < minq) ni++;
+            if (ni != s_len_idx[i] && ++s_mv7[i] >= 3) {
+                s_mv7[i] = 0;
+                uint32_t nl = (uint32_t)((uint64_t)dd_loop_q[ni] * beat_tf / 4);
+                uint32_t cs = dd_live_start(v);
+                if (nl && cs + nl <= v->file_frames) {
+                    s_len_idx[i] = ni;
+                    v->loop_beats = dd_loop_q[ni];
+                    dd_loop_remap(v, cs, nl);
                 }
+            } else if (ni == s_len_idx[i]) s_mv7[i] = 0;
+        }
+        // CV pos = the window, ABSOLUTE across the track. It acts only when the
+        // KNOB moves: re-evaluating it on a length change would re-quantise the
+        // same knob position onto the new, coarser window grid and drag the start
+        // backwards (the bug the deck and the tracker both had).
+        if (s_cv6_ref[i] >= 0 &&
+            (c6 - s_cv6_ref[i] > DD_PICKUP || s_cv6_ref[i] - c6 > DD_PICKUP)) s_cv6_ref[i] = -2;
+        uint32_t llen = dd_live_len(v);
+        int moved = (s_c6_last[i] < 0) || (c6 - s_c6_last[i] > 24) || (s_c6_last[i] - c6 > 24);
+        if (s_cv6_ref[i] == -2 && llen && moved) {
+            uint32_t span = (v->file_frames > v->grid_offset)
+                          ? v->file_frames - v->grid_offset : 0;
+            uint32_t nwin = span / llen;
+            if (nwin) {
+                uint32_t idx = (uint32_t)((uint64_t)c6 * nwin / 4096);
+                if (idx >= nwin) idx = nwin - 1;
+                uint32_t ns = v->grid_offset + idx * llen;
+                if (ns != dd_live_start(v) && ++s_mv6[i] >= 3) {
+                    s_mv6[i] = 0;
+                    s_c6_last[i] = c6;
+                    if (ns + llen <= v->file_frames) dd_loop_remap(v, ns, llen);
+                } else if (ns == dd_live_start(v)) { s_mv6[i] = 0; s_c6_last[i] = c6; }
             }
-        }
-    } else {
-        // PASS-THROUGH pickup: a knob the loop borrowed stays inert until it
-        // returns to the value the engine is still using — then it takes over
-        // and nothing jumps (the deck's 2x/half-speed slam, avoided here).
-        if (s_pk6 != -2) {
-            int d = c6 - dd.filt_cv;
-            if (d < 0) d = -d;
-            if (d <= DD_PASSTOL) s_pk6 = -2;
-        }
-        if (s_pk7 != -2) {
-            int d = c7 - (int)(dd.xf * 4095.0f);   // the fader's LIVE position
-            if (d < 0) d = -d;
-            if (d <= DD_PASSTOL) s_pk7 = -2;
         }
     }
-    bool flt_live = !borrow && s_pk6 == -2;   // else the filter holds its value
-    bool xf_live  = !borrow && s_pk7 == -2;   // else the mix stays exactly put
+
+    // ---- PASS-THROUGH pickup for a knob a loop borrowed: it stays inert until it
+    // comes back THROUGH the value the engine is still using, so leaving a loop can
+    // never step the mix or slam the filter.
+    if (!flt_taken && s_pk6 != -2) {
+        int d = c_flt - dd.filt_cv;
+        if (d < 0) d = -d;
+        if (d <= DD_PASSTOL) s_pk6 = -2;
+    }
+    if (!fad_taken && s_pk7 != -2) {
+        int d = c_fad - (int)(dd.xf * 4095.0f);      // the fader's LIVE position
+        if (d < 0) d = -d;
+        if (d <= DD_PASSTOL) s_pk7 = -2;
+    }
+    bool flt_live = !flt_taken && s_pk6 == -2;
+    bool xf_live  = !fad_taken && s_pk7 == -2;
+    int c7 = c_fad, c6 = c_flt;
+    (void)c6;
 
     // ---- crossfade: three states — AUTO (takeover fade in flight), HELD
     // (fade landed; the mix stays put wherever automation left it), MANUAL
@@ -741,7 +763,7 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // ---- master DJ filter on knob6 (Arlo: "reverse the cv6/7 assignments, that
     // way filter freq stays on cv6 like other machines" — the deck, drums and
     // looper all put the sweep there; crossfade moves to knob7)
-    if (flt_live) dd.filt_cv = c6;     // else FROZEN (loop has the knob, or the
+    if (flt_live) dd.filt_cv = c_flt;  // else FROZEN (a loop has the knob, or the
     int fcv = dd.filt_cv;              // knob has not come back through it yet)
     int mode = 0;
     float fc = 0;
@@ -871,6 +893,12 @@ static cJSON *dualdeck_preset_save(void)
     cJSON_AddNumberToObject(o, "llen", dd.loop_len_beats);
     cJSON_AddNumberToObject(o, "lq", 1);      // llen units = QUARTER-beats
     cJSON_AddNumberToObject(o, "lay", dd.layout);
+    cJSON_AddNumberToObject(o, "cvf", dd.cv_filt);
+    cJSON_AddNumberToObject(o, "cvx", dd.cv_fader);
+    cJSON_AddNumberToObject(o, "cvp0", dd.cv_lpos[0]);
+    cJSON_AddNumberToObject(o, "cvp1", dd.cv_lpos[1]);
+    cJSON_AddNumberToObject(o, "cvl0", dd.cv_llen[0]);
+    cJSON_AddNumberToObject(o, "cvl1", dd.cv_llen[1]);
     return o;
 }
 
@@ -904,6 +932,12 @@ static void dualdeck_preset_load(const cJSON *node)
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lay")) && cJSON_IsNumber(j))
         dd.layout = (j->valueint == DD_LAY_H) ? DD_LAY_H : DD_LAY_V;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvf")) && cJSON_IsNumber(j)) dd.cv_filt = j->valueint & 7;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvx")) && cJSON_IsNumber(j)) dd.cv_fader = j->valueint & 7;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvp0")) && cJSON_IsNumber(j)) dd.cv_lpos[0] = j->valueint & 7;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvp1")) && cJSON_IsNumber(j)) dd.cv_lpos[1] = j->valueint & 7;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvl0")) && cJSON_IsNumber(j)) dd.cv_llen[0] = j->valueint & 7;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvl1")) && cJSON_IsNumber(j)) dd.cv_llen[1] = j->valueint & 7;
     // track loads only when the value actually changes — preset_load also runs
     // on remote settings writes, and reloading mid-performance would mute
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "ta")) && cJSON_IsString(j) &&
