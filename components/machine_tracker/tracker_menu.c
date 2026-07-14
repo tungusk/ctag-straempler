@@ -97,6 +97,23 @@ static int bar_x_of(int pm){ return TBAR_X + 2 + pm * (TBAR_W - 8) / 1000; }
 
 // paint the RULE across [sx, sx+sw): lit inside the loop window, dim outside
 // (and lit end to end when there is no loop). This is also the playhead's erase.
+// LOOP WINDOW GEOMETRY. Honest about the pixels: the loop is measured in STEPS
+// (1..32 rows) and the bar spans the WHOLE SONG, so on a 1000-step module a
+// 4-step loop is 0.4% of the width — about ONE pixel. No colour scheme rescues
+// that. So the window is drawn as a BLOCK (thick, solid, bright) with a
+// legibility FLOOR: never thinner than LOOP_MIN_W, and it grows honestly beyond
+// that, so 4 vs 32 steps still reads as small vs large.
+#define LOOP_BLK_H  8      // the window is a solid block, not a hairline
+#define LOOP_MIN_W  5      // ...and never narrower than this, however few steps
+
+static void loop_px(int *pa, int *pb){
+    int a = bar_x_of(trk.loop_a_pm), b = bar_x_of(trk.loop_b_pm);
+    if (b < a + LOOP_MIN_W) b = a + LOOP_MIN_W;
+    int lim = TBAR_X + TBAR_W - 2;
+    if (b > lim) { b = lim; if (a > b - LOOP_MIN_W) a = b - LOOP_MIN_W; }
+    *pa = a; *pb = b;
+}
+
 static void bar_paint_bg(int sx, int sw){
     if (sw <= 0) return;
     int ry = TBAR_Y + TBAR_H / 2;
@@ -105,22 +122,14 @@ static void bar_paint_bg(int sx, int sw){
         TFT_fillRect(sx, ry, sw, TBAR_RULE, tbar_bg());
         return;
     }
-    int a = bar_x_of(trk.loop_a_pm), b = bar_x_of(trk.loop_b_pm);
-    if (b < a + 2) b = a + 2;                             // a tiny loop still reads
-    int x = sx, end = sx + sw;
-    while (x < end){
-        int run;
-        color_t c;
-        if (x < a)      { run = a < end ? a : end; c = BAR_DIM; }
-        else if (x < b) { run = b < end ? b : end; c = tbar_bg(); }
-        else            { run = end;               c = BAR_DIM; }
-        if (run > x) TFT_fillRect(x, ry, run - x, TBAR_RULE, c);
-        x = run;
-    }
-    // end posts: the loop's EDGES, so its length is unmistakable
-    color_t lc = tbar_bg();
-    TFT_fillRect(a, ry - 3, 1, 7, lc);
-    TFT_fillRect(b, ry - 3, 1, 7, lc);
+    // the SONG is a dim rule; the LOOP is a solid block sitting on it
+    TFT_fillRect(sx, ry, sw, TBAR_RULE, BAR_DIM);
+    int a, b;
+    loop_px(&a, &b);
+    int x0 = a > sx ? a : sx;
+    int x1 = (b < sx + sw) ? b : sx + sw;
+    if (x1 > x0)
+        TFT_fillRect(x0, ry - LOOP_BLK_H / 2, x1 - x0, LOOP_BLK_H, tbar_bg());
 }
 
 static void draw_bar_frame(void){
@@ -134,11 +143,7 @@ static void draw_bar_frame(void){
 
 static void draw_bar(void){
     int a = -1, b = -1;
-    if (trk.loop_engage){
-        a = bar_x_of(trk.loop_a_pm);
-        b = bar_x_of(trk.loop_b_pm);
-        if (b < a + 2) b = a + 2;
-    }
+    if (trk.loop_engage) loop_px(&a, &b);
     if ((trk.playing ? 1 : 0) != s_bar_state ||
         (trk.loop_engage ? 1 : 0) != s_bar_loop ||
         a != s_last_loopa || b != s_last_loopb){
@@ -149,8 +154,8 @@ static void draw_bar(void){
     int x = bar_x_of(bar_pos_pm());
     if (x == s_last_barx) return;
     if (s_last_barx > 0) bar_paint_bg(s_last_barx - 1, TBAR_HEAD_W + 2);   // erase
-    // the scrubber CROSSES the rule (a few px each side), like the fader
-    TFT_fillRect(x, TBAR_Y + 2, TBAR_HEAD_W, TBAR_H - 4, (color_t){245, 245, 245});
+    // the scrubber CROSSES the rule (and the loop block) — white reads on both
+    TFT_fillRect(x, TBAR_Y, TBAR_HEAD_W, TBAR_H, (color_t){245, 245, 245});
     s_last_barx = x;
 }
 
