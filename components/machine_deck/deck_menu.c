@@ -319,7 +319,7 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             if (event == EV_TIMER_REPEATING_SLOW){
                 // engine internals through /status (v1) for remote debugging
                 char dbg[56];
-                snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d S%lu g%u L%d n%d",
+                snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d S%lu g%u L%d W%ld",
                          dk.loop_active ? 'L' : (dk.playing ? 'P' : 's'),
                          (unsigned long)dk.ci.raw_fires,
                          (unsigned long)(dk.ci.raw_iv / 44),        // ms between fires
@@ -327,7 +327,8 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
                          (int)(dk.phase_err * 100),              // PLL convergence
                          (unsigned long)dk.dbg_starve,           // ring underrun blocks
                          (unsigned)dk.ci.clk.ghost_run,             // escape-hatch state
-                         (int)dk.ci.clk.locked, (int)dk.ci.clk.ring_n);
+                         (int)dk.ci.clk.locked,
+                         (long)((int32_t)(dk.wpos - dk.rpos_i)));   // ring LEAD
                 audio_status_set_voices("deck", dbg);
             }
             break;
