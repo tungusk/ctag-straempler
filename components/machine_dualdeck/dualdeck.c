@@ -557,10 +557,17 @@ static esp_err_t dualdeck_start(void)
     dd.fade_beats = -1;             // takeover OFF by default
     dd.loop_len_beats = 16;         // QUARTER-beats = 4 beats (ladder v2)
     dd.layout = DD_LAY_V;           // stacked single-decks
+    // DEFAULTS: NOTHING IS BORROWED. The loops get their own knobs (CV5 window,
+    // CV8 length) so the FILTER (CV6) and the CROSSFADER (CV7) stay live at all
+    // times — Arlo, in performance: "cant access the crossfader on non looped
+    // deck2". A loop on one deck must never freeze the mix; a dead fader mid-blend
+    // is worse than any knob shortage. The matrix still lets you put the loop back
+    // on CV6/CV7 if you would rather have the good knobs on the window and length —
+    // that sharing is what re-enables the borrow, and the CV Map marks it amber.
     dd.cv_filt = 5;                 // CV6 — the house sweep channel
-    dd.cv_fader = 6;                // CV7
-    dd.cv_lpos[0] = dd.cv_lpos[1] = 5;   // loops BORROW those two by default:
-    dd.cv_llen[0] = dd.cv_llen[1] = 6;   // exactly the old fixed wiring
+    dd.cv_fader = 6;                // CV7 — the fader, always yours
+    dd.cv_lpos[0] = dd.cv_lpos[1] = 4;   // CV5 = loop window
+    dd.cv_llen[0] = dd.cv_llen[1] = 7;   // CV8 = loop length
     dd.xf = 0.0f;
     dd.manual = true;
     clockin_reset(&dd.ci, dd_ppb[dd.ppb_idx]);
