@@ -610,9 +610,12 @@ void deck_resync_now(void)
 }
 
 // ---- engine -----------------------------------------------------------------
+static void dk_reset_statics(void);      // defined with the process() statics below
+
 static esp_err_t deck_start(void)
 {
     memset(&dk, 0, sizeof(dk));
+    dk_reset_statics();
     s_pending[0] = 0;
     s_track_req = false;
     dk.ring = heap_caps_malloc((size_t)DK_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
@@ -650,6 +653,30 @@ static void deck_stop(void)
 // and still clicks. Bench-caught on DoubleDecker, where CV7 is the crossfader and
 // the spike modulated the whole mix.
 static int s_cv6 = 0, s_cv7 = 0;
+static cvmed_t s_m6, s_m7;                  // per-channel median-of-5
+static trig_gate_t s_tg1, s_tg2;            // TR1/TR2 gate state
+static trig_combo_t s_tc;                   // the both-trig RESYNC gesture
+static int s_cv6_ref = -1, s_cv7_ref = -1, s_mv6 = 0, s_mv7 = 0;   // loop knob grabs
+static int s_c6_last = -1;                  // knob6 position the last move was made AT
+
+// Every file-static carrying state across process() calls is reset here: they
+// survive a machine SWITCH otherwise, and a gate held low while you switch away
+// leaves the gate state "pressed" — switching back emits a phantom release and the
+// deck play/pauses or toggles its loop by itself.
+static void dk_reset_statics(void)
+{
+    memset(&s_m6, 0, sizeof(s_m6));
+    memset(&s_m7, 0, sizeof(s_m7));
+    memset(&s_tg1, 0, sizeof(s_tg1));
+    memset(&s_tg2, 0, sizeof(s_tg2));
+    memset(&s_tc, 0, sizeof(s_tc));
+    s_cv6 = s_cv7 = 0;
+    s_cv6_ref = s_cv7_ref = -1;
+    s_mv6 = s_mv7 = 0;
+    s_c6_last = -1;
+    s_pk6 = s_pk7 = -2;
+    s_loop_len_idx = 4;
+}
 
 static void deck_process(int32_t out[MACHINE_BLOCK],
                          const int32_t in[MACHINE_BLOCK],
@@ -666,28 +693,26 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     // no longer play/pauses (that moved to TR1). deck_sync_now() is UNBOUND —
     // shelved 2026-07-13; the PLL + NUDGE cover the need. Kept in code as the
     // grave marker for a future binding.
-    static trig_gate_t tg1, tg2;
     const int nfr = MACHINE_BLOCK / 2;
-    {
-        static cvmed_t m6, m7;
-        s_cv6 = cvmed_step(&m6, io->cv[5]);
-        s_cv7 = cvmed_step(&m7, io->cv[6]);
-    }
+    s_cv6 = cvmed_step(&s_m6, io->cv[5]);
+    s_cv7 = cvmed_step(&s_m7, io->cv[6]);
     bool d1 = !(io->trig_level & 1), d2 = !(io->trig_level & 2);
-    tg_event_t e1 = trig_gate_step(&tg1, d1, nfr);
-    tg_event_t e2 = trig_gate_step(&tg2, d2, nfr);
+    tg_event_t e1 = trig_gate_step(&s_tg1, d1, nfr);
+    tg_event_t e2 = trig_gate_step(&s_tg2, d2, nfr);
     // BOTH-TRIG RESYNC: arms at 0.35 s (ahead of either gate's own 0.6 s hold),
     // fires on release. While it owns the trigs, their individual events are
     // swallowed — otherwise the same gesture would also stop the deck and flip
     // the loop on its way past.
-    static trig_combo_t tc;
-    tc_event_t ec = trig_combo_step(&tc, d1, d2, nfr);
+    tc_event_t ec = trig_combo_step(&s_tc, d1, d2, nfr);
     if (ec == TC_FIRE) deck_resync_now();
-    dk.resync_armed = (ec == TC_ARMED) ? true : (trig_combo_busy(&tc) ? dk.resync_armed : false);
-    if (!trig_combo_busy(&tc)) {
+    dk.resync_armed = (ec == TC_ARMED) ? true : (trig_combo_busy(&s_tc) ? dk.resync_armed : false);
+    if (!trig_combo_busy(&s_tc)) {
         if (e1 == TG_REL_SHORT) deck_toggle_play();
         else if (e1 == TG_REL_LONG) deck_restart();
-        if (e2 == TG_PRESS || e2 == TG_REL_LONG) deck_loop_toggle();
+        // TR2 engages the loop ON PRESS, but RESYNC is TR1+TR2 held together and the
+        // combo only arms at 0.35 s — so the gesture used to flip the loop on its way
+        // in. If TR1 is already down, this is a combo forming, not a loop press.
+        if (!d1 && (e2 == TG_PRESS || e2 == TG_REL_LONG)) deck_loop_toggle();
     }
 
     // While LOOPING the two good knobs become the loop's: CV7 = length ladder
@@ -696,11 +721,15 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     // construction (flt_f slew + rate_sm glide toward the physical positions).
     // Relative deltas from engage-captured references; a move must persist a
     // few blocks so a WiFi ADC spike can't jump the window (dualdeck lesson).
-    static int s_cv6_ref = -1, s_cv7_ref = -1, s_mv6 = 0, s_mv7 = 0;
-    static int s_c6_last = -1;    // knob6 position the last window move was made AT
+    // knob6 position the last window move was made AT
     if (dk.loop_active) {
-        if (s_cv6_ref == -1) { s_cv6_ref = io->cv[5]; s_mv6 = 0; }   // arm: dead until moved
-        if (s_cv7_ref == -1) { s_cv7_ref = io->cv[6]; s_mv7 = 0; }   // arm: dead until moved
+        // ARM from the MEDIAN, never the raw pin. A spike in the arm block set the
+        // reference to the outlier (e.g. 4), so the very next block differed by more
+        // than DK_PICKUP, the knob was instantly declared "grabbed", and engaging a
+        // loop flung the window/length to wherever the knob physically sat — the
+        // exact thing "dead until moved" exists to prevent.
+        if (s_cv6_ref == -1) { s_cv6_ref = s_cv6; s_mv6 = 0; }
+        if (s_cv7_ref == -1) { s_cv7_ref = s_cv7; s_mv7 = 0; }
         uint32_t beat_tf_lp = (dk.track_bpm > 20.0f)
             ? (uint32_t)(60.0f * DK_RATE / dk.track_bpm) : 0;
         // CV7 = LENGTH ladder, ABSOLUTE: the knob's position IS the rung, so the

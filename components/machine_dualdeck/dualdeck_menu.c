@@ -716,10 +716,18 @@ static void cv_row_redraw(int i, int pos, int sel){
     snprintf(raw, sizeof(raw), "CV%d", ch + 1);
     if (editing) snprintf(val, sizeof(val), "[ %s ]", raw);
     else snprintf(val, sizeof(val), "%s", raw);
-    // a channel SHARED with the filter or the fader means that knob gets borrowed
-    // while the loop is engaged — say so, rather than letting it surprise anyone
+    // AMBER = this knob gets BORROWED (it shares the filter's or the fader's
+    // channel while a loop is engaged). RED = the assignment is BROKEN: a control on
+    // the CLOCK channel reads the pulse train, not a knob — pulses grab the
+    // reference and the gaps between them remap the loop, which collapses it to a
+    // stutter within milliseconds. The engine ignores such a control outright; the
+    // page has to say so rather than let it look assigned.
+    bool on_clock = (ch == (dd.clk_src & 7));
     bool shares = (i >= 2) && (ch == (dd.cv_filt & 7) || ch == (dd.cv_fader & 7));
-    _fg = editing ? TFT_CYAN : (shares ? (color_t){190, 160, 70} : TFT_WHITE);
+    _fg = editing ? TFT_CYAN
+                  : on_clock ? (color_t){230, 70, 70}
+                  : shares   ? (color_t){190, 160, 70}
+                             : TFT_WHITE;
     TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
     _bg = TFT_BLACK;
 }
@@ -732,7 +740,7 @@ static void cv_redraw(int pos, int sel){
     for (int i = 0; i < DD_CV_N; i++) cv_row_redraw(i, pos, sel);
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("a loop sharing the filter/fader channel BORROWS that knob", 6,
+    TFT_print("amber: borrowed while looping   red: on the CLOCK channel (ignored)", 6,
               _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
@@ -747,6 +755,10 @@ static int dd_cv_handler(int it_id, int event, void *ev_data){
             if(sel){
                 volatile int *slot = cv_slot(pos);
                 *slot = (*slot + (dir > 0 ? 1 : 7)) & 7;
+                // Re-target a LIVE loop knob and it must go DEAD until moved again,
+                // or the newly-assigned knob's current position instantly becomes a
+                // window/length command and the loop jumps.
+                if (pos >= 2) dualdeck_rearm_loop_knobs((pos - 2) / 2);
                 cv_redraw(pos, sel);        // sharing marks can change on any row
             } else {
                 pos += dir;

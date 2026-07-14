@@ -190,3 +190,4 @@ void dualdeck_arm_start(int deck);
 void dualdeck_arm_stop(int deck);
 void dualdeck_loop_toggle(int deck);   // TR2 grammar; safe from UI too
 void dualdeck_resync(int deck);        // BOTH-TRIG gesture: the beat lands NOW
+void dualdeck_rearm_loop_knobs(int deck);   // re-target a loop CV: dead until MOVED
