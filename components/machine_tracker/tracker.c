@@ -643,9 +643,12 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     // pattern is typically 64 rows and the old 32-step ceiling could not hold even
     // one. Windows clamp to the song and snap to whole beats when synced, so long
     // rungs cap out gracefully on short modules.
-    static const int lad_len[14] = {1, 1, 1, 1,  1, 2, 4, 8, 16, 32, 64, 128, 192, 256};
-    static const int lad_div[14] = {16, 8, 4, 2, 0, 0, 0, 0,  0,  0,  0,   0,   0,   0};
-    #define TRK_LEN_STEPS 14
+    // ...up to 1024 steps (Arlo), which on a typical 64-row pattern is sixteen
+    // patterns — most modules end well before that, and the window simply clamps
+    // to the song when it does.
+    static const int lad_len[15] = {1, 1, 1, 1,  1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024};
+    static const int lad_div[15] = {16, 8, 4, 2, 0, 0, 0, 0,  0,  0,  0,   0,   0,   0,    0};
+    #define TRK_LEN_STEPS 15
     static int cv_len_h = -1, cv_pos_h = -1;
     int cv_len = io->cv[6], cv_pos = io->cv[5];
     if (cv_len_h < 0) cv_len_h = cv_len;
