@@ -15,6 +15,7 @@
 #include "fileio.h"
 #include "sd_lock.h"
 #include "trig_gate.h"
+#include "cvsmooth.h"
 #include "dualdeck_priv.h"
 
 static const char *TAG = "DDECK";
@@ -622,7 +623,15 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // ---- LOOP KNOBS: while the FOCUSED deck loops, CV6/CV7 belong to the loop
     // (window / length) — the same deck the trigs address. Everything is done on
     // the LIVE (pending-aware) window, or a move reschedules itself forever.
-    int c6 = io->cv[5], c7 = io->cv[6];
+    // MEDIAN-OF-5 (cvsmooth.h). CV7 is the CROSSFADER — it multiplies the whole
+    // mix — so a single stray ADC sample (the channel reads a steady 1221 and then
+    // throws ONE sample of 4) yanks the gain toward zero for a block and snaps
+    // back: a broadband click, on BOTH decks, on any track, masked by a low-pass.
+    // That is exactly the click Arlo heard. A median rejects the outlier; slewing
+    // alone only smears it.
+    static cvmed_t m6, m7;
+    int c6 = cvmed_step(&m6, io->cv[5]);
+    int c7 = cvmed_step(&m7, io->cv[6]);
     dd_deck_t *fv = &dd.d[dd.focus];
     bool borrow = fv->loop_active && fv->track_bpm > 20.0f && fv->file_frames;
     if (borrow) {

@@ -14,6 +14,7 @@
 #include "fileio.h"
 #include "sd_lock.h"
 #include "trig_gate.h"
+#include "cvsmooth.h"
 #include "sampfile.h"
 #include "deck_priv.h"
 
@@ -642,6 +643,14 @@ static void deck_stop(void)
     dk.ring = NULL;
 }
 
+// MEDIAN-OF-5 knob reads (cvsmooth.h). The ADC throws lone outliers — a channel
+// sits at a steady 1221 and then reports ONE sample of 4 — and every consumer here
+// (filter cutoff, speed, loop window, loop length) steps hard on one. A median
+// rejects the outlier outright; slewing alone only smears it across a few blocks
+// and still clicks. Bench-caught on DoubleDecker, where CV7 is the crossfader and
+// the spike modulated the whole mix.
+static int s_cv6 = 0, s_cv7 = 0;
+
 static void deck_process(int32_t out[MACHINE_BLOCK],
                          const int32_t in[MACHINE_BLOCK],
                          const machine_io_t *io)
@@ -659,6 +668,11 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     // grave marker for a future binding.
     static trig_gate_t tg1, tg2;
     const int nfr = MACHINE_BLOCK / 2;
+    {
+        static cvmed_t m6, m7;
+        s_cv6 = cvmed_step(&m6, io->cv[5]);
+        s_cv7 = cvmed_step(&m7, io->cv[6]);
+    }
     bool d1 = !(io->trig_level & 1), d2 = !(io->trig_level & 2);
     tg_event_t e1 = trig_gate_step(&tg1, d1, nfr);
     tg_event_t e2 = trig_gate_step(&tg2, d2, nfr);
@@ -695,7 +709,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // Grab-then-track: the knob is dead until it MOVES past the deadband,
         // so engaging a loop can't slam the length to wherever the knob sits.
         if (beat_tf_lp) {
-            int c7 = io->cv[6];
+            int c7 = s_cv7;
             if (s_cv7_ref >= 0 &&
                 (c7 - s_cv7_ref > DK_PICKUP || s_cv7_ref - c7 > DK_PICKUP))
                 s_cv7_ref = -2;                  // grabbed: knob is live now
@@ -736,7 +750,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // the start where it is and extend the END — which is exactly what CV7
         // does on its own, as long as CV6 stays out of it.
         {
-            int c6 = io->cv[5];
+            int c6 = s_cv6;
             if (s_cv6_ref >= 0 &&
                 (c6 - s_cv6_ref > DK_PICKUP || s_cv6_ref - c6 > DK_PICKUP))
                 s_cv6_ref = -2;                          // grabbed
@@ -766,7 +780,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // PASS-THROUGH pickup: a knob the loop borrowed stays inert until it
         // returns to the value the engine is still using — then it takes over
         // seamlessly (see DK_PASSTOL). Nothing ever jumps.
-        int c6 = io->cv[5], c7 = io->cv[6];
+        int c6 = s_cv6, c7 = s_cv7;
         if (s_pk7 != -2) {
             int d = c7 - (int)dk.pitch_cv;
             if (d < 0) d = -d;
