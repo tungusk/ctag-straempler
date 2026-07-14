@@ -560,8 +560,9 @@ static int dd_load_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup (house grammar: toggles click, lists bracket-edit, per-row paint) ----
-static const char *setup_labels[] = {"Clock Src", "Clock", "Takeover", "Loop Len", "Layout"};
-#define DD_SETUP_N 5
+static const char *setup_labels[] = {"Clock Src", "Clock", "Takeover", "Loop Len", "Layout", "CV Map"};
+#define DD_SETUP_N 6
+#define DD_ROW_CVMAP 5                                     // opens its own page
 #define SETUP_IS_TOGGLE(i) ((i) == 2 || (i) == 3 || (i) == 4)   // short cycles: click advances
 #define SETUP_ROW_Y(i) (TFT_getfontheight() + 12 + (i) * (TFT_getfontheight() + 8))
 
@@ -581,6 +582,7 @@ static void setup_value_str(int i, char *v, size_t n){
             break;
         }
         case 4: snprintf(v, n, "%s", dd.layout == DD_LAY_V ? "stacked" : "side by side"); break;
+        case DD_ROW_CVMAP: snprintf(v, n, "%s", "...");  break;
         default: v[0] = 0;
     }
 }
@@ -660,6 +662,7 @@ static int dd_setup_handler(int it_id, int event, void *ev_data){
         }
         case EV_SHORT_PRESS:
             if(pos == -1) return M_MORE;
+            if(pos == DD_ROW_CVMAP) return M_DD_CV;        // its own page (drums idiom)
             if(SETUP_IS_TOGGLE(pos)){
                 setup_adj(pos, +1);
                 setup_row_redraw(pos, pos, 0);
@@ -675,6 +678,94 @@ static int dd_setup_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- registration ---------------------------------------------------------
+// ---- CV MAP (Arlo: "selectable cv for the functions assignable in each deck.
+// sub menu like the drums"). Every performable function names its own channel.
+// The two loops get their OWN pair PER DECK — so put them on free CVs and both
+// decks can be worked at once, instead of the trigs' focused-deck compromise.
+// Leave them on the filter's and fader's channels (the default) and you get the
+// old behaviour: the loop BORROWS those knobs and hands them back by pickup.
+static const char *const cv_labels[] = {
+    "Crossfade", "Filter", "1 Loop Pos", "1 Loop Len", "2 Loop Pos", "2 Loop Len",
+};
+#define DD_CV_N 6
+
+static volatile int *cv_slot(int i){
+    switch(i){
+        case 0: return &dd.cv_fader;
+        case 1: return &dd.cv_filt;
+        case 2: return &dd.cv_lpos[0];
+        case 3: return &dd.cv_llen[0];
+        case 4: return &dd.cv_lpos[1];
+        case 5: return &dd.cv_llen[1];
+    }
+    return &dd.cv_filt;
+}
+
+#define CV_ROW_Y(i) (TFT_getfontheight() + 14 + (i) * (TFT_getfontheight() + 8))
+
+static void cv_row_redraw(int i, int pos, int sel){
+    int fh = TFT_getfontheight();
+    int y = CV_ROW_Y(i);
+    bool editing = (i == pos && sel);
+    _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
+    _fg = editing ? TFT_CYAN : TFT_WHITE;
+    TFT_fillRect(0, y - 2, _width, fh + 6, _bg);
+    TFT_print((char*)cv_labels[i], 8, y);
+    int ch = (*cv_slot(i)) & 7;
+    char raw[16], val[20];
+    snprintf(raw, sizeof(raw), "CV%d", ch + 1);
+    if (editing) snprintf(val, sizeof(val), "[ %s ]", raw);
+    else snprintf(val, sizeof(val), "%s", raw);
+    // a channel SHARED with the filter or the fader means that knob gets borrowed
+    // while the loop is engaged — say so, rather than letting it surprise anyone
+    bool shares = (i >= 2) && (ch == (dd.cv_filt & 7) || ch == (dd.cv_fader & 7));
+    _fg = editing ? TFT_CYAN : (shares ? (color_t){190, 160, 70} : TFT_WHITE);
+    TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
+    _bg = TFT_BLACK;
+}
+
+static void cv_redraw(int pos, int sel){
+    TFT_resetclipwin();
+    TFT_fillScreen(TFT_BLACK);
+    _bg = TFT_BLACK; _fg = TFT_WHITE;
+    TFT_print("DoubleDecker CV Map", 6, 4);
+    for (int i = 0; i < DD_CV_N; i++) cv_row_redraw(i, pos, sel);
+    _fg = (color_t){90, 90, 90};
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    TFT_print("a loop sharing the filter/fader channel BORROWS that knob", 6,
+              _height - TFT_getfontheight() - 1);
+    TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+static int dd_cv_handler(int it_id, int event, void *ev_data){
+    static int pos = 0, sel = 0;
+    switch(event){
+        case EV_ENTERED_MENU: pos = 0; sel = 0; cv_redraw(pos, sel); break;
+        case EV_FWD:
+        case EV_BWD: {
+            int dir = (event == EV_FWD) ? +1 : -1;
+            if(sel){
+                volatile int *slot = cv_slot(pos);
+                *slot = (*slot + (dir > 0 ? 1 : 7)) & 7;
+                cv_redraw(pos, sel);        // sharing marks can change on any row
+            } else {
+                pos += dir;
+                if(pos >= DD_CV_N) pos = 0;
+                if(pos < 0) pos = DD_CV_N - 1;
+                cv_redraw(pos, sel);
+            }
+            break;
+        }
+        case EV_SHORT_PRESS:
+            sel = !sel;
+            cv_row_redraw(pos, pos, sel);
+            break;
+        case EV_LONG_PRESS: return M_DD_SETUP;
+        default: break;
+    }
+    return 0;
+}
+
 static void dd_register_pages(void *menusys){
     menusys_t *_ms = (menusys_t *)menusys;
     menusys_new_item(_ms, M_DD_LIVE);
@@ -683,6 +774,8 @@ static void dd_register_pages(void *menusys){
     menusys_item_set_default_cb(_ms, M_DD_SETUP, dd_setup_handler);
     menusys_new_item(_ms, M_DD_LOAD);
     menusys_item_set_default_cb(_ms, M_DD_LOAD, dd_load_handler);
+    menusys_new_item(_ms, M_DD_CV);
+    menusys_item_set_default_cb(_ms, M_DD_CV, dd_cv_handler);
 }
 
 static const char *const dd_main_items[] = {"Live", "Setup"};

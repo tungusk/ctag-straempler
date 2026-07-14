@@ -48,6 +48,7 @@ typedef enum{
     M_DD_LIVE,
     M_DD_SETUP,
     M_DD_LOAD,
+    M_DD_CV,
     M_SETTINGS,
     M_SETTINGS_INPUT,
     M_ABOUT,
@@ -114,7 +115,9 @@ typedef enum{
     SID_WIFI_PASSWD,
     SID_APIKEY,
     SID_TIMEZONE,
-    SID_REMOTE
+    SID_REMOTE,
+    SID_LISTEN,        // beatlisten mode (System Settings row)
+    SID_CLKOUT         // beatlisten clock-out channel
 } submenu_ids_t;
 
 typedef enum{
