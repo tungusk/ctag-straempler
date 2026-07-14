@@ -82,6 +82,9 @@ static color_t bar_body(void){
 }
 static color_t bar_loop(void){
     if (trk.state == TRK_FAIL) return (color_t){70, 20, 20};
+    // RETRIG is not a loop of the song — it is a stutter of the BUFFER, and the
+    // song is frozen under it. Give it its own colour so the two never read alike.
+    if (trk.retrig_div > 0) return (color_t){120, 20, 70};
     return trk.playing ? (color_t){16, 62, 32} : (color_t){22, 42, 88};
 }
 
@@ -202,7 +205,10 @@ static void draw_info(void){
                      (int)(trk.ci.clk.bpm / TRK_PPB_EFF() + 0.5f));
         else
             snprintf(bs, sizeof(bs), "%d bpm", trk.mod_bpm);
-        if (trk.loop_engage)
+        if (trk.loop_engage && trk.retrig_div > 0)
+            snprintf(st, sizeof(st), "RETRIG  1/%d step  @ %02d:%02d  %s",
+                     trk.retrig_div, trk.loop_start_ord, trk.loop_start_row, bs);
+        else if (trk.loop_engage)
             snprintf(st, sizeof(st), "LOOP  %d step%s  @ %02d:%02d  %s",
                      trk.loop_len, trk.loop_len > 1 ? "s" : "",
                      trk.loop_start_ord, trk.loop_start_row, bs);

@@ -82,6 +82,16 @@ typedef struct {
     volatile bool loop_toggle_req; // TR2 edge → render flips loop_engage
     volatile bool loop_freeze;     // release: freeze (resume at loop) vs keep-running (setting)
     volatile int  loop_len;        // window length in steps/rows (CV7 selector)
+    // RETRIG — the sub-step rungs of the CV7 ladder (Arlo: "is it possible to go
+    // sub 1 step on the looper and make it into a retrig under there? ... kind of
+    // like the old old sampler used to"). Below one step the SCORE has no finer
+    // address (libxmp seeks to a row at best), so the retrig happens in the AUDIO
+    // domain instead: the play cursor stops advancing and wraps a short window of
+    // the rendered ring. Freezing the cursor also stalls the renderer, so libxmp's
+    // clock stops with it — the window cannot be overwritten and the song cannot
+    // drift underneath the stutter.
+    volatile int  retrig_div;      // 0 = off, else 2/4/8/16 = 1/2, 1/4, 1/8, 1/16 step
+    volatile uint32_t retrig_len;  // the live window, in frames (UI)
     volatile int  loop_pos_cv;     // CV6 raw 0..4095 → position block across the song
     volatile int  loop_start_ord;  // render-published window origin (UI): order...
     volatile int  loop_start_row;  //  ...and row within it
