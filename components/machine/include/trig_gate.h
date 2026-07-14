@@ -27,15 +27,38 @@ typedef enum {
 typedef struct {
     uint32_t held;        // frames the gate has been down (0 = up)
     bool     long_fired;  // TG_HOLD already emitted this press
+    uint8_t  dn;          // consecutive blocks seen DOWN (debounce)
+    uint8_t  up;          // consecutive blocks seen UP
+    bool     state;       // the DEBOUNCED level
 } trig_gate_t;
 
 #define TG_LONG_FRAMES ((uint32_t)(0.6f * 44100.0f))
 
+// DEBOUNCE (2026-07-13, bench-caught). The gate inputs are active-low and a
+// FLOATING input glitches: with NOTHING patched into TR2, /status caught a stray
+// low sample — and since TR2 press = LOOP TOGGLE fires on the instant the gate
+// goes down, one noisy block flipped the loop underneath Arlo ("it falls out of
+// loop mode and the loops are jumping around on their own"). A press must now
+// PERSIST for TG_DEBOUNCE blocks (~3 ms) before it counts, and a release likewise.
+// That is far below any real finger or sequencer gate, and far above a glitch.
+#define TG_DEBOUNCE 2
+
 // `down` = gate active (caller maps the active-low trig bit); `frames` = block
 // size. Returns at most one event per call — PRESS on the down edge, HOLD at
 // the threshold, REL_* on the up edge.
-static inline tg_event_t trig_gate_step(trig_gate_t *g, bool down, int frames)
+static inline tg_event_t trig_gate_step(trig_gate_t *g, bool raw, int frames)
 {
+    // debounce first: `raw` is the pin, `g->state` is what the grammar sees
+    if (raw) {
+        g->up = 0;
+        if (g->dn < 255) g->dn++;
+        if (g->dn >= TG_DEBOUNCE) g->state = true;
+    } else {
+        g->dn = 0;
+        if (g->up < 255) g->up++;
+        if (g->up >= TG_DEBOUNCE) g->state = false;
+    }
+    bool down = g->state;
     if (down) {
         if (g->held == 0) {
             g->held = (uint32_t)frames;
