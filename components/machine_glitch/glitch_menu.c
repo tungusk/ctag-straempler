@@ -10,6 +10,9 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "clock.h"
+#include "beatlisten.h"
+#include "menu_config.h"
 #include "glitch_priv.h"
 
 static const color_t LIVE_COL   = {40, 160, 90};
@@ -108,7 +111,7 @@ static void setup_redraw(int pos, int sel){
             case 1: snprintf(v, sizeof(v), "%s", gl.reverse ? "ON" : "OFF"); break;
             case 2: snprintf(v, sizeof(v), "%s", gl.sync ? "ON" : "OFF"); break;
             case 3: snprintf(v, sizeof(v), "%s", div_name(gl.division)); break;
-            case 4: snprintf(v, sizeof(v), "CV%d", gl.clk_src + 1); break;
+            case 4: snprintf(v, sizeof(v), "%s", clock_source_name(gl.clk_src)); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -124,7 +127,14 @@ static void gl_adj(int i, int dir){
         case 1: gl.reverse = !gl.reverse; break;
         case 2: gl.sync = !gl.sync; break;
         case 3: gl.division += dir; if(gl.division < 0) gl.division = 0; if(gl.division > 3) gl.division = 3; break;
-        case 4: gl.clk_src = (gl.clk_src + (dir > 0 ? 1 : 7)) & 7; break;
+        case 4:
+            // CV1..8 + AUDIO (both trigs are stutter controls); AUDIO wakes the ear
+            gl.clk_src = clock_source_cycle_cv_audio(gl.clk_src, dir);
+            if (gl.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
+                beatlisten_set_mode(BL_GROOVE);
+                configSetIntSetting("blisten", BL_GROOVE);
+            }
+            break;
     }
 }
 

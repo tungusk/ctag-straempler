@@ -731,7 +731,7 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // ops fire immediately (free-run behaviour).
     clockin_set_ppb(&dd.ci, DD_PPB_RAW());          // gates take the RAW setting
     uint32_t rn_pre = dd.ci.clk.ring_n;
-    clockin_block(&dd.ci, io->cv[dd.clk_src & 7], frames);
+    clockin_block(&dd.ci, clock_source_level(dd.clk_src, io), frames);
     bool pulse = (dd.ci.clk.ring_n != rn_pre);
     uint32_t per_bar = (uint32_t)(DD_PPB_EFF() * 4.0f + 0.5f);
     if (per_bar < 1) per_bar = 1;
@@ -804,7 +804,8 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         // loop-length channel was CV8, which is also the default clock input).
         // preset_load can reload a colliding assignment, so the GUARD is the robust
         // half of the fix; the defaults are merely the polite half.
-        int clk = dd.clk_src & 7;
+        // TR/AUDIO clock sources occupy no CV channel — nothing to collide with
+        int clk = (dd.clk_src <= 7) ? dd.clk_src : -1;
         bool pos_ok = (lp != clk), len_ok = (ll != clk);
         int c6 = pos_ok ? cvv[lp] : 0;         // window position
         int c7 = len_ok ? cvv[ll] : 0;         // window length
@@ -1070,7 +1071,7 @@ static void dualdeck_preset_load(const cJSON *node)
     if (!node) return;
     cJSON *j;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) {
-        dd.clk_src = j->valueint & 7;
+        dd.clk_src = clock_source_clamp_cv_audio(j->valueint);
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
         dd.ppb_idx = j->valueint;

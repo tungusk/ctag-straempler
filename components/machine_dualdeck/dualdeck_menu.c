@@ -17,6 +17,8 @@
 #include "audio.h"
 #include "sample_ram.h"
 #include "sample_browser.h"
+#include "beatlisten.h"
+#include "menu_config.h"
 #include "dualdeck_priv.h"
 
 static const color_t COL_ARM  = {230, 170, 0};
@@ -528,7 +530,7 @@ static const char *setup_labels[] = {"Clock Src", "Clock", "Takeover", "Loop Len
 
 static void setup_value_str(int i, char *v, size_t n){
     switch(i){
-        case 0: snprintf(v, n, "CV%d", dd.clk_src + 1); break;
+        case 0: snprintf(v, n, "%s", clock_source_name(dd.clk_src)); break;
         case 1: snprintf(v, n, "%s", dd_ppb_names[dd.ppb_idx]); break;
         case 2:                          // -1 = the fader never moves itself
             if (dd.fade_beats < 0) snprintf(v, n, "off");
@@ -557,7 +559,14 @@ static void setup_value_str(int i, char *v, size_t n){
 
 static void setup_adj(int i, int dir){
     switch(i){
-        case 0: dd.clk_src = (dd.clk_src + (dir > 0 ? 1 : 7)) & 7; break;
+        case 0:
+            // CV1..8 + AUDIO (the trigs are the transport); AUDIO wakes the ear
+            dd.clk_src = clock_source_cycle_cv_audio(dd.clk_src, dir);
+            if (dd.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
+                beatlisten_set_mode(BL_GROOVE);
+                configSetIntSetting("blisten", BL_GROOVE);
+            }
+            break;
         case 1:
             dd.ppb_idx += dir;
             if (dd.ppb_idx < 0) dd.ppb_idx = 0;
@@ -696,7 +705,7 @@ static void cv_row_redraw(int i, int pos, int sel){
     // reference and the gaps between them remap the loop, which collapses it to a
     // stutter within milliseconds. The engine ignores such a control outright; the
     // page has to say so rather than let it look assigned.
-    bool on_clock = (ch == (dd.clk_src & 7));
+    bool on_clock = (dd.clk_src <= 7 && ch == dd.clk_src);
     bool shares = (i >= 2) && (ch == (dd.cv_filt & 7) || ch == (dd.cv_fader & 7));
     _fg = editing ? TFT_CYAN
                   : on_clock ? (color_t){230, 70, 70}

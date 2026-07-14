@@ -1021,6 +1021,56 @@ static esp_err_t remote_cv_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// POST /blisten?mode=0..4 | ?out=0..2 | ?relock=1 — remote control of the
+// beat listener (mode/clock-out persist into CONFIG.JSN settings like the
+// System menu does; relock is momentary). Any combination of params works.
+static esp_err_t blisten_post_handler(httpd_req_t *req)
+{
+    char v[8];
+    bool did = false, persist = false;
+    if (get_query_param(req, "mode", v, sizeof(v))) {
+        int m = atoi(v);
+        if (m < 0 || m >= BL_NMODES) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "mode 0..4");
+            return ESP_FAIL;
+        }
+        beatlisten_set_mode(m);
+        did = persist = true;
+    }
+    if (get_query_param(req, "out", v, sizeof(v))) {
+        int o = atoi(v);
+        if (o < 0 || o > 2) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "out 0..2");
+            return ESP_FAIL;
+        }
+        beatlisten_set_out(o);
+        did = persist = true;
+    }
+    if (get_query_param(req, "relock", v, sizeof(v)) && v[0] == '1') {
+        beatlisten_relock();
+        did = true;
+    }
+    if (!did) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need mode/out/relock");
+        return ESP_FAIL;
+    }
+    if (persist) {
+        cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+        cJSON *settings = root ? cJSON_GetObjectItemCaseSensitive(root, "settings") : NULL;
+        if (settings) {
+            cJSON_DeleteItemFromObjectCaseSensitive(settings, "blisten");
+            cJSON_AddNumberToObject(settings, "blisten", beatlisten_get_mode());
+            cJSON_DeleteItemFromObjectCaseSensitive(settings, "blisten_out");
+            cJSON_AddNumberToObject(settings, "blisten_out", beatlisten_get_out());
+            char *s = cJSON_Print(root);
+            if (s) { writeJSONFile("/sdcard/CONFIG.JSN", s); free(s); }
+        }
+        if (root) cJSON_Delete(root);
+    }
+    send_json(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 // GET = the active machine's full settings (same JSON as its autosave state);
 // POST = apply edited settings via preset_load on the UI task + autosave
 static esp_err_t remote_params_get_handler(httpd_req_t *req)
@@ -1386,6 +1436,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/remote/event",  .method = HTTP_POST, .handler = remote_event_handler },
     { .uri = "/remote/trig",   .method = HTTP_POST, .handler = remote_trig_handler },
     { .uri = "/remote/cv",     .method = HTTP_POST, .handler = remote_cv_handler },
+    { .uri = "/blisten",       .method = HTTP_POST, .handler = blisten_post_handler },
     { .uri = "/remote/machine",.method = HTTP_POST, .handler = remote_machine_handler },
     { .uri = "/remote/params", .method = HTTP_GET,  .handler = remote_params_get_handler },
     { .uri = "/remote/params", .method = HTTP_POST, .handler = remote_params_post_handler },

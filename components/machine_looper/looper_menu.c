@@ -15,6 +15,9 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "clock.h"
+#include "beatlisten.h"
+#include "menu_config.h"
 #include "looper_priv.h"
 
 static const color_t LANE_BG   = {5, 9, 28};      // darker blue track background
@@ -303,11 +306,7 @@ static const char *s_bounce_msg = ""; // transient result shown on the Bounce ro
 static void setup_value_str(int i, char *v, size_t n){
     switch(i){
         case 0: snprintf(v, n, "%s", lp.sync_on ? "ON" : "OFF"); break;
-        case 1:
-            if (lp.clk_src == LP_CLK_TR1)      snprintf(v, n, "TR1");
-            else if (lp.clk_src == LP_CLK_TR2) snprintf(v, n, "TR2");
-            else snprintf(v, n, "CV%d", lp.clk_src + 1);
-            break;
+        case 1: snprintf(v, n, "%s", clock_source_name(lp.clk_src)); break;
         case 2: snprintf(v, n, "%d", lp.bars); break;
         case 3: snprintf(v, n, "%s", lp.monitor ? "ON" : "OFF"); break;
         case 4: snprintf(v, n, "%s", lp.filter_on ? "ON" : "OFF"); break;
@@ -322,7 +321,15 @@ static void setup_value_str(int i, char *v, size_t n){
 static void setup_adj(int i, int dir){
     switch(i){
         case 0: lp.sync_on = !lp.sync_on; break;
-        case 1: lp.clk_src = (lp.clk_src + (dir > 0 ? 1 : LP_CLK_SRCS - 1)) % LP_CLK_SRCS; break;
+        case 1:
+            // full set incl. TR (the looper masks its clock trig) and AUDIO;
+            // picking AUDIO switches the listener on if it was off
+            lp.clk_src = (lp.clk_src + (dir > 0 ? 1 : CLK_SRC_COUNT - 1)) % CLK_SRC_COUNT;
+            if (lp.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
+                beatlisten_set_mode(BL_GROOVE);
+                configSetIntSetting("blisten", BL_GROOVE);
+            }
+            break;
         case 2: {
             int b = (dir > 0) ? lp.bars * 2 : lp.bars / 2;
             lp.bars = (b > 8) ? 1 : (b < 1) ? 8 : b;

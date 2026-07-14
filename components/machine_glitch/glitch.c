@@ -98,7 +98,7 @@ static void glitch_process(int32_t out[MACHINE_BLOCK],
     int frames = MACHINE_BLOCK / 2;
     // keep the tempo detector running — CV is sampled once per block, so the
     // block-level conditioned feed is timing-identical to the old per-frame tick
-    clockin_block(&gl.ci, io->cv[gl.clk_src & 7], frames);
+    clockin_block(&gl.ci, clock_source_level(gl.clk_src, io), frames);
     for (int f = 0; f < frames; f++) {
         int32_t l, r;
         if (!gl.stutter) {
@@ -151,7 +151,8 @@ static void glitch_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "reverse"))) gl.reverse = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync"))) gl.sync = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "division")) && cJSON_IsNumber(j)) gl.division = j->valueint;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) gl.clk_src = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j))
+        gl.clk_src = clock_source_clamp_cv_audio(j->valueint);
 }
 
 extern const machine_ui_t glitch_menu_ui;
