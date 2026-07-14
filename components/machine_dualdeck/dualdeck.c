@@ -651,11 +651,32 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         if (lp == (dd.cv_fader & 7) || ll == (dd.cv_fader & 7)) fad_taken = true;
     }
 
-    // ---- LOOP KNOBS, per deck (they no longer have to be the focused one: with
-    // the loops on their own channels, both decks can be worked at once).
+    // ---- LOOP KNOBS, per deck. A deck answers its loop knobs when it is FOCUSED,
+    // or when it owns CHANNELS THE OTHER DECK DOES NOT — that is the whole point of
+    // the matrix. On the default wiring the two decks share CV6/CV7, so without the
+    // focus gate a knob drove whichever deck happened to be looping, no matter which
+    // one you were pointed at (Arlo: "loop mode is affected even if the other deck is
+    // highlighted"). Give the loops their own channels and both decks go live at once.
+    //
+    // Switching focus RE-ARMS both decks' knobs: the deck you just left keeps its
+    // loop exactly as it was ("leave the loop in state"), and the deck you just
+    // arrived at will not jump when the knob is nowhere near its window — it stays
+    // dead until you MOVE it.
+    static int s_focus_prev = -1;
+    if (dd.focus != s_focus_prev) {
+        s_focus_prev = dd.focus;
+        for (int i = 0; i < 2; i++) {
+            if (dd.d[i].loop_active) { s_cv6_ref[i] = -1; s_cv7_ref[i] = -1; }
+            s_mv6[i] = s_mv7[i] = 0;
+            s_c6_last[i] = -1;
+        }
+    }
     for (int i = 0; i < 2; i++) {
         dd_deck_t *v = &dd.d[i];
         if (!v->loop_active || v->track_bpm <= 20.0f || !v->file_frames) continue;
+        bool own_ch = (dd.cv_lpos[i] & 7) != (dd.cv_lpos[1 - i] & 7) &&
+                      (dd.cv_llen[i] & 7) != (dd.cv_llen[1 - i] & 7);
+        if (i != dd.focus && !own_ch) continue;      // not addressed: leave it be
         uint32_t beat_tf = (uint32_t)(60.0f * DD_RATE / v->track_bpm);
         if (!beat_tf) continue;
         int c6 = cvv[dd.cv_lpos[i] & 7];       // window position
