@@ -28,6 +28,7 @@ select{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px;font-f
 input[type=range]{padding:0;height:22px;accent-color:#0af}
 .row{display:flex;gap:8px;margin-top:8px}
 .row>*{flex:1}
+.row.tight>*{flex:0 0 auto;padding:3px 14px}   /* natural-width buttons */
 .dz{border:2px dashed #333;padding:24px;text-align:center;color:#555;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
 .dz.ov{border-color:#0af;color:#0af}
 progress{width:100%;height:6px;margin-top:6px;display:none}
@@ -147,12 +148,12 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
   <label>Inputs</label>
   <div class="rmon" id="rmon"></div>
-  <div class="row" style="margin-top:4px">
+  <div class="row tight" style="margin-top:4px">
     <button class="btn" onclick="remTrig(1)">TR1 pulse</button>
     <button class="btn" onclick="remTrig(2)">TR2 pulse</button>
   </div>
   <label>Encoder</label>
-  <div class="row">
+  <div class="row tight">
     <button class="btn" onclick="remEv('bwd')">&#8592; turn</button>
     <button class="btn" onclick="remEv('fwd')">turn &#8594;</button>
     <button class="btn" onclick="remEv('press')">press</button>
