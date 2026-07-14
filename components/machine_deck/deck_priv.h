@@ -95,6 +95,14 @@ typedef struct {
                                    // across wraps, len changes, start moves)
     volatile int  loop_len_beats;  // display + PLL whole-pulse invariant
     uint32_t engage_rpos;          // rpos at engage (phantom base)
+    // SEAM CROSSFADE (Arlo, ear test: "faint click at the seam"). At the wrap
+    // the incoming head blends against the OUTGOING TAIL CONTINUING PAST the
+    // window end — not against itself. That keeps the loop period exactly N
+    // beats (the PLL never sees a hiccup: a fade built from the head would
+    // shorten every cycle by the fade length). The material past the window is
+    // ring-resident by the reader's +4096 park overshoot.
+    uint32_t xf_left;              // frames of fade remaining (0 = none)
+    uint32_t xf_src;               // absolute frame of the outgoing tail
 
     // DJ filter (knob6): centre = bypass, left = LP sweeping down,
     // right = HP sweeping up. Chamberlin SVF, one per channel.

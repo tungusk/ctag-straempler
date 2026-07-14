@@ -352,44 +352,61 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
 static const char *setup_labels[] = {"Track", "Sync", "Clock Src", "Clock", "Loop", "BPM", "Grid Nudge", "Analyze", "Auto BPM", "Loop Freeze", "Feel", "Clk Scale"};
 #define DK_SETUP_N 12
 
+// house Setup grammar (sampler3 pilot, now everywhere): TOGGLES and short
+// cycles flip right on the click; lists/ranges keep click-to-edit and show an
+// explicit "[ value ]" bracket while editing. Value edits repaint ONE row.
+#define SETUP_IS_TOGGLE(i) ((i) == 1 || (i) == 4 || (i) == 8 || (i) == 9 || \
+                            (i) == 10 || (i) == 11)
+#define SETUP_ROW_Y(i) (TFT_getfontheight() + 14 + (i) * (TFT_getfontheight() + 7))
+
+static void setup_value_str(int i, char *v, size_t n){
+    switch(i){
+        case 0: snprintf(v, n, "%s", dk.track[0] ? dk.track : "(none)"); break;
+        case 1: snprintf(v, n, "%s", dk.sync ? "ON" : "OFF"); break;
+        case 2: snprintf(v, n, "CV%d", dk.clk_src + 1); break;
+        case 3: snprintf(v, n, "%s", dk_ppb_names[dk.ppb_idx]); break;
+        case 4: snprintf(v, n, "%s", dk.loop ? "ON" : "OFF"); break;
+        case 5:
+            if (dk.track_bpm > 0) snprintf(v, n, "%.1f", dk.track_bpm);
+            else snprintf(v, n, "?");
+            break;
+        case 6: snprintf(v, n, "%lums", (unsigned long)(dk.grid_offset * 1000 / DK_RATE)); break;
+        case 7:
+            if (dk.an_state == DK_AN_RUNNING) snprintf(v, n, "%d%%", dk.an_progress);
+            else if (dk.an_state == DK_AN_DONE) snprintf(v, n, "%.1f bpm", dk.an_bpm);
+            else if (dk.an_state == DK_AN_FAIL) snprintf(v, n, "FAILED");
+            else snprintf(v, n, "press");
+            break;
+        case 8: snprintf(v, n, "%s", dk.auto_an ? "ON" : "OFF"); break;
+        case 9: snprintf(v, n, "%s", dk.loop_freeze ? "ON" : "OFF"); break;
+        case 10: snprintf(v, n, dk.feel == 0.5f ? "x0.5" : dk.feel == 2.0f ? "x2" : "x1"); break;
+        case 11: snprintf(v, n, dk.clk_scale == 0.5f ? "x0.5" : dk.clk_scale == 2.0f ? "x2" : "x1"); break;
+    }
+}
+
+static void setup_row_redraw(int i, int pos, int sel){
+    int fh = TFT_getfontheight();
+    int y = SETUP_ROW_Y(i);
+    bool editing = (i == pos && sel);
+    _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
+    _fg = editing ? TFT_CYAN : TFT_WHITE;
+    TFT_fillRect(0, y - 2, _width, fh + 5, _bg);
+    TFT_print((char*)setup_labels[i], 8, y);
+    char raw[28], val[32];
+    setup_value_str(i, raw, sizeof(raw));
+    if (editing) snprintf(val, sizeof(val), "[ %s ]", raw);   // edit-mode bracket
+    else snprintf(val, sizeof(val), "%s", raw);
+    TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
+    _bg = TFT_BLACK;
+}
+
 static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
     _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
     _fg = TFT_WHITE;
     TFT_print("Deck Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);   // top-right; pos -1 = System selected
-    for (int i = 0; i < DK_SETUP_N; i++){
-        int y = fh + 14 + i * (fh + 7);
-        _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-        _fg = (i == pos && sel) ? TFT_CYAN : TFT_WHITE;
-        TFT_fillRect(0, y - 2, _width, fh + 5, _bg);
-        TFT_print((char*)setup_labels[i], 8, y);
-        char v[28];
-        switch(i){
-            case 0: snprintf(v, sizeof(v), "%s", dk.track[0] ? dk.track : "(none)"); break;
-            case 1: snprintf(v, sizeof(v), "%s", dk.sync ? "ON" : "OFF"); break;
-            case 2: snprintf(v, sizeof(v), "CV%d", dk.clk_src + 1); break;
-            case 3: snprintf(v, sizeof(v), "%s", dk_ppb_names[dk.ppb_idx]); break;
-            case 4: snprintf(v, sizeof(v), "%s", dk.loop ? "ON" : "OFF"); break;
-            case 5:
-                if (dk.track_bpm > 0) snprintf(v, sizeof(v), "%.1f", dk.track_bpm);
-                else snprintf(v, sizeof(v), "?");
-                break;
-            case 6: snprintf(v, sizeof(v), "%lums", (unsigned long)(dk.grid_offset * 1000 / DK_RATE)); break;
-            case 7:
-                if (dk.an_state == DK_AN_RUNNING) snprintf(v, sizeof(v), "%d%%", dk.an_progress);
-                else if (dk.an_state == DK_AN_DONE) snprintf(v, sizeof(v), "%.1f bpm", dk.an_bpm);
-                else if (dk.an_state == DK_AN_FAIL) snprintf(v, sizeof(v), "FAILED");
-                else snprintf(v, sizeof(v), "press");
-                break;
-            case 8: snprintf(v, sizeof(v), "%s", dk.auto_an ? "ON" : "OFF"); break;
-            case 9: snprintf(v, sizeof(v), "%s", dk.loop_freeze ? "ON" : "OFF"); break;
-            case 10: snprintf(v, sizeof(v), dk.feel == 0.5f ? "x0.5" : dk.feel == 2.0f ? "x2" : "x1"); break;
-            case 11: snprintf(v, sizeof(v), dk.clk_scale == 0.5f ? "x0.5" : dk.clk_scale == 2.0f ? "x2" : "x1"); break;
-        }
-        TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
-    }
+    menuTFTPrintAffordance("Machine", pos == -1);   // top-right; pos -1 = System
+    for (int i = 0; i < DK_SETUP_N; i++) setup_row_redraw(i, pos, sel);
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     TFT_print("Analyze finds BPM + beat grid; cached per track", 8, _height - TFT_getfontheight() - 1);
@@ -450,20 +467,30 @@ static int deck_setup_handler(int it_id, int event, void *ev_data){
             break;
         }
         case EV_FWD:
-            if(sel) setup_adj(pos, +1);
-            else { pos++; if(pos >= DK_SETUP_N) pos = -1; }    // past bottom -> System
-            setup_redraw(pos, sel);
+        case EV_BWD: {
+            int dir = (event == EV_FWD) ? +1 : -1;
+            if(sel){
+                setup_adj(pos, dir);
+                setup_row_redraw(pos, pos, sel);      // value edit: ONE row
+            } else {
+                pos += dir;
+                if(pos >= DK_SETUP_N) pos = -1;       // past bottom -> System
+                if(pos < -1) pos = DK_SETUP_N - 1;    // past System -> bottom
+                setup_redraw(pos, sel);
+            }
             break;
-        case EV_BWD:
-            if(sel) setup_adj(pos, -1);
-            else { pos--; if(pos < -1) pos = DK_SETUP_N - 1; } // past System -> bottom
-            setup_redraw(pos, sel);
-            break;
+        }
         case EV_SHORT_PRESS:
             if(pos == -1) return M_MORE;                       // System affordance
             if(pos == 0){ refresh_samples(); s_load_ret = M_DECK_SETUP; return M_DECK_LOAD; }
             if(pos == 7){ deck_analyze_start(); setup_redraw(pos, sel); break; }
-            sel = !sel; setup_redraw(pos, sel);
+            if(SETUP_IS_TOGGLE(pos)){
+                setup_adj(pos, +1);                   // toggles flip on the click
+                setup_row_redraw(pos, pos, 0);
+            } else {
+                sel = !sel;                           // lists/ranges: edit mode
+                setup_row_redraw(pos, pos, sel);
+            }
             break;
         case EV_LONG_PRESS: return M_DECK_LIVE;   // toggle Setup -> Live (no hub)
         default: break;
