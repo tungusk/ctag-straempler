@@ -187,10 +187,35 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <label>WiFi SSID</label><input id="ss">
   <label>WiFi Password (leave blank to keep current)</label><input id="sp" type="password">
   <label>Freesound API Key</label><input id="sa">
+  <label style="margin-top:10px"><input type="checkbox" id="srem" style="width:auto;margin-right:6px">Teleremote (soft trigs, encoder + knob injection from this page)</label>
   <div class="row" style="margin-top:10px">
     <button class="btn" onclick="saveSet()">Save</button>
   </div>
   <div class="msg" id="sm"></div>
+  <div class="card">
+    <h4>LISTENER</h4>
+    <div class="row">
+      <div><label>Mode</label>
+        <select id="blmode" onchange="blSet()">
+          <option value="0">OFF</option><option value="1">PULSE</option>
+          <option value="2">KICK</option><option value="3">FLUX</option>
+          <option value="4">GROOVE</option>
+        </select></div>
+      <div><label>Clock out (audio jack)</label>
+        <select id="blout" onchange="blSet()">
+          <option value="0">OFF</option><option value="1">LEFT</option>
+          <option value="2">RIGHT</option>
+        </select></div>
+      <div style="flex:0 0 90px"><label>&nbsp;</label>
+        <button class="btn" style="width:100%" onclick="blRelock()">Relock</button></div>
+    </div>
+    <div class="msg" id="blsm"></div>
+  </div>
+  <div class="card">
+    <h4>ABOUT</h4>
+    <div class="kv">firmware <b id="abver">--</b></div>
+    <div class="kv" style="margin-top:4px">CTAG Str&#228;mpler &#8212; upstream by Robert Manzke (CC BY-NC-SA 4.0); v09-machines fork by Arlo + Claude</div>
+  </div>
   <label style="margin-top:18px">Boot logo (any image &#8212; converted in-browser to the exact 320x240 BMP the module needs)</label>
   <input type="file" id="blf" accept="image/*" onchange="blPick(this.files[0])">
   <canvas id="blc" width="320" height="240" style="display:none;border:1px solid #333;margin-top:6px;max-width:100%"></canvas>
@@ -565,14 +590,31 @@ function loadSet(){
 function loadSysinfo(){
   fetch('/sysinfo').then(function(r){return r.json();}).then(function(d){
     var ipEl=document.getElementById('ip');if(ipEl)ipEl.value=d.ip||'';
+    var re=document.getElementById('srem');if(re)re.checked=!!d.remote;
+    var bm=document.getElementById('blmode');if(bm&&d.blisten!=null)bm.value=String(d.blisten);
+    var bo=document.getElementById('blout');if(bo&&d.blout!=null)bo.value=String(d.blout);
+    var av=document.getElementById('abver');if(av&&d.version)av.textContent=d.version;
     var dk=document.getElementById('disk');
     if(dk){
       dk.textContent=d.total?('SD '+Math.round(d.free/1048576)+'/'+Math.round(d.total/1048576)+'MB'):'';
     }
   }).catch(function(){});
 }
+function blSet(){
+  var m=document.getElementById('blmode').value,o=document.getElementById('blout').value;
+  fetch('/blisten?mode='+m+'&out='+o,{method:'POST'}).then(function(r){
+    var e=document.getElementById('blsm');
+    e.className='msg '+(r.ok?'ok':'er');e.textContent=r.ok?'applied':'failed';
+  });
+}
+function blRelock(){
+  fetch('/blisten?relock=1',{method:'POST'}).then(function(r){
+    var e=document.getElementById('blsm');
+    e.className='msg '+(r.ok?'ok':'er');e.textContent=r.ok?'relocking…':'failed';
+  });
+}
 function saveSet(){
-  var body=JSON.stringify({ssid:document.getElementById('ss').value,passwd:document.getElementById('sp').value,apikey:document.getElementById('sa').value,hostname:document.getElementById('sh').value});
+  var body=JSON.stringify({ssid:document.getElementById('ss').value,passwd:document.getElementById('sp').value,apikey:document.getElementById('sa').value,hostname:document.getElementById('sh').value,remote:document.getElementById('srem').checked?1:0});
   fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(function(r){
     var m=document.getElementById('sm');
     m.className='msg '+(r.ok?'ok':'er');
