@@ -8,6 +8,7 @@
 #include "driver/i2s.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "audio.h"
 #include "recording.h"
 #include "machine.h"
@@ -49,6 +50,53 @@ void audio_remote_trig(int t, int ms) {
     s_remote_trig_until[t] = xTaskGetTickCount() + pdMS_TO_TICKS(ms > 0 ? ms : 30);
 }
 
+// ---- trig edge acquisition ----------------------------------------------------
+// The audio task samples the trig pins once per block (0.726 ms), so a real
+// ~1 ms eurorack gate and a floating-input glitch are indistinguishable at
+// the sample level — no block-counted debounce can separate them (HANDOFF:
+// TG_DEBOUNCE 2 drops short gates; 1 lets a floating TR2 toggle the loop).
+// An edge ISR measures the true LOW width instead: gate-assert edges are
+// timestamped and validated at >= TRIG_MIN_US, and the audio task publishes
+// one machine_io_t.trig_rising bit per validated assert — a 1 ms gate can no
+// longer fall between block samples, and sub-100 us noise never registers.
+#define TRIG_MIN_US 200
+static volatile int64_t s_trig_t_assert[2] = {0, 0};   // stamp of last assert edge
+static volatile bool    s_trig_low[2] = {false, false}; // ISR's view of the line
+static volatile bool    s_trig_pulse[2] = {false, false}; // completed valid pulse
+
+static void IRAM_ATTR trig_isr(void *arg)
+{
+    int t = (int)(intptr_t)arg;
+    int64_t now = esp_timer_get_time();
+    if (gpio_get_level(t ? TRIG1_PIN : TRIG0_PIN) == 0) {   // assert (active low)
+        s_trig_t_assert[t] = now;
+        s_trig_low[t] = true;
+    } else if (s_trig_low[t]) {                              // release: validate
+        s_trig_low[t] = false;
+        if (now - s_trig_t_assert[t] >= TRIG_MIN_US) s_trig_pulse[t] = true;
+    }
+}
+
+// one rising bit per validated assert: sticky completed pulses OR a gate
+// still held past the validation width; s_rep_t de-dupes by assert stamp
+static uint8_t trig_rising_bits(void)
+{
+    static int64_t s_rep_t[2] = {-1, -1};
+    int64_t now = esp_timer_get_time();
+    uint8_t bits = 0;
+    for (int t = 0; t < 2; t++) {
+        int64_t ta = s_trig_t_assert[t];
+        bool valid = s_trig_pulse[t] ||
+                     (s_trig_low[t] && now - ta >= TRIG_MIN_US);
+        s_trig_pulse[t] = false;
+        if (valid && ta != s_rep_t[t]) {
+            bits |= (uint8_t)(1 << t);
+            s_rep_t[t] = ta;
+        }
+    }
+    return bits;
+}
+
 static void audio_task(void *pvParams)
 {
     int32_t out[BUF_SZ], in[BUF_SZ];
@@ -67,10 +115,16 @@ static void audio_task(void *pvParams)
             io.cv_raw[i] = ctrlData[i];
         }
         io.trig_level = (gpio_get_level(TRIG0_PIN) ? 1 : 0) | (gpio_get_level(TRIG1_PIN) ? 2 : 0);
-        // merge teleremote soft pulses (assert = pull low, like the jacks)
+        io.trig_rising = trig_rising_bits();
+        // merge teleremote soft pulses (assert = pull low, like the jacks);
+        // a soft assert edge also counts as a validated rising event
+        static uint8_t s_soft_prev = 0;
         TickType_t now = xTaskGetTickCount();
-        if (now < s_remote_trig_until[0]) io.trig_level &= ~1;
-        if (now < s_remote_trig_until[1]) io.trig_level &= ~2;
+        uint8_t soft = (now < s_remote_trig_until[0] ? 1 : 0) |
+                       (now < s_remote_trig_until[1] ? 2 : 0);
+        io.trig_level &= (uint8_t)~soft;
+        io.trig_rising |= (uint8_t)(soft & ~s_soft_prev);
+        s_soft_prev = soft;
 
         // v0/v1 names are pushed by the machine via audio_status_set_voices()
         portENTER_CRITICAL(&_status_mux);
@@ -107,6 +161,14 @@ void initAudio(void)
     init_i2s();
     recording_init();
     beatlisten_init();
+    // trig edge ISRs (service may already be installed by the encoder init)
+    esp_err_t ie = gpio_install_isr_service(0);
+    if (ie != ESP_OK && ie != ESP_ERR_INVALID_STATE)
+        ESP_LOGE("AUDIO", "gpio isr service: %d", ie);
+    gpio_set_intr_type(TRIG0_PIN, GPIO_INTR_ANYEDGE);
+    gpio_set_intr_type(TRIG1_PIN, GPIO_INTR_ANYEDGE);
+    gpio_isr_handler_add(TRIG0_PIN, trig_isr, (void *)0);
+    gpio_isr_handler_add(TRIG1_PIN, trig_isr, (void *)1);
     ESP_LOGI("AUDIO", "Starting audio task");
     xTaskCreatePinnedToCore(audio_task, "audio_task", 4096, NULL, 23, &audio_task_h, 1);
 }

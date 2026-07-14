@@ -20,10 +20,16 @@
 
 typedef struct {
     // raw GPIO levels of the trigger inputs (active low on this hardware);
-    // bit0 = TRIG0, bit1 = TRIG1. Edge derivation is machine policy for now
-    // (the sampler has latch modes); may move core-side later.
+    // bit0 = TRIG0, bit1 = TRIG1. Edge derivation from LEVEL is machine
+    // policy (the sampler has latch modes) — but see trig_rising below.
     uint8_t trig_level;
-    uint8_t trig_rising;    // reserved, 0 until edge detection moves core-side
+    // one bit per VALIDATED gate-assert edge since the previous block,
+    // measured by GPIO ISR (audio.c): the low must hold >= 200 us. A 1 ms
+    // gate that falls entirely between block samples still registers here,
+    // and a sub-100 us floating-input glitch never does. Teleremote soft
+    // assert edges are merged in. Prefer this over deriving edges from
+    // trig_level when short external triggers must be honored.
+    uint8_t trig_rising;
     // corrected CV snapshot (cv_corrected applied), 0..4095 — use this
     uint16_t cv[8];
     // TEMPORARY (until M0b): raw ADC values for the legacy sampler code,
