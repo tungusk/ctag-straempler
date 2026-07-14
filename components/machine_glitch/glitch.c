@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "machine.h"
+#include "cvsmooth.h"
 #include "audio.h"
 #include "glitch_priv.h"
 
@@ -64,11 +65,20 @@ static void glitch_process(int32_t out[MACHINE_BLOCK],
                            const int32_t in[MACHINE_BLOCK],
                            const machine_io_t *io)
 {
+    // conditioned CV (cvsmooth.h): the ADC throws lone outliers (a channel sits at a
+    // steady ~1221 and reports ONE sample of 4). CV1 drives a GAIN here, so a spike is
+    // a click — and note the >900 floor-gate turns a DOWN-spike into c1 = 0, which maps
+    // to UNITY, i.e. a jump to full level. The clock read stays RAW (clockin has its own
+    // Schmitt and needs the edge timing).
+    static cvmed_t s_med[8];
+    int cvm[8];
+    for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&s_med[k], io->cv[k]);
+
     if (!gl.ring || !gl.win) { memset(out, 0, MACHINE_BLOCK * sizeof(int32_t)); return; }
 
-    gl.win_ms = 20 + (int)((uint32_t)io->cv[5] * 480 / 4095);   // knob6 = 20..500 ms
-    gl.pitch_cv = io->cv[6];                                    // knob7 = pitch
-    uint16_t c1 = io->cv[0] > 900 ? io->cv[0] - 900 : 0;        // CV1 jack = level
+    gl.win_ms = 20 + (int)((uint32_t)cvm[5] * 480 / 4095);   // knob6 = 20..500 ms
+    gl.pitch_cv = cvm[6];                                    // knob7 = pitch
+    uint16_t c1 = cvm[0] > 900 ? cvm[0] - 900 : 0;        // CV1 jack = level
     gl.level = c1 ? (uint16_t)((uint32_t)c1 * 255 / 3195) : 255;
 
     // pitch increment (unity plateau around centre)

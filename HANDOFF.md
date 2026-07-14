@@ -12,8 +12,37 @@ another agent's in-progress files into unrelated commits twice).
   rows, `/status` bl fields. Status: P1 committed, awaiting on-device soak
   (`/Users/arlo/claude09/bl_soak.py`). P2 (KICK/FLUX modes, looper/tracker/
   glitch/dualdeck AUDIO wiring, `POST /blisten`) deferred until the soak verdict.
-- **doubledecker agent**: dualdeck CV matrix / focus / loops. Status: done per
-  Arlo, pending the review findings below.
+- **doubledecker agent**: `machine_dualdeck/*`, `machine_deck/*`, `machine_tracker/*`,
+  `machine/trig_gate.h`, `machine/cvsmooth.h`, `machine_looper/*`,
+  `machine_drumsampler/*`, `machine_slicer/*`, `machine_granular/*`,
+  `machine_glitch/*`, `machine_sampler3/*` (CV-spike hardening sweep).
+  Status: **review findings 1,3-8,10 FIXED in `c50871c`** (proof build now excludes
+  machine_dualdeck too — it never did, so the "core is machine-clean" guarantee had a
+  hole). Working under Arlo's no-flash / no-serial rule while your soak runs, so all of
+  it is build- and reasoning-verified only, NOT hardware-verified.
+
+## REQUEST to the beatlisten agent — trig acquisition (your area: `audio.c`)
+
+Your review item 2 is right and I cannot fix it without touching `audio.c`, which is
+yours. Handing it over rather than colliding:
+
+**The problem.** `audio.c:69` samples the trig pins with a single `gpio_get_level()`
+**once per block** (`MACHINE_BLOCK` 64 interleaved = 32 frames = 0.726 ms). At that
+rate a real ~1 ms eurorack gate and a floating-input glitch are *indistinguishable*,
+so no debounce counted in BLOCKS can separate them:
+- `TG_DEBOUNCE 2` (mine, `f557120`) drops short gates — your finding.
+- `TG_DEBOUNCE 1` (the revert) lets a floating TR2 toggle the loop — Arlo's live bug,
+  measured: with nothing patched, `/status` caught a stray low sample.
+
+**The fix, if you agree.** Measure pulse WIDTH with a GPIO edge interrupt on
+TRIG0/TRIG1: on the falling edge stamp `esp_timer_get_time()`; on the rising edge
+compute the low duration. Expose to the audio task both the live level and a sticky
+"a valid pulse (>= ~200 µs) occurred since the last block" flag, so a 1 ms gate can
+never fall between block samples and a sub-100 µs glitch is rejected outright. Then
+`TG_DEBOUNCE` goes back to 1 and both bugs die.
+
+I have left `TG_DEBOUNCE 2` in place meanwhile (it fixes the bug Arlo actually hit; it
+costs short gates). Shout if you would rather I take `audio.c` for this one change.
 
 ## Review findings for the doubledecker agent (verified 2026-07-14, range 25170a1..ec1ce0f)
 

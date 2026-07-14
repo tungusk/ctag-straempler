@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "machine.h"
+#include "cvsmooth.h"
 #include "audio.h"
 #include "sample_ram.h"
 #include "drum_priv.h"
@@ -141,6 +142,11 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
                          const int32_t in[MACHINE_BLOCK],
                          const machine_io_t *io)
 {
+    // conditioned CV (cvsmooth.h): every knob read below goes through the median
+    static cvmed_t s_dmed[8];
+    int cvm[8];
+    for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&s_dmed[k], io->cv[k]);
+
     // (no "is pad 0 loaded" guard any more: with lazy allocation an empty pad 0 is
     // normal. Every read is gated on its own layer's buf/len.)
 
@@ -153,7 +159,12 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
                                       dr.sel_src[1] == DR_MOD_LEVEL_CV));
     bool dc_free = !(dr.cv_select && (dr.sel_src[0] == DR_MOD_DECAY_CV ||
                                       dr.sel_src[1] == DR_MOD_DECAY_CV));
-    int lv = io->cv[DR_MOD_LEVEL_CV], dc = io->cv[DR_MOD_DECAY_CV];
+    // MEDIAN-OF-5 on the performance knobs (cvsmooth.h). The grab-then-track guard
+    // below rejects small JITTER but PASSES a big excursion — so a lone ADC outlier
+    // (a steady ~1221 reporting ONE sample of 4) both falsely SEIZES the knob and
+    // slams the value: the pad level jumps, and the master filter's cutoff drops to
+    // the floor for a block. A median rejects the outlier outright.
+    int lv = cvm[DR_MOD_LEVEL_CV], dc = cvm[DR_MOD_DECAY_CV];
     if (!dr.knob_seen) {                          // first block: adopt, don't apply
         dr.knob_last[0] = lv;
         dr.knob_last[1] = dc;
@@ -272,9 +283,23 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
             for (int l = 0; l < nly; l++) {
                 dr_layer_t *L = &p->ly[l];
                 if (!L->buf || !L->len || L->trig_src == DR_SRC_NONE) continue;
-                int v = io->cv[L->trig_src & 7];
-                if (v < L->base) L->base = v;           // dips pull the floor down instantly
-                else if (L->base < 4095) L->base++;     // ~690/s upward drift back
+                int v = io->cv[L->trig_src & 7];   // RAW: a median would swallow a short gate
+                // THE FLOOR MUST NOT FOLLOW A LONE DIP. It used to adopt any lower
+                // reading instantly — so a single ADC outlier (a steady ~1221 reporting
+                // ONE sample of 4) collapsed the floor to 4, and the very next block
+                // read 1221 >= base + fire_d and FIRED THE PAD at near-max velocity,
+                // with ~1.7 s of base++ recovery. A false TRIGGER, not a click: the most
+                // musically destructive thing the CV-spike audit turned up.
+                // The dip must now persist for two blocks to be believed. Detection
+                // latency is untouched (the arm/fire tests still read the raw pin), so
+                // short gates still land.
+                if (v < L->base) {
+                    if (L->dip_seen) L->base = v;       // the dip is real: follow it
+                    else L->dip_seen = true;            // first sighting: wait one block
+                } else {
+                    L->dip_seen = false;
+                    if (L->base < 4095) L->base++;      // ~690/s upward drift back
+                }
                 if (!L->armed) {
                     if (v < L->base + arm_d[sens]) L->armed = true;
                 } else if (v >= L->base + fire_d[sens]) {

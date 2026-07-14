@@ -39,8 +39,16 @@ typedef struct {
 // low sample — and since TR2 press = LOOP TOGGLE fires on the instant the gate
 // goes down, one noisy block flipped the loop underneath Arlo ("it falls out of
 // loop mode and the loops are jumping around on their own"). A press must now
-// PERSIST for TG_DEBOUNCE blocks (~3 ms) before it counts, and a release likewise.
-// That is far below any real finger or sequencer gate, and far above a glitch.
+// PERSIST for TG_DEBOUNCE blocks before it counts, and a release likewise.
+//
+// KNOWN LIMIT (2026-07-14, review): a block is 0.726 ms, so TG_DEBOUNCE 2 is ~1.45 ms
+// — and audio.c samples the pins ONCE per block. At that rate a real ~1 ms eurorack
+// gate and a floating-input glitch are INDISTINGUISHABLE, so no debounce counted in
+// blocks can separate them: 2 drops short gates, 1 lets a floating TR2 toggle the loop.
+// The fix is in the acquisition layer — a GPIO edge interrupt measuring pulse WIDTH
+// (>= ~200 us = real, sub-100 us = glitch) — requested in HANDOFF.md, since audio.c is
+// the other agent's area. Until it lands, 2 is the lesser evil: it fixes the bug Arlo
+// actually hit, at the cost of very short gates.
 #define TG_DEBOUNCE 2
 
 // `down` = gate active (caller maps the active-low trig bit); `frames` = block
@@ -88,6 +96,11 @@ static inline tg_event_t trig_gate_step(trig_gate_t *g, bool raw, int frames)
 //
 //   TC_ARMED — both gates have been down past TC_HOLD_FRAMES (show it in the UI)
 //   TC_FIRE  — the first gate came back up: THIS instant is the beat
+//
+// (Timing note: process() runs once per 32 stereo frames = 0.726 ms, since
+// MACHINE_BLOCK is 64 INTERLEAVED samples. Earlier comments here said "~3 ms" for a
+// 2-block debounce; the real figure is ~1.45 ms. Frame-counted thresholds like
+// TG_LONG_FRAMES are unaffected — only BLOCK-counted ones were mis-stated.)
 //
 // The combo ARMS at 0.35 s, comfortably below the individual TG_LONG_FRAMES
 // (0.6 s), so it always beats TR1-hold / TR2-hold to the punch — and short
