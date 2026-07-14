@@ -702,7 +702,7 @@ filter_done:;                // mild resonance, DJ-ish
     // extracted from). set_ppb every block keeps the pulse-rate sanity gates
     // scaled and, ON an actual mult/div change, drops the lock for a clean
     // 2-pulse relock instead of letting the guards defend the stale period.
-    clockin_set_ppb(&dk.ci, DK_PPB_EFF());
+    clockin_set_ppb(&dk.ci, DK_PPB_RAW());   // gates take the RAW setting
     clockin_block(&dk.ci, io->cv[dk.clk_src & 7], frames);
 }
 

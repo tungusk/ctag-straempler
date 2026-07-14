@@ -53,7 +53,25 @@ typedef struct {
     uint32_t raw_fires;      // rising fires since reset
     uint32_t raw_iv;         // frames between the last two fires
     uint32_t raw_since;      // frames since the last fire
+    // OCTAVE PREFERENCE (Arlo: "default to a safe range (80-140) on its
+    // initial detection"). Tempo is octave-ambiguous: the same pulse train
+    // reads as 70 or 140 depending on what you call a beat. Rather than touch
+    // the detector (its period feeds the phase reference), we fold the
+    // INTERPRETATION: oct multiplies ppb so the implied BEAT lands in the
+    // musical band. Hysteretic (76..148) so it can't flap at the edges;
+    // a machine's manual clock-scale still overrides on top.
+    float    oct;            // 0.25 .. 4 (1 = as detected)
 } clockin_t;
+
+#define CLOCKIN_BPM_LO  80.0f
+#define CLOCKIN_BPM_HI  140.0f
+
+// pulses per beat AFTER the octave fold — what tempo math should use
+static inline float clockin_ppb_eff(const clockin_t *ci)
+{
+    float o = (ci->oct > 0) ? ci->oct : 1.0f;
+    return ci->ppb * o;
+}
 
 void clockin_reset(clockin_t *ci, float ppb);
 void clockin_set_ppb(clockin_t *ci, float ppb);   // rescales the sanity gates
@@ -63,6 +81,6 @@ bool clockin_block(clockin_t *ci, uint16_t cv, int frames);
 // tempo of the BEAT (pulse rate / ppb); 0 when unlocked
 static inline float clockin_beat_bpm(const clockin_t *ci)
 {
-    return (ci->clk.locked && ci->clk.bpm > 0 && ci->ppb > 0)
-           ? ci->clk.bpm / ci->ppb : 0;
+    float p = clockin_ppb_eff(ci);
+    return (ci->clk.locked && ci->clk.bpm > 0 && p > 0) ? ci->clk.bpm / p : 0;
 }

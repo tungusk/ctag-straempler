@@ -133,7 +133,15 @@ extern const float dk_ppb[6];     // {0.25, 0.5, 1, 2, 4, 8} pulses per beat
 // effective pulses per beat: the mult/div setting over the clock scale —
 // keep the three tempo layers distinct: feel (per-track, persisted) x
 // clk_scale (setup) x speed_mult (performance)
-#define DK_PPB_EFF() (dk_ppb[dk.ppb_idx] / (dk.clk_scale > 0 ? dk.clk_scale : 1.0f))
+// RAW pulses-per-beat: the mult/div setting over the manual clock scale. This
+// is what the DETECTOR gets (clockin_set_ppb) — its sanity gates are scaled
+// from it, and feeding the octave fold back in here creates a relock loop
+// (fold -> gates change -> lock drops -> fold resets -> ..., bench-caught).
+#define DK_PPB_RAW() (dk_ppb[dk.ppb_idx] / (dk.clk_scale > 0 ? dk.clk_scale : 1.0f))
+// EFFECTIVE: the raw setting x the detector's octave fold. This is what TEMPO
+// MATH uses. Keep the four layers distinct: feel (per-track) x clk_scale
+// (setup) x oct (auto musical-range) x speed_mult (performance).
+#define DK_PPB_EFF() (DK_PPB_RAW() * (dk.ci.oct > 0 ? dk.ci.oct : 1.0f))
 extern const char *const dk_ppb_names[6];
 
 // UI-side (SD-touching; call from UI/background tasks only)
