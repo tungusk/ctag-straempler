@@ -92,6 +92,11 @@ typedef struct {
     // drift underneath the stutter.
     volatile int  retrig_div;      // 0 = off, else 2/4/8/16 = 1/2, 1/4, 1/8, 1/16 step
     volatile uint32_t retrig_len;  // the live window, in frames (UI)
+    volatile uint32_t loop_wrap_w; // wpos at the last loop wrap = the frame where
+                                   // the window's FIRST ROW begins in the ring.
+                                   // The retrig anchors on this, so it stutters the
+                                   // head of the row CV6 selected — not whatever
+                                   // audio happened to be under the cursor.
     volatile int  loop_pos_cv;     // CV6 raw 0..4095 → position block across the song
     volatile int  loop_start_ord;  // render-published window origin (UI): order...
     volatile int  loop_start_row;  //  ...and row within it
