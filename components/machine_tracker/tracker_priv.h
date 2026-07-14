@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "clock.h"
+#include "svf.h"
 
 // Tracker — a multi-format module player (MOD/XM/IT/S3M/669/… via libxmp).
 // Architecture mirrors the deck: an unpinned RENDER task owns the libxmp
@@ -115,6 +116,19 @@ typedef struct {
     float tf_cur;                  // current tempo factor (render-owned)
     int   ph_row, ph_frame, ph_speed;  // last rendered row/tick position
                                        // (render-owned; feeds the sync phase pull)
+
+    // DJ FILTER on CV6/CV7 (Arlo: "what do the knobs even do not in loop mode?
+    // scroll the text, come on. maybe we can put the dj filter there too"). The
+    // house sweep: centre = bypass, left = LP closing down, right = HP opening up,
+    // CV7 = resonance. While a loop is engaged the knobs belong to the LOOP
+    // (window + length); on release the filter comes back by PASS-THROUGH pickup —
+    // inert until the knob crosses back through the value the engine is using — so
+    // leaving a loop can never slam the filter open or shut.
+    volatile int  filt_cv;         // frozen while the loop owns the knob
+    volatile int  flt_res_cv;
+    volatile int  flt_mode;        // 0 off, 1 LP, 2 HP (UI)
+    float flt_f, flt_q;
+    svf_t flt_l, flt_r;
 
     float out_gain;                // declick ramp (0..1)
     volatile uint32_t dbg_starve;  // blocks muted mid-play: render fell behind

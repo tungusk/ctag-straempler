@@ -216,6 +216,10 @@ static void draw_info(void){
                  xTaskGetTickCount() - s_nudge_tick < pdMS_TO_TICKS(800))
             snprintf(st, sizeof(st), "NUDGE %+d   pat %02d/%02d   %s",
                      s_nudge_val, trk.cur_pos, trk.num_pat, bs);
+        else if (trk.flt_mode)
+            snprintf(st, sizeof(st), "%s  pat %02d/%02d  %s  %s",
+                     state_word(), trk.cur_pos, trk.num_pat, bs,
+                     trk.flt_mode == 1 ? "LP" : "HP");
         else
             snprintf(st, sizeof(st), "%s   pat %02d/%02d   %s",
                      state_word(), trk.cur_pos, trk.num_pat, bs);
