@@ -22,6 +22,8 @@ tr:hover td{background:#161616}
 .btn:hover{background:#333}
 .del{border-color:#633;color:#f88}
 .del:hover{background:#2a1010}
+.del.armed{background:#f22;color:#000;border-color:#f22;font-weight:bold}
+.del.armed:hover{background:#f44}
 label{display:block;color:#666;font-size:11px;margin:8px 0 2px}
 input{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px 8px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
 select{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
@@ -83,7 +85,6 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <table id="ftab">
     <thead><tr>
       <th id="th-name" style="cursor:pointer" onclick="setSort('name',1)">Name</th>
-      <th id="th-dir" style="cursor:pointer" onclick="setSort('dir',1)">Folder</th>
       <th id="th-bpm" style="cursor:pointer" onclick="setSort('bpm',1)">BPM</th>
       <th id="th-dur" style="cursor:pointer" onclick="setSort('dur',1)">Length</th>
       <th id="th-size" style="cursor:pointer" onclick="setSort('size',1)">Size</th>
@@ -250,10 +251,10 @@ var libEdit=null;  // file name being renamed IN PLACE (null = none)
 function loadFiles(){
   fetch('/files').then(function(r){return r.json();}).then(function(d){
     libFiles=(d.files||[]).slice();
-    libEdit=null;
+    libEdit=null;delArm=null;
     renderFiles();
     loadSysinfo();
-  }).catch(function(){document.getElementById('ftb').innerHTML='<tr><td colspan="6" class="er">Failed to load</td></tr>';});
+  }).catch(function(){document.getElementById('ftb').innerHTML='<tr><td colspan="5" class="er">Failed to load</td></tr>';});
 }
 
 // sort state: header clicks only. Same header cycles natural -> flipped ->
@@ -265,10 +266,10 @@ function setSort(by,fromHeader){
     if(libDir===1)libDir=-1;
     else{libSort='new';libDir=1;}               // third click: newest again
   }else{libSort=by;libDir=1;}
-  ['name','dir','bpm','dur','size'].forEach(function(k){
+  ['name','bpm','dur','size'].forEach(function(k){
     var th=document.getElementById('th-'+k);
-    // arrow shows the EFFECTIVE order: text columns natural-ascend, numerics descend
-    var up=(k==='name'||k==='dir')===(libDir>0);
+    // arrow shows the EFFECTIVE order: name natural-ascends, numerics descend
+    var up=(k==='name')===(libDir>0);
     if(th)th.textContent=th.textContent.replace(/[ ▲▼]+$/,'')
       +(k===libSort?(up?' ▲':' ▼'):'');
   });
@@ -280,7 +281,6 @@ function renderFiles(){
   files.sort(function(a,b){
     var r;
     if(by==='name')r=String(a.name).localeCompare(String(b.name));
-    else if(by==='dir')r=String(a.dir||'').localeCompare(String(b.dir||''));
     else if(by==='bpm')r=(b.bpm||0)-(a.bpm||0);
     else if(by==='dur')r=(b.dur||0)-(a.dur||0);
     else if(by==='size')r=(b.size||0)-(a.size||0);
@@ -298,24 +298,27 @@ function renderFiles(){
     }else{
       nameCell='<span class="ren" title="rename in place" onclick="libRename(\''+esc(f.name)+'\')">'+esc(f.name)+'</span>';
     }
-    // the folder cell IS the move control: a tiny pull-down showing where the
-    // file lives; picking another folder moves it (audio+sidecar+slices together)
-    var dirCell='<select style="width:auto;font-size:10px;padding:1px 2px;color:#888" '
+    // the folder pull-down rides in the actions cell: it shows where the file
+    // lives; picking another folder moves it (audio+sidecar+slices together)
+    var dirSel='<select style="width:auto;font-size:10px;padding:1px 2px;color:#888" '
       +'onchange="moveFile(\''+esc(f.name)+'\',this.value)">';
     ['pool','REC','LOOPS'].forEach(function(dd){
-      dirCell+='<option value="'+dd+'"'+((f.dir||'pool')===dd?' selected':'')+'>'+dd+'</option>';
+      dirSel+='<option value="'+dd+'"'+((f.dir||'pool')===dd?' selected':'')+'>'+dd+'</option>';
     });
-    dirCell+='</select>';
+    dirSel+='</select>';
+    // two-click delete: first click ARMS (bright red, black X), second click
+    // within 3 s in the same place deletes — no confirm() window
+    var armed=(delArm===f.name);
     h+='<tr><td>'+nameCell+'</td>'
-      +'<td>'+dirCell+'</td>'
       +'<td>'+bpm+'</td>'
       +'<td style="color:#9ab">'+mmss(f.dur)+'</td>'
       +'<td>'+(f.size?(Math.round(f.size/1024))+'KB':'')+'</td>'
       +'<td style="white-space:nowrap">'
+      +dirSel+' '
       +'<a class="btn" style="text-decoration:none" href="/files/raw?name='+encodeURIComponent(f.name)+'" download="'+esc(f.name)+'.RAW">&#11015;</a> '
-      +'<button class="btn del" onclick="del(\''+esc(f.name)+'\')">&#10005;</button></td></tr>';
+      +'<button class="btn del'+(armed?' armed':'')+'" onclick="del(\''+esc(f.name)+'\')">&#10005;</button></td></tr>';
   });
-  tb.innerHTML=h||'<tr><td colspan="6" style="color:#555;padding:12px">No files yet</td></tr>';
+  tb.innerHTML=h||'<tr><td colspan="5" style="color:#555;padding:12px">No files yet</td></tr>';
   if(libEdit!==null){var el=document.getElementById('lrn');if(el){el.focus();el.select();}}
 }
 
@@ -347,11 +350,21 @@ function libCommit(name){
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
+// two-click delete: click once to ARM (the button goes bright red with a black
+// X), click the same button again to delete. Anything else — 3 s passing, a
+// reload, arming another row — disarms. No confirm() window.
+var delArm=null,delArmT=null;
 function del(name){
-  if(!confirm('Delete '+name+'?'))return;
-  fetch('/files?name='+encodeURIComponent(name),{method:'DELETE'}).then(function(r){
-    if(r.ok)loadFiles();else alert('Delete failed');
-  });
+  if(delArm===name){
+    delArm=null;clearTimeout(delArmT);
+    fetch('/files?name='+encodeURIComponent(name),{method:'DELETE'}).then(function(r){
+      if(r.ok)loadFiles();else{alert('Delete failed');renderFiles();}
+    });
+    return;
+  }
+  delArm=name;renderFiles();
+  clearTimeout(delArmT);
+  delArmT=setTimeout(function(){delArm=null;renderFiles();},3000);
 }
 
 var MOD_EXTS=['mod','xm','it','s3m','669','mtm','okt','ult','far','med','dbm','amf','ptm','stm','dmf','gdm','imf','liq','mdl','pt3','oxm','digi','emod'];
