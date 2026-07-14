@@ -17,6 +17,8 @@
 #include "tftspi.h"
 #include "machine.h"
 #include "recording.h"
+#include "beatlisten.h"
+#include "menu_config.h"
 #include "sampler3_priv.h"
 
 static const color_t ACCENT   = {230, 160, 40};
@@ -632,8 +634,8 @@ static int s3_load_handler(int it_id, int event, void *ev_data){
 
 // ---- Record ---------------------------------------------------------------------
 static const char *rec_labels[] = {"Arm V1", "Arm V2", "Monitor", "Arm mutes",
-                                   "Int Clock", "Clock PPQ"};
-#define S3_REC_N 6
+                                   "Int Clock", "Clock PPQ", "Clock Src"};
+#define S3_REC_N 7
 
 // PPQ ladder — click cycles; applies to the external detector AND the
 // internal clock's pulse synthesis (Arlo's jig clocks at 8)
@@ -661,7 +663,8 @@ static void rec_redraw(int pos){
                                             s3.int_bpm, s3.ci.clk.locked ? " (ext!)" : "");
             else snprintf(val, sizeof(val), "OFF");
         }
-        else snprintf(val, sizeof(val), "%d", (int)(s3.ci.ppb + 0.5f));
+        else if (i == 5) snprintf(val, sizeof(val), "%d", (int)(s3.ci.ppb + 0.5f));
+        else snprintf(val, sizeof(val), "%s", clock_source_name(s3.clk_src));
         if (i < 2 && s3.arm_target == i) _fg = COL_ARM;
         TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
     }
@@ -716,6 +719,14 @@ static int s3_rec_handler(int it_id, int event, void *ev_data){
                     if (s3.ci.ppb >= ppq_ladder[i] - 0.1f &&
                         s3.ci.ppb <= ppq_ladder[i] + 0.1f) k = i;
                 clockin_set_ppb(&s3.ci, ppq_ladder[(k + 1) % PPQ_N]);
+            }
+            else if (pos == 6) {       // Clock Src: CV1..8 + AUDIO (trigs are
+                                       // voice gates — never clock inputs here)
+                s3.clk_src = clock_source_cycle_cv_audio(s3.clk_src, +1);
+                if (s3.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
+                    beatlisten_set_mode(BL_GROOVE);   // AUDIO implies the ear is on
+                    configSetIntSetting("blisten", BL_GROOVE);
+                }
             }
             else {                     // Int Clock: press = edit bpm / press again = done;
                 if (sel) sel = 0;      // (turn OFF by dialing... hold = off below)

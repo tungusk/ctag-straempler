@@ -374,18 +374,39 @@ void menuTFTPrintTimezone(const char** items, const int* n_items, int *shift){
     TFT_resetclipwin();
 }
 
-void menuTFTPrintRemote(const char** items, const int* n_items, int *on){
+// one settings row's value, by label — _fg/_bg are shared globals, so they
+// are saved/restored around the draw (the CLAUDE.md display house rule)
+static void printSettingsValue(const char** items, const int* n_items,
+                               const char *label, const char *val){
+    color_t fg_save = _fg, bg_save = _bg;
     TFT_setclipwin(0,TFT_getfontheight()+9, _width-1, _height);
     _bg = TFT_BLACK;
     _fg = TFT_WHITE;
     int x = 4, row = 0;
     for(int i = 0; i < *n_items; i++){
-        if(strcasecmp(items[i], "Remote") == 0) row = i;
+        if(strcasecmp(items[i], label) == 0) row = i;
     }
     int y = 3 + (TFT_getfontheight() + 3) * row;
     TFT_fillRect(x + _width/2, y, _width/2 - x - 4, TFT_getfontheight() + 2, _bg);
-    TFT_print(*on ? "ON" : "OFF", x + _width/2, y);
+    TFT_print((char*)val, x + _width/2, y);
     TFT_resetclipwin();
+    _fg = fg_save; _bg = bg_save;
+}
+
+void menuTFTPrintRemote(const char** items, const int* n_items, int *on){
+    printSettingsValue(items, n_items, "Remote", *on ? "ON" : "OFF");
+}
+
+void menuTFTPrintListen(const char** items, const int* n_items, int *mode){
+    static const char *names[] = {"OFF", "PULSE", "KICK", "FLUX", "GROOVE"};
+    int m = (*mode >= 0 && *mode <= 4) ? *mode : 0;
+    printSettingsValue(items, n_items, "Listen", names[m]);
+}
+
+void menuTFTPrintClkOut(const char** items, const int* n_items, int *ch){
+    static const char *names[] = {"OFF", "LEFT", "RIGHT"};
+    int c = (*ch >= 0 && *ch <= 2) ? *ch : 0;
+    printSettingsValue(items, n_items, "ClkOut", names[c]);
 }
 
 

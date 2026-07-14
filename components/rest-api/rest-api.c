@@ -15,6 +15,7 @@
 #include "sd_lock.h"
 #include "audio.h"
 #include "machine.h"
+#include "beatlisten.h"
 #include "recording.h"
 #include "wifi.h"
 #include "freesound.h"
@@ -405,17 +406,22 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     bool rec = recording_is_active();
     const machine_t *m = machine_active();
 
+    bl_status_t bl;
+    beatlisten_get_status(&bl);
+
     // build compact JSON by hand to avoid cJSON overhead in hot path
-    char buf[288];
+    char buf[416];
     int n = snprintf(buf, sizeof(buf),
         "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
-        "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u}",
+        "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u,"
+        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d}}",
         m ? m->name : "",
         rec ? "true" : "false",
         st.v0, st.v1,
         st.cv[0], st.cv[1], st.cv[2], st.cv[3],
         st.cv[4], st.cv[5], st.cv[6], st.cv[7],
-        st.trig);
+        st.trig,
+        bl.mode, bl.state, (double)bl.bpm, (double)bl.conf, bl.cost_us);
     (void)n;
     send_json(req, buf);
     return ESP_OK;

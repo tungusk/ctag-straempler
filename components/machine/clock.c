@@ -1,4 +1,42 @@
 #include "clock.h"
+#include "beatlisten.h"
+
+// ---- shared clock-source selection (the looper's clock_level, generalized) ----
+// Trigs are active-low: a pulse pulls the line low, mapped to the "high" state.
+uint16_t clock_source_level(int src, const machine_io_t *io)
+{
+    if (src == CLK_SRC_TR1)   return (io->trig_level & 1) ? 0 : 4095;
+    if (src == CLK_SRC_TR2)   return (io->trig_level & 2) ? 0 : 4095;
+    if (src == CLK_SRC_AUDIO) return beatlisten_level();
+    return io->cv[src & 7];
+}
+
+const char *clock_source_name(int src)
+{
+    static const char *names[CLK_SRC_COUNT] = {
+        "CV1", "CV2", "CV3", "CV4", "CV5", "CV6", "CV7", "CV8",
+        "TR1", "TR2", "AUDIO"
+    };
+    return (src >= 0 && src < CLK_SRC_COUNT) ? names[src] : "?";
+}
+
+int clock_source_cycle_cv_audio(int src, int dir)
+{
+    if (dir > 0) {
+        if (src == 7) return CLK_SRC_AUDIO;
+        if (src < 0 || src >= CLK_SRC_TR1) return 0;   // AUDIO/stray -> CV1
+        return src + 1;
+    }
+    if (src == CLK_SRC_AUDIO) return 7;
+    if (src <= 0 || src >= CLK_SRC_TR1) return CLK_SRC_AUDIO;
+    return src - 1;
+}
+
+int clock_source_clamp_cv_audio(int src)
+{
+    if (src == CLK_SRC_AUDIO) return src;
+    return (src >= 0 && src <= 7) ? src : 7;   // TR/garbage -> CV8 default
+}
 
 // Extracted from the looper's inline detector so glitch can beat-sync too.
 #define CLK_RATE   44100
