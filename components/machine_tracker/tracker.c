@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "machine.h"
+#include "cvsmooth.h"
 #include "audio.h"
 #include "sd_lock.h"
 #include "xmp.h"
@@ -638,6 +639,13 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
 {
     if (!trk.ring) return;
 
+    // conditioned CV (cvsmooth.h): every knob read in this function goes through the
+    // median. The clock input is NOT median-filtered — clockin_block has its own
+    // Schmitt + period gates and needs the raw edge timing.
+    static cvmed_t s_tmed[8];
+    static int s_cvm[8];
+    for (int k = 0; k < 8; k++) s_cvm[k] = cvmed_step(&s_tmed[k], io->cv[k]);
+
     // transport gates — the unified TR grammar (convergence S4, shared
     // trig_gate.h): TR1 tap = play/pause (fires on RELEASE now), TR1
     // hold-release = restart from the top; TR2 press = loop toggle (engage
@@ -667,7 +675,10 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     static const int lad_div[15] = {16, 8, 4, 2, 0, 0, 0, 0,  0,  0,  0,   0,   0,   0,    0};
     #define TRK_LEN_STEPS 15
     static int cv_len_h = -1, cv_pos_h = -1;
-    int cv_len = io->cv[6], cv_pos = io->cv[5];
+    int cv_len = s_cvm[6], cv_pos = s_cvm[5];   // median: the +/-60 deadband below is a
+                                                // JITTER filter — a 1200-count outlier
+                                                // sails straight through it and resizes
+                                                // the loop for a block
     if (cv_len_h < 0) cv_len_h = cv_len;
     if (cv_pos_h < 0) cv_pos_h = cv_pos;
     if (cv_len - cv_len_h > 60 || cv_len_h - cv_len > 60) cv_len_h = cv_len;
@@ -723,7 +734,11 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     loop_was = trk.loop_engage;
 
     if (!trk.loop_engage) {
-        int c6 = io->cv[5], c7 = io->cv[6];
+        int c6 = s_cvm[5], c7 = s_cvm[6];   // MEDIAN, never the raw pin: a lone ADC
+                                            // outlier both slams the cutoff AND can land
+                                            // within TRK_PASSTOL of the frozen value,
+                                            // falsely releasing the pickup that exists
+                                            // to stop exactly that slam
         if (pk6 != -2) { int d = c6 - trk.filt_cv;    if (d < 0) d = -d; if (d <= TRK_PASSTOL) pk6 = -2; }
         if (pk7 != -2) { int d = c7 - trk.flt_res_cv; if (d < 0) d = -d; if (d <= TRK_PASSTOL) pk7 = -2; }
         if (pk6 == -2) trk.filt_cv = c6;

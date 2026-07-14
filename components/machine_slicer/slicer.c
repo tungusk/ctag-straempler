@@ -14,6 +14,7 @@
 #include "sampfile.h"
 #include "sd_lock.h"
 #include "machine.h"
+#include "cvsmooth.h"
 #include "audio.h"
 #include "slicer_priv.h"
 
@@ -401,6 +402,15 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
                            const int32_t in[MACHINE_BLOCK],
                            const machine_io_t *io)
 {
+    // conditioned CV (cvsmooth.h): the ADC throws lone outliers (a channel sits at a
+    // steady ~1221 and reports ONE sample of 4). CV1 drives a GAIN here, so a spike is
+    // a click — and note the >900 floor-gate turns a DOWN-spike into c1 = 0, which maps
+    // to UNITY, i.e. a jump to full level. The clock read stays RAW (clockin has its own
+    // Schmitt and needs the edge timing).
+    static cvmed_t s_med[8];
+    int cvm[8];
+    for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&s_med[k], io->cv[k]);
+
     (void)in;
     if (sl.loading || sl.len == 0 || !sl.heads) {
         memset(out, 0, MACHINE_BLOCK * sizeof(int32_t));
@@ -416,7 +426,7 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
 
     // knob 6 (CV6) selects the slice — update on movement (encoder co-writes)
     static uint16_t last_cv6 = 0xFFFF;
-    uint16_t cv6 = io->cv[5];
+    uint16_t cv6 = cvm[5];
     if (last_cv6 == 0xFFFF) last_cv6 = cv6;
     if (cv6 > last_cv6 + 40 || cv6 + 40 < last_cv6) {
         int s = (int)((uint32_t)cv6 * sl.n_slices / 4096);
@@ -425,11 +435,11 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     }
 
     // CV1 jack = level (when driven, else unity)
-    uint16_t c1 = io->cv[0] > 900 ? io->cv[0] - 900 : 0;
+    uint16_t c1 = cvm[0] > 900 ? cvm[0] - 900 : 0;
     sl.level = c1 ? (uint16_t)((uint32_t)c1 * 255 / 3195) : 255;
 
     // knob 7 (CV7) pitch: unity plateau, 0.5x..2.0x outside it
-    sl.pitch_cv = io->cv[6];
+    sl.pitch_cv = cvm[6];
     if (sl.pitch_cv >= 1843 && sl.pitch_cv <= 2253) sl.inc = 1.0f;
     else if (sl.pitch_cv > 2253) sl.inc = 1.0f + (float)(sl.pitch_cv - 2253) / 1842.0f;
     else                         sl.inc = 0.5f + (float)sl.pitch_cv / 1843.0f * 0.5f;

@@ -56,6 +56,10 @@ typedef struct {
                                   // DR_SRC_NONE = nothing does
     bool armed;                   // Schmitt state, engine only — PER LAYER
     int  base;                    // tracked floor of this layer's CV source
+    bool dip_seen;                // a lower reading seen ONCE. The floor used to follow
+                                  // any dip instantly, so a lone ADC outlier collapsed it
+                                  // and the next block FIRED THE PAD. A dip must persist
+                                  // two blocks to be believed (drum.c).
     char sample[24];              // loaded library sample id ("" = empty)
     // waveform thumbnail for the pad cell, built from the RAM buffer at load
     // (no SD pass needed — the whole sample is already in PSRAM). Peak per

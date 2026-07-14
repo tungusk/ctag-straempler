@@ -9,6 +9,7 @@
 #include "cJSON.h"
 #include "sample_ram.h"
 #include "machine.h"
+#include "cvsmooth.h"
 #include "audio.h"
 #include "granular_priv.h"
 
@@ -93,15 +94,24 @@ static void granular_process(int32_t out[MACHINE_BLOCK],
                              const int32_t in[MACHINE_BLOCK],
                              const machine_io_t *io)
 {
+    // conditioned CV (cvsmooth.h): the ADC throws lone outliers (a channel sits at a
+    // steady ~1221 and reports ONE sample of 4). CV1 drives a GAIN here, so a spike is
+    // a click — and note the >900 floor-gate turns a DOWN-spike into c1 = 0, which maps
+    // to UNITY, i.e. a jump to full level. The clock read stays RAW (clockin has its own
+    // Schmitt and needs the edge timing).
+    static cvmed_t s_med[8];
+    int cvm[8];
+    for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&s_med[k], io->cv[k]);
+
     (void)in;
     if (gr.loading || gr.len == 0 || !gr.buf) { memset(out, 0, MACHINE_BLOCK * sizeof(int32_t)); return; }
 
     // TR1 held (active low) = freeze the cloud position
     gr.freeze = !(io->trig_level & 1);
 
-    gr.position = io->cv[5];     // knob 6 = position
-    gr.pitch_cv = io->cv[6];     // knob 7 = pitch
-    uint16_t c1 = io->cv[0] > 900 ? io->cv[0] - 900 : 0;   // CV1 jack = level
+    gr.position = cvm[5];     // knob 6 = position
+    gr.pitch_cv = cvm[6];     // knob 7 = pitch
+    uint16_t c1 = cvm[0] > 900 ? cvm[0] - 900 : 0;   // CV1 jack = level
     gr.level = c1 ? (uint16_t)((uint32_t)c1 * 255 / 3195) : 255;
 
     if (!gr.freeze)

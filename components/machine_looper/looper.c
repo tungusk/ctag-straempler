@@ -13,6 +13,7 @@
 #include "fileio.h"
 #include "sampfile.h"
 #include "machine.h"
+#include "cvsmooth.h"
 #include "clock.h"
 #include "audio.h"
 #include "looper_priv.h"
@@ -145,11 +146,21 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
         else if (t->len > 0) { t->pos = 0; t->state = LP_PLAY; }
     }
 
+    // MEDIAN-OF-5 (cvsmooth.h). CV6 drives a per-sample GAIN, which is the most
+    // spike-exposed thing in the instrument: the ADC throws lone outliers (a channel
+    // sits at a steady ~1221 and reports ONE sample of 4), and here that drops the
+    // selected track to near-silence for a block and snaps back — a broadband click.
+    // Identical failure mode to DoubleDecker's crossfader, which is what motivated
+    // the shared helper. A median REJECTS the outlier; a slew only smears it.
+    static cvmed_t s_lmed[8];
+    int cvm[8];
+    for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&s_lmed[k], io->cv[k]);
+
     // the two good knobs shape the selected track: CV6 = level, CV7 = pan.
     // (knobs 5/8 are faulty on this unit, so per-track-fixed mapping is out;
     // this is a focus-style control — values persist per track when deselected)
-    lp.tr[lp.sel].vol = io->cv[5] >> 4;   // CV6 -> 0..255
-    lp.tr[lp.sel].pan = io->cv[6];        // CV7 -> 0..4095
+    lp.tr[lp.sel].vol = cvm[5] >> 4;   // CV6 -> 0..255
+    lp.tr[lp.sel].pan = cvm[6];        // CV7 -> 0..4095
 
     // filter mod on the jacks: rising CV1 OPENS the selected track's cutoff
     // (patch an envelope/LFO to open it), CV2 raises resonance. The 1V/oct
@@ -157,8 +168,8 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     // stored setting when the jack is actually driven (c > 0) — so each track
     // REMEMBERS its cutoff/res and an unpatched jack doesn't slam it on select.
     if (lp.filter_on) {
-        uint16_t c1 = io->cv[0] > 900 ? io->cv[0] - 900 : 0;   // 0..3195
-        uint16_t c2 = io->cv[1] > 900 ? io->cv[1] - 900 : 0;
+        uint16_t c1 = cvm[0] > 900 ? cvm[0] - 900 : 0;   // 0..3195
+        uint16_t c2 = cvm[1] > 900 ? cvm[1] - 900 : 0;
         if (c1) lp.tr[lp.sel].cutoff = 295 + (uint16_t)((uint32_t)c1 * 3800 / 3195);
         if (c2) lp.tr[lp.sel].res    = 900 + (uint16_t)((uint32_t)c2 * 3000 / 3195);
     }
