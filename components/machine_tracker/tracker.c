@@ -379,6 +379,22 @@ static void render_task(void *pv)
                 uint32_t total = trk.total_steps > 0 ? trk.total_steps : 1;
                 int len = trk.loop_len;
                 if (len < 1) len = 1;
+                // GRID SNAP (Arlo: "the tracker loop start needs to figure out
+                // where to put the loop start to stay on grid — if clock is
+                // active"): while the clock drives us, a window that isn't a
+                // whole number of BEATS restarts off-phase and the servo spends
+                // the loop fighting it. 24 ticks = one beat at every speed, so
+                // rows-per-beat = 24/speed. Snap the LENGTH to whole beats and
+                // the start follows for free — it is always a multiple of the
+                // length (block math below). Free-running keeps raw row lengths.
+                int rpb = 1;
+                if (trk.sync && trk.ci.clk.locked) {
+                    rpb = 24 / spd;
+                    if (rpb < 1) rpb = 1;
+                    int snapped = ((len + rpb / 2) / rpb) * rpb;   // nearest beat
+                    if (snapped < rpb) snapped = rpb;              // never sub-beat
+                    len = snapped;
+                }
                 if ((uint32_t)len > total) len = (int)total;
                 uint32_t nblk = total / (uint32_t)len;
                 if (nblk < 1) nblk = 1;
