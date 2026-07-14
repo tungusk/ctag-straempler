@@ -620,6 +620,11 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     if (borrow) {
         uint32_t beat_tf = (uint32_t)(60.0f * DD_RATE / fv->track_bpm);
         if (beat_tf) {
+            // ARM: seize the reference the block after engage. Without this the
+            // refs sat at -1 forever and the loop knobs never went live at all
+            // (the deck does this; I ported the grab test and not the arm).
+            if (s_cv6_ref == -1) { s_cv6_ref = c6; s_mv6 = 0; }
+            if (s_cv7_ref == -1) { s_cv7_ref = c7; s_mv7 = 0; }
             // CV7 = LENGTH. Grab-then-track: dead until the knob MOVES, so
             // engaging a loop can't instantly resize it.
             if (s_cv7_ref >= 0 &&
