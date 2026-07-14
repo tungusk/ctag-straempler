@@ -676,6 +676,7 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     if (li < 0) li = 0;
     if (li > TRK_LEN_STEPS - 1) li = TRK_LEN_STEPS - 1;
     trk.loop_len = lad_len[li];
+
     trk.retrig_div = trk.loop_engage ? lad_div[li] : 0;   // retrig lives INSIDE the loop
     trk.loop_pos_cv = cv_pos_h;
 
@@ -707,6 +708,52 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     if (trk.loop_wrap_w != rt_seen) { rt_seen = trk.loop_wrap_w; rt_pending = rt_seen; }
     bool retrig = (rt_len > 0 && rt_base > 0);
 
+    // ---- DJ FILTER (CV6 sweep / CV7 resonance) — what the knobs do when the loop
+    // is NOT engaged. The loop BORROWS both knobs; on release each comes back by
+    // PASS-THROUGH pickup: inert until it crosses back through the value the engine
+    // is still using, so leaving a loop cannot slam the filter (the deck's lesson).
+    #define TRK_FLT_FMAX  1.0f
+    #define TRK_Q_CLEAN   2.0f
+    #define TRK_Q_SQUELCH 0.10f
+    #define TRK_PASSTOL   90
+    static int pk6 = -2, pk7 = -2;        // -2 live, -1 armed (waiting to be crossed)
+    static bool loop_was = false;
+    if (trk.loop_engage && !loop_was) { /* engage: the loop takes the knobs */ }
+    if (!trk.loop_engage && loop_was) pk6 = pk7 = -1;   // release: arm the pickups
+    loop_was = trk.loop_engage;
+
+    if (!trk.loop_engage) {
+        int c6 = io->cv[5], c7 = io->cv[6];
+        if (pk6 != -2) { int d = c6 - trk.filt_cv;    if (d < 0) d = -d; if (d <= TRK_PASSTOL) pk6 = -2; }
+        if (pk7 != -2) { int d = c7 - trk.flt_res_cv; if (d < 0) d = -d; if (d <= TRK_PASSTOL) pk7 = -2; }
+        if (pk6 == -2) trk.filt_cv = c6;
+        if (pk7 == -2) trk.flt_res_cv = c7;
+    }
+    {
+        int fcv = trk.filt_cv;
+        int mode = 0;
+        float fc = 0;
+        if (fcv < 2048 - 150) {                  // LP zone: sweeps DOWN to the left
+            mode = 1;
+            float t = (float)fcv / (2048.0f - 150.0f);
+            fc = 80.0f * powf(150.0f, t);                    // 80 Hz .. 12 kHz
+        } else if (fcv > 2048 + 150) {           // HP zone: sweeps UP to the right
+            mode = 2;
+            float t = (float)(fcv - 2048 - 150) / (4095.0f - 2048.0f - 150.0f);
+            fc = 30.0f * powf(200.0f, t);                    // 30 Hz .. 6 kHz
+        }
+        trk.flt_mode = mode;
+        float f_t = mode ? svf_coef(fc, (float)TRK_RATE, TRK_FLT_FMAX) : 0.0f;
+        trk.flt_f += 0.2f * (f_t - trk.flt_f);   // slewed: no zipper on a fast sweep
+        // a Chamberlin with low damping AND a high coefficient self-oscillates, so
+        // the damping floor has to rise with the cutoff (the drums lesson)
+        float q_t = svf_damp((float)trk.flt_res_cv / 4095.0f, TRK_Q_SQUELCH, TRK_Q_CLEAN);
+        float qfloor = TRK_Q_SQUELCH + 0.8f * (trk.flt_f > 0.85f ? (trk.flt_f - 0.85f) : 0.0f);
+        if (q_t < qfloor) q_t = qfloor;
+        trk.flt_q += 0.2f * (q_t - trk.flt_q);
+    }
+    int fmode = trk.flt_mode;
+
     int frames = MACHINE_BLOCK / 2;
     static int16_t last_l = 0, last_r = 0;
     bool starved = false;
@@ -733,8 +780,23 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
         // the cursor, comfortably inside the 2 s ring.
         uint32_t rf = retrig ? (rt_base + ((trk.rpos - rt_base) % rt_len)) : trk.rpos;
         uint32_t i = rf % TRK_RING_FRAMES;
-        int16_t l = (int16_t)(trk.ring[i * 2]     * trk.out_gain);
-        int16_t r = (int16_t)(trk.ring[i * 2 + 1] * trk.out_gain);
+        float fl = (float)trk.ring[i * 2]     * trk.out_gain;
+        float fr = (float)trk.ring[i * 2 + 1] * trk.out_gain;
+        if (fmode) {                             // the DJ sweep (util/svf.h)
+            float lo, hi;
+            svf_step(&trk.flt_l, fl, trk.flt_f, trk.flt_q, &lo, NULL, &hi);
+            fl = (fmode == 1) ? lo : hi;
+            svf_step(&trk.flt_r, fr, trk.flt_f, trk.flt_q, &lo, NULL, &hi);
+            fr = (fmode == 1) ? lo : hi;
+            if (fl > 32767) fl = 32767;
+            if (fl < -32768) fl = -32768;
+            if (fr > 32767) fr = 32767;
+            if (fr < -32768) fr = -32768;
+        } else {
+            svf_park(&trk.flt_l, fl);            // park at the signal: no thump when
+            svf_park(&trk.flt_r, fr);            // the filter re-engages
+        }
+        int16_t l = (int16_t)fl, r = (int16_t)fr;
         last_l = l; last_r = r;
         out[fno * 2]     = (int32_t)l << 16;
         out[fno * 2 + 1] = (int32_t)r << 16;
