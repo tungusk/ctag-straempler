@@ -93,6 +93,11 @@ typedef struct {
     clockin_t ci;
     float rate_sm;                 // smoothed rate (edge jitter -> no warble)
     volatile uint32_t dbg_starve;  // blocks muted mid-play: reader fell behind
+    // the window the UI should DRAW: the pending one if a move is scheduled,
+    // else the committed one. Drawing only committed values made the box sit
+    // still while the knobs were clearly doing something (Arlo: "i see the
+    // numbers change in the readout but not the box").
+    volatile uint32_t ui_lstart, ui_llen;
     volatile float rate;           // current playback rate (UI display)
     volatile float phase_err;      // current beat phase error (UI display)
     volatile float phase_int;      // PLL integrator: nulls residual frequency
