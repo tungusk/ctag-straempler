@@ -194,6 +194,7 @@ void deck_restart(void)
 {
     if (!dk.track[0]) return;
     dk.loop_active = false;               // a restart always exits the loop
+    dk.xf_left = 0;
     dk.loading = true;                    // engine mutes while the ring refills
     dk.phase_offset = 0.0f;               // hard reset-to-cue clears the nudge
     dk.phase_int = 0.0f;                  // and the loop integrator (phase jumped)
@@ -224,6 +225,7 @@ void deck_seek_beats(int beats)
 {
     if (!dk.track[0] || !dk.file_frames) return;
     dk.loop_active = false;               // a scrub exits the loop
+    dk.xf_left = 0;
     uint32_t beat_tf = (dk.track_bpm > 20.0f)
         ? (uint32_t)(60.0f * DK_RATE / dk.track_bpm)
         : DK_RATE;                              // no grid yet: 1 s steps
@@ -295,6 +297,17 @@ void deck_sync_now(void)
 // flag (seamless by residency); keeps-running = seek to the phantom position
 // playback would have reached (engage_rpos + loop_adv), a ~0.33 s duck —
 // consistent with the tracker's loop release feel.
+#define DK_XFADE 256          // ~5.8 ms seam fade — a click-killer, not a blur
+#define DK_PICKUP 120         // knob counts of movement that GRAB a frozen knob
+
+// KNOB PICKUP after a loop (Arlo, ear test: "when leaving loop we need it to
+// not immediately apply cv7 because it affects the playback speed"). While
+// looping CV6/CV7 belong to the loop (window + length), so on release they sit
+// wherever the loop left them — applying them instantly SLAMS the speed and
+// the filter. Both stay FROZEN at their pre-loop values until the physical
+// knob moves past the deadband; then it takes over smoothly.
+//   -2 = live, -1 = armed (seize the reference next block), >=0 = reference
+static int s_pk6 = -2, s_pk7 = -2;
 static const int dk_loop_beats[5] = {1, 2, 4, 8, 16};
 static int s_loop_len_idx = 2;              // 4 beats; persists per session
 
@@ -302,6 +315,8 @@ static void deck_loop_toggle(void)
 {
     if (dk.loop_active) {
         dk.loop_active = false;             // clear BEFORE any seek (ordering)
+        dk.xf_left = 0;
+        s_pk6 = s_pk7 = -1;                 // knobs stay put until they MOVE
         if (!dk.loop_freeze) {
             uint64_t ph = (uint64_t)dk.engage_rpos + dk.loop_adv;
             if (dk.file_frames && ph >= dk.file_frames) {
@@ -350,6 +365,7 @@ static void deck_loop_toggle(void)
     dk.loop_len_fr = len;
     dk.loop_len_beats = lb;
     dk.loop_adv = 0;
+    dk.xf_left = 0;
     dk.engage_rpos = dk.rpos_i;
     dk.loop_active = true;                            // set LAST (write ordering)
 }
@@ -471,12 +487,24 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     int mode = dk.flt_mode;                  // frozen while looping
     const float q = 0.9f;
     if (!dk.loop_active) {
-        dk.pitch_cv = io->cv[6];   // knob7 = free-run rate when sync is off
+        // pickup gates (see DK_PICKUP): a knob the loop borrowed only comes
+        // back to life once it MOVES
+        int c6 = io->cv[5], c7 = io->cv[6];
+        if (s_pk7 == -1) s_pk7 = c7;
+        else if (s_pk7 >= 0 && (c7 - s_pk7 > DK_PICKUP || s_pk7 - c7 > DK_PICKUP))
+            s_pk7 = -2;
+        if (s_pk6 == -1) s_pk6 = c6;
+        else if (s_pk6 >= 0 && (c6 - s_pk6 > DK_PICKUP || s_pk6 - c6 > DK_PICKUP))
+            s_pk6 = -2;
+
+        if (s_pk7 == -2) dk.pitch_cv = c7;   // knob7 = speed / free-run rate
+        if (s_pk6 != -2) goto filter_done;   // knob6 still frozen: keep the
+                                             // filter exactly where it was
 
         // DJ filter from knob6: centre dead zone = bypass; left half sweeps a
         // low-pass down (12 kHz -> 80 Hz), right half a high-pass up (30 Hz ->
         // 6 kHz). Exponential sweeps; coefficient slewed per block (no zipper).
-        int fcv = io->cv[5];
+        int fcv = c6;
         dk.filt_cv = fcv;
         mode = 0;
         float fc = 0;
@@ -494,7 +522,8 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // this clamp IS the top of the LP sweep
         float f_target = mode ? svf_coef(fc, (float)DK_RATE, 1.2f) : 0;
         dk.flt_f += 0.2f * (f_target - dk.flt_f);
-    }                // mild resonance, DJ-ish
+    }
+filter_done:;                // mild resonance, DJ-ish
 
     // playback rate
     float rate = 1.0f;
@@ -599,6 +628,20 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         float fr = (float)dk.rpos_f;
         float l = (float)dk.ring[i0 * 2]     + ((float)dk.ring[i1 * 2]     - (float)dk.ring[i0 * 2])     * fr;
         float r = (float)dk.ring[i0 * 2 + 1] + ((float)dk.ring[i1 * 2 + 1] - (float)dk.ring[i0 * 2 + 1]) * fr;
+        if (dk.xf_left) {
+            // equal-power blend: head rises, outgoing tail falls. The two are
+            // uncorrelated material, so sqrt gains (not linear) keep the seam
+            // from dipping.
+            uint32_t t0 = dk.xf_src % DK_RING_FRAMES;
+            float tl = (float)dk.ring[t0 * 2];
+            float tr = (float)dk.ring[t0 * 2 + 1];
+            float w = 1.0f - (float)dk.xf_left / (float)DK_XFADE;   // 0 -> 1
+            float gh = sqrtf(w), gt = sqrtf(1.0f - w);
+            l = l * gh + tl * gt;
+            r = r * gh + tr * gt;
+            dk.xf_src++;
+            dk.xf_left--;
+        }
         if (mode) {                       // Chamberlin SVF per channel (util/svf.h)
             float lo, hi;
             svf_step(&dk.flt_l, l, dk.flt_f, q, &lo, NULL, &hi);
@@ -636,8 +679,20 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // of looping unfilled ring. The while handles 16->4 shrinks.
         if (dk.loop_active && !dk.loading && !dk.seek_req) {
             uint32_t lend = dk.loop_start + dk.loop_len_fr;
-            if (lend <= dk.wpos)
-                while (dk.rpos_i >= lend) dk.rpos_i -= dk.loop_len_fr;
+            if (lend <= dk.wpos) {
+                while (dk.rpos_i >= lend) {
+                    dk.rpos_i -= dk.loop_len_fr;
+                    // arm the seam fade: outgoing tail = the track CONTINUING
+                    // past the window (resident via the reader's overshoot);
+                    // needs room in the file and a window worth fading
+                    if (lend + DK_XFADE <= dk.wpos &&
+                        lend + DK_XFADE <= dk.file_frames &&
+                        dk.loop_len_fr > 4 * DK_XFADE) {
+                        dk.xf_left = DK_XFADE;
+                        dk.xf_src = lend;
+                    }
+                }
+            }
         }
     }
     if (starved) dk.dbg_starve++;
