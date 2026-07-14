@@ -109,9 +109,15 @@ static void draw_info(void){
     // while analysing, the tempo slot shows analysis progress counting UP
     // ("an 16%"), matching the Setup row — shown while playing too (frozen,
     // since analysis pauses during playback) so the pending state stays visible
-    if (dk.loop_active)
-        snprintf(s1, sizeof(s1), "LOOP %dbt  %s  x%s  %s",
-                 dk.loop_len_beats, st, sp, fl);
+    if (dk.loop_active){
+        // loop_len_beats is in QUARTER-beats: show fractions at the short end
+        char lb[12];
+        int q = dk.loop_len_beats;
+        if (q == 1)      snprintf(lb, sizeof(lb), "1/4");
+        else if (q == 2) snprintf(lb, sizeof(lb), "1/2");
+        else             snprintf(lb, sizeof(lb), "%d", q / 4);
+        snprintf(s1, sizeof(s1), "LOOP %sbt  %s  x%s  %s", lb, st, sp, fl);
+    }
     else if (dk.an_state == DK_AN_RUNNING)
         snprintf(s1, sizeof(s1), "ana %d%%  %s  x%s  %s", dk.an_progress, st, sp, fl);
     else
@@ -407,10 +413,8 @@ static void setup_redraw(int pos, int sel){
     TFT_print("Deck Setup", 6, 4);
     menuTFTPrintAffordance("Machine", pos == -1);   // top-right; pos -1 = System
     for (int i = 0; i < DK_SETUP_N; i++) setup_row_redraw(i, pos, sel);
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("Analyze finds BPM + beat grid; cached per track", 8, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
+    // no hint line: the row list grew (Feel / Clk Scale) and the hint was
+    // overlapping the last rows (Arlo)
 }
 
 static void setup_adj(int i, int dir){
