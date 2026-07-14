@@ -79,8 +79,11 @@ static int loop_key(int i){
     return v->loop_active ? (int)(v->ui_lstart >> 9) * 31 + (int)(v->ui_llen >> 9) : -1;
 }
 
-// status string both layouts print ("LOOP 4" / "PLAY  124.0  1:03/5:12")
-static void deck_info_str(int i, char *out, size_t n){
+// status string both layouts print ("PLAY  124.0  1:03/5:12"). REVERSED for
+// deck 2 in the stacked layout (Arlo: "for symmetry the info text in deck 2 can
+// be reverse order: time, tempo, play/stop") — it is right-justified there, so
+// reversing puts the state word on the outside edge, mirroring deck 1.
+static void deck_info_str(int i, char *out, size_t n, bool rev){
     dd_deck_t *v = &dd.d[i];
     char st[20];
     int stt = tbar_state(i);
@@ -91,11 +94,15 @@ static void deck_info_str(int i, char *out, size_t n){
     } else snprintf(st, sizeof(st), "%s", stt == 1 ? "PLAY" : stt == 2 ? "ARM" : "STOP");
     if (v->file_frames){
         int el = (int)(v->ui_fpos / DD_RATE), tt = (int)(v->file_frames / DD_RATE);
-        if (v->track_bpm > 0)
-            snprintf(out, n, "%s  %.1f  %d:%02d/%d:%02d", st, v->track_bpm,
-                     el / 60, el % 60, tt / 60, tt % 60);
-        else
-            snprintf(out, n, "%s  no grid  %d:%02d", st, el / 60, el % 60);
+        if (v->track_bpm > 0){
+            if (rev) snprintf(out, n, "%d:%02d/%d:%02d  %.1f  %s",
+                              el / 60, el % 60, tt / 60, tt % 60, v->track_bpm, st);
+            else     snprintf(out, n, "%s  %.1f  %d:%02d/%d:%02d", st, v->track_bpm,
+                              el / 60, el % 60, tt / 60, tt % 60);
+        } else {
+            if (rev) snprintf(out, n, "%d:%02d  no grid  %s", el / 60, el % 60, st);
+            else     snprintf(out, n, "%s  no grid  %d:%02d", st, el / 60, el % 60);
+        }
     } else snprintf(out, n, "%s", st);
 }
 
@@ -138,13 +145,16 @@ static void draw_big_bpm(void){
 #define V_TB_W   (_width - 16)
 #define V_TB_H   36
 #define V_TB_BW  3                       // fat state border (deck idiom)
-#define V_A_NAME 36
-#define V_A_INFO (V_A_NAME + TFT_getfontheight() + 2)
+#define V_NAME_H 22                      // the big track-name row (DEJAVU18)
+#define V_A_NAME 34
+#define V_A_INFO (V_A_NAME + V_NAME_H)
 #define V_BAR_A  (V_A_INFO + TFT_getfontheight() + 5)
-#define V_XF_Y   (V_BAR_A + V_TB_H + 9)
-#define V_BAR_B  (V_XF_Y + 9 + 9)
+// the fader is a HAIRLINE between the decks; deck 2 comes right back up to meet
+// it (Arlo: "theres extra padding below the crossfader, tighten that up")
+#define V_XF_Y   (V_BAR_A + V_TB_H + 8)
+#define V_BAR_B  (V_XF_Y + 8)
 #define V_B_INFO (V_BAR_B + V_TB_H + 5)
-#define V_B_NAME (V_B_INFO + TFT_getfontheight() + 2)
+#define V_B_NAME (V_B_INFO + TFT_getfontheight() + 3)
 
 static int v_bar_y(int i){ return i == 0 ? V_BAR_A : V_BAR_B; }
 
@@ -233,28 +243,36 @@ static void v_bar(int i){
 static void v_hdr(int i, bool full){
     dd_deck_t *v = &dd.d[i];
     bool focus = (i == dd.focus);
-    bool right = (i == 1);
+    bool right = (i == 1);              // deck 2 mirrors deck 1 around the fader
     char nm[32], info[48], sig[96];
-    snprintf(nm, sizeof(nm), "%c  %.12s", i == 0 ? 'A' : 'B',
-             v->track[0] ? v->track : "(empty)");
-    deck_info_str(i, info, sizeof(info));
+    snprintf(nm, sizeof(nm), "%d  %.10s", i + 1, v->track[0] ? v->track : "(empty)");
+    deck_info_str(i, info, sizeof(info), right);   // deck 2 reads outward
     snprintf(sig, sizeof(sig), "%d|%s|%s", focus ? 1 : 0, nm, info);
     if (!full && strcmp(sig, s_last_hdr[i]) == 0) return;
     strlcpy(s_last_hdr[i], sig, sizeof(s_last_hdr[i]));
 
     int ny = (i == 0) ? V_A_NAME : V_B_NAME;
     int iy = (i == 0) ? V_A_INFO : V_B_INFO;
-    int fh = TFT_getfontheight();
     _bg = TFT_BLACK;
-    TFT_fillRect(0, ny - 1, _width, fh + 2, _bg);
-    TFT_fillRect(0, iy - 1, _width, fh + 2, _bg);
+    TFT_fillRect(0, ny - 1, _width, V_NAME_H, _bg);
+
+    // DECK NUMBER + TRACK NAME, big (Arlo: "room to scale up the font of the
+    // track name... label the decks 1 and 2, larger font")
+    Font f = cfont;
+    TFT_setFont(DEJAVU18_FONT, NULL);
+    int nfh = TFT_getfontheight();
     _fg = focus ? TFT_WHITE : (color_t){95, 105, 135};
-    TFT_print(nm, right ? V_TB_X + V_TB_W - TFT_getStringWidth(nm) : V_TB_X, ny);
-    if (focus){                        // accent tab on the deck's own side
+    int nx = right ? V_TB_X + V_TB_W - TFT_getStringWidth(nm) : V_TB_X;
+    TFT_print(nm, nx, ny);
+    if (focus){                         // accent tab on the deck's own side
         color_t acc = tbar_bg(i);
-        if (right) TFT_fillRect(V_TB_X + V_TB_W + 2, ny, 3, fh, acc);
-        else       TFT_fillRect(V_TB_X - 5, ny, 3, fh, acc);
+        if (right) TFT_fillRect(V_TB_X + V_TB_W + 2, ny, 3, nfh, acc);
+        else       TFT_fillRect(V_TB_X - 5, ny, 3, nfh, acc);
     }
+    cfont = f;
+
+    int fh = TFT_getfontheight();
+    TFT_fillRect(0, iy - 1, _width, fh + 2, _bg);
     _fg = (color_t){120, 130, 160};
     TFT_print(info, right ? V_TB_X + V_TB_W - TFT_getStringWidth(info) : V_TB_X, iy);
 }
@@ -329,7 +347,7 @@ static void h_panel(int i, bool full){
     char nm[32], info[48], sig[96];
     snprintf(nm, sizeof(nm), "%c %.11s", i == 0 ? 'A' : 'B',
              v->track[0] ? v->track : "(empty)");
-    deck_info_str(i, info, sizeof(info));
+    deck_info_str(i, info, sizeof(info), false);   // panels: both read normally
     snprintf(sig, sizeof(sig), "%d|%s|%s|%d|%d", focus ? 1 : 0, nm, info,
              v->wf_state == 2 ? 1 : 0, loop_key(i));
     bool repaint = full || strcmp(sig, s_last_hdr[i]) != 0;
@@ -355,8 +373,8 @@ static void h_panel(int i, bool full){
 // =====================================================================
 //  Shared: the crossfader — a thin RULE with a scrubber crossing it (Arlo)
 // =====================================================================
-#define XF_RULE  2
-#define XF_OVER  4
+#define XF_RULE  1      // a hairline (Arlo)
+#define XF_OVER  5      // the scrubber crosses it by a few px
 static int xf_y(void){ return dd.layout == DD_LAY_V ? V_XF_Y : H_XF_Y; }
 
 static void draw_xfade(bool full){
@@ -378,7 +396,7 @@ static void live_full_redraw(void){
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
-    TFT_print("DualDeck", 6, 4);
+    TFT_print("DoubleDecker", 6, 4);
     s_last_dbpm = -1;
     s_last_focus = -1;
     s_last_xfx = -1;
@@ -435,7 +453,7 @@ static int dd_live_handler(int it_id, int event, void *ev_data){
                          (int)(dd.xf * 100),
                          (unsigned long)(dd.ci.clk.period / 44),
                          (int)dd.ci.clk.locked);
-                audio_status_set_voices("dualdeck", dbg);
+                audio_status_set_voices("doubledecker", dbg);
             }
             break;
         }
@@ -455,41 +473,60 @@ static int dd_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Load browser (deck/sampler3 style: big centered name, dated order) --------
+// ---- Load browser: a SCROLLING LIST (Arlo: "only shows 3 lines, make it like
+// the other loaders"). The centred three-name picker every machine ships shows
+// you almost nothing of a 512-track pool; this pages through it properly, with
+// the selection highlighted and the window following the cursor.
+#define LB_TOP   26
+#define LB_PAD   4
+
+static int lb_rows(void){
+    int fh = TFT_getfontheight();
+    int avail = _height - LB_TOP - 18;          // leave the hint line room
+    int r = avail / (fh + LB_PAD);
+    return r < 3 ? 3 : r;
+}
+
 static void load_redraw(void){
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_LIGHTGREY;
     char h[48];
-    snprintf(h, sizeof(h), "Load -> deck %c  (%d/%d)", dd.focus == 0 ? 'A' : 'B',
+    snprintf(h, sizeof(h), "Load -> deck %d   %d/%d", dd.focus + 1,
              s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
-    TFT_print(h, _width / 2 - TFT_getStringWidth(h) / 2, 4);
+    TFT_print(h, 8, 4);
     if (!s_n_samples){
         char *m = "no files in usr/";
         TFT_print(m, _width / 2 - TFT_getStringWidth(m) / 2, _height / 2);
         return;
     }
-    int cy = _height / 2;
-    Font f = cfont;
-    TFT_setFont(DEJAVU24_FONT, NULL);
-    int bigfh = TFT_getfontheight();
-    _fg = TFT_WHITE;
-    char *selnm = s_samples[s_sample_idx];
-    TFT_print(selnm, _width / 2 - TFT_getStringWidth(selnm) / 2, cy - bigfh / 2);
-    cfont = f;
-    _fg = (color_t){110, 110, 110};
-    if (s_sample_idx > 0){
-        char *p = s_samples[s_sample_idx - 1];
-        TFT_print(p, _width / 2 - TFT_getStringWidth(p) / 2, cy - bigfh / 2 - TFT_getfontheight() - 10);
+    int fh = TFT_getfontheight();
+    int rows = lb_rows();
+    // keep the cursor inside the window, biased to the middle while scrolling
+    int top = s_sample_idx - rows / 2;
+    if (top > s_n_samples - rows) top = s_n_samples - rows;
+    if (top < 0) top = 0;
+    for (int r = 0; r < rows && top + r < s_n_samples; r++){
+        int idx = top + r;
+        int y = LB_TOP + r * (fh + LB_PAD);
+        bool sel = (idx == s_sample_idx);
+        bool cur = (strcmp(s_samples[idx], dd.d[dd.focus].track) == 0);
+        _bg = sel ? (color_t){10, 18, 56} : TFT_BLACK;
+        TFT_fillRect(0, y - 2, _width, fh + LB_PAD, _bg);
+        _fg = sel ? TFT_WHITE : (color_t){130, 140, 170};
+        TFT_print(s_samples[idx], 12, y);
+        if (cur){                       // the track this deck already holds
+            _fg = (color_t){40, 200, 90};
+            TFT_print("*", 2, y);
+        }
     }
-    if (s_sample_idx < s_n_samples - 1){
-        char *p = s_samples[s_sample_idx + 1];
-        TFT_print(p, _width / 2 - TFT_getStringWidth(p) / 2, cy + bigfh / 2 + 10);
-    }
+    _bg = TFT_BLACK;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("press:load  hold:back", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:browse  press:load  hold:back", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
+
 
 static int dd_load_handler(int it_id, int event, void *ev_data){
     switch(event){
@@ -581,7 +618,7 @@ static void setup_redraw(int pos, int sel){
     TFT_resetclipwin();
     _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
     _fg = TFT_WHITE;
-    TFT_print("DualDeck Setup", 6, 4);
+    TFT_print("DoubleDecker Setup", 6, 4);
     menuTFTPrintAffordance("Machine", pos == -1);
     for (int i = 0; i < DD_SETUP_N; i++) setup_row_redraw(i, pos, sel);
 }

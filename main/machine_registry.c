@@ -29,7 +29,7 @@ const machine_t *const machine_registry[] = {
     &machine_glitch,
     &machine_drumsampler,
     &machine_deck,
-    &machine_dualdeck,     // "DualDeck" — clock-locked track blender
+    &machine_dualdeck,     // "DoubleDecker" — clock-locked track blender
     &machine_tracker,
     &machine_freesound,
     &machine_stub,
