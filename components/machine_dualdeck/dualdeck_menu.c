@@ -277,9 +277,18 @@ static void v_hdr(int i, bool full){
     int boxx = right ? (V_TB_X + V_TB_W - boxw) : V_TB_X;
     int namex = right ? (V_TB_X + V_TB_W - boxw - 10 - namew) : (V_TB_X + boxw + 10);
 
-    TFT_fillRect(boxx, ny - 2, boxw, boxh, focus ? TFT_WHITE : (color_t){28, 34, 50});
-    _bg = focus ? TFT_WHITE : (color_t){28, 34, 50};
-    _fg = focus ? TFT_BLACK : (color_t){95, 105, 135};
+    // FOCUSED: black on a filled WHITE plate. UNFOCUSED: blue numeral in a blue
+    // OUTLINE on black (Arlo) — same square either way, so the two decks read as
+    // the same badge in two states and nothing shifts when focus moves.
+    if (focus){
+        TFT_fillRect(boxx, ny - 2, boxw, boxh, TFT_WHITE);
+        _bg = TFT_WHITE; _fg = TFT_BLACK;
+    } else {
+        color_t bl = (color_t){70, 110, 190};
+        _fg = bl;
+        TFT_drawRect(boxx, ny - 2, boxw, boxh, _fg);
+        _bg = TFT_BLACK; _fg = bl;
+    }
     TFT_print(num, boxx + (boxw - numw) / 2, ny);
     _bg = TFT_BLACK;
     _fg = focus ? TFT_WHITE : (color_t){95, 105, 135};
