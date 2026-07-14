@@ -37,6 +37,7 @@
 #define DD_NAME_LEN    24
 #define DD_WF_W        120                    // waveform columns per deck
 enum { DD_LAY_V = 0, DD_LAY_H = 1 };   // stacked single-decks / side-by-side panels
+enum { DD_KNOB_CTX = 0, DD_KNOB_FIXED = 1 };   // contextual knobs / the explicit CV Map
 
 typedef struct {
     // streaming — PLAYBACK-ORDER frame space (the deck's 2026-07-13 loop
@@ -155,6 +156,25 @@ typedef struct {
     // The borrow is not special-cased any more: it simply IS what happens when a
     // loop shares a channel with the filter or the fader — the sharing knob goes
     // to the loop while it is engaged and comes back by pass-through pickup.
+    // CONTEXTUAL KNOBS ("solo mode", Arlo). Two good knobs, four control sets to
+    // reach (filter, fader, and a loop window+length PER DECK) — any FIXED map
+    // starves something. So by default CV6/CV7 address the FOCUSED deck, and its
+    // LOOP STATUS picks which pair:
+    //
+    //     focused deck not looping ->  CV6 = filter      CV7 = crossfader
+    //     focused deck LOOPING     ->  CV6 = loop window CV7 = loop length
+    //
+    // Turning the encoder swings the pair to the other deck. The knob whose meaning
+    // changes must never step the sound: a knob TAKING OVER a loop param is dead
+    // until it MOVES (grab-then-track), and a knob RETURNING to filter/fader is live
+    // instantly while the ENGINE catches up to it (never pass-through pickup — that
+    // is what left Arlo with a dead crossfader).
+    //
+    // FADER LOCK is the escape hatch: with both decks looping, no focus position
+    // exposes the crossfader. Locked, CV7 stays the fader in every context and the
+    // loop LENGTH falls back to its CV Map channel.
+    volatile int knob_mode;        // DD_KNOB_CTX / DD_KNOB_FIXED
+    volatile bool fader_lock;      // CV7 is ALWAYS the fader
     volatile int cv_fader;         // 0..7
     volatile int cv_filt;
     volatile int cv_lpos[2];       // per deck: loop window position
