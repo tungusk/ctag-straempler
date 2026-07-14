@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <time.h>
 
 static const char *TAG = "REST-API";
 static httpd_handle_t server = NULL;
@@ -638,6 +639,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             wifiApplyHostname(hn);
         }
     }
+    // display timezone shift (hours vs UTC), persisted like the System menu's
+    // Timezone row; the device clock itself is SNTP/UTC
+    if ((j = cJSON_GetObjectItem(in, "tz")) && cJSON_IsNumber(j) &&
+        j->valueint >= -12 && j->valueint <= 14) {
+        cJSON_DeleteItemFromObjectCaseSensitive(settings, "tz_shift");
+        cJSON_AddNumberToObject(settings, "tz_shift", j->valueint);
+    }
     // teleremote toggle from the web — same persist+apply the System menu does.
     // (Turning it OFF from the web disables /remote/* but not this endpoint,
     // so the web can always turn it back on.)
@@ -872,14 +880,26 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
         if (mp >= (int)sizeof(machines) - 1) break;
     }
 
-    char buf[512];
+    // device clock (SNTP, UTC) + the display timezone shift from settings —
+    // servers-facing features (radio, certs) will lean on this being right
+    int tzs = 0;
+    {
+        cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+        cJSON *st = root ? cJSON_GetObjectItemCaseSensitive(root, "settings") : NULL;
+        cJSON *tj = st ? cJSON_GetObjectItemCaseSensitive(st, "tz_shift") : NULL;
+        if (tj && cJSON_IsNumber(tj)) tzs = tj->valueint;
+        if (root) cJSON_Delete(root);
+    }
+
+    char buf[560];
     snprintf(buf, sizeof(buf),
              "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu,\"remote\":%d,"
-             "\"version\":\"%s\",\"blisten\":%d,\"blout\":%d,\"machines\":[%s]}",
+             "\"version\":\"%s\",\"blisten\":%d,\"blout\":%d,"
+             "\"time\":%ld,\"tz\":%d,\"machines\":[%s]}",
              ip, (unsigned long long)freeb, (unsigned long long)totb,
              s_remote_on ? 1 : 0,
              STRAMPLER_FW_VERSION, beatlisten_get_mode(), beatlisten_get_out(),
-             machines);
+             (long)time(NULL), tzs, machines);
     send_json(req, buf);
     return ESP_OK;
 }

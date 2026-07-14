@@ -59,6 +59,8 @@ extern lp_state_t lp;
 // save track i's RAM loop to the SD library (LOOP_NNNN.RAW + .JSN). Returns 0
 // on success, -1 if the track is empty or the write failed. Call from UI task.
 int looper_save_track(int i);
+int looper_get_ppq(void);
+void looper_set_ppq(float q);
 
 // bounce (resample) all playing tracks down into track 1, baking in each
 // track's level + bandpass, then clear tracks 2-4. Mono; length = longest
