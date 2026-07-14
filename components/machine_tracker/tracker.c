@@ -362,7 +362,7 @@ static void render_task(void *pv)
                 // (the loop rides the external clock too).
                 int lb = trk.cur_bpm > 0 ? trk.cur_bpm : trk.mod_bpm;
                 if (trk.sync && trk.ci.clk.locked && trk.ci.clk.bpm > 0 && lb > 0) {
-                    float ext_beat = trk.ci.clk.bpm / trk_ppb[trk.ppb_idx];
+                    float ext_beat = trk.ci.clk.bpm / TRK_PPB_EFF();
                     float tgt = (float)lb / ext_beat;   // time factor: live mod bpm / ext
                     if (tgt < 0.5f) tgt = 0.5f;
                     if (tgt > 2.0f) tgt = 2.0f;
@@ -428,7 +428,7 @@ static void render_task(void *pv)
                 // instead of warbling. Nominal factor 1.0 when unsynced/unlocked.
                 int live_bpm = trk.cur_bpm > 0 ? trk.cur_bpm : trk.mod_bpm;
                 if (trk.sync && trk.ci.clk.locked && trk.ci.clk.bpm > 0 && live_bpm > 0) {
-                    float ext_beat = trk.ci.clk.bpm / trk_ppb[trk.ppb_idx];
+                    float ext_beat = trk.ci.clk.bpm / TRK_PPB_EFF();
                     // xmp_set_tempo_factor is a TIME multiplier (bigger = slower),
                     // bench-verified inverted 2026-07-11 — so the ratio is mod/ext.
                     // LIVE bpm, not load-time: IT songs change tempo mid-song and
@@ -447,7 +447,7 @@ static void render_task(void *pv)
                         float ph_r = fmodf((float)trk.ph_row * (float)trk.ph_speed
                                            + (float)trk.ph_frame, 24.0f) / 24.0f;
                         float lead_b = (float)(trk.wpos - trk.rpos) / beat_fr;
-                        float p_trk = (ph_r - lead_b) * trk_ppb[trk.ppb_idx];
+                        float p_trk = (ph_r - lead_b) * TRK_PPB_EFF();
                         p_trk -= floorf(p_trk);
                         float p_ext = (float)trk.ci.clk.since / (float)trk.ci.clk.period;
                         if (p_ext > 1.0f) p_ext = 1.0f;
@@ -651,7 +651,7 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     // CV clock conditioning: the shared front-end (clockin_t) — floor-tracked
     // Schmitt + ppb-scaled gates; drops the lock for a clean relock when the
     // ppb setting actually changes
-    clockin_set_ppb(&trk.ci, trk_ppb[trk.ppb_idx]);
+    clockin_set_ppb(&trk.ci, TRK_PPB_RAW());   // gates take the RAW setting
     clockin_block(&trk.ci, io->cv[trk.clk_src], frames);
 }
 

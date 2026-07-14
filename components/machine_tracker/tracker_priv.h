@@ -107,6 +107,11 @@ typedef struct {
 
 extern trk_state_t trk;
 extern const float trk_ppb[5];
+// RAW ppb feeds the detector's sanity gates; EFFECTIVE (x the octave fold)
+// feeds tempo math — mixing them makes the fold move the gates and the lock
+// never settles (bench-caught on the deck).
+#define TRK_PPB_RAW() (trk_ppb[trk.ppb_idx])
+#define TRK_PPB_EFF() (trk_ppb[trk.ppb_idx] * (trk.ci.oct > 0 ? trk.ci.oct : 1.0f))
 extern const char *const trk_ppb_names[5];
 
 // render-task-only libxmp entry (implemented in tracker.c, called by menu)

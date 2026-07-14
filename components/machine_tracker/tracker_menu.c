@@ -82,27 +82,52 @@ static void draw_bar_frame(void){
     s_bar_loop  = trk.loop_engage ? 1 : 0;
 }
 
-static void draw_bar(void){
-    if ((trk.playing ? 1 : 0) != s_bar_state ||
-        (trk.loop_engage ? 1 : 0) != s_bar_loop) draw_bar_frame();
-    if (trk.loop_engage){
-        // show the loop window as a bright band on the (pink) bar — the start
-        // point moves it with knob6, the length resizes it with knob7
-        int a = TBAR_X + 2 + trk.loop_a_pm * (TBAR_W - 8) / 1000;
-        int b = TBAR_X + 2 + trk.loop_b_pm * (TBAR_W - 8) / 1000;
-        if (b < a + 3) b = a + 3;
-        if (a == s_last_loopa && b == s_last_loopb) return;
-        TFT_fillRect(TBAR_X + 1, TBAR_Y + 1, TBAR_W - 2, TBAR_H - 2, tbar_bg());
-        TFT_fillRect(a, TBAR_Y + 1, b - a, TBAR_H - 2, (color_t){245, 225, 235});
-        s_last_loopa = a; s_last_loopb = b;
+// bar background for a slice: while looping the bar DARKENS outside the loop
+// window (Arlo) so the window reads as the live region at a glance — no band,
+// no colour change, just contrast. The playhead keeps sweeping over it.
+static const color_t BAR_DIM = {26, 26, 34};
+
+static void bar_paint_bg(int sx, int sw){
+    if (sw <= 0) return;
+    if (!trk.loop_engage){
+        TFT_fillRect(sx, TBAR_Y + 1, sw, TBAR_H - 2, tbar_bg());
         return;
+    }
+    int a = TBAR_X + 2 + trk.loop_a_pm * (TBAR_W - 8) / 1000;
+    int b = TBAR_X + 2 + trk.loop_b_pm * (TBAR_W - 8) / 1000;
+    if (b < a + 3) b = a + 3;
+    int x = sx, end = sx + sw;
+    while (x < end){
+        int run;
+        color_t c;
+        if (x < a)      { run = a < end ? a : end; c = BAR_DIM; }
+        else if (x < b) { run = b < end ? b : end; c = tbar_bg(); }
+        else            { run = end;               c = BAR_DIM; }
+        if (run > x) TFT_fillRect(x, TBAR_Y + 1, run - x, TBAR_H - 2, c);
+        x = run;
+    }
+}
+
+static void draw_bar(void){
+    int a = -1, b = -1;
+    if (trk.loop_engage){
+        a = TBAR_X + 2 + trk.loop_a_pm * (TBAR_W - 8) / 1000;
+        b = TBAR_X + 2 + trk.loop_b_pm * (TBAR_W - 8) / 1000;
+        if (b < a + 3) b = a + 3;
+    }
+    if ((trk.playing ? 1 : 0) != s_bar_state ||
+        (trk.loop_engage ? 1 : 0) != s_bar_loop ||
+        a != s_last_loopa || b != s_last_loopb){
+        draw_bar_frame();                       // frame + state caches
+        bar_paint_bg(TBAR_X + 1, TBAR_W - 2);   // dim/live regions
+        s_last_loopa = a; s_last_loopb = b;
+        s_last_barx = -1;
     }
     if (trk.total_ms <= 0) return;
     int frac = (int)((int64_t)trk.time_ms * (TBAR_W - 8) / trk.total_ms);
     int x = TBAR_X + 2 + frac;
     if (x == s_last_barx) return;
-    if (s_last_barx > 0)
-        TFT_fillRect(s_last_barx, TBAR_Y + 1, 4, TBAR_H - 2, tbar_bg());
+    if (s_last_barx > 0) bar_paint_bg(s_last_barx, 4);   // erase into the right bg
     TFT_fillRect(x, TBAR_Y + 1, 4, TBAR_H - 2, (color_t){235, 235, 235});
     s_last_barx = x;
 }
@@ -147,7 +172,7 @@ static void draw_info(void){
         char bs[16];
         if (trk.sync && trk.ci.clk.locked && trk.ci.clk.bpm > 0)
             snprintf(bs, sizeof(bs), "%d bpm EXT",
-                     (int)(trk.ci.clk.bpm / trk_ppb[trk.ppb_idx] + 0.5f));
+                     (int)(trk.ci.clk.bpm / TRK_PPB_EFF() + 0.5f));
         else
             snprintf(bs, sizeof(bs), "%d bpm", trk.mod_bpm);
         if (trk.loop_engage)
