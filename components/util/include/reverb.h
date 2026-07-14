@@ -63,9 +63,19 @@ void reverb_free(reverb_t *rv);
 void reverb_set_mode(reverb_t *rv, int mode);   // applies the mode's preset
 void reverb_set_mix(reverb_t *rv, float wet);   // 0..1
 
-// process one machine block IN PLACE on the interleaved int32<<16 output
-// buffer (the machine format). No-op when mode == RV_OFF or rv is unallocated.
+// INSERT mode: process one machine block IN PLACE on the interleaved
+// int32<<16 output buffer (the machine format). Wet/dry is equal-power.
+// No-op when mode == RV_OFF or rv is unallocated.
 void reverb_block_i32(reverb_t *rv, int32_t *out, int frames);
+
+// SEND mode (drums, 2026-07-13 — a kick through a hall is mud; each voice
+// decides how much of itself goes in): the caller mixes a SEND bus (only the
+// voices that want reverb, at their send levels) and passes it alongside the
+// dry mix. The tank processes the send bus; its output is added to dry at the
+// RETURN level (rv->wet doubles as the return gain here). Dry is untouched.
+//   dry: interleaved int32<<16, processed IN PLACE (the machine's output)
+//   send: interleaved int16 stereo, `frames` frames (the caller's send bus)
+void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames);
 
 static inline const char *reverb_mode_name(int m)
 {

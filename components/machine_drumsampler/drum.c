@@ -309,8 +309,11 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
     // ---- mix active pads (mono buffers -> stereo, linear pan, one-shot) ----
     int frames = MACHINE_BLOCK / 2;
     int32_t accL[MACHINE_BLOCK / 2], accR[MACHINE_BLOCK / 2];
+    int32_t sndL[MACHINE_BLOCK / 2], sndR[MACHINE_BLOCK / 2];   // reverb SEND bus
     memset(accL, 0, sizeof(accL));
     memset(accR, 0, sizeof(accR));
+    memset(sndL, 0, sizeof(sndL));
+    memset(sndR, 0, sizeof(sndR));
     bool any = false;
     for (int i = 0; i < DR_PADS; i++) {
         dr_pad_t *p = &dr.pad[i];
@@ -399,8 +402,14 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
             int g = ((int)p->level * (int)p->vel) >> 8;      // 0..DR_LEVEL_MAX
             int x = (s * g) >> 8;
             if (p->level > DR_LEVEL_UNITY) x = soft_clip(x);
-            accL[f] += (x * (255 - p->pan)) >> 8;
-            accR[f] += (x * p->pan) >> 8;
+            int32_t xl = (x * (255 - p->pan)) >> 8;
+            int32_t xr = (x * p->pan) >> 8;
+            accL[f] += xl;
+            accR[f] += xr;
+            if (p->rv_send) {                 // post-fader, post-pan send
+                sndL[f] += (xl * p->rv_send) >> 8;
+                sndR[f] += (xr * p->rv_send) >> 8;
+            }
             p->pos = pos + 1;
         }
     }
@@ -440,7 +449,21 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         out[f * 2]     = lo32 << 16;
         out[f * 2 + 1] = ro32 << 16;
     }
-    if (rv_live) reverb_block_i32(&dr.rv, out, frames);   // post-filter, master
+    if (rv_live) {
+        // SEND bus: only what the pads sent goes into the tank; the dry mix
+        // (already filtered) passes untouched and the return is added on top.
+        // The send is pre-FILTER by design — the filter is a performance sweep
+        // on the dry kit, not a tone control on the reverb feed.
+        int16_t send[MACHINE_BLOCK];
+        for (int f = 0; f < frames; f++) {
+            int32_t sl = sndL[f], sr = sndR[f];
+            if (sl > 32767) sl = 32767; else if (sl < -32768) sl = -32768;
+            if (sr > 32767) sr = 32767; else if (sr < -32768) sr = -32768;
+            send[f * 2]     = (int16_t)sl;
+            send[f * 2 + 1] = (int16_t)sr;
+        }
+        reverb_send_i32(&dr.rv, out, send, frames);
+    }
 }
 
 // ---- sample I/O (UI task) ---------------------------------------------------
@@ -531,7 +554,7 @@ static cJSON *drum_preset_save(void)
     cJSON_AddBoolToObject(o, "vel", dr.velocity);
     cJSON_AddBoolToObject(o, "cvmod", dr.cv_mod);
     cJSON_AddNumberToObject(o, "rv", dr.rv.mode);     // master reverb mode
-    cJSON_AddNumberToObject(o, "rvmx", (int)(dr.rv.wet * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "rvmx", (int)(dr.rv.wet * 100 + 0.5f));   // RETURN level
     cJSON_AddNumberToObject(o, "rvus", dr.rv.cost_us); // info only (cost meter)
     cJSON_AddBoolToObject(o, "flt", dr.flt_box);      // master filter box exists
     cJSON_AddBoolToObject(o, "flton", dr.flt_on);     // ...and is engaged
@@ -547,6 +570,7 @@ static cJSON *drum_preset_save(void)
         cJSON_AddStringToObject(p, "s", dr.pad[i].ly[0].sample);
         cJSON_AddNumberToObject(p, "lvl", dr.pad[i].level);
         cJSON_AddNumberToObject(p, "pan", dr.pad[i].pan);
+        cJSON_AddNumberToObject(p, "rvs", dr.pad[i].rv_send);
         cJSON_AddNumberToObject(p, "dec", dr.pad[i].decay_ms);
         cJSON_AddBoolToObject(p, "en", dr.pad[i].enabled);
         cJSON_AddNumberToObject(p, "src", dr.pad[i].ly[0].trig_src + 1);  // CV number, 1-based
@@ -617,6 +641,10 @@ static void drum_preset_load(const cJSON *node)
                 dr.pad[i].level = (uint16_t)lv;
             }
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "pan")) && cJSON_IsNumber(j)) dr.pad[i].pan = (uint8_t)j->valueint;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "rvs")) && cJSON_IsNumber(j)) {
+                int rs = j->valueint;               // clamp, don't mask (house lesson)
+                dr.pad[i].rv_send = (uint8_t)(rs < 0 ? 0 : (rs > 255 ? 255 : rs));
+            }
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "dec")) && cJSON_IsNumber(j)) {
                 int d = j->valueint;
                 if (d < 0) d = 0;

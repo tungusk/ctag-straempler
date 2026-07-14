@@ -191,6 +191,94 @@ static inline float shim_step(reverb_t *rv, float x)
            line_read(&rv->shim, back1) * (1.0f - w0);
 }
 
+// one tank sample: feed x in, get the stereo taps out. Shared by the insert
+// and send paths (the tank itself never knew the difference).
+static inline void tank_step(reverb_t *rv, float x, float decay, float damp,
+                             float bw, float sg, float *yl, float *yr)
+{
+    // shimmer: blend the octave-up of what the tank just produced
+    if (sg > 0) x += sg * shim_step(rv, rv->damp_a + rv->damp_b);
+
+    line_push(&rv->pre, x);
+    x = line_read(&rv->pre, rv->pre.len - 1);
+    rv->in_lp += bw * (x - rv->in_lp);           // input bandwidth
+    x = rv->in_lp;
+    x = ap_step(&rv->ap_in[0], x, 0.75f);
+    x = ap_step(&rv->ap_in[1], x, 0.75f);
+    x = ap_step(&rv->ap_in[2], x, 0.625f);
+    x = ap_step(&rv->ap_in[3], x, 0.625f);
+
+    // figure-8 tank: each branch takes the input + the OTHER branch's tail
+    float tail_b = line_read(&rv->d_a2, rv->d_a2.len - 1) * decay;
+    float tail_a = line_read(&rv->d_b2, rv->d_b2.len - 1) * decay;
+
+    float a = ap_step(&rv->ap_a1, x + tail_a, 0.70f);
+    line_push(&rv->d_a1, a);
+    float ad = line_read(&rv->d_a1, rv->d_a1.len - 1);
+    rv->damp_a += (1.0f - damp) * (ad - rv->damp_a);   // damping LPF
+    a = ap_step(&rv->ap_a2, rv->damp_a * decay, 0.50f);
+    line_push(&rv->d_a2, a);
+
+    float b = ap_step(&rv->ap_b1, x + tail_b, 0.70f);
+    line_push(&rv->d_b1, b);
+    float bd = line_read(&rv->d_b1, rv->d_b1.len - 1);
+    rv->damp_b += (1.0f - damp) * (bd - rv->damp_b);
+    b = ap_step(&rv->ap_b2, rv->damp_b * decay, 0.50f);
+    line_push(&rv->d_b2, b);
+
+    // output taps (Dattorro accumulator table, size-scaled offsets)
+    *yl = 0.6f * ( line_read(&rv->d_b1, s_tap[0])
+                 + line_read(&rv->d_b1, s_tap[1])
+                 - line_read(&rv->ap_b2, s_tap[2])
+                 + line_read(&rv->d_b2, s_tap[3])
+                 - line_read(&rv->d_a1, s_tap[4])
+                 - line_read(&rv->ap_a2, s_tap[5])
+                 - line_read(&rv->d_a2, s_tap[6]));
+    *yr = 0.6f * ( line_read(&rv->d_a1, s_tap[7])
+                 + line_read(&rv->d_a1, s_tap[8])
+                 - line_read(&rv->ap_a2, s_tap[9])
+                 + line_read(&rv->d_a2, s_tap[10])
+                 - line_read(&rv->d_b1, s_tap[11])
+                 - line_read(&rv->ap_b2, s_tap[12])
+                 - line_read(&rv->d_b2, s_tap[13]));
+}
+
+// NaN guard (svf lesson: a NaN in a recursive network is permanent silence
+// that looks like a hardware fault) — flush the tank if poisoned
+static inline void tank_nan_guard(reverb_t *rv)
+{
+    if (!(rv->damp_a == rv->damp_a) || !(rv->damp_b == rv->damp_b)) {
+        tank_resize(rv, 1.0f);
+        reverb_set_mode(rv, rv->mode);
+    }
+}
+
+void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames)
+{
+    if (!rv->slab || rv->mode == RV_OFF) { rv->cost_us = 0; return; }
+    int64_t t0 = esp_timer_get_time();
+    const float decay = rv->decay, damp = rv->damp, bw = rv->in_bw;
+    const float sg = rv->shim_gain;
+    const float ret = rv->wet;          // RETURN level: dry stays full
+    for (int f = 0; f < frames; f++) {
+        float sl = (float)send[f * 2], sr = (float)send[f * 2 + 1];
+        float x = 0.5f * (sl + sr) * 0.6f;
+        float yl, yr;
+        tank_step(rv, x, decay, damp, bw, sg, &yl, &yr);
+        float ol = (float)(dry[f * 2] >> 16)     + ret * yl;
+        float or_ = (float)(dry[f * 2 + 1] >> 16) + ret * yr;
+        if (ol > 32767.0f) ol = 32767.0f;
+        if (ol < -32768.0f) ol = -32768.0f;
+        if (or_ > 32767.0f) or_ = 32767.0f;
+        if (or_ < -32768.0f) or_ = -32768.0f;
+        dry[f * 2]     = ((int32_t)ol) << 16;
+        dry[f * 2 + 1] = ((int32_t)or_) << 16;
+    }
+    tank_nan_guard(rv);
+    int us = (int)(esp_timer_get_time() - t0);
+    rv->cost_us += (us - rv->cost_us) >> 3;
+}
+
 void reverb_block_i32(reverb_t *rv, int32_t *out, int frames)
 {
     if (!rv->slab || rv->mode == RV_OFF) { rv->cost_us = 0; return; }
@@ -209,51 +297,8 @@ void reverb_block_i32(reverb_t *rv, int32_t *out, int frames)
         float dr = (float)(out[f * 2 + 1] >> 16);
         float x = 0.5f * (dl + dr) * 0.6f;           // mono tank feed, headroom
 
-        // shimmer: blend the octave-up of what the tank just produced
-        if (sg > 0) x += sg * shim_step(rv, rv->damp_a + rv->damp_b);
-
-        line_push(&rv->pre, x);
-        x = line_read(&rv->pre, rv->pre.len - 1);
-        rv->in_lp += bw * (x - rv->in_lp);           // input bandwidth
-        x = rv->in_lp;
-        x = ap_step(&rv->ap_in[0], x, 0.75f);
-        x = ap_step(&rv->ap_in[1], x, 0.75f);
-        x = ap_step(&rv->ap_in[2], x, 0.625f);
-        x = ap_step(&rv->ap_in[3], x, 0.625f);
-
-        // figure-8 tank: each branch takes the input + the OTHER branch's tail
-        float tail_b = line_read(&rv->d_a2, rv->d_a2.len - 1) * decay;
-        float tail_a = line_read(&rv->d_b2, rv->d_b2.len - 1) * decay;
-
-        float a = ap_step(&rv->ap_a1, x + tail_a, 0.70f);
-        line_push(&rv->d_a1, a);
-        float ad = line_read(&rv->d_a1, rv->d_a1.len - 1);
-        rv->damp_a += (1.0f - damp) * (ad - rv->damp_a);   // damping LPF
-        a = ap_step(&rv->ap_a2, rv->damp_a * decay, 0.50f);
-        line_push(&rv->d_a2, a);
-
-        float b = ap_step(&rv->ap_b1, x + tail_b, 0.70f);
-        line_push(&rv->d_b1, b);
-        float bd = line_read(&rv->d_b1, rv->d_b1.len - 1);
-        rv->damp_b += (1.0f - damp) * (bd - rv->damp_b);
-        b = ap_step(&rv->ap_b2, rv->damp_b * decay, 0.50f);
-        line_push(&rv->d_b2, b);
-
-        // output taps (Dattorro accumulator table, size-scaled offsets)
-        float yl = 0.6f * ( line_read(&rv->d_b1, s_tap[0])
-                          + line_read(&rv->d_b1, s_tap[1])
-                          - line_read(&rv->ap_b2, s_tap[2])
-                          + line_read(&rv->d_b2, s_tap[3])
-                          - line_read(&rv->d_a1, s_tap[4])
-                          - line_read(&rv->ap_a2, s_tap[5])
-                          - line_read(&rv->d_a2, s_tap[6]));
-        float yr = 0.6f * ( line_read(&rv->d_a1, s_tap[7])
-                          + line_read(&rv->d_a1, s_tap[8])
-                          - line_read(&rv->ap_a2, s_tap[9])
-                          + line_read(&rv->d_a2, s_tap[10])
-                          - line_read(&rv->d_b1, s_tap[11])
-                          - line_read(&rv->ap_b2, s_tap[12])
-                          - line_read(&rv->d_b2, s_tap[13]));
+        float yl, yr;
+        tank_step(rv, x, decay, damp, bw, sg, &yl, &yr);
 
         float ol = gd * dl + gw * yl;
         float or_ = gd * dr + gw * yr;
@@ -265,13 +310,7 @@ void reverb_block_i32(reverb_t *rv, int32_t *out, int frames)
         out[f * 2 + 1] = ((int32_t)or_) << 16;
     }
 
-    // NaN guard (svf lesson: a NaN in a recursive network is permanent
-    // silence that looks like a hardware fault) — flush the tank if poisoned
-    if (!(rv->damp_a == rv->damp_a) || !(rv->damp_b == rv->damp_b)) {
-        tank_resize(rv, 1.0f);
-        reverb_set_mode(rv, rv->mode);
-    }
-
+    tank_nan_guard(rv);
     int us = (int)(esp_timer_get_time() - t0);
     rv->cost_us += (us - rv->cost_us) >> 3;          // EMA, ~8-block settle
 }
