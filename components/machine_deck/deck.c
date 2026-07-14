@@ -28,7 +28,16 @@ const float dk_ppb[6] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 const char *const dk_ppb_names[6] = {"1 per 4 beats", "1 per 2 beats", "1 per beat", "2 per beat", "4 per beat", "8 per beat"};
 
 #define DK_XFADE 256          // ~5.8 ms seam fade — a click-killer, not a blur
-#define DK_PICKUP 120         // knob counts of movement that GRAB a frozen knob
+#define DK_PICKUP 120         // knob counts of movement that GRAB a loop knob
+// PASS-THROUGH pickup on loop EXIT (Arlo: "i want cv7 to have to pickup on loop
+// exit or else it jumps the tempo to 2x or .5"). While looping, CV6/CV7 belong
+// to the loop (window + length), so on release they sit wherever the loop left
+// them — and a mere move-and-grab is not enough: the first nudge would snap the
+// value to the knob's physical position, which after a ladder sweep means 2x or
+// half speed. So a released knob stays INERT until it comes back THROUGH the
+// value the engine is still using; by then it agrees with the sound, and
+// nothing can jump.
+#define DK_PASSTOL 90         // how close a knob must come to reclaim its param
 // Read-ahead while looping. This IS the latency of a length/window change, so
 // it wants to be small — but it must stay ABOVE DK_LOW_WATER, or the reader
 // parks below the level the engine treats as "buffered" and the ring starves
@@ -610,6 +619,7 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     // Relative deltas from engage-captured references; a move must persist a
     // few blocks so a WiFi ADC spike can't jump the window (dualdeck lesson).
     static int s_cv6_ref = -1, s_cv7_ref = -1, s_mv6 = 0, s_mv7 = 0;
+    static int s_c6_last = -1;    // knob6 position the last window move was made AT
     if (dk.loop_active) {
         if (s_cv6_ref == -1) { s_cv6_ref = io->cv[5]; s_mv6 = 0; }   // arm: dead until moved
         if (s_cv7_ref == -1) { s_cv7_ref = io->cv[6]; s_mv7 = 0; }   // arm: dead until moved
@@ -654,13 +664,21 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // sweep spans the track and the landing stays phase-true (a whole
         // number of windows from the grid = a whole number of clock pulses).
         // Grab-then-track, so engaging a loop can't fling the window.
+        // CV6 acts ONLY when the KNOB ITSELF moves (s_c6_last). Its mapping is
+        // absolute in WINDOWS, so re-evaluating it on a CV7 length change
+        // re-quantizes the same knob position onto a coarser grid and drags the
+        // start backwards (Arlo: "sometimes turning up cv7 expands the loop
+        // backwards by moving the start point back"). Growing a loop must keep
+        // the start where it is and extend the END — which is exactly what CV7
+        // does on its own, as long as CV6 stays out of it.
         {
             int c6 = io->cv[5];
             if (s_cv6_ref >= 0 &&
                 (c6 - s_cv6_ref > DK_PICKUP || s_cv6_ref - c6 > DK_PICKUP))
                 s_cv6_ref = -2;                          // grabbed
             uint32_t llen = dk_live_len();
-            if (s_cv6_ref == -2 && llen) {
+            int moved = (s_c6_last < 0) || (c6 - s_c6_last > 24) || (s_c6_last - c6 > 24);
+            if (s_cv6_ref == -2 && llen && moved) {
                 uint32_t span = (dk.file_frames > dk.grid_offset)
                               ? dk.file_frames - dk.grid_offset : 0;
                 uint32_t nwin = span / llen;              // windows in the track
@@ -670,12 +688,13 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
                     uint32_t ns = dk.grid_offset + idx * llen;
                     if (ns != dk_live_start() && ++s_mv6 >= 3) {
                         s_mv6 = 0;
+                        s_c6_last = c6;                  // this knob position is spent
                         if (ns + llen <= dk.file_frames) deck_loop_remap(ns, llen);
-                    } else if (ns == dk_live_start()) s_mv6 = 0;
+                    } else if (ns == dk_live_start()) { s_mv6 = 0; s_c6_last = c6; }
                 }
             }
         }
-    } else { s_cv6_ref = -1; s_cv7_ref = -1; }   // re-arm both for the next engage
+    } else { s_cv6_ref = -1; s_cv7_ref = -1; s_c6_last = -1; }   // re-arm for the next engage
 
     int mode = dk.flt_mode;                  // frozen while looping
     const float q = 0.9f;
