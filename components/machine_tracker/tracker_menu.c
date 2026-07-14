@@ -67,7 +67,7 @@ static const char *state_word(void){
 // where the head actually was (Arlo: "i'm not seeing the loop size").
 #define TBAR_X  8
 #define TBAR_Y  100          // the rule's line
-#define TBAR_H  12           // the band the scrubber sweeps (erase geometry)
+#define TBAR_H  16           // the band the scrubber sweeps (erase geometry)
 #define TBAR_W  (_width - 16)
 #define TBAR_RULE 2          // a 2px line (Arlo: 1px read too faint)
 #define TBAR_HEAD_W 3
@@ -103,7 +103,7 @@ static int bar_x_of(int pm){ return TBAR_X + 2 + pm * (TBAR_W - 8) / 1000; }
 // that. So the window is drawn as a BLOCK (thick, solid, bright) with a
 // legibility FLOOR: never thinner than LOOP_MIN_W, and it grows honestly beyond
 // that, so 4 vs 32 steps still reads as small vs large.
-#define LOOP_BLK_H  8      // the window is a solid block, not a hairline
+#define LOOP_BLK_H  14     // a FAT solid block (Arlo: "thicken it up")
 #define LOOP_MIN_W  5      // ...and never narrower than this, however few steps
 
 static void loop_px(int *pa, int *pb){
@@ -117,7 +117,7 @@ static void loop_px(int *pa, int *pb){
 static void bar_paint_bg(int sx, int sw){
     if (sw <= 0) return;
     int ry = TBAR_Y + TBAR_H / 2;
-    TFT_fillRect(sx, TBAR_Y, sw, TBAR_H, TFT_BLACK);      // clear the whole band
+    TFT_fillRect(sx, TBAR_Y - 1, sw, TBAR_H + 2, TFT_BLACK);   // band + head overhang
     if (!trk.loop_engage){
         TFT_fillRect(sx, ry, sw, TBAR_RULE, tbar_bg());
         return;
@@ -154,8 +154,9 @@ static void draw_bar(void){
     int x = bar_x_of(bar_pos_pm());
     if (x == s_last_barx) return;
     if (s_last_barx > 0) bar_paint_bg(s_last_barx - 1, TBAR_HEAD_W + 2);   // erase
+    // (the erase repaints rule + block underneath, so the head can overhang them)
     // the scrubber CROSSES the rule (and the loop block) — white reads on both
-    TFT_fillRect(x, TBAR_Y, TBAR_HEAD_W, TBAR_H, (color_t){245, 245, 245});
+    TFT_fillRect(x, TBAR_Y - 1, TBAR_HEAD_W, TBAR_H + 2, (color_t){245, 245, 245});
     s_last_barx = x;
 }
 

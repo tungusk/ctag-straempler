@@ -637,16 +637,22 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     // loop window from CV: CV7 (idx 6) = length selector, CV6 (idx 5) = position.
     // Deadband the raw CVs so ADC noise can't jitter length/position — otherwise
     // the loop resizes/relocates every block and retriggers constantly.
-    static const int loop_len_tbl[6] = {1, 2, 4, 8, 16, 32};
+    // Arlo: "can we enable longer loops too". A pattern is typically 64 rows, so
+    // the old 32-step ceiling could not even hold ONE pattern — the ladder now
+    // runs to 256 steps (several patterns). The window is clamped to the song
+    // and snapped to whole beats when synced, so long rungs simply cap out on
+    // short modules instead of misbehaving.
+    static const int loop_len_tbl[10] = {1, 2, 4, 8, 16, 32, 64, 128, 192, 256};
+    #define TRK_LEN_STEPS 10
     static int cv_len_h = -1, cv_pos_h = -1;
     int cv_len = io->cv[6], cv_pos = io->cv[5];
     if (cv_len_h < 0) cv_len_h = cv_len;
     if (cv_pos_h < 0) cv_pos_h = cv_pos;
     if (cv_len - cv_len_h > 60 || cv_len_h - cv_len > 60) cv_len_h = cv_len;
     if (cv_pos - cv_pos_h > 60 || cv_pos_h - cv_pos > 60) cv_pos_h = cv_pos;
-    int li = cv_len_h * 6 / 4096;
+    int li = cv_len_h * TRK_LEN_STEPS / 4096;
     if (li < 0) li = 0;
-    if (li > 5) li = 5;
+    if (li > TRK_LEN_STEPS - 1) li = TRK_LEN_STEPS - 1;
     trk.loop_len = loop_len_tbl[li];
     trk.loop_pos_cv = cv_pos_h;
 
