@@ -148,15 +148,14 @@ static void draw_info(void){
 
 static int s_bar_state = -1;   // -1 forces the first paint
 
-static int tbar_state(void){   // 3 = looping, 1 = playing, 2 = analyzing, 0 = idle
-    // playing wins: analysis is paused during playback, so show green not pink
-    if (dk.loop_active) return 3;
+static int tbar_state(void){   // 1 = playing, 2 = analyzing (stopped), 0 = idle
+    // playing wins: analysis is paused during playback, so show green not pink.
+    // LOOPING is NOT a colour state (Arlo): the box keeps the transport colour
+    // and the SHRINK to the window is the whole signal.
     return dk.playing ? 1 : (dk.an_state == DK_AN_RUNNING ? 2 : 0);
 }
 static color_t tbar_bg(void){
     switch (tbar_state()){
-        case 3:  return (color_t){150, 45, 95};    // loop pink (tracker's shade —
-                                                   // analysis keeps its brighter one)
         case 2:  return (color_t){210, 70, 150};   // pink: analysis running
         case 1:  return (color_t){25, 120, 50};    // green: playing
         default: return (color_t){30, 60, 140};    // blue: stopped
@@ -193,30 +192,50 @@ static void tbar_paint_slice(int x, int w){
 static int s_wf_drawn = -1;    // wf_state the bar was last painted with
 static int s_loop_key = -1;    // loop window fingerprint (band change detection)
 
-// the LOOP BAND: top+bottom strips in loop pink across the window's span of
-// the canvas, clipped to [sx, sx+sw) so marker-erase slices restore it
-static void tbar_loop_band(int sx, int sw){
+// THE BOX IS THE LOOP (Arlo, ear test: "shrink the bar like on the sampler").
+// While looping, the fat state-colored border stops framing the whole track
+// and SHRINKS to frame the loop window — the same idiom as sampler3's crop
+// box. The waveform keeps running full width behind it, so you see where the
+// window sits in the track at a glance. Clipped to [sx, sx+sw) so the
+// playhead-erase slices restore it.
+static void tbar_loop_box(int sx, int sw){
     if (!dk.loop_active || !dk.file_frames) return;
     int bx = TBAR_X + TBAR_BW + 1, bw = TBAR_W - 2 * TBAR_BW - 6;
     int x0 = bx + (int)((uint64_t)dk.loop_start * bw / dk.file_frames);
     int x1 = bx + (int)((uint64_t)(dk.loop_start + dk.loop_len_fr) * bw / dk.file_frames);
-    if (x1 <= x0) x1 = x0 + 1;
-    int a = x0 > sx ? x0 : sx;
-    int b = x1 < sx + sw ? x1 : sx + sw;
-    if (b <= a) return;
-    color_t pk = {150, 45, 95};
-    TFT_fillRect(a, TBAR_Y + TBAR_BW, b - a, 3, pk);
-    TFT_fillRect(a, TBAR_Y + TBAR_H - TBAR_BW - 3, b - a, 3, pk);
+    if (x1 < x0 + 2 * TBAR_BW) x1 = x0 + 2 * TBAR_BW;   // stay legible when tiny
+    color_t pk = tbar_bg();          // same colour as the full bar (Arlo)
+    struct { int x, w, y, h; } seg[4] = {
+        { x0, x1 - x0, TBAR_Y, TBAR_BW },                       // top
+        { x0, x1 - x0, TBAR_Y + TBAR_H - TBAR_BW, TBAR_BW },    // bottom
+        { x0, TBAR_BW, TBAR_Y, TBAR_H },                        // left end
+        { x1 - TBAR_BW, TBAR_BW, TBAR_Y, TBAR_H },              // right end
+    };
+    for (int k = 0; k < 4; k++){
+        int a = seg[k].x > sx ? seg[k].x : sx;
+        int b = (seg[k].x + seg[k].w) < (sx + sw) ? (seg[k].x + seg[k].w) : (sx + sw);
+        if (b > a) TFT_fillRect(a, seg[k].y, b - a, seg[k].h, pk);
+    }
 }
 
+// engage/release + window moves all live in this key — tbar_state no longer
+// changes on loop, so THIS is what triggers the frame repaint
 static int loop_key(void){
     return dk.loop_active
         ? (int)(dk.loop_start >> 11) * 31 + (int)(dk.loop_len_fr >> 11) : -1;
 }
 
 static void draw_posbar_frame(void){
-    TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, tbar_bg());   // border color
-    tbar_paint_slice(TBAR_X + TBAR_BW, TBAR_W - 2 * TBAR_BW);  // black canvas
+    if (dk.loop_active){
+        // no full-width border while looping: the canvas goes edge to edge and
+        // the ONLY box is the loop window (drawn by the caller). Black frame
+        // fill wipes the previous full border away.
+        TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, (color_t){0, 0, 0});
+        tbar_paint_slice(TBAR_X, TBAR_W);
+    } else {
+        TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, tbar_bg());   // border color
+        tbar_paint_slice(TBAR_X + TBAR_BW, TBAR_W - 2 * TBAR_BW);  // black canvas
+    }
     _bg = TFT_BLACK;      // _bg is a shared global — leaking the bar color
                           // painted the hint line's text background blue
     s_last_barx = -1;
@@ -229,7 +248,7 @@ static void draw_posbar(void){
         (dk.wf_state == 2) != (s_wf_drawn == 2) ||  // thumbnail landed: paint it
         loop_key() != s_loop_key){                  // loop window moved/resized
         draw_posbar_frame();
-        tbar_loop_band(TBAR_X + TBAR_BW, TBAR_W - 2 * TBAR_BW);
+        tbar_loop_box(TBAR_X, TBAR_W);
         s_loop_key = loop_key();
     }
     if (!dk.file_frames) return;
@@ -238,7 +257,7 @@ static void draw_posbar(void){
     if (x == s_last_barx) return;
     if (s_last_barx > 0){                     // erase only the old marker slice
         tbar_paint_slice(s_last_barx, 5);
-        tbar_loop_band(s_last_barx, 5);       // restore the band through it
+        tbar_loop_box(s_last_barx, 5);        // restore the box through it
     }
     TFT_fillRect(x, TBAR_Y + TBAR_BW, 5, TBAR_H - 2 * TBAR_BW, (color_t){245, 245, 245});
     s_last_barx = x;
