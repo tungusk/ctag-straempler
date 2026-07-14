@@ -100,6 +100,11 @@ typedef struct {
     volatile uint32_t rm_start, rm_len, rm_p0, rm_at;   // rm_at 0 = none
 
     // PLL (deck math, per deck, against the shared clock)
+    volatile float phase_offset;   // the LOCK POINT — moved by the both-trig
+                                   // RESYNC gesture so a re-anchor STICKS
+    volatile float sync_slew;      // frames left to shift via a capped rate bend
+                                   // (no seek, no dropout); 0 = idle
+    volatile bool resync_armed;    // gesture armed (UI)
     float phase_int;
     volatile float phase_err;      // UI display
     float rate_sm;
@@ -162,3 +167,4 @@ int  dualdeck_load_track(int deck, const char *name);
 void dualdeck_arm_start(int deck);
 void dualdeck_arm_stop(int deck);
 void dualdeck_loop_toggle(int deck);   // TR2 grammar; safe from UI too
+void dualdeck_resync(int deck);        // BOTH-TRIG gesture: the beat lands NOW

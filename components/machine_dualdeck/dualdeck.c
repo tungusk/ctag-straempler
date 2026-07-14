@@ -24,6 +24,9 @@ const float dd_ppb[6] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 const char *const dd_ppb_names[6] = {"1 per 4 beats", "1 per 2 beats", "1 per beat",
                                      "2 per beat", "4 per beat", "8 per beat"};
 
+#define DD_LAG_LEAD_FR (0.0131f * 44100.0f)   // output-chain lead (deck-measured)
+#define DD_SLEW_GAIN 0.0006f  // drains the resync shift over ~1 s
+#define DD_SLEW_MAX  0.15f    // max +/-15% rate bend — a bend, not a jump
 #define DD_XF_GRAB 220        // knob counts of movement that grab the fader back
 #define DD_XFADE   256        // ~5.8 ms seam fade — a click-killer, not a blur
 // Read-ahead while looping: this IS the latency of a window change, so it wants
@@ -251,6 +254,8 @@ int dualdeck_load_track(int deck, const char *name)
     v->track_bpm = 0;
     v->grid_offset = 0;
     v->phase_int = 0;
+    v->phase_offset = 0;               // new track, new grid: drop the re-anchor
+    v->sync_slew = 0;
     v->arm_start = v->arm_stop = false;
     strlcpy(v->track, name, sizeof(v->track));
 
@@ -399,6 +404,33 @@ void dualdeck_loop_toggle(int deck)
     if (v->wpos > valid_to) v->wpos = valid_to;
 }
 
+// RESYNC — the shared both-trig gesture (Arlo: "long press both tr1 tr2 forces
+// resync of the pll with beat landing on release"). Applied to the FOCUSED deck,
+// like every other trig here. The track slides to the nearest beat by a capped
+// RATE BEND (never a seek — nothing drops), and the PLL's LOCK POINT moves with
+// it, or the loop would quietly haul the beat back to the grid stamp and undo
+// the gesture. This is also the manual nudge, and it costs no knob.
+void dualdeck_resync(int deck)
+{
+    dd_deck_t *v = &dd.d[deck & 1];
+    if (!v->playing || !v->track[0] || !v->file_frames || v->track_bpm <= 20.0f) return;
+    uint32_t beat_tf = (uint32_t)(60.0f * DD_RATE / v->track_bpm);
+    if (!beat_tf) return;
+    int64_t rel = (int64_t)dd_map(v, v->rpos_i) - (int64_t)v->grid_offset;
+    int64_t off = rel % (int64_t)beat_tf;
+    if (off < 0) off += beat_tf;
+    // nearer beat: the pull is never more than half a beat, so the bend is inaudible
+    v->sync_slew = (off <= beat_tf / 2) ? -(float)off : (float)(beat_tf - off);
+    if (dd.ci.clk.locked && dd.ci.clk.period > 0) {
+        float p_ext = (float)dd.ci.clk.since / (float)dd.ci.clk.period;
+        if (p_ext > 1.0f) p_ext = 1.0f;
+        float po = p_ext + DD_LAG_LEAD_FR / (float)dd.ci.clk.period;
+        po -= floorf(po);
+        v->phase_offset = po;          // the release instant IS the beat
+    }
+    v->phase_int = 0;                  // start the new lock clean
+}
+
 // ---- engine helpers ----------------------------------------------------------
 // fire the armed transport ops for one deck (called ON the bar boundary, or
 // immediately when free-running with no clock)
@@ -410,6 +442,7 @@ static void deck_fire(int i)
         v->arm_start = false;
         v->loop_active = false;        // stop exits the loop
         v->rm_at = 0;
+        v->sync_slew = 0;              // no stale bend across a re-cue
         v->playing = false;
         // re-park at the cue so the next start is instant
         v->loading = true;
@@ -421,6 +454,7 @@ static void deck_fire(int i)
         v->arm_start = false;
         v->loop_active = false;        // a restart exits the loop
         v->rm_at = 0;
+        v->sync_slew = 0;
         if (!v->track[0] || !v->file_frames) return;
         // "parked at the cue" is a question about the FILE position, not the
         // playback counter (the deck's hard lesson: counters carry a seek skew)
@@ -473,9 +507,8 @@ static float deck_rate(dd_deck_t *v)
         float p_trk = fmodf((float)((int64_t)dd_map(v, v->rpos_i) - (int64_t)v->grid_offset),
                             seg_tf) / seg_tf;
         if (p_trk < 0) p_trk += 1.0f;
-        #define DD_LAG_LEAD_FR (0.0131f * 44100.0f)   // deck's measured output-chain lead
         float lead = DD_LAG_LEAD_FR / (float)dd.ci.clk.period;
-        float err = p_ext - p_trk + lead;
+        float err = p_ext - p_trk - v->phase_offset + lead;   // RESYNC moves the lock point
         err -= floorf(err);
         if (err > 0.5f) err -= 1.0f;
         // leaky PI (deck constants — instrument-verified there)
@@ -545,12 +578,24 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // quantized start/restart, TG_HOLD = quantized stop; TR2 press = LOOP
     // toggle (beat-true), held past 0.6 s = momentary (long release exits).
     static trig_gate_t tg[2];
+    static trig_combo_t tc;
     int fo = dd.focus;
-    tg_event_t e1 = trig_gate_step(&tg[0], !(io->trig_level & 1), frames);
-    tg_event_t e2 = trig_gate_step(&tg[1], !(io->trig_level & 2), frames);
-    if (e1 == TG_HOLD) dualdeck_arm_stop(fo);
-    else if (e1 == TG_REL_SHORT) dualdeck_arm_start(fo);
-    if (e2 == TG_PRESS || e2 == TG_REL_LONG) dualdeck_loop_toggle(fo);
+    bool d1 = !(io->trig_level & 1), d2 = !(io->trig_level & 2);
+    tg_event_t e1 = trig_gate_step(&tg[0], d1, frames);
+    tg_event_t e2 = trig_gate_step(&tg[1], d2, frames);
+    // BOTH-TRIG RESYNC on the focused deck. It arms at 0.35 s — ahead of either
+    // gate's own 0.6 s hold — and while it owns the trigs their individual
+    // events are swallowed, or the same gesture would also stop the deck and
+    // flip its loop on the way past.
+    tc_event_t ec = trig_combo_step(&tc, d1, d2, frames);
+    if (ec == TC_FIRE) dualdeck_resync(fo);
+    if (ec == TC_ARMED) dd.d[fo].resync_armed = true;
+    if (!trig_combo_busy(&tc)) {
+        dd.d[0].resync_armed = dd.d[1].resync_armed = false;
+        if (e1 == TG_HOLD) dualdeck_arm_stop(fo);
+        else if (e1 == TG_REL_SHORT) dualdeck_arm_start(fo);
+        if (e2 == TG_PRESS || e2 == TG_REL_LONG) dualdeck_loop_toggle(fo);
+    }
 
     // ---- shared clock + bar phase. An accepted pulse advances the counter;
     // the bar boundary is every 4 beats' worth of pulses. With no lock, armed
@@ -737,7 +782,13 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
                 last[i][0] = l * v->out_gain;
                 last[i][1] = r * v->out_gain;
                 l = last[i][0]; r = last[i][1];
-                v->rpos_f += rate[i];
+                // RESYNC catch-up: bleed the shift in as a capped rate bend
+                // (rate >= 0.25 and |sl| <= 0.15, so playback never runs backwards)
+                float sl = v->sync_slew * DD_SLEW_GAIN;
+                if (sl > DD_SLEW_MAX) sl = DD_SLEW_MAX;
+                else if (sl < -DD_SLEW_MAX) sl = -DD_SLEW_MAX;
+                v->sync_slew -= sl;
+                v->rpos_f += rate[i] + sl;
                 // playback counter: NEVER wraps. The loop lives in the MAPPING
                 // (the reader wraps its own file reads and crossfades the seam),
                 // so there is no engine-side cursor wrap any more.
