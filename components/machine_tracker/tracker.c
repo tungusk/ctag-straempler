@@ -280,6 +280,7 @@ static void render_task(void *pv)
     s_have_module = false;
     s_alive = true;
 
+    bool     cv6_grabbed = false;   // CV6 has MOVED since engage: it owns the window
     int      loop_engage_ms = 0;    // module time captured when the loop engaged
     uint32_t loop_anchor_w  = 0;    // wpos at engage (frames rendered = real time)
     uint32_t loop_prev_start = 0xFFFFFFFFu;  // last window start (detect a move)
@@ -318,6 +319,7 @@ static void render_task(void *pv)
                 loop_anchor_abs = (fi.pos >= 0 && fi.pos < trk.n_orders)
                                 ? trk.order_step0[fi.pos] + (uint32_t)fi.row : 0;
                 cv6_engage = trk.loop_pos_cv;
+                cv6_grabbed = false;            // dead until the knob actually moves
                 loop_prev_start = 0xFFFFFFFFu;
                 // seed the UI loop band at the engage position so it doesn't flash
                 // a stale spot for a frame before the first loop render updates it
@@ -398,13 +400,24 @@ static void render_task(void *pv)
                 if ((uint32_t)len > total) len = (int)total;
                 uint32_t nblk = total / (uint32_t)len;
                 if (nblk < 1) nblk = 1;
-                // window start = the engage position, shifted by how far CV6 has
-                // moved since engage — ONE loop-length (block) per ~128 CV counts,
-                // so a nudge advances by the loop length (not a song-scaled jump).
-                // Unmoved CV6 => stays put.
+                // CV6 = WINDOW POSITION, ABSOLUTE across the WHOLE SONG (Arlo:
+                // "cv6 needs to scale to a % and be able to reach the whole
+                // track"). It used to be a DELTA from the knob's value at engage,
+                // one block per ~128 counts — so a full sweep crossed at most 32
+                // blocks and most of a long module was simply unreachable. The
+                // knob is now a percentage of the song, quantised to whole
+                // windows (which keeps the start phase-true: a whole number of
+                // loop lengths from zero). GRAB-then-track, so engaging a loop
+                // can't fling the window: the knob is dead until it MOVES.
                 int base_blk = (int)(loop_anchor_abs / (uint32_t)len);
-                int cv_delta = ((int)trk.loop_pos_cv - cv6_engage) / 128;
-                int blk = base_blk + cv_delta;
+                int blk;
+                if (cv6_grabbed ||
+                    trk.loop_pos_cv - cv6_engage > 120 || cv6_engage - trk.loop_pos_cv > 120) {
+                    cv6_grabbed = true;
+                    blk = (int)((uint64_t)trk.loop_pos_cv * nblk / 4096);
+                } else {
+                    blk = base_blk;              // untouched: stay where we engaged
+                }
                 if (blk < 0) blk = 0;
                 if (blk >= (int)nblk) blk = (int)nblk - 1;
                 uint32_t lstart = (uint32_t)blk * (uint32_t)len;
