@@ -680,15 +680,20 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     int mode = dk.flt_mode;                  // frozen while looping
     const float q = 0.9f;
     if (!dk.loop_active) {
-        // pickup gates (see DK_PICKUP): a knob the loop borrowed only comes
-        // back to life once it MOVES
+        // PASS-THROUGH pickup: a knob the loop borrowed stays inert until it
+        // returns to the value the engine is still using — then it takes over
+        // seamlessly (see DK_PASSTOL). Nothing ever jumps.
         int c6 = io->cv[5], c7 = io->cv[6];
-        if (s_pk7 == -1) s_pk7 = c7;
-        else if (s_pk7 >= 0 && (c7 - s_pk7 > DK_PICKUP || s_pk7 - c7 > DK_PICKUP))
-            s_pk7 = -2;
-        if (s_pk6 == -1) s_pk6 = c6;
-        else if (s_pk6 >= 0 && (c6 - s_pk6 > DK_PICKUP || s_pk6 - c6 > DK_PICKUP))
-            s_pk6 = -2;
+        if (s_pk7 != -2) {
+            int d = c7 - (int)dk.pitch_cv;
+            if (d < 0) d = -d;
+            if (d <= DK_PASSTOL) s_pk7 = -2;     // knob has caught up: it is live
+        }
+        if (s_pk6 != -2) {
+            int d = c6 - (int)dk.filt_cv;
+            if (d < 0) d = -d;
+            if (d <= DK_PASSTOL) s_pk6 = -2;
+        }
 
         if (s_pk7 == -2) dk.pitch_cv = c7;   // knob7 = speed / free-run rate
         if (s_pk6 != -2) goto filter_done;   // knob6 still frozen: keep the
