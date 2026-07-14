@@ -24,6 +24,10 @@ typedef struct {
     char v1[64];   // diag string; 32 truncated multi-voice diags (dualdeck)
     uint16_t cv[8];
     uint8_t trig;      // raw gate levels, bit0=TR1 bit1=TR2 (active low)
+    // rough VU: decayed per-block peak of line-in / machine-out, 0..255
+    // (peak >> 7 of the 16-bit magnitude). A signal-present meter, not a tool.
+    uint8_t vu_in;
+    uint8_t vu_out;
 } audio_status_t;
 
 void initAudio(void);
@@ -34,3 +38,7 @@ void audio_status_set_voices(const char *v0, const char *v1);
 // teleremote: assert trigger input t (0/1) in software for ms milliseconds —
 // the audio task pulls the bit low (= active) alongside the hardware gate
 void audio_remote_trig(int t, int ms);
+// teleremote: override CV channel ch (0..7) with v (0..4095) for ms
+// milliseconds — the audio task substitutes it for the ADC reading, then
+// decays back to the physical knob (a stale web value can never pin a knob)
+void audio_remote_cv(int ch, int v, int ms);
