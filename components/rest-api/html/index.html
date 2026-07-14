@@ -31,6 +31,10 @@ input[type=range]{padding:0;height:22px;accent-color:#0af}
 .row{display:flex;gap:8px;margin-top:8px}
 .row>*{flex:1}
 .row.tight>*{flex:0 0 auto;padding:3px 14px}   /* natural-width buttons */
+/* the TR pair spans the same total width as the encoder quartet */
+.row.enc4>*{width:78px}
+.row.tr2>*{width:164px}
+.mtr.sm{width:48px;height:8px}
 .dz{border:2px dashed #333;padding:24px;text-align:center;color:#555;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
 .dz.ov{border-color:#0af;color:#0af}
 progress{width:100%;height:6px;margin-top:6px;display:none}
@@ -155,12 +159,12 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
   <label>Inputs</label>
   <div class="rmon" id="rmon"></div>
-  <div class="row tight" style="margin-top:4px">
+  <div class="row tight tr2" style="margin-top:4px">
     <button class="btn" onclick="remTrig(1)">TR1 pulse</button>
     <button class="btn" onclick="remTrig(2)">TR2 pulse</button>
   </div>
   <label>Encoder</label>
-  <div class="row tight">
+  <div class="row tight enc4">
     <button class="btn" onclick="remEv('bwd')">&#8592; turn</button>
     <button class="btn" onclick="remEv('fwd')">turn &#8594;</button>
     <button class="btn" onclick="remEv('press')">press</button>
@@ -196,6 +200,9 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 </div>
 <div class="sbar">
   <div class="cv" id="cvb"></div>
+  <span class="sep">|</span>
+  <span class="vl">in</span><div class="mtr sm"><i id="vui" style="width:0%"></i></div>
+  <span class="vl">out</span><div class="mtr sm"><i id="vuo" style="width:0%"></i></div>
   <span class="sep">|</span>
   <span class="ri" id="ri">REC</span>
   <span class="sep">|</span>
@@ -946,6 +953,10 @@ function pollStatus(){
       h+='<div class="cvb" style="height:14px"><div class="cvf" style="height:'+pct+'%"></div></div>';
     }
     document.getElementById('cvb').innerHTML=h;
+    var vu=d.vu||[0,0];
+    var vi=document.getElementById('vui'),vo=document.getElementById('vuo');
+    if(vi)vi.style.width=Math.round(vu[0]/255*100)+'%';
+    if(vo)vo.style.width=Math.round(vu[1]/255*100)+'%';
     var ri=document.getElementById('ri');
     ri.className='ri'+(d.recording?' on':'');
     document.getElementById('v0').textContent='V0: '+(d.v0||'--');
