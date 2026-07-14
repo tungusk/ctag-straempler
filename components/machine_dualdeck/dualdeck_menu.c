@@ -145,7 +145,7 @@ static void draw_big_bpm(void){
 #define V_TB_W   (_width - 16)
 #define V_TB_H   36
 #define V_TB_BW  3                       // fat state border (deck idiom)
-#define V_NAME_H 22                      // the big track-name row (DEJAVU18)
+#define V_NAME_H 30                      // the big track-name row (DEJAVU24)
 #define V_A_NAME 34
 #define V_A_INFO (V_A_NAME + V_NAME_H)
 #define V_BAR_A  (V_A_INFO + TFT_getfontheight() + 5)
@@ -245,8 +245,12 @@ static void v_hdr(int i, bool full){
     bool focus = (i == dd.focus);
     bool right = (i == 1);              // deck 2 mirrors deck 1 around the fader
     char nm[32], info[48], sig[96];
-    snprintf(nm, sizeof(nm), "%d  %.10s", i + 1, v->track[0] ? v->track : "(empty)");
-    deck_info_str(i, info, sizeof(info), right);   // deck 2 reads outward
+    // the info line takes the OPPOSITE justification from the number+name, so
+    // each deck spans the screen: its number on one edge, its state on the other
+    bool inf_right = !right;
+    deck_info_str(i, info, sizeof(info), inf_right);
+    const char *tn = v->track[0] ? v->track : "(empty)";
+    snprintf(nm, sizeof(nm), "%.10s", tn);
     snprintf(sig, sizeof(sig), "%d|%s|%s", focus ? 1 : 0, nm, info);
     if (!full && strcmp(sig, s_last_hdr[i]) == 0) return;
     strlcpy(s_last_hdr[i], sig, sizeof(s_last_hdr[i]));
@@ -254,27 +258,38 @@ static void v_hdr(int i, bool full){
     int ny = (i == 0) ? V_A_NAME : V_B_NAME;
     int iy = (i == 0) ? V_A_INFO : V_B_INFO;
     _bg = TFT_BLACK;
-    TFT_fillRect(0, ny - 1, _width, V_NAME_H, _bg);
+    TFT_fillRect(0, ny - 2, _width, V_NAME_H, _bg);
 
-    // DECK NUMBER + TRACK NAME, big (Arlo: "room to scale up the font of the
-    // track name... label the decks 1 and 2, larger font")
+    // THE NUMBER IS THE SELECTION (Arlo): the focused deck wears its number as
+    // BLACK ON A WHITE SQUARE — unmissable at a glance, which is what focus has
+    // to be when the trigs and both knobs address it. The unfocused deck gets a
+    // dim plate, so the geometry never shifts.
     Font f = cfont;
-    TFT_setFont(DEJAVU18_FONT, NULL);
+    TFT_setFont(DEJAVU24_FONT, NULL);
     int nfh = TFT_getfontheight();
+    char num[4];
+    snprintf(num, sizeof(num), "%d", i + 1);
+    int numw = TFT_getStringWidth(num);
+    int boxw = numw + 12, boxh = nfh + 4;
+    int namew = TFT_getStringWidth(nm);
+    // deck 1 leads with its number, deck 2 TRAILS with it — the numbers sit on
+    // the OUTER edges ("move the 2 to the right, following the track name")
+    int boxx = right ? (V_TB_X + V_TB_W - boxw) : V_TB_X;
+    int namex = right ? (V_TB_X + V_TB_W - boxw - 10 - namew) : (V_TB_X + boxw + 10);
+
+    TFT_fillRect(boxx, ny - 2, boxw, boxh, focus ? TFT_WHITE : (color_t){28, 34, 50});
+    _bg = focus ? TFT_WHITE : (color_t){28, 34, 50};
+    _fg = focus ? TFT_BLACK : (color_t){95, 105, 135};
+    TFT_print(num, boxx + (boxw - numw) / 2, ny);
+    _bg = TFT_BLACK;
     _fg = focus ? TFT_WHITE : (color_t){95, 105, 135};
-    int nx = right ? V_TB_X + V_TB_W - TFT_getStringWidth(nm) : V_TB_X;
-    TFT_print(nm, nx, ny);
-    if (focus){                         // accent tab on the deck's own side
-        color_t acc = tbar_bg(i);
-        if (right) TFT_fillRect(V_TB_X + V_TB_W + 2, ny, 3, nfh, acc);
-        else       TFT_fillRect(V_TB_X - 5, ny, 3, nfh, acc);
-    }
+    TFT_print(nm, namex, ny);
     cfont = f;
 
     int fh = TFT_getfontheight();
     TFT_fillRect(0, iy - 1, _width, fh + 2, _bg);
     _fg = (color_t){120, 130, 160};
-    TFT_print(info, right ? V_TB_X + V_TB_W - TFT_getStringWidth(info) : V_TB_X, iy);
+    TFT_print(info, inf_right ? V_TB_X + V_TB_W - TFT_getStringWidth(info) : V_TB_X, iy);
 }
 
 // =====================================================================
