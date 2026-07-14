@@ -285,12 +285,10 @@ static int machine_sel_def_handler(int it_id, int event, void* event_data){
     return 0; // remain in current menu
 }
 
-// P1 cycles only the implemented listen modes (KICK/FLUX land in P2)
+// all five listen modes are real now (P2): OFF/PULSE/KICK/FLUX/GROOVE
 static int listen_cycle(int cur, int dir){
-    static const int order[] = {BL_OFF, BL_PULSE, BL_GROOVE};
-    int k = 0;
-    for (int i = 0; i < 3; i++) if (order[i] == cur) k = i;
-    return order[(k + (dir > 0 ? 1 : 2)) % 3];
+    if (cur < 0 || cur >= BL_NMODES) cur = BL_OFF;
+    return (cur + (dir > 0 ? 1 : BL_NMODES - 1)) % BL_NMODES;
 }
 
 static int settings_def_handler(int it_id, int event, void* event_data){

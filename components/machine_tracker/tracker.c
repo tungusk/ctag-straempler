@@ -823,7 +823,7 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     // Schmitt + ppb-scaled gates; drops the lock for a clean relock when the
     // ppb setting actually changes
     clockin_set_ppb(&trk.ci, TRK_PPB_RAW());   // gates take the RAW setting
-    clockin_block(&trk.ci, io->cv[trk.clk_src], frames);
+    clockin_block(&trk.ci, clock_source_level(trk.clk_src, io), frames);
 }
 
 // ---- preset -----------------------------------------------------------------
@@ -856,7 +856,8 @@ static void tracker_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "amiga"))) trk.amiga = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "show_text"))) trk.show_text = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop_freeze"))) trk.loop_freeze = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) trk.clk_src = j->valueint & 7;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j))
+        trk.clk_src = clock_source_clamp_cv_audio(j->valueint);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
         trk.ppb_idx = j->valueint; if (trk.ppb_idx < 0) trk.ppb_idx = 0; if (trk.ppb_idx > 4) trk.ppb_idx = 4;
     }

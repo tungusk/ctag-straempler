@@ -43,7 +43,9 @@ static const char *TAG = "BLISTEN";
 
 #define BL_PULSE_FR    441.0f                 // 10 ms grid pulse width
 #define BL_HOLD_BLK    14                     // ~10 ms onset pulse hold
-#define BL_REFRACT_BLK 55                     // ~40 ms onset refractory
+#define BL_REFRACT_BLK 55                     // ~40 ms onset refractory (PULSE)
+#define BL_REFRACT_KICK 165                   // ~120 ms — one pulse per kick
+#define BL_REFRACT_FLUX 82                    // ~60 ms — any transient
 #define BL_SILENCE     500.0f                 // block |mono| sum ~ -66 dBFS
 #define BL_LEAD_FR     0                      // phase-anchor trim (on-device tune)
 
@@ -63,7 +65,9 @@ static volatile int      s_cost_us = 0;
 // ---- audio-task side ---------------------------------------------------------
 static int      s_amode = BL_OFF;      // mode the audio path last saw
 static svf_t    s_flo, s_fmid;
-static float    s_coef_lo, s_coef_mid;
+static float    s_coef_lo, s_coef_mid, s_coef_kick;
+static float    s_pblk_lo, s_pblk_mid, s_pblk_hi;      // FLUX: prev BLOCK log energies
+static float    s_flux_blk, s_flux_ema;                // FLUX: this block's flux + baseline
 static float    s_acc_lo, s_acc_mid, s_acc_hi;         // hop band |x| sums
 static float    s_plog_lo, s_plog_mid, s_plog_hi;      // previous hop log energies
 static int      s_hop_blk;                             // blocks into the hop
@@ -101,6 +105,7 @@ void beatlisten_init(void)
 {
     s_coef_lo  = 2.0f * sinf((float)M_PI * 150.0f  / BL_RATE);
     s_coef_mid = 2.0f * sinf((float)M_PI * 2000.0f / BL_RATE);
+    s_coef_kick = 2.0f * sinf((float)M_PI * 120.0f / BL_RATE);
     svf_reset(&s_flo);
     svf_reset(&s_fmid);
 }
@@ -167,6 +172,8 @@ void beatlisten_push(const int32_t in[64])
         svf_reset(&s_fmid);
         s_acc_lo = s_acc_mid = s_acc_hi = 0;
         s_plog_lo = s_plog_mid = s_plog_hi = 0;
+        s_pblk_lo = s_pblk_mid = s_pblk_hi = 0;
+        s_flux_blk = s_flux_ema = 0;
         s_hop_blk = 0;
         s_floor = 1e9f;
         s_hold = s_refract = 0;
@@ -192,6 +199,35 @@ void beatlisten_push(const int32_t in[64])
             ahi  += fabsf(mono - m2);
         }
         s_acc_lo += alo; s_acc_mid += amid; s_acc_hi += ahi;
+        e_blk = alo + amid + ahi;
+    } else if (mode == BL_KICK) {
+        // low band only: the kick's energy, nothing else's
+        for (int f = 0; f < BL_BLK; f++) {
+            float mono = 0.5f * ((float)(in[f * 2] >> 16) + (float)(in[f * 2 + 1] >> 16));
+            float lo;
+            svf_step(&s_flo, mono, s_coef_kick, 1.0f, &lo, NULL, NULL);
+            e_blk += fabsf(lo);
+        }
+    } else if (mode == BL_FLUX) {
+        // 3-band rectified log flux, per BLOCK: a spectral CHANGE detector —
+        // sustained material contributes nothing, any transient spikes it
+        float alo = 0, amid = 0, ahi = 0;
+        for (int f = 0; f < BL_BLK; f++) {
+            float mono = 0.5f * ((float)(in[f * 2] >> 16) + (float)(in[f * 2 + 1] >> 16));
+            float lo, m2;
+            svf_step(&s_flo,  mono, s_coef_lo,  1.0f, &lo, NULL, NULL);
+            svf_step(&s_fmid, mono, s_coef_mid, 1.0f, &m2, NULL, NULL);
+            alo  += fabsf(lo);
+            amid += fabsf(m2 - lo);
+            ahi  += fabsf(mono - m2);
+        }
+        float llo = logf(alo + 1.0f), lmi = logf(amid + 1.0f), lhi = logf(ahi + 1.0f);
+        float fx = 0, d;
+        d = llo - s_pblk_lo;  if (d > 0) fx += d;
+        d = lmi - s_pblk_mid; if (d > 0) fx += d;
+        d = lhi - s_pblk_hi;  if (d > 0) fx += d;
+        s_pblk_lo = llo; s_pblk_mid = lmi; s_pblk_hi = lhi;
+        s_flux_blk = fx;
         e_blk = alo + amid + ahi;
     } else {
         for (int f = 0; f < BL_BLK; f++) {
@@ -237,15 +273,23 @@ void beatlisten_push(const int32_t in[64])
             s_level = 0;
         }
     } else {
-        // onset modes (PULSE; KICK/FLUX fall back here until P2): adaptive
-        // floor (dips instant, rises slowly) + fire gate + refractory
-        if (e_blk < s_floor) s_floor = e_blk;
-        else s_floor += (e_blk - s_floor) * 0.0005f;
+        // onset modes. PULSE/KICK: adaptive energy floor (dips instant, rises
+        // slowly) + fire gate. FLUX: the flux fires against its own baseline.
         if (s_refract > 0) s_refract--;
         if (s_hold > 0) s_hold--;
-        if (s_refract == 0 && e_blk > s_floor * 4.0f + 2000.0f) {
+        bool fire;
+        if (mode == BL_FLUX) {
+            fire = (s_refract == 0 && s_flux_blk > 2.5f * s_flux_ema + 0.8f);
+            s_flux_ema += (s_flux_blk - s_flux_ema) * 0.01f;
+        } else {
+            if (e_blk < s_floor) s_floor = e_blk;
+            else s_floor += (e_blk - s_floor) * 0.0005f;
+            fire = (s_refract == 0 && e_blk > s_floor * 4.0f + 2000.0f);
+        }
+        if (fire) {
             s_hold = BL_HOLD_BLK;
-            s_refract = BL_REFRACT_BLK;
+            s_refract = (mode == BL_KICK) ? BL_REFRACT_KICK :
+                        (mode == BL_FLUX) ? BL_REFRACT_FLUX : BL_REFRACT_BLK;
         }
         s_level = s_hold > 0 ? 4095 : 0;
     }

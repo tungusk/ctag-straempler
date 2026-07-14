@@ -673,12 +673,13 @@ function loadRemote(){
     // L/R tags above each pair, IN/OUT below — same anatomy as the CV columns
     ['in','out'].forEach(function(g){
       mh+='<div class="rcol">'
-        +'<div style="display:flex;gap:2px;font-size:9px;color:#555">'
-        +'<span style="width:22px;text-align:center">L</span><span style="width:22px;text-align:center">R</span></div>'
         +'<div style="display:flex;gap:2px">'
         +'<div class="rbar"><div class="rfill" id="rv'+g+'l" style="height:0%;background:#3a7"></div></div>'
         +'<div class="rbar"><div class="rfill" id="rv'+g+'r" style="height:0%;background:#3a7"></div></div>'
-        +'</div><span id="rlv'+g+'">'+g.toUpperCase()+'</span></div>';
+        +'</div>'
+        +'<div style="display:flex;gap:2px;font-size:9px;color:#555">'
+        +'<span style="width:22px;text-align:center">L</span><span style="width:22px;text-align:center">R</span></div>'
+        +'<span id="rlv'+g+'">'+g.toUpperCase()+'</span></div>';
     });
     document.getElementById('rmon').innerHTML=mh;
     updateClkTag();

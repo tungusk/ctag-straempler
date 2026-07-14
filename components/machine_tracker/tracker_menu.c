@@ -15,6 +15,9 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "clock.h"
+#include "beatlisten.h"
+#include "menu_config.h"
 #include "audio.h"
 #include "tracker_priv.h"
 
@@ -376,7 +379,7 @@ static void setup_redraw(int pos, int sel){
             case 1: snprintf(v, sizeof(v), "%s", trk.loop ? "ON" : "OFF"); break;
             case 2: snprintf(v, sizeof(v), "%s", trk.amiga ? "Amiga" : "Clean"); break;
             case 3: snprintf(v, sizeof(v), "%s", trk.sync ? "ON" : "OFF"); break;
-            case 4: snprintf(v, sizeof(v), "CV%d", trk.clk_src + 1); break;
+            case 4: snprintf(v, sizeof(v), "%s", clock_source_name(trk.clk_src)); break;
             case 5: snprintf(v, sizeof(v), "%s", trk_ppb_names[trk.ppb_idx]); break;
             case 6: snprintf(v, sizeof(v), "%s", trk.show_text ? "ON" : "OFF"); break;
             case 7: snprintf(v, sizeof(v), "%s", trk.loop_freeze ? "ON" : "OFF"); break;
@@ -394,7 +397,14 @@ static void setup_adj(int i, int dir){
         case 1: trk.loop = !trk.loop; break;
         case 2: trk.amiga = !trk.amiga; trk.sound_dirty = true; break;
         case 3: trk.sync = !trk.sync; break;
-        case 4: trk.clk_src = (trk.clk_src + (dir > 0 ? 1 : 7)) & 7; break;
+        case 4:
+            // CV1..8 + AUDIO (TR1/TR2 are play/loop); AUDIO wakes the ear
+            trk.clk_src = clock_source_cycle_cv_audio(trk.clk_src, dir);
+            if (trk.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
+                beatlisten_set_mode(BL_GROOVE);
+                configSetIntSetting("blisten", BL_GROOVE);
+            }
+            break;
         case 5: trk.ppb_idx += dir; if (trk.ppb_idx < 0) trk.ppb_idx = 0; if (trk.ppb_idx > 4) trk.ppb_idx = 4; break;
         case 6: trk.show_text = !trk.show_text; break;
         case 7: trk.loop_freeze = !trk.loop_freeze; break;

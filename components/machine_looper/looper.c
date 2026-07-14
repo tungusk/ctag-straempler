@@ -27,15 +27,9 @@ lp_state_t lp;
 // detector's fixed 1500/800 thresholds, which misfired on attenuated CV.
 static clockin_t s_ci;
 
-// clock line as a 0/4095 level fed to the detector, from either a CV channel
-// (raw, thresholded in clock.c) or a trig input. Trigs are active-low: a clock
-// pulse pulls the line low, mapped to the "high" clock state.
-static uint16_t clock_level(const machine_io_t *io)
-{
-    if (lp.clk_src == LP_CLK_TR1) return (io->trig_level & 1) ? 0 : 4095;
-    if (lp.clk_src == LP_CLK_TR2) return (io->trig_level & 2) ? 0 : 4095;
-    return io->cv[lp.clk_src & 7];
-}
+// clock level comes from the shared source helper (clock_source_level) —
+// CV, TR (the looper masks its clock trig out of button handling) or AUDIO
+// (the beat listener's synthesized grid).
 
 // ---- track helpers --------------------------------------------------------
 static uint32_t bar_frames(void)
@@ -187,7 +181,7 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     // timing exactly. An ACCEPTED pulse shows up as a ring_n change (Schmitt
     // fires that fail the sanity gate don't count, same as before).
     uint32_t rn_pre = s_ci.clk.ring_n;
-    clockin_block(&s_ci, clock_level(io), frames);
+    clockin_block(&s_ci, clock_source_level(lp.clk_src, io), frames);
     bool clk_acc = (s_ci.clk.ring_n != rn_pre);
     lp.bpm = s_ci.clk.bpm;                  // mirror to the UI-facing fields
     lp.locked = s_ci.clk.locked;            // (also reflects clock-stop promptly)
@@ -392,7 +386,10 @@ static void looper_preset_load(const cJSON *node)
     if (!node) return;   // no saved state — keep start() defaults
     cJSON *j;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync")))                     lp.sync_on = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) lp.clk_src = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) {
+        int cs = j->valueint;              // 0..7 CV, 8/9 TR, 10 AUDIO (clock.h)
+        lp.clk_src = (cs >= 0 && cs < CLK_SRC_COUNT) ? cs : 7;
+    }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "bars")) && cJSON_IsNumber(j))    lp.bars = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor")))                  lp.monitor = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "filter")))                   lp.filter_on = cJSON_IsTrue(j);
