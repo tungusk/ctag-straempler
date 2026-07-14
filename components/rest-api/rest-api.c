@@ -74,6 +74,9 @@ static bool get_query_param(httpd_req_t *req, const char *key, char *buf, size_t
 static esp_err_t landing_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
+    // the page ships inside the firmware: after every flash the browser's
+    // cached copy is stale, so tell it to revalidate every load
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     httpd_resp_send(req, index_html, index_html_len);
     return ESP_OK;
 }
