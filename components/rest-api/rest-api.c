@@ -229,6 +229,52 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── POST /files/move?name=xxx&dir=pool|REC|LOOPS ────────────────────────────
+// Folder organization from the web: the same all-pieces sweep as rename (audio
+// + .JSN + .OT travel together), destination = another pool folder, id kept.
+static esp_err_t files_move_handler(httpd_req_t *req)
+{
+    char name[32], dir[12];
+    if (!get_query_param(req, "name", name, sizeof(name)) ||
+        !get_query_param(req, "dir", dir, sizeof(dir))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name/dir");
+        return ESP_FAIL;
+    }
+    static const char *const mv_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
+                                          "/sdcard/usr/LOOPS"};
+    static const char *const mv_tags[] = {"pool", "REC", "LOOPS"};
+    int dst = -1;
+    for (int d = 0; d < 3; d++)
+        if (strcasecmp(dir, mv_tags[d]) == 0) dst = d;
+    if (dst < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "dir must be pool/REC/LOOPS");
+        return ESP_FAIL;
+    }
+    static const char *const mv_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF", ".JSN", ".OT"};
+    char from_p[80], to_p[80];
+    int moved = 0;
+    sd_lock_take();
+    for (int d = 0; d < 3; d++) {
+        if (d == dst) continue;
+        for (int i = 0; i < 6; i++) {
+            snprintf(from_p, sizeof(from_p), "%s/%s%s", mv_dirs[d], name, mv_exts[i]);
+            struct stat st;
+            if (stat(from_p, &st) != 0) continue;      // this piece isn't here
+            snprintf(to_p, sizeof(to_p), "%s/%s%s", mv_dirs[dst], name, mv_exts[i]);
+            struct stat dt;
+            if (stat(to_p, &dt) == 0) continue;        // never clobber a twin
+            if (rename(from_p, to_p) == 0) moved++;
+        }
+    }
+    sd_lock_give();
+    if (!moved) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No such sample (or already there)");
+        return ESP_FAIL;
+    }
+    send_json(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 // ─── POST /files/rename?name=xxx&to=yyy ───────────────────────────────────────
 //
 // A pool id is not just a filename: it is an audio file, a .JSN sidecar (carrying the
@@ -1219,6 +1265,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/files",      .method = HTTP_GET,    .handler = files_get_handler },
     { .uri = "/files",      .method = HTTP_DELETE, .handler = files_delete_handler },
     { .uri = "/files/rename", .method = HTTP_POST, .handler = files_rename_handler },
+    { .uri = "/files/move",   .method = HTTP_POST, .handler = files_move_handler },
     { .uri = "/files/raw",  .method = HTTP_GET,    .handler = files_raw_handler },
     { .uri = "/import",     .method = HTTP_POST,   .handler = import_post_handler },
     { .uri = "/import",     .method = HTTP_GET,    .handler = import_get_handler },

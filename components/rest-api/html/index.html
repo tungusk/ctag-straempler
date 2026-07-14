@@ -298,8 +298,16 @@ function renderFiles(){
     }else{
       nameCell='<span class="ren" title="rename in place" onclick="libRename(\''+esc(f.name)+'\')">'+esc(f.name)+'</span>';
     }
+    // the folder cell IS the move control: a tiny pull-down showing where the
+    // file lives; picking another folder moves it (audio+sidecar+slices together)
+    var dirCell='<select style="width:auto;font-size:10px;padding:1px 2px;color:#888" '
+      +'onchange="moveFile(\''+esc(f.name)+'\',this.value)">';
+    ['pool','REC','LOOPS'].forEach(function(dd){
+      dirCell+='<option value="'+dd+'"'+((f.dir||'pool')===dd?' selected':'')+'>'+dd+'</option>';
+    });
+    dirCell+='</select>';
     h+='<tr><td>'+nameCell+'</td>'
-      +'<td><span style="color:#888;font-size:10px">'+esc(f.dir||'')+'</span></td>'
+      +'<td>'+dirCell+'</td>'
       +'<td>'+bpm+'</td>'
       +'<td style="color:#9ab">'+mmss(f.dur)+'</td>'
       +'<td>'+(f.size?(Math.round(f.size/1024))+'KB':'')+'</td>'
@@ -314,6 +322,14 @@ function renderFiles(){
 // RENAME (in place). The firmware moves the audio, its .JSN sidecar (which carries the
 // bpm/grid stamp) and any .OT slice map together — renaming only the audio would orphan
 // the analysis and the deck would then refuse to loop the track ("no grid").
+function moveFile(name,dir){
+  fetch('/files/move?name='+encodeURIComponent(name)+'&dir='+encodeURIComponent(dir),{method:'POST'})
+    .then(function(r){
+      if(r.ok){loadFiles();return;}
+      return r.text().then(function(t){alert('Move failed: '+t);renderFiles();});
+    }).catch(function(){alert('Move failed');renderFiles();});
+}
+
 function libRename(name){libEdit=name;renderFiles();}
 function libCancel(){libEdit=null;renderFiles();}
 function libCommit(name){
