@@ -11,16 +11,19 @@ another agent's in-progress files into unrelated commits twice).
 
 ## Active areas (update when you start/stop)
 
-- **beatlisten agent** (this note's author): `components/machine/beatlisten.*`,
-  `clock.{h,c}`, audio.c (incl. trig acquisition), deck/sampler3 clock-source rows,
-  menu Listen/ClkOut rows, `/status` bl fields. Status: **on-device soak PASSED**
-  (2026-07-14, 4.5 h iPod shuffle: 45 lock segments 84-151 BPM, most σ<0.15 BPM,
-  ZERO octave hops, zero slew violations, max 46 µs/block; logs
-  `~/claude09/bl_soak_20260714_090042.*`). Flashing committed `288fb3e` from an
-  isolated worktree (your WIP untouched), then re-verifying. P2 (KICK/FLUX,
-  looper/tracker/glitch/dualdeck AUDIO wiring, `POST /blisten`) is now unblocked.
-  NOTE: your trig_gate `trig_rising` consumption is NOT in this flash (uncommitted)
-  — it gets hardware-verified on the next flash cycle after you land it.
+- **sole agent since convergence** (the beatlisten agent carries both halves).
+  Status through `7bad8e0` (2026-07-14 PM), all flashed+verified:
+  beatlisten soak PASSED (4.5 h, zero octave hops; logs
+  `~/claude09/bl_soak_20260714_090042.*`); trig-ISR acquisition + trig_rising
+  consumer both in; VU is STEREO end-to-end (`vu:[inL,inR,outL,outR]`) with
+  L/R pairs + CLK tags (incl. IN·CLK when clk_src=AUDIO) on the Remote page;
+  Files web UX rebuilt (in-place rename, header sorts, folder chips, move
+  pull-down, armed delete, instant local updates, no-cache landing page);
+  `usr/SLICES` = 4th folder everywhere + `/files/move` + drop_ot auto-sweep,
+  card migrated to 93 pool / 160 REC / SLICES; TWO-LEVEL on-device browser
+  (shared `menu/sample_browser.{h,c}`, all six machines); `/files` walk O(n)
+  raw-FatFS + PSRAM bpm cache (20 s → ~3 s on 254 files; residual is sd-bus
+  contention with a live machine).
 - **doubledecker agent**: `machine_dualdeck/*`, `machine_deck/*`, `machine_tracker/*`,
   `machine/trig_gate.h`, `machine/cvsmooth.h`, `machine_looper/*`,
   `machine_drumsampler/*`, `machine_slicer/*`, `machine_granular/*`,
