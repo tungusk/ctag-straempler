@@ -61,3 +61,18 @@ accidentally swept into commit 4d7e3ea by a `git add -A components/menu`; that
 menu.c calls `menuTFTPrintListen`/`menuTFTPrintClkOut`, whose definitions
 (menutft.c/h, machine/beatlisten.c) are NOT yet committed. Once that session commits
 its files, HEAD builds as-is again.
+
+## Refreshed at commit ee177ff (post-archive hardware findings)
+
+- **Trig gates are DEBOUNCED** (shared, trig_gate.h). With NOTHING patched into TR2,
+  /status caught a stray low sample on the active-low input — and TR2-press toggles
+  the loop the instant the gate goes down, so one noisy block flipped the loop and
+  each re-engage re-anchored the window ("it falls out of loop mode and the loops
+  are jumping around on their own"). A press must now persist ~3 ms.
+- **The loop no longer borrows the fader.** Defaults: loop window CV5, loop length
+  CV8, filter CV6, crossfader CV7 — all live at once. With both loops previously on
+  CV6/CV7, engaging a loop on EITHER deck froze the filter and the fader for BOTH
+  ("cant access the crossfader on non looped deck2"). The CV Map still allows the old
+  sharing, which is what re-enables the borrow.
+- **Reminder**: DoubleDecker has NO analysis engine. A track with no "bpm" in its
+  sidecar shows "no grid" and CANNOT loop — analyse it once in the Deck machine.
