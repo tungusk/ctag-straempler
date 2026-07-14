@@ -473,59 +473,46 @@ static int dd_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Load browser (deck/sampler3 style: big centered name, dated order) --------
-// ---- Load browser: a SCROLLING LIST (Arlo: "only shows 3 lines, make it like
-// the other loaders"). The centred three-name picker every machine ships shows
-// you almost nothing of a 512-track pool; this pages through it properly, with
-// the selection highlighted and the window following the cursor.
-#define LB_TOP   26
-#define LB_PAD   4
-
-static int lb_rows(void){
-    int fh = TFT_getfontheight();
-    int avail = _height - LB_TOP - 18;          // leave the hint line room
-    int r = avail / (fh + LB_PAD);
-    return r < 3 ? 3 : r;
-}
-
+// ---- Load browser — the house picker (sampler3's, verbatim): the selection
+// big in the middle, FOUR names above and four below. Arlo: "sampler has 9
+// lines in the file browser, big selection in the middle, 4 above 4 below".
 static void load_redraw(void){
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
+    int fh = TFT_getfontheight();
     _bg = TFT_BLACK; _fg = TFT_LIGHTGREY;
     char h[48];
-    snprintf(h, sizeof(h), "Load -> deck %d   %d/%d", dd.focus + 1,
+    snprintf(h, sizeof(h), "Load -> deck %d  (%d/%d)", dd.focus + 1,
              s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
-    TFT_print(h, 8, 4);
+    TFT_print(h, _width / 2 - TFT_getStringWidth(h) / 2, 4);
     if (!s_n_samples){
         char *m = "no files in usr/";
         TFT_print(m, _width / 2 - TFT_getStringWidth(m) / 2, _height / 2);
         return;
     }
-    int fh = TFT_getfontheight();
-    int rows = lb_rows();
-    // keep the cursor inside the window, biased to the middle while scrolling
-    int top = s_sample_idx - rows / 2;
-    if (top > s_n_samples - rows) top = s_n_samples - rows;
-    if (top < 0) top = 0;
-    for (int r = 0; r < rows && top + r < s_n_samples; r++){
-        int idx = top + r;
-        int y = LB_TOP + r * (fh + LB_PAD);
-        bool sel = (idx == s_sample_idx);
-        bool cur = (strcmp(s_samples[idx], dd.d[dd.focus].track) == 0);
-        _bg = sel ? (color_t){10, 18, 56} : TFT_BLACK;
-        TFT_fillRect(0, y - 2, _width, fh + LB_PAD, _bg);
-        _fg = sel ? TFT_WHITE : (color_t){130, 140, 170};
-        TFT_print(s_samples[idx], 12, y);
-        if (cur){                       // the track this deck already holds
-            _fg = (color_t){40, 200, 90};
-            TFT_print("*", 2, y);
-        }
+    int cy = _height / 2;
+    Font f = cfont;
+    TFT_setFont(DEJAVU24_FONT, NULL);
+    int bigfh = TFT_getfontheight();
+    _fg = TFT_WHITE;
+    char *selnm = s_samples[s_sample_idx];
+    TFT_print(selnm, _width / 2 - TFT_getStringWidth(selnm) / 2, cy - bigfh / 2);
+    cfont = f;
+    _fg = (color_t){110, 110, 110};
+    for (int k = 1; k <= 4; k++){
+        int up = s_sample_idx - k, dn = s_sample_idx + k;
+        int yup = cy - bigfh / 2 - k * (fh + 4) - 4;
+        int ydn = cy + bigfh / 2 + (k - 1) * (fh + 4) + 6;
+        if (up >= 0){ char *nn = s_samples[up]; TFT_print(nn, _width / 2 - TFT_getStringWidth(nn) / 2, yup); }
+        if (dn < s_n_samples){ char *nn = s_samples[dn]; TFT_print(nn, _width / 2 - TFT_getStringWidth(nn) / 2, ydn); }
     }
-    _bg = TFT_BLACK;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:browse  press:load  hold:back", 6, _height - TFT_getfontheight() - 1);
+    char *hint = "turn:browse  press:load  hold:cancel";
+    TFT_print(hint, _width / 2 - TFT_getStringWidth(hint) / 2, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
+
 
 
 static int dd_load_handler(int it_id, int event, void *ev_data){
