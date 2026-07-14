@@ -708,7 +708,9 @@ static cJSON *tracker_preset_save(void)
 static void tracker_preset_load(const cJSON *node)
 {
     // defaults first (also the NULL / other-machine-autosave path)
-    trk.loop = true; trk.sync = false; trk.amiga = true; trk.show_text = true;
+    trk.loop = true; trk.sync = false; trk.amiga = true;
+    trk.show_text = false;          // the sample-name panel is opt-in now (Arlo):
+                                    // the play bar is the page, not a caption block
     trk.loop_freeze = false;
     trk.clk_src = 7; trk.ppb_idx = 4; trk.file[0] = 0;
     if (!node) return;
