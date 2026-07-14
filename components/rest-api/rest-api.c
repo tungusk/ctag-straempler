@@ -100,10 +100,11 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     httpd_resp_send_chunk(req, "{\"files\":[", HTTPD_RESP_USE_STRLEN);
 
     static const char *const jdirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
-                                        "/sdcard/usr/LOOPS"};
+                                        "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES"};
     // short folder tag streamed with each entry so the browser can SHOW the
-    // card's organization instead of flattening it (pool / takes / loops)
-    static const char *const jdir_tag[] = {"pool", "REC", "LOOPS"};
+    // card's organization instead of flattening it (pool/takes/loops/slices)
+    static const char *const jdir_tag[] = {"pool", "REC", "LOOPS", "SLICES"};
+    #define JN_DIRS 4
     // INTERNAL RAM, reused for every sidecar. Never PSRAM: SDMMC DMA cannot target it,
     // which is the whole reason sidecars were skipped here in the first place.
     static char sidecar_buf[512];
@@ -111,7 +112,7 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     bool dead = false;   // client hung up mid-stream — stop sending (same
                          // disease as the /files/raw abort fix: a dead socket
                          // must not keep the worker pumping chunks at it)
-    for (int di = 0; di < 3 && !dead; di++) {
+    for (int di = 0; di < JN_DIRS && !dead; di++) {
     sd_lock_take();
     DIR *d = opendir(jdirs[di]);
     sd_lock_give();
@@ -169,6 +170,18 @@ static esp_err_t files_get_handler(httpd_req_t *req)
             // a browsing aid, not a timeline.
             int dur = fsize > 0 ? (int)(fsize / (4L * 44100L)) : 0;
 
+            // slice map present? (one stat next to the audio) — lets the web
+            // find .OT-associated samples, e.g. to herd them into usr/SLICES
+            int has_ot = 0;
+            {
+                char op[300];
+                struct stat ot;
+                sample_resolve_aux(id, ".OT", op, sizeof(op));
+                sd_lock_take();
+                has_ot = (stat(op, &ot) == 0) ? 1 : 0;
+                sd_lock_give();
+            }
+
             // build ONE tiny object (cJSON just for correct string escaping),
             // print it small, stream it, free it — flat memory footprint
             cJSON *o = cJSON_CreateObject();
@@ -180,6 +193,7 @@ static esp_err_t files_get_handler(httpd_req_t *req)
             cJSON_AddNumberToObject(o, "bpm", bpm);
             cJSON_AddNumberToObject(o, "dur", dur);
             cJSON_AddNumberToObject(o, "mtime", mtime);
+            cJSON_AddNumberToObject(o, "ot", has_ot);
             char *os = cJSON_PrintUnformatted(o);
             cJSON_Delete(o);
             if (os) {
@@ -232,29 +246,22 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
 // ─── POST /files/move?name=xxx&dir=pool|REC|LOOPS ────────────────────────────
 // Folder organization from the web: the same all-pieces sweep as rename (audio
 // + .JSN + .OT travel together), destination = another pool folder, id kept.
-static esp_err_t files_move_handler(httpd_req_t *req)
+static const char *const mv_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
+                                      "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES"};
+static const char *const mv_tags[] = {"pool", "REC", "LOOPS", "SLICES"};
+#define MV_DIRS 4
+
+// sweep every piece of a sample (audio + .JSN + .OT, wherever each lives)
+// into mv_dirs[dst]. Creates the folder on first use; never clobbers a twin.
+// Returns pieces moved (0 = nothing found / already all there).
+static int files_move_pieces(const char *name, int dst)
 {
-    char name[32], dir[12];
-    if (!get_query_param(req, "name", name, sizeof(name)) ||
-        !get_query_param(req, "dir", dir, sizeof(dir))) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name/dir");
-        return ESP_FAIL;
-    }
-    static const char *const mv_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
-                                          "/sdcard/usr/LOOPS"};
-    static const char *const mv_tags[] = {"pool", "REC", "LOOPS"};
-    int dst = -1;
-    for (int d = 0; d < 3; d++)
-        if (strcasecmp(dir, mv_tags[d]) == 0) dst = d;
-    if (dst < 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "dir must be pool/REC/LOOPS");
-        return ESP_FAIL;
-    }
     static const char *const mv_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF", ".JSN", ".OT"};
     char from_p[80], to_p[80];
     int moved = 0;
     sd_lock_take();
-    for (int d = 0; d < 3; d++) {
+    mkdir(mv_dirs[dst], 0775);                         // idempotent
+    for (int d = 0; d < MV_DIRS; d++) {
         if (d == dst) continue;
         for (int i = 0; i < 6; i++) {
             snprintf(from_p, sizeof(from_p), "%s/%s%s", mv_dirs[d], name, mv_exts[i]);
@@ -267,7 +274,25 @@ static esp_err_t files_move_handler(httpd_req_t *req)
         }
     }
     sd_lock_give();
-    if (!moved) {
+    return moved;
+}
+
+static esp_err_t files_move_handler(httpd_req_t *req)
+{
+    char name[32], dir[12];
+    if (!get_query_param(req, "name", name, sizeof(name)) ||
+        !get_query_param(req, "dir", dir, sizeof(dir))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name/dir");
+        return ESP_FAIL;
+    }
+    int dst = -1;
+    for (int d = 0; d < MV_DIRS; d++)
+        if (strcasecmp(dir, mv_tags[d]) == 0) dst = d;
+    if (dst < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "dir must be pool/REC/LOOPS/SLICES");
+        return ESP_FAIL;
+    }
+    if (!files_move_pieces(name, dst)) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No such sample (or already there)");
         return ESP_FAIL;
     }
@@ -316,11 +341,11 @@ static esp_err_t files_rename_handler(httpd_req_t *req)
 
     static const char *const rn_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF", ".JSN", ".OT"};
     static const char *const rn_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
-                                          "/sdcard/usr/LOOPS"};
+                                          "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES"};
     char from_p[80], to_p[80];
     int moved = 0;
     sd_lock_take();
-    for (int d = 0; d < 3; d++)
+    for (int d = 0; d < 4; d++)
         for (int i = 0; i < 6; i++) {
             snprintf(from_p, sizeof(from_p), "%s/%s%s", rn_dirs[d], name, rn_exts[i]);
             struct stat st;
@@ -590,7 +615,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     int n = snprintf(buf, sizeof(buf),
         "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
         "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u,"
-        "\"vu\":[%u,%u],"
+        "\"vu\":[%u,%u,%u,%u],"
         "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d}}",
         m ? m->name : "",
         rec ? "true" : "false",
@@ -598,7 +623,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
         st.cv[0], st.cv[1], st.cv[2], st.cv[3],
         st.cv[4], st.cv[5], st.cv[6], st.cv[7],
         st.trig,
-        st.vu_in, st.vu_out,
+        st.vu[0], st.vu[1], st.vu[2], st.vu[3],
         bl.mode, bl.state, (double)bl.bpm, (double)bl.conf, bl.cost_us);
     (void)n;
     send_json(req, buf);
@@ -1173,6 +1198,9 @@ static esp_err_t drop_ot_put_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD rename failed"); return ESP_FAIL;
     }
     ESP_LOGI(TAG, "ot upload %s", path);
+    // a sample with a slice map belongs in usr/SLICES (Arlo) — sweep every
+    // piece there now that the .OT exists (no-op if it already lives there)
+    files_move_pieces(name, 3 /* SLICES, mv_dirs[] */);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;

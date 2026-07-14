@@ -24,10 +24,10 @@ typedef struct {
     char v1[64];   // diag string; 32 truncated multi-voice diags (dualdeck)
     uint16_t cv[8];
     uint8_t trig;      // raw gate levels, bit0=TR1 bit1=TR2 (active low)
-    // rough VU: decayed per-block peak of line-in / machine-out, 0..255
-    // (peak >> 7 of the 16-bit magnitude). A signal-present meter, not a tool.
-    uint8_t vu_in;
-    uint8_t vu_out;
+    // rough STEREO VU: decayed per-block peak per channel, 0..255 (peak >> 7
+    // of the 16-bit magnitude). Order: inL, inR, outL, outR. A signal-present
+    // meter, not a tool.
+    uint8_t vu[4];
 } audio_status_t;
 
 void initAudio(void);

@@ -33,12 +33,14 @@ int sample_list_recent(char (**out)[24]);
 // The same three-dir walk, restricted to ONE folder — organization, not
 // restriction: every file stays reachable, the folder screen just makes a
 // grown library navigable and turns the list caps into per-folder budgets.
-#define SAMPLE_DIR_ALL   (-1)
-#define SAMPLE_DIR_POOL  0     // usr/ — imports, bounces, legacy
-#define SAMPLE_DIR_REC   1     // usr/REC — takes
-#define SAMPLE_DIR_LOOPS 2     // usr/LOOPS — looper saves
-const char *sample_dir_name(int di);            // "all"/"pool"/"REC"/"LOOPS"
-void sample_folder_counts(int out[3]);          // per-folder entry counts (display)
+#define SAMPLE_DIR_ALL    (-1)
+#define SAMPLE_DIR_POOL   0    // usr/ — imports, bounces, legacy
+#define SAMPLE_DIR_REC    1    // usr/REC — takes
+#define SAMPLE_DIR_LOOPS  2    // usr/LOOPS — looper saves
+#define SAMPLE_DIR_SLICES 3    // usr/SLICES — anything with an .OT slice map
+#define SAMPLE_DIR_N      4
+const char *sample_dir_name(int di);            // "all"/"pool"/"REC"/"LOOPS"/"SLICES"
+void sample_folder_counts(int out[SAMPLE_DIR_N]);  // per-folder entry counts (display)
 int sample_list_shared_dir(int di, char (**out)[24]);
 int sample_list_recent_dir(int di, char (**out)[24]);
 
