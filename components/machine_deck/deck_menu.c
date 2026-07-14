@@ -253,7 +253,7 @@ static void draw_posbar(void){
     }
     if (!dk.file_frames) return;
     int x = TBAR_X + TBAR_BW + 1 +
-            (int)((uint64_t)dk.rpos_i * (TBAR_W - 2 * TBAR_BW - 6) / dk.file_frames);
+            (int)((uint64_t)dk.ui_fpos * (TBAR_W - 2 * TBAR_BW - 6) / dk.file_frames);
     if (x == s_last_barx) return;
     if (s_last_barx > 0){                     // erase only the old marker slice
         tbar_paint_slice(s_last_barx, 5);

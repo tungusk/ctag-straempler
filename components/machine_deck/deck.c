@@ -27,6 +27,34 @@ const float dk_ppb[6] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 #define SYNC_SLEW_MAX  0.15f     // max +/-15% rate bend (~2.4 semitones), no dropout
 const char *const dk_ppb_names[6] = {"1 per 4 beats", "1 per 2 beats", "1 per beat", "2 per beat", "4 per beat", "8 per beat"};
 
+#define DK_XFADE 256          // ~5.8 ms seam fade — a click-killer, not a blur
+#define DK_PICKUP 120         // knob counts of movement that GRAB a frozen knob
+#define DK_LOOP_LEAD (DK_RATE / 2)   // read-ahead while looping: 0.5 s. Short on
+                                     // purpose — it is the LATENCY of a window
+                                     // move, and the ring covers it with audio
+#define DK_MOVE_KEEP (DK_RATE / 6)   // ~0.17 s of read-ahead kept on a move: the
+                                     // gap between "instant" and "starving"
+
+// playback counter -> FILE frame. The reader owns this mapping; everyone else
+// (engine, UI) goes through it. Loop = a mapping, not a cursor wrap.
+static inline uint32_t dk_map(uint32_t p)
+{
+    if (dk.loop_active && dk.loop_len_fr)
+        return dk.loop_start + ((p - dk.map_p0) % dk.loop_len_fr);
+    return dk.map_f0 + (p - dk.map_p0);
+}
+
+// KNOB PICKUP after a loop (Arlo, ear test: "when leaving loop we need it to
+// not immediately apply cv7 because it affects the playback speed"). While
+// looping CV6/CV7 belong to the loop (window + length), so on release they sit
+// wherever the loop left them — applying them instantly SLAMS the speed and
+// the filter. Both stay FROZEN at their pre-loop values until the physical
+// knob moves past the deadband; then it takes over smoothly.
+//   -2 = live, -1 = armed (seize the reference next block), >=0 = reference
+static int s_pk6 = -2, s_pk7 = -2;
+// Arlo's ladder. The window streams now, so length is bounded by the TRACK,
+// not by the ring — 256 beats is ~2 minutes at 120 bpm.
+
 static volatile bool s_run = false, s_alive = false;
 static volatile bool s_track_req = false;
 static char s_pending[DK_NAME_LEN];
@@ -40,6 +68,8 @@ static void reader_task(void *pv)
     // DMA-capable internal RAM per the SD house rule (with CAPS_ALLOC plain
     // malloc is internal anyway; explicit caps guard against config drift)
     int16_t *chunk = heap_caps_malloc(4096 * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    int16_t *tail  = heap_caps_malloc(DK_XFADE * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    uint32_t cur_ff = (uint32_t)-1;    // file frame the handle is parked at
     s_alive = true;
 
     while (s_run) {
@@ -62,6 +92,9 @@ static void reader_task(void *pv)
                 dk.wpos = 0;
                 dk.rpos_i = 0;
                 dk.rpos_f = 0;
+                dk.map_p0 = 0;
+                dk.map_f0 = 0;
+                cur_ff = (uint32_t)-1;
                 dk.wf_state = (f && dk.file_frames) ? 1 : 0;   // thumbnail pending
                 dk.wf_col = 0;
             }
@@ -71,27 +104,55 @@ static void reader_task(void *pv)
             dk.seek_req = false;
             uint32_t to = dk.seek_to;           // latest wins if requests raced
             if (to >= dk.file_frames) to = 0;
-            sd_lock_take();
-            fseek(f, sf_seek_pos(&sfl, to), SEEK_SET);
-            sd_lock_give();
-            dk.wpos = to;                       // ring restarts from the seek point
-            dk.rpos_i = to;                     // reader is the ONLY seek-writer of rpos
+            // counters stay MONOTONIC (ring slots depend on them) — a seek
+            // rewrites the MAPPING instead of rewinding them
+            uint32_t base = dk.wpos + DK_RING_FRAMES;   // fresh, non-aliasing slots
+            dk.map_p0 = base;
+            dk.map_f0 = to;
+            dk.rpos_i = base;                   // reader is the ONLY seek-writer of rpos
+            dk.rpos_f = 0;
+            dk.wpos = base;
+            cur_ff = (uint32_t)-1;              // force a file seek on the next fill
         }
         if (f && !s_track_req && !dk.seek_req) {
+            bool lp = dk.loop_active && dk.loop_len_fr;
             uint32_t lead = dk.wpos - dk.rpos_i;
-            // lead cap (convergence S5): stop one second EARLIER than ring-full
-            // so >=1 s of played history always stays ring-resident behind rpos
-            // (the loop engage anchors up to a beat back; 7 s lookahead remains)
-            // loop PARK: while looping, don't stream past the window end —
-            // the ring keeps the whole window and wraps are pure cursor math.
-            // Un-parks automatically on release/grow (never seeked, so the
-            // file offset stays correct). +4096 overshoot is harmless.
-            if (dk.wpos < dk.file_frames && lead < DK_RING_FRAMES - DK_RATE - 4096 &&
-                (!dk.loop_active || dk.wpos < dk.loop_start + dk.loop_len_fr + 4096)) {
-                uint32_t want = dk.file_frames - dk.wpos;
-                if (want > 4096) want = 4096;
+            // lead cap: a modest read-ahead normally (>=1 s of history stays
+            // resident behind rpos — the loop anchor may sit a beat back), and
+            // a SHORT one while looping, because that lead IS the latency of a
+            // window move. The ring covers it with already-buffered audio.
+            uint32_t lead_cap = lp ? DK_LOOP_LEAD : (DK_RING_FRAMES - DK_RATE - 4096);
+            uint32_t ff = dk_map(dk.wpos);
+            bool have_room = lp ? (lead < lead_cap)
+                                : (dk.wpos < dk.map_p0 + (dk.file_frames - dk.map_f0) &&
+                                   lead < lead_cap);
+            if (have_room && ff < dk.file_frames) {
+                // never read past the window end (loop) or the file end (linear)
+                uint32_t limit = lp ? (dk.loop_start + dk.loop_len_fr - ff)
+                                    : (dk.file_frames - ff);
+                uint32_t want = limit < 4096 ? limit : 4096;
+                bool seam = lp && ff == dk.loop_start && dk.wpos > dk.map_p0;
                 sd_lock_take();
+                if (cur_ff != ff) { fseek(f, sf_seek_pos(&sfl, ff), SEEK_SET); cur_ff = ff; }
                 size_t got = sampfile_read(f, &sfl, chunk, want);
+                cur_ff += got;
+                // SEAM: blend the incoming head against the tail CONTINUING past
+                // the window end (phase-exact — the cycle keeps its full length)
+                if (seam && got > 0) {
+                    uint32_t lend = dk.loop_start + dk.loop_len_fr;
+                    uint32_t nx = got < DK_XFADE ? (uint32_t)got : DK_XFADE;
+                    if (lend + nx <= dk.file_frames) {
+                        fseek(f, sf_seek_pos(&sfl, lend), SEEK_SET);
+                        size_t tg = sampfile_read(f, &sfl, tail, nx);
+                        for (size_t k = 0; k < tg; k++) {
+                            float w = (float)k / (float)DK_XFADE;   // 0 -> 1
+                            float gh = sqrtf(w), gt = sqrtf(1.0f - w);
+                            chunk[k * 2]     = (int16_t)(chunk[k * 2] * gh + tail[k * 2] * gt);
+                            chunk[k * 2 + 1] = (int16_t)(chunk[k * 2 + 1] * gh + tail[k * 2 + 1] * gt);
+                        }
+                        fseek(f, sf_seek_pos(&sfl, cur_ff), SEEK_SET);   // resume
+                    }
+                }
                 sd_lock_give();
                 if (got > 0) {
                     uint32_t w = dk.wpos % DK_RING_FRAMES;
@@ -101,12 +162,10 @@ static void reader_task(void *pv)
                     if (first < got) memcpy(dk.ring, chunk + first * 2, (got - first) * 4);
                     dk.wpos += got;
                 }
-                if (dk.loading && (dk.wpos - dk.rpos_i >= DK_LOW_WATER ||
-                                   dk.wpos >= dk.file_frames))
-                    dk.loading = false;
+                if (dk.loading && dk.wpos - dk.rpos_i >= DK_LOW_WATER) dk.loading = false;
                 continue;              // keep filling without the delay below
             }
-            if (dk.loading && dk.wpos >= dk.file_frames) dk.loading = false;
+            if (dk.loading && !lp && ff >= dk.file_frames) dk.loading = false;
 
             // waveform thumbnail, one column per idle pass (ring is warm
             // when we get here): seek away for a 128-frame peek, restore
@@ -117,10 +176,9 @@ static void reader_task(void *pv)
                 uint32_t want = dk.file_frames - p;
                 if (want > 128) want = 128;
                 sd_lock_take();
-                long back = ftell(f);
                 fseek(f, sf_seek_pos(&sfl, p), SEEK_SET);
                 size_t got = want ? sampfile_read(f, &sfl, chunk, want) : 0;
-                fseek(f, back, SEEK_SET);
+                cur_ff = (uint32_t)-1;      // handle moved: force a seek next fill
                 sd_lock_give();
                 int peak = 0;
                 for (size_t k = 0; k < got * 2; k++) {
@@ -136,6 +194,7 @@ static void reader_task(void *pv)
     }
     if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
     free(chunk);
+    free(tail);
     s_alive = false;
     vTaskDelete(NULL);
 }
@@ -194,7 +253,6 @@ void deck_restart(void)
 {
     if (!dk.track[0]) return;
     dk.loop_active = false;               // a restart always exits the loop
-    dk.xf_left = 0;
     dk.loading = true;                    // engine mutes while the ring refills
     dk.phase_offset = 0.0f;               // hard reset-to-cue clears the nudge
     dk.phase_int = 0.0f;                  // and the loop integrator (phase jumped)
@@ -225,7 +283,6 @@ void deck_seek_beats(int beats)
 {
     if (!dk.track[0] || !dk.file_frames) return;
     dk.loop_active = false;               // a scrub exits the loop
-    dk.xf_left = 0;
     uint32_t beat_tf = (dk.track_bpm > 20.0f)
         ? (uint32_t)(60.0f * DK_RATE / dk.track_bpm)
         : DK_RATE;                              // no grid yet: 1 s steps
@@ -295,30 +352,31 @@ void deck_sync_now(void)
 // S5 reader lead cap (guarded: snaps forward whole beats if not) — and the
 // first audible effect is the first wrap. RELEASE: freeze = just drop the
 // flag (seamless by residency); keeps-running = seek to the phantom position
-// playback would have reached (engage_rpos + loop_adv), a ~0.33 s duck —
-// consistent with the tracker's loop release feel.
-#define DK_XFADE 256          // ~5.8 ms seam fade — a click-killer, not a blur
-#define DK_PICKUP 120         // knob counts of movement that GRAB a frozen knob
-
-// KNOB PICKUP after a loop (Arlo, ear test: "when leaving loop we need it to
-// not immediately apply cv7 because it affects the playback speed"). While
-// looping CV6/CV7 belong to the loop (window + length), so on release they sit
-// wherever the loop left them — applying them instantly SLAMS the speed and
-// the filter. Both stay FROZEN at their pre-loop values until the physical
-// knob moves past the deadband; then it takes over smoothly.
-//   -2 = live, -1 = armed (seize the reference next block), >=0 = reference
-static int s_pk6 = -2, s_pk7 = -2;
-static const int dk_loop_beats[5] = {1, 2, 4, 8, 16};
+// playback would have reached (engage_ff + loop_adv), a brief duck — while
+// FREEZE (the seamless option) simply rebases the mapping and plays on.
+static const int dk_loop_beats[9] = {1, 2, 4, 8, 16, 32, 64, 128, 256};
+#define DK_LOOP_STEPS 9
 static int s_loop_len_idx = 2;              // 4 beats; persists per session
 
 static void deck_loop_toggle(void)
 {
     if (dk.loop_active) {
-        dk.loop_active = false;             // clear BEFORE any seek (ordering)
-        dk.xf_left = 0;
-        s_pk6 = s_pk7 = -1;                 // knobs stay put until they MOVE
+        // RELEASE. Rebase the mapping to LINEAR at the cursor's current file
+        // frame. Everything the reader already buffered from here to the next
+        // wrap maps identically under both mappings, so it stays valid — the
+        // ring keeps playing and there is no duck.
+        uint32_t p = dk.rpos_i;
+        uint32_t off = (p - dk.map_p0) % dk.loop_len_fr;
+        uint32_t ff = dk.loop_start + off;
+        uint32_t valid_to = p + (dk.loop_len_fr - off);   // the next seam
+        dk.map_p0 = p;
+        dk.map_f0 = ff;
+        dk.loop_active = false;            // mapping written BEFORE the flag
+        if (dk.wpos > valid_to) dk.wpos = valid_to;
+        s_pk6 = s_pk7 = -1;                // knobs stay put until they MOVE
         if (!dk.loop_freeze) {
-            uint64_t ph = (uint64_t)dk.engage_rpos + dk.loop_adv;
+            // keeps-running: jump to where playback WOULD be by now
+            uint64_t ph = (uint64_t)dk.engage_ff + dk.loop_adv;
             if (dk.file_frames && ph >= dk.file_frames) {
                 if (dk.loop && dk.file_frames > dk.grid_offset)
                     ph = dk.grid_offset +
@@ -333,41 +391,59 @@ static void deck_loop_toggle(void)
         }
         return;
     }
-    // engage gates: mid-air states (loading/seek) and gridless tracks can't loop
+    // ENGAGE. Gates: mid-air states and gridless tracks can't loop.
     if (!dk.playing || dk.loading || dk.seek_req || dk.track_bpm <= 20.0f ||
         !dk.file_frames) return;
     uint32_t beat_tf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
     if (!beat_tf) return;
-    // whole-pulse invariant: the window must hold an integer number of clock
-    // segments so the PLL sails through wraps — lengths are powers of two,
-    // so only sub-beat ppb settings raise the floor
-    float ppb = DK_PPB_EFF();
-    int min_beats = ppb >= 1.0f ? 1 : (int)(1.0f / ppb + 0.5f);
-    while (s_loop_len_idx < 4 && dk_loop_beats[s_loop_len_idx] < min_beats)
-        s_loop_len_idx++;
+    uint32_t ff = dk_map(dk.rpos_i);
+    if (ff >= dk.file_frames) return;
+    // anchor on the grid beat AT OR BEFORE the cursor (floor, not nearest): the
+    // window must CONTAIN the cursor or the mapping can't stay continuous
+    int64_t rel = (int64_t)ff - (int64_t)dk.grid_offset;
+    int64_t idx = (rel >= 0) ? rel / (int64_t)beat_tf
+                             : -(((-rel) + beat_tf - 1) / (int64_t)beat_tf);
+    int64_t st = (int64_t)dk.grid_offset + idx * (int64_t)beat_tf;
+    if (st < 0) st = 0;
+    if (st > (int64_t)ff) st -= beat_tf;          // paranoia: never ahead of the cursor
+    if (st < 0) st = 0;
     int lb = dk_loop_beats[s_loop_len_idx];
     uint32_t len = (uint32_t)lb * beat_tf;
-    // ring cap (dualdeck-stage catch): a 16-beat window below ~132 bpm
-    // exceeds the 8 s ring — wraps would read EVICTED data. Halve until
-    // the window is fully ring-residentable.
-    while (len > DK_RING_FRAMES - 8192 && lb > min_beats) { lb >>= 1; len = (uint32_t)lb * beat_tf; }
-    if (len >= dk.file_frames || len > DK_RING_FRAMES - 8192) return;
-    // anchor on the NEAREST grid beat (an engage-position block anchor could
-    // sit outside the ring; a beat is at most half a beat away)
-    int64_t rel = (int64_t)dk.rpos_i - (int64_t)dk.grid_offset;
-    int64_t idx = (rel >= 0) ? (rel + beat_tf / 2) / beat_tf
-                             : -(((-rel) + beat_tf / 2) / beat_tf);
-    int64_t st = (int64_t)dk.grid_offset + idx * (int64_t)beat_tf;
-    int64_t oldest = (int64_t)dk.wpos - DK_RING_FRAMES + 4096;
-    while (st < 0 || st < oldest) st += beat_tf;      // residency guard
-    if (st + len > (int64_t)dk.file_frames) return;   // no room at EOF
+    // the window must fit the TRACK — the ring is no longer the ceiling
+    while (len > 0 && st + (int64_t)len > (int64_t)dk.file_frames &&
+           s_loop_len_idx > 0) {
+        s_loop_len_idx--;
+        lb = dk_loop_beats[s_loop_len_idx];
+        len = (uint32_t)lb * beat_tf;
+    }
+    if (!len || st + (int64_t)len > (int64_t)dk.file_frames) return;
+    uint32_t off = ff - (uint32_t)st;             // cursor's offset into the window
     dk.loop_start = (uint32_t)st;
     dk.loop_len_fr = len;
     dk.loop_len_beats = lb;
     dk.loop_adv = 0;
-    dk.xf_left = 0;
-    dk.engage_rpos = dk.rpos_i;
-    dk.loop_active = true;                            // set LAST (write ordering)
+    dk.engage_ff = ff;
+    dk.map_p0 = dk.rpos_i - off;                  // keeps map(rpos) == ff
+    dk.loop_active = true;                        // set LAST (write ordering)
+    // the read-ahead stays valid up to the first seam; the reader wraps there
+    uint32_t valid_to = dk.map_p0 + len;
+    if (dk.wpos > valid_to) dk.wpos = valid_to;
+}
+
+// window move / length change while looping: rewrite the mapping and truncate
+// the read-ahead. The ring keeps playing the old material for ~0.17 s while the
+// reader fills the new window — a beat of latency instead of a hole.
+static void deck_loop_remap(uint32_t new_start, uint32_t new_len)
+{
+    if (!dk.loop_active || !new_len) return;
+    if (new_start + new_len > dk.file_frames) return;
+    uint32_t off = (dk.rpos_i - dk.map_p0) % dk.loop_len_fr;
+    if (off >= new_len) off %= new_len;           // shrank under the cursor
+    dk.loop_start = new_start;
+    dk.loop_len_fr = new_len;
+    dk.map_p0 = dk.rpos_i - off;                  // keep the cursor's phase
+    uint32_t keep = dk.rpos_i + DK_MOVE_KEEP;
+    if (dk.wpos > keep) dk.wpos = keep;           // reader refills from here
 }
 
 // ---- engine -----------------------------------------------------------------
@@ -438,26 +514,25 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         if (s_cv6_ref < 0) { s_cv6_ref = io->cv[5]; s_cv7_ref = io->cv[6]; s_mv6 = s_mv7 = 0; }
         uint32_t beat_tf_lp = (dk.track_bpm > 20.0f)
             ? (uint32_t)(60.0f * DK_RATE / dk.track_bpm) : 0;
+        // CV7 = LENGTH ladder (1..256 beats)
         int steps7 = (io->cv[6] - s_cv7_ref) / 512;
         if (steps7 != 0 && beat_tf_lp) {
-            if (++s_mv7 >= 3) {
+            if (++s_mv7 >= 3) {                  // persist: a WiFi ADC spike is 1 block
                 s_mv7 = 0;
                 int ni = s_loop_len_idx + steps7;
                 if (ni < 0) ni = 0;
-                if (ni > 4) ni = 4;
-                float ppb = DK_PPB_EFF();
-                int min_beats = ppb >= 1.0f ? 1 : (int)(1.0f / ppb + 0.5f);
-                while (ni < 4 && dk_loop_beats[ni] < min_beats) ni++;
+                if (ni > DK_LOOP_STEPS - 1) ni = DK_LOOP_STEPS - 1;
                 uint32_t nl = (uint32_t)dk_loop_beats[ni] * beat_tf_lp;
-                if (ni != s_loop_len_idx && nl <= DK_RING_FRAMES - 8192 &&
-                    dk.loop_start + nl <= dk.file_frames) {
+                if (ni != s_loop_len_idx && dk.loop_start + nl <= dk.file_frames) {
                     s_loop_len_idx = ni;
-                    dk.loop_len_fr = nl;              // len before flag reads it
                     dk.loop_len_beats = dk_loop_beats[ni];
+                    deck_loop_remap(dk.loop_start, nl);
                 }
                 s_cv7_ref += steps7 * 512;
             }
         } else if (steps7 == 0) s_mv7 = 0;
+        // CV6 = WINDOW position, in whole-window blocks (phase-true by
+        // construction: a whole window is an integer number of clock segments)
         int blocks6 = (io->cv[5] - s_cv6_ref) / 128;
         if (blocks6 != 0) {
             if (++s_mv6 >= 3) {
@@ -467,18 +542,8 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
                 if (ns < 0) ns = 0;
                 if (ns + dk.loop_len_fr > (int64_t)dk.file_frames)
                     ns = (int64_t)dk.file_frames - dk.loop_len_fr;
-                if ((uint32_t)ns != dk.loop_start) {
-                    // every move = the battle-tested seek protocol: engine
-                    // parks on loading, wrap suppressed, reader re-fills at
-                    // the new window (~0.33 s duck — same feel as a scrub).
-                    // Landing is phase-true by construction: moves are whole
-                    // windows = integer clock segments.
-                    dk.loop_start = (uint32_t)ns;
-                    dk.loading = true;
-                    dk.phase_int = 0;
-                    dk.seek_to = (uint32_t)ns;
-                    dk.seek_req = true;
-                }
+                if (ns >= 0 && (uint32_t)ns != dk.loop_start)
+                    deck_loop_remap((uint32_t)ns, dk.loop_len_fr);
                 s_cv6_ref += blocks6 * 128;
             }
         } else s_mv6 = 0;
@@ -599,12 +664,14 @@ filter_done:;                // mild resonance, DJ-ish
     static float last_l = 0, last_r = 0;
     bool starved = false;
     for (int fno = 0; fno < frames; fno++) {
-        uint32_t avail_to = dk.wpos < dk.file_frames ? dk.wpos : dk.file_frames;
-        bool can_play = dk.playing && !dk.loading && dk.rpos_i + 1 < avail_to;
+        // wpos is the reader's frontier in PLAYBACK space; the file end only
+        // bounds playback when we're NOT looping (a loop never reaches it)
+        bool can_play = dk.playing && !dk.loading && dk.rpos_i + 1 < dk.wpos;
+        uint32_t ff_now = dk_map(dk.rpos_i);
         // mid-track mute with the reader as the limiter = ring underrun;
         // counted per block into /status so click reports are attributable
         if (!can_play && dk.playing && !dk.loading && !dk.seek_req &&
-            dk.file_frames && dk.rpos_i + 1 < dk.file_frames)
+            dk.file_frames && (dk.loop_active || ff_now + 1 < dk.file_frames))
             starved = true;
         // declick both edges: gain ramps in on resume; on mute the last
         // sample decays out instead of stepping to zero (each scrub detent
@@ -612,8 +679,8 @@ filter_done:;                // mild resonance, DJ-ish
         float gt = can_play ? 1.0f : 0.0f;
         dk.out_gain += (gt - dk.out_gain) * 0.015f;
         if (!can_play) {
-            if (dk.playing && !dk.loading && dk.file_frames &&
-                dk.rpos_i + 1 >= dk.file_frames && !dk.seek_req) {
+            if (dk.playing && !dk.loading && !dk.loop_active && dk.file_frames &&
+                ff_now + 1 >= dk.file_frames && !dk.seek_req) {
                 if (dk.loop) deck_restart();     // sets flags; reader seeks
                 else dk.playing = false;
             }
@@ -628,20 +695,7 @@ filter_done:;                // mild resonance, DJ-ish
         float fr = (float)dk.rpos_f;
         float l = (float)dk.ring[i0 * 2]     + ((float)dk.ring[i1 * 2]     - (float)dk.ring[i0 * 2])     * fr;
         float r = (float)dk.ring[i0 * 2 + 1] + ((float)dk.ring[i1 * 2 + 1] - (float)dk.ring[i0 * 2 + 1]) * fr;
-        if (dk.xf_left) {
-            // equal-power blend: head rises, outgoing tail falls. The two are
-            // uncorrelated material, so sqrt gains (not linear) keep the seam
-            // from dipping.
-            uint32_t t0 = dk.xf_src % DK_RING_FRAMES;
-            float tl = (float)dk.ring[t0 * 2];
-            float tr = (float)dk.ring[t0 * 2 + 1];
-            float w = 1.0f - (float)dk.xf_left / (float)DK_XFADE;   // 0 -> 1
-            float gh = sqrtf(w), gt = sqrtf(1.0f - w);
-            l = l * gh + tl * gt;
-            r = r * gh + tr * gt;
-            dk.xf_src++;
-            dk.xf_left--;
-        }
+
         if (mode) {                       // Chamberlin SVF per channel (util/svf.h)
             float lo, hi;
             svf_step(&dk.flt_l, l, dk.flt_f, q, &lo, NULL, &hi);
@@ -669,33 +723,12 @@ filter_done:;                // mild resonance, DJ-ish
         dk.rpos_f += rate + sl;
         while (dk.rpos_f >= 1.0) {
             dk.rpos_f -= 1.0;
-            dk.rpos_i++;
-            if (dk.loop_active) dk.loop_adv++;   // feeds the release phantom
-        }
-        // engine-owned WRAP (the protocol amendment, deck_priv.h): back by
-        // whole windows once past the end. Parked during loading/seek —
-        // that ordering kills every wrap-vs-seek race. Skipped while the
-        // ring hasn't filled the window yet (a grow): brief starve instead
-        // of looping unfilled ring. The while handles 16->4 shrinks.
-        if (dk.loop_active && !dk.loading && !dk.seek_req) {
-            uint32_t lend = dk.loop_start + dk.loop_len_fr;
-            if (lend <= dk.wpos) {
-                while (dk.rpos_i >= lend) {
-                    dk.rpos_i -= dk.loop_len_fr;
-                    // arm the seam fade: outgoing tail = the track CONTINUING
-                    // past the window (resident via the reader's overshoot);
-                    // needs room in the file and a window worth fading
-                    if (lend + DK_XFADE <= dk.wpos &&
-                        lend + DK_XFADE <= dk.file_frames &&
-                        dk.loop_len_fr > 4 * DK_XFADE) {
-                        dk.xf_left = DK_XFADE;
-                        dk.xf_src = lend;
-                    }
-                }
-            }
+            dk.rpos_i++;                          // playback counter: NEVER wraps
+            if (dk.loop_active) dk.loop_adv++;    // feeds the release phantom
         }
     }
     if (starved) dk.dbg_starve++;
+    dk.ui_fpos = dk_map(dk.rpos_i);      // the UI reads FILE position, not counters
 
     // clock conditioning lives in the shared front-end now (clockin_t,
     // components/machine/clock.{h,c} — the code this replaced is what it was
@@ -718,6 +751,7 @@ static cJSON *deck_preset_save(void)
     cJSON_AddNumberToObject(o, "clk_src", dk.clk_src);
     cJSON_AddNumberToObject(o, "ppb", dk.ppb_idx);
     cJSON_AddNumberToObject(o, "clkx", (double)dk.clk_scale);
+    cJSON_AddNumberToObject(o, "llen", dk_loop_beats[s_loop_len_idx]);  // loop ladder
     return o;
 }
 
@@ -740,6 +774,23 @@ static void deck_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clkx")) && cJSON_IsNumber(j)) {
         float cs = (float)j->valuedouble;
         dk.clk_scale = (cs == 0.5f || cs == 2.0f) ? cs : 1.0f;
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "llen")) && cJSON_IsNumber(j)) {
+        int want = j->valueint;
+        for (int k = 0; k < DK_LOOP_STEPS; k++)
+            if (dk_loop_beats[k] == want) {
+                s_loop_len_idx = k;
+                // live: re-map the running window to the new length
+                if (dk.loop_active && dk.track_bpm > 20.0f) {
+                    uint32_t btf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
+                    uint32_t nl = (uint32_t)want * btf;
+                    if (dk.loop_start + nl <= dk.file_frames) {
+                        dk.loop_len_beats = want;
+                        deck_loop_remap(dk.loop_start, nl);
+                    }
+                }
+                break;
+            }
     }
     // only touched sync/ppb/clk_src must NOT reload the track (that re-triggers
     // the ring refill + PLL cold-relock and makes the deck sound like it reset)

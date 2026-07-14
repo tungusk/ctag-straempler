@@ -31,10 +31,21 @@
 enum { DK_AN_IDLE = 0, DK_AN_RUNNING, DK_AN_DONE, DK_AN_FAIL };
 
 typedef struct {
-    // streaming
+    // streaming — PLAYBACK-ORDER frame space (2026-07-13 loop rework). wpos and
+    // rpos are monotonic PLAYBACK counters, not file frames: the READER owns the
+    // playback->file mapping, so a loop is a MAPPING (not a cursor wrap) and its
+    // length is bounded by the TRACK, not by the ring.
+    //
+    //   file_frame(p) = loop_active ? loop_start + ((p - map_p0) % loop_len_fr)
+    //                               : map_f0 + (p - map_p0)
+    //
+    // Ring slot is p % DK_RING_FRAMES, so counters are NEVER rebased — every
+    // transition (engage / window move / release) instead rewrites the mapping
+    // and truncates wpos to the last frame still VALID under it. That is what
+    // kills the duck: the ring keeps playing while the reader catches up.
     int16_t *ring;                 // PSRAM, DK_RING_FRAMES * 2
-    volatile uint32_t wpos;        // ring write head (frames, absolute)
-    volatile uint32_t rpos_i;      // play cursor, integer part (absolute frames)
+    volatile uint32_t wpos;        // reader fill frontier (playback counter)
+    volatile uint32_t rpos_i;      // play cursor, integer part (playback counter)
     double   rpos_f;               // fractional part (engine only)
     volatile uint32_t file_frames; // track length
     volatile bool playing;
@@ -46,6 +57,10 @@ typedef struct {
     // loop-restart caused garbage playback + stuck buffering.)
     volatile uint32_t seek_to;
     volatile bool seek_req;
+    volatile uint32_t map_p0;      // mapping origin (playback counter)
+    volatile uint32_t map_f0;      // mapping origin (file frame; linear mode)
+    volatile uint32_t ui_fpos;     // published FILE position of the play cursor
+                                   // (the UI must not know about the mapping)
     char track[DK_NAME_LEN];       // loaded track id ("" = none)
 
     // grid + sync
@@ -79,30 +94,28 @@ typedef struct {
                                    // brief rate bend (no seek/dropout); 0 = idle
     volatile float speed_mult;     // knob7 while synced: x0.5 / x1 / x2, still locked
 
-    // KO-II buffer LOOP (convergence S6-S7). Engage is SEAMLESS: the window
-    // anchors on the nearest grid beat (ring-resident by the reader lead cap)
-    // and the first audible effect is the first wrap — no seek, no mute.
-    // Protocol amendment: while loop_active && !loading && !seek_req the
-    // ENGINE wraps rpos_i back by whole windows; any seek/load re-parks it
-    // (the reader stays the only seek-writer).
+    // KO-II LOOP — STREAMED (2026-07-13 rework). Engage is seamless: the window
+    // anchors on the grid beat AT OR BEFORE the cursor and only rewrites the
+    // mapping. The reader wraps its own FILE reads at the window end, so the
+    // window can be ANY length (1..256 beats) — the ring stopped being the
+    // ceiling. Window moves rewrite the mapping too and merely truncate the
+    // read-ahead: the ring keeps playing while the reader catches up, so a move
+    // costs a beat of latency instead of a hole (Arlo: "delay, sometimes
+    // silence when moving loop start / window").
     volatile bool loop_active;
     volatile bool loop_freeze;     // Setup (persisted): release resumes at the
                                    // loop (freeze) vs where playback WOULD be
-    volatile uint32_t loop_start;  // window start (frames, absolute)
-    volatile uint32_t loop_len_fr; // window length (frames)
-    volatile uint32_t loop_adv;    // frames advanced while looping — feeds the
-                                   // keeps-running release phantom (robust
-                                   // across wraps, len changes, start moves)
-    volatile int  loop_len_beats;  // display + PLL whole-pulse invariant
-    uint32_t engage_rpos;          // rpos at engage (phantom base)
-    // SEAM CROSSFADE (Arlo, ear test: "faint click at the seam"). At the wrap
-    // the incoming head blends against the OUTGOING TAIL CONTINUING PAST the
-    // window end — not against itself. That keeps the loop period exactly N
-    // beats (the PLL never sees a hiccup: a fade built from the head would
-    // shorten every cycle by the fade length). The material past the window is
-    // ring-resident by the reader's +4096 park overshoot.
-    uint32_t xf_left;              // frames of fade remaining (0 = none)
-    uint32_t xf_src;               // absolute frame of the outgoing tail
+    volatile uint32_t loop_start;  // window start (FILE frames)
+    volatile uint32_t loop_len_fr; // window length (frames) — any length
+    volatile uint32_t loop_adv;    // playback frames advanced while looping
+                                   // (feeds the keeps-running release phantom)
+    volatile int  loop_len_beats;  // display
+    uint32_t engage_ff;            // FILE frame at engage (phantom base)
+    // SEAM CROSSFADE lives in the READER now (it is the one with the file): at
+    // each cycle boundary it blends the incoming head against the outgoing tail
+    // CONTINUING PAST the window end and writes the blend into the ring. The
+    // loop period stays exactly N beats — a fade built from the head itself
+    // would shorten every cycle and the PLL would fight it.
 
     // DJ filter (knob6): centre = bypass, left = LP sweeping down,
     // right = HP sweeping up. Chamberlin SVF, one per channel.
