@@ -81,6 +81,56 @@ static esp_err_t landing_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── sidecar bpm cache ───────────────────────────────────────────────────────
+// PSRAM, keyed (id, dir, sidecar mtime+size): a rewritten .JSN moves the key,
+// so entries self-invalidate — no hooks in upload/analyze/rename to maintain.
+// Linear probe over a modest table; collisions just overwrite (it's a cache).
+#define SCC_N 512
+typedef struct {
+    char     id[24];
+    uint8_t  di;
+    uint32_t mtime, size;
+    float    bpm;
+    bool     used;
+} scc_ent_t;
+static scc_ent_t *s_scc = NULL;
+
+static int scc_slot(const char *id, int di)
+{
+    uint32_t h = 5381 ^ (uint32_t)di;
+    for (const char *c = id; *c; c++) h = h * 33 + (uint8_t)*c;
+    return (int)(h % SCC_N);
+}
+
+static bool sidecar_cache_get(const char *id, int di, uint32_t mtime,
+                              uint32_t size, float *bpm)
+{
+    if (!s_scc) return false;
+    scc_ent_t *e = &s_scc[scc_slot(id, di)];
+    if (e->used && e->di == di && e->mtime == mtime && e->size == size &&
+        strncmp(e->id, id, sizeof(e->id)) == 0) {
+        *bpm = e->bpm;
+        return true;
+    }
+    return false;
+}
+
+static void sidecar_cache_put(const char *id, int di, uint32_t mtime,
+                              uint32_t size, float bpm)
+{
+    if (!s_scc) {
+        s_scc = heap_caps_calloc(SCC_N, sizeof(scc_ent_t), MALLOC_CAP_SPIRAM);
+        if (!s_scc) return;                    // no cache, no harm
+    }
+    scc_ent_t *e = &s_scc[scc_slot(id, di)];
+    strlcpy(e->id, id, sizeof(e->id));
+    e->di = (uint8_t)di;
+    e->mtime = mtime;
+    e->size = size;
+    e->bpm = bpm;
+    e->used = true;
+}
+
 // ─── GET /files ──────────────────────────────────────────────────────────────
 
 static esp_err_t files_get_handler(httpd_req_t *req)
@@ -133,54 +183,67 @@ static esp_err_t files_get_handler(httpd_req_t *req)
             char id[260] = {0};
             strncpy(id, ent->d_name, len - 4);
 
-            // audio size + mtime via stat — light, no file open needed; the resolver
-            // finds whichever container (.RAW/.WAV/.AIF) carries this id
-            char raw_path[280];
+            // DIRECT paths only in this loop. The walk already knows the dir,
+            // and pieces travel together (move/rename sweep them as one), so
+            // the up-to-16-stat sample_resolve() per lookup — ~50 SD ops per
+            // entry across audio+JSN+OT, the whole reason the page took ~10 s
+            // on a 270-file card — is replaced by a handful of same-dir stats.
+            char p[320];
             struct stat st;
-            long fsize = 0;
-            long mtime = 0;
+            long fsize = 0, mtime = 0;
+            static const char *const a_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF"};
             sd_lock_take();
-            if (sample_resolve(id, raw_path, sizeof(raw_path)) == 0 && stat(raw_path, &st) == 0) {
-                fsize = st.st_size;
-                mtime = (long)st.st_mtime;
+            for (int e = 0; e < 4; e++) {
+                snprintf(p, sizeof(p), "%s/%s%s", jdirs[di], id, a_exts[e]);
+                if (stat(p, &st) == 0) { fsize = st.st_size; mtime = (long)st.st_mtime; break; }
+            }
+            // slice map: same dir first; legacy drop_ot parked OTs in usr/
+            int has_ot = 0;
+            snprintf(p, sizeof(p), "%s/%s.OT", jdirs[di], id);
+            has_ot = (stat(p, &st) == 0) ? 1 : 0;
+            if (!has_ot && di != 0) {
+                snprintf(p, sizeof(p), "%s/%s.OT", jdirs[0], id);
+                has_ot = (stat(p, &st) == 0) ? 1 : 0;
             }
             sd_lock_give();
 
-            // the sidecar's bpm, read into a SMALL INTERNAL buffer and scanned as text
+            // the sidecar's bpm, behind a PSRAM cache keyed on the sidecar's
+            // (mtime,size): unchanged sidecars cost ONE stat instead of an
+            // open+read+parse. Re-analysis rewrites the .JSN, so the key moves
+            // and the entry re-reads — no invalidation hooks to forget.
             float bpm = 0.0f;
             {
-                char jp[300];
-                sample_resolve_aux(id, ".JSN", jp, sizeof(jp));
+                char jp[320];
+                snprintf(jp, sizeof(jp), "%s/%s", jdirs[di], ent->d_name);
+                struct stat jst;
                 sd_lock_take();
-                FILE *jf = fopen(jp, "rb");
-                if (jf) {
-                    size_t got = fread(sidecar_buf, 1, sizeof(sidecar_buf) - 1, jf);
-                    fclose(jf);
-                    sidecar_buf[got] = 0;
-                    const char *b = strstr(sidecar_buf, "\"bpm\"");
-                    if (b) {
-                        b = strchr(b, ':');
-                        if (b) bpm = strtof(b + 1, NULL);
-                    }
-                }
+                bool have_j = (stat(jp, &jst) == 0);
                 sd_lock_give();
+                if (have_j && sidecar_cache_get(id, di, (uint32_t)jst.st_mtime,
+                                                (uint32_t)jst.st_size, &bpm)) {
+                    // cache hit — bpm filled
+                } else if (have_j) {
+                    sd_lock_take();
+                    FILE *jf = fopen(jp, "rb");
+                    if (jf) {
+                        size_t got = fread(sidecar_buf, 1, sizeof(sidecar_buf) - 1, jf);
+                        fclose(jf);
+                        sidecar_buf[got] = 0;
+                        const char *b = strstr(sidecar_buf, "\"bpm\"");
+                        if (b) {
+                            b = strchr(b, ':');
+                            if (b) bpm = strtof(b + 1, NULL);
+                        }
+                    }
+                    sd_lock_give();
+                    sidecar_cache_put(id, di, (uint32_t)jst.st_mtime,
+                                      (uint32_t)jst.st_size, bpm);
+                }
             }
             // duration: stereo 16-bit at 44.1k is the pool's native shape, so bytes/4
             // is frames. A WAV/AIFF header is a rounding error at this scale — this is
             // a browsing aid, not a timeline.
             int dur = fsize > 0 ? (int)(fsize / (4L * 44100L)) : 0;
-
-            // slice map present? (one stat next to the audio) — lets the web
-            // find .OT-associated samples, e.g. to herd them into usr/SLICES
-            int has_ot = 0;
-            {
-                char op[300];
-                struct stat ot;
-                sample_resolve_aux(id, ".OT", op, sizeof(op));
-                sd_lock_take();
-                has_ot = (stat(op, &ot) == 0) ? 1 : 0;
-                sd_lock_give();
-            }
 
             // build ONE tiny object (cJSON just for correct string escaping),
             // print it small, stream it, free it — flat memory footprint

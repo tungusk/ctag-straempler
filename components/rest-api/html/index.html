@@ -665,7 +665,10 @@ function loadRemote(){
     var mh='';
     for(var i=0;i<8;i++)
       mh+='<div class="rcol"><div class="rbar"><div class="rfill" id="rf'+i+'" style="height:0%"></div></div><span id="rl'+i+'">CV'+(i+1)+'</span><span id="rv'+i+'">-</span></div>';
-    mh+='<div class="rcol"><div class="rdot" id="rt0"></div><span id="rlt0">TR1</span></div><div class="rcol"><div class="rdot" id="rt1"></div><span id="rlt1">TR2</span></div>';
+    // TR dots stack vertically in one column (Arlo) — less width, same read
+    mh+='<div class="rcol" style="justify-content:flex-end">'
+      +'<div class="rdot" id="rt0"></div><span id="rlt0">TR1</span>'
+      +'<div class="rdot" id="rt1" style="margin-top:4px"></div><span id="rlt1">TR2</span></div>';
     // stereo audio level bars ride with the input monitor (green = audio):
     // L/R tags above each pair, IN/OUT below — same anatomy as the CV columns
     ['in','out'].forEach(function(g){
@@ -675,7 +678,7 @@ function loadRemote(){
         +'<div style="display:flex;gap:2px">'
         +'<div class="rbar"><div class="rfill" id="rv'+g+'l" style="height:0%;background:#3a7"></div></div>'
         +'<div class="rbar"><div class="rfill" id="rv'+g+'r" style="height:0%;background:#3a7"></div></div>'
-        +'</div>'+g.toUpperCase()+'</div>';
+        +'</div><span id="rlv'+g+'">'+g.toUpperCase()+'</span></div>';
     });
     document.getElementById('rmon').innerHTML=mh;
     updateClkTag();
@@ -692,7 +695,9 @@ function updateClkTag(){
     l.textContent='CV'+(i+1)+(cs===i?'·CLK':'');
     l.style.color=cs===i?'#0af':'';
   }
-  [['rlt0',8,'TR1'],['rlt1',9,'TR2']].forEach(function(p){
+  // 8/9 = TR1/TR2; 10 = AUDIO (the beat listener) — then the ear IS the clock,
+  // so the IN meter wears the tag
+  [['rlt0',8,'TR1'],['rlt1',9,'TR2'],['rlvin',10,'IN']].forEach(function(p){
     var l=document.getElementById(p[0]);
     if(!l)return;
     l.textContent=p[2]+(cs===p[1]?'·CLK':'');
