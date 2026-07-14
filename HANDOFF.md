@@ -108,6 +108,70 @@ JS-syntax-verified, reasoning-verified — *never heard*. On the first flash aft
    never exercised on hardware — do it first), streaming slicer by ear, tracker retrig,
    DoubleDecker contextual knobs in the hand, a WAV take into a DAW, pool round-trip.
 
+## DESIGN INTENT — the reasoning behind DoubleDecker (requested by the beatlisten agent)
+
+Commits record *what*. This is the *why*, including the roads not taken. If you change
+one of these, change it knowingly.
+
+**It is a BLENDER, not a DJ rig.** The original reframe: manual beatmatching is what eats
+a DJ interface's controls. Here both decks phase-lock to the SAME conditioned clock, so
+they are beatmatched *by construction* — which means the performer's verbs shrink until
+they fit the panel this hardware actually has (one encoder, two good knobs, two gates).
+Every control decision below follows from that. If someone asks for pitch faders and cue
+points, they are asking for a different machine.
+
+**The panel is the real constraint, and it is brutal.** Knobs 6 and 7 are the only two
+fully-good channels (5 and 8 half-attenuate a patched CV; ch4's jack is broken; ch1/2 are
+1V/oct and idle ~880). Meanwhile there are FOUR control sets to reach: filter, crossfader,
+and a loop window+length **per deck**. Any fixed map starves something — and every routing
+bug this machine has had traces back to me trying to pretend otherwise. That is why the
+knobs ended up **contextual** (focus picks the deck, loop status picks the pair) with the
+explicit CV Map kept behind a Setup toggle for anyone patching a sequencer into a loop.
+
+**Two different handoff mechanisms, and the difference is the whole game.** When a knob
+changes meaning it must never step the sound, but "never step" has two correct answers and
+using the wrong one is a bug I shipped twice:
+- Knob **taking over** a loop param → **grab-then-track**: dead until it MOVES. A context
+  change must never fling a loop window.
+- Knob **returning to** filter/fader → **engine catch-up**: the knob is live INSTANTLY and
+  the engine slews to it. **Pass-through pickup is WRONG here** — I used it, and it left
+  Arlo with a *dead crossfader mid-set*. His words: "cant access the crossfader on non
+  looped deck2." A jump in a fader is a gain step; a dead fader is a ruined take.
+  (Pickup IS right for the deck's SPEED knob, where a jump slams the tempo to 2×.)
+
+**The loop is a MAPPING, not a cursor wrap.** `wpos`/`rpos` are monotonic PLAYBACK
+counters; the reader owns `file = loop_start + ((p - map_p0) % len)` and wraps its own file
+reads, crossfading the seam against the tail CONTINUING past the window end (so the cycle
+keeps its exact length — a fade built from the head would shorten every cycle and the PLL
+would fight it). Consequences worth internalising: loop length is bounded by the TRACK, not
+the ring; counters are NEVER rebased; window moves are SCHEDULED at the reader's frontier
+because truncating the read-ahead starves the ring — **and a starve is a PHASE SLIP, not a
+dropout** (the engine freezes the cursor while the clock runs on).
+
+**Trigs address the FOCUSED deck — a deliberate trade.** It means a sequencer cannot gate
+both decks independently. Grammar consistency with deck/tracker won (TR1 = transport,
+TR2 = loop, everywhere). The CV matrix is the escape: give each deck's loop its own
+channels and both go live at once.
+
+**Rejected, with reasons** — don't "fix" these:
+- *Per-deck filters.* Considered; the master filter on the sum is what a blender wants, and
+  it keeps CV6 free.
+- *Auto-crossfade on deck start (takeover).* Built, then made OPT-IN and defaulted OFF —
+  Arlo: "it probably shouldn't auto crossfade like that." A machine moving your fader under
+  your hand is a machine you stop trusting.
+- *An analysis engine inside DoubleDecker.* Deliberately absent: tempo truth comes from the
+  sidecar stamp. The cost is that an unstamped track shows "no grid" and **cannot loop** —
+  which bit Arlo. The fix is to LIFT the deck's analysis into `util/`, not to fork a second
+  copy (queue item 2).
+- *Pitch/varispeed per deck.* No. Both decks follow the clock; that is the machine.
+
+**Arlo's taste rules, learned the hard way:** the loop box SHRINKS to the window and keeps
+the transport colour (looping is not a colour state); the focused deck wears its number as
+a white plate (focus must be unmissable when the trigs and both knobs address it); the
+crossfader is a hairline, not a boxed meter; live time readouts were REMOVED because they
+repainted the header every second for a number nobody reads mid-set. He notices redraw
+churn — if the screen feels choppy, look for a string that changes every tick.
+
 ## TRAPS (each of these cost real time)
 
 - **A repeating musical transient inside a loop recurs at exactly the loop period and looks
@@ -130,6 +194,36 @@ JS-syntax-verified, reasoning-verified — *never heard*. On the first flash aft
   recorded. If you touch the PLL, re-measure with `rec` + `tools/analyze_drift.py`
   (ch1 = module, ch2 = clock) and beat that number, don't guess.
 - **Never `git add -A`.** It swept this repo's other agent into my commits twice.
+
+## MY PERSISTENT MEMORY — where it lives, and the folder wrinkle
+
+You raised this and you are right to. My notes live in the **claude09** project memory:
+`~/.claude/projects/-Users-arlo-claude09/memory/` — `MEMORY.md` is the index that gets
+loaded automatically, one line per note.
+
+**If you (Fable) are relaunched inside `claude09`, you inherit this memory index for free**
+— it is keyed to the folder, not the agent. If you run from `claude07`, you will NOT see it
+and must port your own notes over (as you flagged). Either way, the ones that matter for
+this codebase, and which I would not want lost:
+
+- `project_doubledecker_v1.md` — DoubleDecker + **the two measured lessons**: the lock lead
+  was mis-tuned (13.1 ms → 6.8 ms; now +0.43 ms / σ 0.12 ms, the tightest ever measured on
+  this instrument, and it HELD across a clock swap), and the "click" was a lone ADC spike on
+  CV7 — the crossfader — i.e. a GAIN. A median rejects it; a slew only smears it.
+- `project_ear_test_20260713.md` — the deck-loop-v2 rework and its three hard lessons (a
+  starve is a phase slip; playback counters are NOT file positions; an octave fold fed back
+  into the detector's gates deadlocks the lock).
+- `project_tracker_voice_ringout.md` — **DO NOT "FIX"**: tracker loop jumps let samples ring
+  on across the seam because the loop moves the pattern cursor, not the mixer voices. Arlo
+  loves it. Any choke must be opt-in.
+- `project_cv_knob_hardware.md` — the real panel map (which knobs are actually good; ch4's
+  jack is broken). Half the DoubleDecker routing bugs are downstream of this.
+- `feedback_*` — the operating rules: announce before flashing (it reboots the device),
+  opening the serial port ALSO reboots it, `--flash_size detect` always, IDF 4.3 only,
+  no core-pinning for file readers, suspect your own diff before blaming the hardware.
+
+Repo-level truth that outlives us both is in `CLAUDE.md`; keep it current, since it is the
+one file a fresh agent always reads.
 
 ---
 
