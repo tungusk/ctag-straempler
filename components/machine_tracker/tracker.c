@@ -281,6 +281,9 @@ static void render_task(void *pv)
     s_alive = true;
 
     bool     cv6_grabbed = false;   // CV6 has MOVED since engage: it owns the window
+    int      cv6_applied = -1;      // knob value the current start was computed AT
+    uint32_t win_start = 0;         // the window start, in absolute steps — its OWN
+                                    // position, so the LENGTH knob can never drag it
     int      loop_engage_ms = 0;    // module time captured when the loop engaged
     uint32_t loop_anchor_w  = 0;    // wpos at engage (frames rendered = real time)
     uint32_t loop_prev_start = 0xFFFFFFFFu;  // last window start (detect a move)
@@ -320,6 +323,8 @@ static void render_task(void *pv)
                                 ? trk.order_step0[fi.pos] + (uint32_t)fi.row : 0;
                 cv6_engage = trk.loop_pos_cv;
                 cv6_grabbed = false;            // dead until the knob actually moves
+                cv6_applied = -1;
+                win_start = loop_anchor_abs;
                 loop_prev_start = 0xFFFFFFFFu;
                 // seed the UI loop band at the engage position so it doesn't flash
                 // a stale spot for a frame before the first loop render updates it
@@ -398,29 +403,38 @@ static void render_task(void *pv)
                     len = snapped;
                 }
                 if ((uint32_t)len > total) len = (int)total;
-                uint32_t nblk = total / (uint32_t)len;
-                if (nblk < 1) nblk = 1;
                 // CV6 = WINDOW POSITION, ABSOLUTE across the WHOLE SONG (Arlo:
                 // "cv6 needs to scale to a % and be able to reach the whole
-                // track"). It used to be a DELTA from the knob's value at engage,
-                // one block per ~128 counts — so a full sweep crossed at most 32
-                // blocks and most of a long module was simply unreachable. The
-                // knob is now a percentage of the song, quantised to whole
-                // windows (which keeps the start phase-true: a whole number of
-                // loop lengths from zero). GRAB-then-track, so engaging a loop
-                // can't fling the window: the knob is dead until it MOVES.
-                int base_blk = (int)(loop_anchor_abs / (uint32_t)len);
-                int blk;
-                if (cv6_grabbed ||
-                    trk.loop_pos_cv - cv6_engage > 120 || cv6_engage - trk.loop_pos_cv > 120) {
-                    cv6_grabbed = true;
-                    blk = (int)((uint64_t)trk.loop_pos_cv * nblk / 4096);
-                } else {
-                    blk = base_blk;              // untouched: stay where we engaged
+                // track"). It was a DELTA from the knob at engage — one block per
+                // ~128 counts — so a full sweep crossed at most 32 blocks and most
+                // of a long module was unreachable.
+                //
+                // The start is its OWN position, snapped to whole BEATS — NOT to
+                // whole loop-lengths. Quantising it by the length made the length
+                // knob drag it: a longer window re-quantised the same position
+                // onto a coarser grid and the start walked backwards (Arlo:
+                // "changing the length moves the start point back again" — the
+                // identical bug the deck had). Growing a loop must keep the start
+                // and extend the END. So the start moves ONLY when CV6 moves.
+                uint32_t snap = 1;
+                if (trk.sync && trk.ci.clk.locked && rpb > 1) snap = (uint32_t)rpb;
+                if (!cv6_grabbed &&
+                    (trk.loop_pos_cv - cv6_engage > 120 || cv6_engage - trk.loop_pos_cv > 120)) {
+                    cv6_grabbed = true;              // the knob MOVED: it owns the window
+                    cv6_applied = -1;                // force a recompute this pass
                 }
-                if (blk < 0) blk = 0;
-                if (blk >= (int)nblk) blk = (int)nblk - 1;
-                uint32_t lstart = (uint32_t)blk * (uint32_t)len;
+                if (cv6_grabbed &&
+                    (cv6_applied < 0 || trk.loop_pos_cv - cv6_applied > 40
+                                     || cv6_applied - trk.loop_pos_cv > 40)) {
+                    cv6_applied = trk.loop_pos_cv;
+                    uint64_t p = (uint64_t)trk.loop_pos_cv * total / 4096;
+                    win_start = (uint32_t)(p / snap) * snap;      // whole beats
+                }
+                if (!cv6_grabbed) win_start = (loop_anchor_abs / snap) * snap;
+                uint32_t lstart = win_start;
+                if (lstart + (uint32_t)len > total)                // ran off the end
+                    lstart = total > (uint32_t)len ? total - (uint32_t)len : 0;
+                lstart = (lstart / snap) * snap;
                 uint32_t lend = lstart + (uint32_t)len;
                 if (lend > total) lend = total;
                 int lo, lr;
