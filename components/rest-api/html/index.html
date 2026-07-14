@@ -309,7 +309,8 @@ function renderFiles(){
     // two-click delete: first click ARMS (bright red, black X), second click
     // within 3 s in the same place deletes — no confirm() window
     var armed=(delArm===f.name);
-    h+='<tr><td>'+nameCell+'</td>'
+    var pend=(delPend===f.name);   // strike-through while the DELETE is in flight
+    h+='<tr'+(pend?' style="text-decoration:line-through;opacity:.45"':'')+'><td>'+nameCell+'</td>'
       +'<td>'+bpm+'</td>'
       +'<td style="color:#9ab">'+mmss(f.dur)+'</td>'
       +'<td>'+(f.size?(Math.round(f.size/1024))+'KB':'')+'</td>'
@@ -328,7 +329,10 @@ function renderFiles(){
 function moveFile(name,dir){
   fetch('/files/move?name='+encodeURIComponent(name)+'&dir='+encodeURIComponent(dir),{method:'POST'})
     .then(function(r){
-      if(r.ok){loadFiles();return;}
+      if(r.ok){   // update the local entry — no 10 s sidecar refetch
+        libFiles.forEach(function(f){if(f.name===name)f.dir=dir;});
+        renderFiles();return;
+      }
       return r.text().then(function(t){alert('Move failed: '+t);renderFiles();});
     }).catch(function(){alert('Move failed');renderFiles();});
 }
@@ -343,7 +347,10 @@ function libCommit(name){
   if(!to||to===name){renderFiles();return;}
   fetch('/files/rename?name='+encodeURIComponent(name)+'&to='+encodeURIComponent(to),{method:'POST'})
     .then(function(r){
-      if(r.ok){loadFiles();return;}
+      if(r.ok){   // update the local entry — no 10 s sidecar refetch
+        libFiles.forEach(function(f){if(f.name===name)f.name=to;});
+        renderFiles();return;
+      }
       return r.text().then(function(t){alert('Rename failed: '+t);renderFiles();});
     }).catch(function(){alert('Rename failed');renderFiles();});
 }
@@ -353,13 +360,20 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 // two-click delete: click once to ARM (the button goes bright red with a black
 // X), click the same button again to delete. Anything else — 3 s passing, a
 // reload, arming another row — disarms. No confirm() window.
-var delArm=null,delArmT=null;
+// The row strikes through while the DELETE is in flight, then vanishes from
+// the LOCAL list — a full /files refetch streams every sidecar (~10 s on a
+// big card), so the table never waits on one to reflect what just happened.
+var delArm=null,delArmT=null,delPend=null;
 function del(name){
   if(delArm===name){
     delArm=null;clearTimeout(delArmT);
+    delPend=name;renderFiles();
     fetch('/files?name='+encodeURIComponent(name),{method:'DELETE'}).then(function(r){
-      if(r.ok)loadFiles();else{alert('Delete failed');renderFiles();}
-    });
+      delPend=null;
+      if(r.ok)libFiles=libFiles.filter(function(f){return f.name!==name;});
+      else alert('Delete failed');
+      renderFiles();
+    }).catch(function(){delPend=null;alert('Delete failed');renderFiles();});
     return;
   }
   delArm=name;renderFiles();
