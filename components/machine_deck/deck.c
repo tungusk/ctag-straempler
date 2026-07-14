@@ -526,6 +526,13 @@ static void deck_loop_toggle(void)
 // the clock and the PLL spends the next seconds hauling it back (Arlo: "moving
 // the start point gets out of phase with the pll"). Latency is the honest cost
 // here — the loop stays phase-true and nothing drops.
+// the window in force for CONTROL purposes: pending if a move is scheduled.
+// Comparing knobs against the COMMITTED window instead made CV6 reschedule the
+// same move every few blocks, pushing the commit point forward forever — so the
+// loop start never actually changed (Arlo: "cv6 seems to do a lot of nothing").
+static inline uint32_t dk_live_start(void){ return dk.rm_at ? dk.rm_start : dk.loop_start; }
+static inline uint32_t dk_live_len(void)  { return dk.rm_at ? dk.rm_len   : dk.loop_len_fr; }
+
 static void deck_loop_remap(uint32_t new_start, uint32_t new_len)
 {
     if (!dk.loop_active || !new_len) return;
@@ -631,10 +638,11 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
                 if (ni != s_loop_len_idx && solid && ++s_mv7 >= 3) {
                     s_mv7 = 0;
                     uint32_t nl = dk_len_for(ni, beat_tf_lp);
-                    if (nl && dk.loop_start + nl <= dk.file_frames) {
+                    uint32_t cs = dk_live_start();
+                    if (nl && cs + nl <= dk.file_frames) {
                         s_loop_len_idx = ni;
                         dk.loop_len_beats = dk_loop_q[ni];
-                        deck_loop_remap(dk.loop_start, nl);
+                        deck_loop_remap(cs, nl);
                     }
                 } else if (ni == s_loop_len_idx) s_mv7 = 0;
             }
@@ -651,19 +659,19 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
             if (s_cv6_ref >= 0 &&
                 (c6 - s_cv6_ref > DK_PICKUP || s_cv6_ref - c6 > DK_PICKUP))
                 s_cv6_ref = -2;                          // grabbed
-            if (s_cv6_ref == -2 && dk.loop_len_fr) {
+            uint32_t llen = dk_live_len();
+            if (s_cv6_ref == -2 && llen) {
                 uint32_t span = (dk.file_frames > dk.grid_offset)
                               ? dk.file_frames - dk.grid_offset : 0;
-                uint32_t nwin = span / dk.loop_len_fr;    // windows in the track
+                uint32_t nwin = span / llen;              // windows in the track
                 if (nwin) {
                     uint32_t idx = (uint32_t)((uint64_t)c6 * nwin / 4096);
                     if (idx >= nwin) idx = nwin - 1;
-                    uint32_t ns = dk.grid_offset + idx * dk.loop_len_fr;
-                    if (ns != dk.loop_start && ++s_mv6 >= 3) {
+                    uint32_t ns = dk.grid_offset + idx * llen;
+                    if (ns != dk_live_start() && ++s_mv6 >= 3) {
                         s_mv6 = 0;
-                        if (ns + dk.loop_len_fr <= dk.file_frames)
-                            deck_loop_remap(ns, dk.loop_len_fr);
-                    } else if (ns == dk.loop_start) s_mv6 = 0;
+                        if (ns + llen <= dk.file_frames) deck_loop_remap(ns, llen);
+                    } else if (ns == dk_live_start()) s_mv6 = 0;
                 }
             }
         }
@@ -862,6 +870,8 @@ filter_done:;                // mild resonance, DJ-ish
         dk.rm_at = 0;
     }
     dk.ui_fpos = dk_map(dk.rpos_i);      // the UI reads FILE position, not counters
+    dk.ui_lstart = dk_live_start();      // ...and the window it should DRAW
+    dk.ui_llen = dk_live_len();
     // keep the track-loop window in step with Setup/analysis (cheap, no I/O)
     {
         static uint32_t s_tl_sig = 0;

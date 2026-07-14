@@ -207,8 +207,8 @@ static int s_loop_key = -1;    // loop window fingerprint (band change detection
 static void tbar_loop_box(int sx, int sw){
     if (!dk.loop_active || !dk.file_frames) return;
     int bx = TBAR_X + TBAR_BW + 1, bw = TBAR_W - 2 * TBAR_BW - 6;
-    int x0 = bx + (int)((uint64_t)dk.loop_start * bw / dk.file_frames);
-    int x1 = bx + (int)((uint64_t)(dk.loop_start + dk.loop_len_fr) * bw / dk.file_frames);
+    int x0 = bx + (int)((uint64_t)dk.ui_lstart * bw / dk.file_frames);
+    int x1 = bx + (int)((uint64_t)(dk.ui_lstart + dk.ui_llen) * bw / dk.file_frames);
     if (x1 < x0 + 2 * TBAR_BW) x1 = x0 + 2 * TBAR_BW;   // stay legible when tiny
     color_t pk = tbar_bg();          // same colour as the full bar (Arlo)
     struct { int x, w, y, h; } seg[4] = {
@@ -227,8 +227,10 @@ static void tbar_loop_box(int sx, int sw){
 // engage/release + window moves all live in this key — tbar_state no longer
 // changes on loop, so THIS is what triggers the frame repaint
 static int loop_key(void){
+    // keyed on the LIVE (pending-aware) window and finer than before, so the box
+    // tracks the knobs immediately instead of waiting for the commit
     return dk.loop_active
-        ? (int)(dk.loop_start >> 11) * 31 + (int)(dk.loop_len_fr >> 11) : -1;
+        ? (int)(dk.ui_lstart >> 9) * 31 + (int)(dk.ui_llen >> 9) : -1;
 }
 
 static void draw_posbar_frame(void){
@@ -322,13 +324,13 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
                 snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d S%lu g%u L%d W%ld",
                          dk.loop_active ? 'L' : (dk.playing ? 'P' : 's'),
                          (unsigned long)dk.ci.raw_fires,
-                         (unsigned long)(dk.ci.raw_iv / 44),        // ms between fires
-                         (unsigned long)(dk.ci.clk.period / 44),    // ms accepted period
-                         (int)(dk.phase_err * 100),              // PLL convergence
-                         (unsigned long)dk.dbg_starve,           // ring underrun blocks
-                         (unsigned)dk.ci.clk.ghost_run,             // escape-hatch state
+                         (unsigned long)(dk.ci.raw_iv / 44),
+                         (unsigned long)(dk.ci.clk.period / 44),
+                         (int)(dk.phase_err * 100),
+                         (unsigned long)dk.dbg_starve,
+                         (unsigned)dk.ci.clk.ghost_run,
                          (int)dk.ci.clk.locked,
-                         (long)((int32_t)(dk.wpos - dk.rpos_i)));   // ring LEAD
+                         (long)((int32_t)(dk.wpos - dk.rpos_i)));
                 audio_status_set_voices("deck", dbg);
             }
             break;
