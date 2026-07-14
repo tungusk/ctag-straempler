@@ -16,6 +16,7 @@
 #include "audio.h"
 #include "machine.h"
 #include "beatlisten.h"
+#include "strampler_version.h"
 #include "recording.h"
 #include "wifi.h"
 #include "freesound.h"
@@ -637,6 +638,14 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             wifiApplyHostname(hn);
         }
     }
+    // teleremote toggle from the web — same persist+apply the System menu does.
+    // (Turning it OFF from the web disables /remote/* but not this endpoint,
+    // so the web can always turn it back on.)
+    if ((j = cJSON_GetObjectItem(in, "remote")) && cJSON_IsNumber(j)) {
+        cJSON_DeleteItemFromObjectCaseSensitive(settings, "remote");
+        cJSON_AddNumberToObject(settings, "remote", j->valueint ? 1 : 0);
+        rest_remote_enable(j->valueint);
+    }
     // optional WiFi TX power cap in quarter-dBm (8..84) — antenna-less units
     // brown out on full-power TX bursts; applied live and persisted
     if ((j = cJSON_GetObjectItem(in, "txpwr")) && cJSON_IsNumber(j) && j->valueint >= 8 && j->valueint <= 84) {
@@ -863,11 +872,14 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
         if (mp >= (int)sizeof(machines) - 1) break;
     }
 
-    char buf[384];
+    char buf[512];
     snprintf(buf, sizeof(buf),
-             "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu,\"remote\":%d,\"machines\":[%s]}",
+             "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu,\"remote\":%d,"
+             "\"version\":\"%s\",\"blisten\":%d,\"blout\":%d,\"machines\":[%s]}",
              ip, (unsigned long long)freeb, (unsigned long long)totb,
-             s_remote_on ? 1 : 0, machines);
+             s_remote_on ? 1 : 0,
+             STRAMPLER_FW_VERSION, beatlisten_get_mode(), beatlisten_get_out(),
+             machines);
     send_json(req, buf);
     return ESP_OK;
 }
