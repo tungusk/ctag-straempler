@@ -25,10 +25,113 @@ another agent's in-progress files into unrelated commits twice).
   `machine/trig_gate.h`, `machine/cvsmooth.h`, `machine_looper/*`,
   `machine_drumsampler/*`, `machine_slicer/*`, `machine_granular/*`,
   `machine_glitch/*`, `machine_sampler3/*` (CV-spike hardening sweep).
-  Status: **review findings 1,3-8,10 FIXED in `c50871c`** (proof build now excludes
-  machine_dualdeck too — it never did, so the "core is machine-clean" guarantee had a
-  hole). Working under Arlo's no-flash / no-serial rule while your soak runs, so all of
-  it is build- and reasoning-verified only, NOT hardware-verified.
+  Status: **all committed through `58d87d5`. See the CONVERGENCE HANDOFF below — it is
+  written so a single agent can carry this half cold.**
+
+---
+
+# CONVERGENCE HANDOFF — the doubledecker agent's half (2026-07-14)
+
+Arlo is spinning one agent down. This section is the complete state of my area: what is
+done, what is UNVERIFIED, what to do first, and the traps that will bite you.
+
+## THE ONE THING TO DO FIRST
+
+**Nothing of mine has been hardware-verified.** Everything from `c50871c` onward was
+written under the no-flash rule while the soak ran: build-verified, proof-verified,
+JS-syntax-verified, reasoning-verified — *never heard*. On the first flash after the soak:
+
+1. **Re-test "the loops jump around on their own" in DoubleDecker.** My diagnosis CHANGED.
+   I first blamed a floating TR2 input (real, and fixed by the trig debounce), but the
+   actual cause is almost certainly that I had put the loop-LENGTH knob on **CV8 — which
+   is the clock input** (`clk_src` default). The knob was reading the pulse train. Fixed
+   two ways in `c50871c` (the engine now ignores any loop control on the clock channel,
+   AND the default moved off it). If the loop still jumps, my model is wrong and everything
+   downstream of it deserves suspicion.
+2. **Drums: confirm pads no longer self-fire.** The floor tracker used to adopt a lone ADC
+   dip instantly, collapsing the noise floor so the NEXT block read a normal value as a hit
+   — at near-max velocity. That is a false TRIGGER, not a click, and it is the most
+   musically destructive thing the CV audit found. Fixed by requiring a dip to persist two
+   blocks (`drum.c`, `dip_seen`).
+3. **Leave the new web CV scope running with hands off the panel.** It flags lone ADC
+   outliers. It is the instrument that would have found the original bug in seconds.
+
+## WHAT I SHIPPED (and why, briefly)
+
+- **`c50871c` Phase 0 — regressions I had shipped hours earlier**, found by the beatlisten
+  agent's review. Loop-length CV on the clock channel (above); the RESYNC gesture flipped
+  the loop on its way in (TR2 engages on PRESS but the both-trig combo only arms at 0.35 s —
+  a TR2 press while TR1 is down is now read as a combo forming); the deck armed its loop
+  knobs from the RAW pin while everything else used the median (a spike then declared the
+  knob "grabbed" and flung the window); file-statics survived machine switches (a held gate
+  made a deck self-trigger on switch-back); pending-remap phase came from the stale mapping;
+  catch-up fired when nothing was borrowed and ended mid-slew with a step. Also
+  `proof_build.sh` never excluded `machine_dualdeck` — the "core links with every machine
+  excluded" guarantee had a hole in it.
+- **`7a542d6` Phase 1 — the CV-spike class, everywhere.** `cvsmooth.h` (median-of-5) into
+  looper (CV6 drove a track's VOLUME raw — the worst in the tree), drums (knobs + the floor
+  tracker), tracker (the DJ filter I'd added that morning read raw, and a spike could
+  falsely RELEASE its pass-through pickup), glitch/granular/slicer. **Clock inputs stay raw
+  on purpose** — `clockin` has its own Schmitt and needs true edge timing.
+- **`dc8f794` Phase 2 — contextual knobs.** Focus picks the deck, loop status picks the
+  pair (CV6/CV7 = filter/fader, or window/length when the focused deck loops). Fixed CV Map
+  survives behind Setup → `Knobs [contextual|fixed]`. `Fader Lock` is the escape hatch when
+  both decks loop. Routing lives in ONE place (`dd_eff_*` + `dd_addressed`) so the modes
+  cannot drift. Includes a preset MIGRATION (`"cvv":1`) — old presets hold loops on CV6/CV7
+  or CV8 and `preset_load` overrides defaults, so without it a fresh flash silently restores
+  the behaviour we just removed.
+- **`84358f6` web Tier 0 + the trig_rising consumer.** Import progress + rescan; CV scope
+  with spike detection; beatlisten panel; Files with bpm/duration/newest-first + click-to-
+  rename (`POST /files/rename` moves audio + `.JSN` + `.OT` together and rewrites the id
+  INSIDE the sidecar — renaming only the audio orphans the bpm/grid stamp and the deck then
+  refuses to loop the track with "no grid").
+
+## OPEN QUEUE, in the order I would do it
+
+1. **Flash + the three checks above.** Everything else is downstream of that.
+2. **Phase 3 — lift the deck's BPM analysis into `components/util/bpm_analysis.{h,c}`** so
+   DoubleDecker can analyse an unstamped track instead of silently refusing to loop (Arlo
+   hit this as "i cant seem to engage loop on track 1" — the track simply had no `bpm` in
+   its sidecar). `deck_analysis.c` is NOT welded to the deck: the DSP touches `dk` in only
+   three places — result/progress fields, the commit, and a playback backpressure gate
+   (`while (dk.playing || dk.loading)`, which keeps it off the SD bus). The gate is the seam
+   that matters: DoubleDecker has TWO decks, so pass a `bool (*busy)(void)`. I left this
+   undone deliberately — it rewrites a proven DSP path and it WRITES SIDECARS, so a mistake
+   corrupts tempo stamps across the library. Do it with the device available.
+3. **Web Tier 1** (plan: `~/.claude/plans/synthetic-swimming-gem.md`): machine-published
+   `/state` endpoints via the existing `web_uris` mechanism (zero cost when the machine is
+   inactive, 8 slots free) serving the ALREADY-COMPUTED waveforms (`wf[]`, 120-144 bytes),
+   playhead (`ui_fpos`) and loop window (`ui_lstart`/`ui_llen`). Then `POST /remote/cv` —
+   requested from the beatlisten agent above; **it is the single thing standing between a
+   web settings page and a web instrument**, because every performance control is a knob.
+4. **Arlo's untested paths**: looper save to `usr/LOOPS/*.WAV` (STILL the only write path
+   never exercised on hardware — do it first), streaming slicer by ear, tracker retrig,
+   DoubleDecker contextual knobs in the hand, a WAV take into a DAW, pool round-trip.
+
+## TRAPS (each of these cost real time)
+
+- **A repeating musical transient inside a loop recurs at exactly the loop period and looks
+  identical to a seam click.** I chased one for a while. Before believing a click is real:
+  rule out starvation (`S` in `/status` v1), phase error (`E`), and clipping (flat-topping
+  in a capture).
+- **A median REJECTS an outlier; a slew SMEARS it and still clicks; a deadband sized for
+  jitter PASSES a 1200-count spike entirely.** Several "protections" in the tree were the
+  latter two.
+- **`v1` in `/status` is a debug string, not an API.** Per-machine format, and it only
+  refreshes while that machine's live page is on the TFT. Do not build a UI on it.
+- **`html/convert.sh` is MANUAL and not in CMake.** Edit `index.html`, forget it, and your
+  change silently does not ship. (I also fixed its BSD `sed -i -e` bug, which was quietly
+  creating `index.html.h-e`.)
+- **Sidecars in `/files` were skipped for a real reason**: the old attempt built cJSON per
+  file into PSRAM, and SDMMC DMA cannot target PSRAM. I read them into one small INTERNAL
+  buffer with a substring parse. Keep it that way.
+- **The lock lead was mis-tuned for who knows how long** (13.1 ms → measured 6.8 ms). The
+  current lock is **+0.43 ms mean / 0.12 ms std** — the tightest this instrument has
+  recorded. If you touch the PLL, re-measure with `rec` + `tools/analyze_drift.py`
+  (ch1 = module, ch2 = clock) and beat that number, don't guess.
+- **Never `git add -A`.** It swept this repo's other agent into my commits twice.
+
+---
 
 ## ✅ DONE — trig acquisition (beatlisten agent, per your request below)
 
