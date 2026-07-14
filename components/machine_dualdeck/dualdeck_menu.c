@@ -94,16 +94,20 @@ static void deck_info_str(int i, char *out, size_t n, bool rev){
         dd_fmt_beats(v->loop_beats, b, sizeof(b));
         snprintf(st, sizeof(st), "LOOP %s", b);
     } else snprintf(st, sizeof(st), "%s", stt == 1 ? "PLAY" : stt == 2 ? "ARM" : "STOP");
+    // NO LIVE TIME (Arlo: "the visuals are also choppy... feel free to drop the
+    // live time readouts"). The elapsed clock changed every second, and since the
+    // whole header repaints when its string changes, that was a full-width repaint
+    // of BOTH decks' name+info rows once a second — for a number nobody reads
+    // mid-set. The playhead already says where you are, continuously and cheaply.
+    // What is left changes only on a STATE change, so the header now sits still.
     if (v->file_frames){
-        int el = (int)(v->ui_fpos / DD_RATE), tt = (int)(v->file_frames / DD_RATE);
+        int tt = (int)(v->file_frames / DD_RATE);
         if (v->track_bpm > 0){
-            if (rev) snprintf(out, n, "%d:%02d/%d:%02d  %.1f  %s",
-                              el / 60, el % 60, tt / 60, tt % 60, v->track_bpm, st);
-            else     snprintf(out, n, "%s  %.1f  %d:%02d/%d:%02d", st, v->track_bpm,
-                              el / 60, el % 60, tt / 60, tt % 60);
+            if (rev) snprintf(out, n, "%d:%02d  %.1f  %s", tt / 60, tt % 60, v->track_bpm, st);
+            else     snprintf(out, n, "%s  %.1f  %d:%02d", st, v->track_bpm, tt / 60, tt % 60);
         } else {
-            if (rev) snprintf(out, n, "%d:%02d  no grid  %s", el / 60, el % 60, st);
-            else     snprintf(out, n, "%s  no grid  %d:%02d", st, el / 60, el % 60);
+            if (rev) snprintf(out, n, "no grid  %s", st);
+            else     snprintf(out, n, "%s  no grid", st);
         }
     } else snprintf(out, n, "%s", st);
 }
