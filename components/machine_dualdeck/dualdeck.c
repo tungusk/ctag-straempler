@@ -24,7 +24,15 @@ const float dd_ppb[6] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 const char *const dd_ppb_names[6] = {"1 per 4 beats", "1 per 2 beats", "1 per beat",
                                      "2 per beat", "4 per beat", "8 per beat"};
 
-#define DD_LAG_LEAD_FR (0.0131f * 44100.0f)   // output-chain lead (deck-measured)
+// fixed-TIME lock lead: the output chain lands beats a constant few ms late
+// (I2S/DAC latency + block-quantized edge capture + grid-anchor bias), so the
+// target is led by the same amount, in pulse phase so it tracks any rate.
+// RE-TUNED BY CAPTURE 2026-07-13 (Arlo: "the pll sounds slightly off, can hear
+// slight offset on the transients"). At 13.1 ms BOTH machines landed ~4.3 ms
+// EARLY against the clock (60 s, 125 beats: mean -4.32 ms, std 2.53). The deck's
+// calibration curve is ~-1.8 ms of offset per +1 ms of lead, so the lead comes
+// DOWN by ~2.5 ms to put the beat on the pulse.
+#define DD_LAG_LEAD_FR (0.0068f * 44100.0f)
 #define DD_SLEW_GAIN 0.0006f  // drains the resync shift over ~1 s
 #define DD_SLEW_MAX  0.15f    // max +/-15% rate bend — a bend, not a jump
 #define DD_XF_GRAB 220        // knob counts of movement that grab the fader back
