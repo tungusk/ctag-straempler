@@ -86,8 +86,8 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <div class="tab on" id="ft0" onclick="filesTab(0)">Samples</div>
     <div class="tab" id="ft1" onclick="filesTab(1)">Modules</div>
     <span style="width:10px"></span>
-    <div class="tab on" id="fd-all" onclick="setDirFilt(null)">all</div>
-    <div class="tab" id="fd-pool" onclick="setDirFilt('pool')">pool</div>
+    <div class="tab on" id="fd-all" onclick="setDirFilt(null)">ALL</div>
+    <div class="tab" id="fd-pool" onclick="setDirFilt('pool')">POOL</div>
     <div class="tab" id="fd-REC" onclick="setDirFilt('REC')">REC</div>
     <div class="tab" id="fd-LOOPS" onclick="setDirFilt('LOOPS')">LOOPS</div>
     <div class="tab" id="fd-SLICES" onclick="setDirFilt('SLICES')">SLICES</div>
@@ -331,7 +331,7 @@ function renderFiles(){
     var dirSel='<select style="width:auto;font-size:10px;padding:1px 2px;color:#888" '
       +'onchange="moveFile(\''+esc(f.name)+'\',this.value)">';
     ['pool','REC','LOOPS','SLICES'].forEach(function(dd){
-      dirSel+='<option value="'+dd+'"'+((f.dir||'pool')===dd?' selected':'')+'>'+dd+'</option>';
+      dirSel+='<option value="'+dd+'"'+((f.dir||'pool')===dd?' selected':'')+'>'+dd.toUpperCase()+'</option>';
     });
     dirSel+='</select>';
     // two-click delete: first click ARMS (bright red, black X), second click
