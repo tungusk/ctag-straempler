@@ -287,7 +287,7 @@ void dualdeck_arm_stop(int deck)  { dd.d[deck & 1].arm_stop = true; }
 // phase and the PLL spends the loop fighting it. One pulse = 4/ppb quarters.
 static int dd_min_q(void)
 {
-    float ppb = dd_ppb[dd.ppb_idx] * (dd.ci.oct > 0 ? dd.ci.oct : 1.0f);
+    float ppb = DD_PPB_EFF();
     int q = (ppb > 0) ? (int)(4.0f / ppb + 0.999f) : 4;
     return q < 1 ? 1 : q;
 }
@@ -471,7 +471,7 @@ static void deck_fire(int i)
         // the mix is yours and starting a deck is purely a transport act.
         if (dd.fade_beats < 0) { /* off: the fader stays exactly where you left it */ }
         else if (dd.fade_beats > 0 && dd.ci.clk.locked && dd.ci.clk.period > 0) {
-            float fade_frames = (float)dd.ci.clk.period * dd_ppb[dd.ppb_idx] * (float)dd.fade_beats;
+            float fade_frames = (float)dd.ci.clk.period * DD_PPB_EFF() * (float)dd.fade_beats;
             dd.auto_target = (i == 0) ? 0.0f : 1.0f;
             dd.auto_step = (fade_frames > 1) ? (float)(MACHINE_BLOCK / 2) / fade_frames : 1.0f;
             dd.auto_active = true;
@@ -496,7 +496,7 @@ static float deck_rate(dd_deck_t *v)
     float rate = 1.0f;
     if (v->track_bpm > 20.0f && dd.ci.clk.locked && dd.ci.clk.period > 0) {
         uint32_t beat_tf = (uint32_t)(60.0f * DD_RATE / v->track_bpm);
-        float seg_tf = (float)beat_tf / dd_ppb[dd.ppb_idx];
+        float seg_tf = (float)beat_tf / DD_PPB_EFF();   // EFFECTIVE: the fold counts here
         float base = seg_tf / (float)dd.ci.clk.period;
         float p_ext = (float)dd.ci.clk.since / (float)dd.ci.clk.period;
         if (p_ext > 1.0f) p_ext = 1.0f;
@@ -600,11 +600,11 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // ---- shared clock + bar phase. An accepted pulse advances the counter;
     // the bar boundary is every 4 beats' worth of pulses. With no lock, armed
     // ops fire immediately (free-run behaviour).
-    clockin_set_ppb(&dd.ci, dd_ppb[dd.ppb_idx]);
+    clockin_set_ppb(&dd.ci, DD_PPB_RAW());          // gates take the RAW setting
     uint32_t rn_pre = dd.ci.clk.ring_n;
     clockin_block(&dd.ci, io->cv[dd.clk_src & 7], frames);
     bool pulse = (dd.ci.clk.ring_n != rn_pre);
-    uint32_t per_bar = (uint32_t)(dd_ppb[dd.ppb_idx] * 4.0f + 0.5f);
+    uint32_t per_bar = (uint32_t)(DD_PPB_EFF() * 4.0f + 0.5f);
     if (per_bar < 1) per_bar = 1;
     if (!dd.ci.clk.locked) dd.pulses = 0;
     else if (pulse) dd.pulses++;
