@@ -447,8 +447,17 @@ static void live_full_redraw(void){
     draw_xfade(true);
     _bg = TFT_BLACK; _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:focus press:load hold:setup  CV6:filter CV7:fader  TR1/TR2", 6,
-              _height - TFT_getfontheight() - 1);
+    {
+        // The hint tells you what the knobs mean in THIS context — the whole point of
+        // contextual mode is that it changes, so a static legend would be a lie.
+        char h[128];   // sized generously: a truncating snprintf is a stack smash
+        if (dd.knob_mode == DD_KNOB_CTX && dd.d[dd.focus].loop_active)
+            snprintf(h, sizeof(h), "turn:focus  press:load  hold:setup   deck %d LOOP: CV6 window  CV7 %s",
+                     dd.focus + 1, dd.fader_lock ? "(fader locked)" : "length");
+        else
+            snprintf(h, sizeof(h), "turn:focus  press:load  hold:setup   CV6 filter  CV7 fader");
+        TFT_print(h, 6, _height - TFT_getfontheight() - 1);
+    }
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
@@ -560,10 +569,13 @@ static int dd_load_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup (house grammar: toggles click, lists bracket-edit, per-row paint) ----
-static const char *setup_labels[] = {"Clock Src", "Clock", "Takeover", "Loop Len", "Layout", "CV Map"};
-#define DD_SETUP_N 6
-#define DD_ROW_CVMAP 5                                     // opens its own page
-#define SETUP_IS_TOGGLE(i) ((i) == 2 || (i) == 3 || (i) == 4)   // short cycles: click advances
+static const char *setup_labels[] = {"Clock Src", "Clock", "Takeover", "Loop Len", "Layout",
+                                     "Knobs", "Fader Lock", "CV Map"};
+#define DD_SETUP_N 8
+#define DD_ROW_KNOBS 5
+#define DD_ROW_FLOCK 6
+#define DD_ROW_CVMAP 7                                     // opens its own page
+#define SETUP_IS_TOGGLE(i) ((i) == 2 || (i) == 3 || (i) == 4 || (i) == 5 || (i) == 6)
 #define SETUP_ROW_Y(i) (TFT_getfontheight() + 12 + (i) * (TFT_getfontheight() + 8))
 
 static void setup_value_str(int i, char *v, size_t n){
@@ -582,7 +594,15 @@ static void setup_value_str(int i, char *v, size_t n){
             break;
         }
         case 4: snprintf(v, n, "%s", dd.layout == DD_LAY_V ? "stacked" : "side by side"); break;
-        case DD_ROW_CVMAP: snprintf(v, n, "%s", "...");  break;
+        case DD_ROW_KNOBS:
+            snprintf(v, n, "%s", dd.knob_mode == DD_KNOB_CTX ? "contextual" : "fixed");
+            break;
+        case DD_ROW_FLOCK:
+            snprintf(v, n, "%s", dd.fader_lock ? "on" : "off");
+            break;
+        case DD_ROW_CVMAP:
+            snprintf(v, n, "%s", dd.knob_mode == DD_KNOB_CTX ? "(fixed only)" : "...");
+            break;
         default: v[0] = 0;
     }
 }
@@ -605,6 +625,12 @@ static void setup_adj(int i, int dir){
         }
         case 4:
             dd.layout = (dd.layout == DD_LAY_V) ? DD_LAY_H : DD_LAY_V;
+            break;
+        case DD_ROW_KNOBS:
+            dd.knob_mode = (dd.knob_mode == DD_KNOB_CTX) ? DD_KNOB_FIXED : DD_KNOB_CTX;
+            break;
+        case DD_ROW_FLOCK:
+            dd.fader_lock = !dd.fader_lock;
             break;
         case 3: {
             int k = 4;                      // default 1 beat (4 quarters)
@@ -737,6 +763,15 @@ static void cv_redraw(int pos, int sel){
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
     TFT_print("DoubleDecker CV Map", 6, 4);
+    if (dd.knob_mode == DD_KNOB_CTX) {
+        // Do not show a map that the engine is ignoring — that is how a UI lies.
+        _fg = (color_t){230, 170, 0};
+        TFT_setFont(DEF_SMALL_FONT, NULL);
+        TFT_print("KNOBS = CONTEXTUAL: this map is not in force", 6,
+                  TFT_getfontheight() + 6);
+        TFT_setFont(DEFAULT_FONT, NULL);
+        _fg = TFT_WHITE;
+    }
     for (int i = 0; i < DD_CV_N; i++) cv_row_redraw(i, pos, sel);
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
