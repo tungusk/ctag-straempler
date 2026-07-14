@@ -537,6 +537,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     int n = snprintf(buf, sizeof(buf),
         "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
         "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u,"
+        "\"vu\":[%u,%u],"
         "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d}}",
         m ? m->name : "",
         rec ? "true" : "false",
@@ -544,6 +545,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
         st.cv[0], st.cv[1], st.cv[2], st.cv[3],
         st.cv[4], st.cv[5], st.cv[6], st.cv[7],
         st.trig,
+        st.vu_in, st.vu_out,
         bl.mode, bl.state, (double)bl.bpm, (double)bl.conf, bl.cost_us);
     (void)n;
     send_json(req, buf);
@@ -827,6 +829,40 @@ static esp_err_t remote_trig_handler(httpd_req_t *req)
     if (ms < 5) ms = 5;
     if (ms > 2000) ms = 2000;
     audio_remote_trig(ts[0] - '1', ms);
+    send_json(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// POST /remote/cv?ch=1..8&v=0..4095[&ms=..] — the knob mirror of /remote/trig:
+// while fresh, the value substitutes for the ADC in the audio task, then decays
+// back to the physical knob. This is what makes the web page an instrument.
+static esp_err_t remote_cv_handler(httpd_req_t *req)
+{
+    if (remote_gate(req) != ESP_OK) return ESP_OK;
+    char chs[8], vs[8], ms_s[8];
+    if (!get_query_param(req, "ch", chs, sizeof(chs))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ch must be 1..8");
+        return ESP_FAIL;
+    }
+    int ch = atoi(chs);
+    if (ch < 1 || ch > 8) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ch must be 1..8");
+        return ESP_FAIL;
+    }
+    if (!get_query_param(req, "v", vs, sizeof(vs))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "v must be 0..4095");
+        return ESP_FAIL;
+    }
+    int v = atoi(vs);
+    if (v < 0 || v > 4095) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "v must be 0..4095");
+        return ESP_FAIL;
+    }
+    int ms = 250;                       // a dragging web knob re-posts well within this
+    if (get_query_param(req, "ms", ms_s, sizeof(ms_s))) ms = atoi(ms_s);
+    if (ms < 20) ms = 20;
+    if (ms > 5000) ms = 5000;
+    audio_remote_cv(ch - 1, v, ms);
     send_json(req, "{\"ok\":true}");
     return ESP_OK;
 }
@@ -1191,6 +1227,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/trk/delete", .method = HTTP_DELETE, .handler = mod_delete_handler },
     { .uri = "/remote/event",  .method = HTTP_POST, .handler = remote_event_handler },
     { .uri = "/remote/trig",   .method = HTTP_POST, .handler = remote_trig_handler },
+    { .uri = "/remote/cv",     .method = HTTP_POST, .handler = remote_cv_handler },
     { .uri = "/remote/machine",.method = HTTP_POST, .handler = remote_machine_handler },
     { .uri = "/remote/params", .method = HTTP_GET,  .handler = remote_params_get_handler },
     { .uri = "/remote/params", .method = HTTP_POST, .handler = remote_params_post_handler },

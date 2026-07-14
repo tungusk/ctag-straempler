@@ -50,6 +50,21 @@ void audio_remote_trig(int t, int ms) {
     s_remote_trig_until[t] = xTaskGetTickCount() + pdMS_TO_TICKS(ms > 0 ? ms : 30);
 }
 
+// teleremote CV overrides — the mirror of the soft trigs: while fresh, the
+// override substitutes for the ADC reading, so a web-driven knob is
+// indistinguishable from a physical one; on timeout the physical knob is
+// back in charge (a stale web value can never pin a channel)
+static volatile TickType_t s_remote_cv_until[8] = {0};
+static volatile uint16_t   s_remote_cv_val[8] = {0};
+
+void audio_remote_cv(int ch, int v, int ms) {
+    if (ch < 0 || ch > 7) return;
+    if (v < 0) v = 0;
+    if (v > 4095) v = 4095;
+    s_remote_cv_val[ch] = (uint16_t)v;
+    s_remote_cv_until[ch] = xTaskGetTickCount() + pdMS_TO_TICKS(ms > 0 ? ms : 250);
+}
+
 // ---- trig edge acquisition ----------------------------------------------------
 // The audio task samples the trig pins once per block (0.726 ms), so a real
 // ~1 ms eurorack gate and a floating-input glitch are indistinguishable at
@@ -109,10 +124,17 @@ static void audio_task(void *pvParams)
         // get control data
         xQueueReceive(control_queue, &ctrlData, 0);
 
-        // machine I/O snapshot
+        // machine I/O snapshot (teleremote CV overrides substitute for the
+        // ADC while fresh — both views, so legacy cv_raw readers agree)
+        TickType_t cvnow = xTaskGetTickCount();
         for (int i = 0; i < 8; i++) {
-            io.cv[i] = cv_corrected(i, ctrlData);
-            io.cv_raw[i] = ctrlData[i];
+            if (cvnow < s_remote_cv_until[i]) {
+                io.cv[i] = s_remote_cv_val[i];
+                io.cv_raw[i] = s_remote_cv_val[i];
+            } else {
+                io.cv[i] = cv_corrected(i, ctrlData);
+                io.cv_raw[i] = ctrlData[i];
+            }
         }
         io.trig_level = (gpio_get_level(TRIG0_PIN) ? 1 : 0) | (gpio_get_level(TRIG1_PIN) ? 2 : 0);
         io.trig_rising = trig_rising_bits();
@@ -149,6 +171,28 @@ static void audio_task(void *pvParams)
 
         // optional clock OUT: overwrite one channel with beat pulses
         beatlisten_out_render(out);
+
+        // rough VU: decayed per-block peak of both buses (16-bit magnitude
+        // >> 7 => 0..255). A "is signal arriving / leaving" meter, no more.
+        {
+            static uint8_t vu_i = 0, vu_o = 0;
+            int32_t pi = 0, po = 0;
+            for (int i = 0; i < BUF_SZ; i++) {
+                int32_t a = in[i] >> 16, b = out[i] >> 16;
+                if (a < 0) a = -a;
+                if (b < 0) b = -b;
+                if (a > pi) pi = a;
+                if (b > po) po = b;
+            }
+            uint8_t ni = (uint8_t)(pi >> 7 > 255 ? 255 : pi >> 7);
+            uint8_t no = (uint8_t)(po >> 7 > 255 ? 255 : po >> 7);
+            vu_i = ni > vu_i ? ni : (uint8_t)((vu_i * 15) >> 4);   // fast up, ~11ms decay steps
+            vu_o = no > vu_o ? no : (uint8_t)((vu_o * 15) >> 4);
+            portENTER_CRITICAL(&_status_mux);
+            _audio_status.vu_in = vu_i;
+            _audio_status.vu_out = vu_o;
+            portEXIT_CRITICAL(&_status_mux);
+        }
 
         i2s_write(I2S_NUM_0, out, BUF_SZ * 4, &nb, portMAX_DELAY);
     }
