@@ -155,6 +155,7 @@ void clockin_set_ppb(clockin_t *ci, float ppb)
 void clockin_reset(clockin_t *ci, float ppb)
 {
     clock_reset(&ci->clk);
+    ci->oct = 1.0f;
     ci->base = 4095;              // floor tracker converges down on first reads
     ci->high = false;
     ci->edge_since = 1u << 30;    // first edge is never ghost-gated
@@ -183,6 +184,26 @@ bool clockin_block(clockin_t *ci, uint16_t cv, int frames)
     }
     uint16_t synth = ci->high ? 4095 : 0;
     for (int f = 0; f < frames; f++) clock_tick(&ci->clk, synth);
+
+    // OCTAVE PREFERENCE: fold the implied beat tempo into the musical band.
+    // Hysteresis band (76..148) is wider than the target (80..140) so a tempo
+    // parked near an edge can't flap the fold every pulse.
+    if (ci->clk.locked && ci->clk.bpm > 0 && ci->ppb > 0) {
+        if (ci->oct <= 0) ci->oct = 1.0f;
+        float beat = ci->clk.bpm / (ci->ppb * ci->oct);
+        int guard = 0;
+        while (beat > 148.0f && ci->oct < 4.0f && guard++ < 4) {
+            ci->oct *= 2.0f;                 // beat halves
+            beat *= 0.5f;
+        }
+        guard = 0;
+        while (beat < 76.0f && ci->oct > 0.25f && guard++ < 4) {
+            ci->oct *= 0.5f;                 // beat doubles
+            beat *= 2.0f;
+        }
+    } else if (!ci->clk.locked) {
+        ci->oct = 1.0f;                      // a fresh lock decides afresh
+    }
     // AC-coupled pulse sources ring on the tail and refire the Schmitt:
     // accept a sync edge only >= 3/4 of a locked period after the last
     if (ci->edge_since < (1u << 30)) ci->edge_since += (uint32_t)frames;
