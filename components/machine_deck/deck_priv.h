@@ -75,6 +75,15 @@ typedef struct {
     volatile uint32_t grid_offset; // first downbeat, frames into the file
     volatile bool sync;            // follow the external clock
     volatile bool loop;            // wrap to the downbeat at end of file
+    // TRACK LOOP as a streamed window (Arlo: "with loop off, seems like it
+    // redetects tempo at the beginning of every cycle" — the old EOF wrap
+    // seeked, muted and RESET the PLL integrator every pass, so the rate
+    // re-converged audibly; and a take that isn't a whole number of beats put
+    // a phase discontinuity right on the seam). Now the reader wraps its own
+    // reads at the last WHOLE BEAT, exactly like the KO-II loop: phase-exact,
+    // seamless, crossfaded, and the PLL never notices.
+    volatile uint32_t tl_start;    // = grid_offset (0 = no track-loop mapping)
+    volatile uint32_t tl_len;      // whole beats of track (0 = disabled)
     volatile int  clk_src;         // CV channel of the clock (default CV8)
     volatile int  ppb_idx;         // pulses-per-beat index into dk_ppb[] (mult/div)
     volatile int  pitch_cv;        // knob7 free-rate when sync is off
@@ -109,8 +118,14 @@ typedef struct {
     volatile uint32_t loop_len_fr; // window length (frames) — any length
     volatile uint32_t loop_adv;    // playback frames advanced while looping
                                    // (feeds the keeps-running release phantom)
-    volatile int  loop_len_beats;  // display
+    volatile int  loop_len_beats;  // display, in QUARTER-beats
     uint32_t engage_ff;            // FILE frame at engage (phantom base)
+    // a window move/resize is SCHEDULED at the reader's frontier: buffered audio
+    // plays out, the reader starts the new window, and the cursor commits it on
+    // arrival. Truncating the read-ahead instead starved the ring, and a starve
+    // freezes the cursor while the clock runs on — that is a PHASE SLIP, not a
+    // dropout (Arlo: "moving the start point gets out of phase with the pll").
+    volatile uint32_t rm_start, rm_len, rm_p0, rm_at;   // rm_at 0 = none
     // SEAM CROSSFADE lives in the READER now (it is the one with the file): at
     // each cycle boundary it blends the incoming head against the outgoing tail
     // CONTINUING PAST the window end and writes the blend into the ring. The
