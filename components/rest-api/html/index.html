@@ -90,6 +90,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <div class="tab" id="fd-pool" onclick="setDirFilt('pool')">pool</div>
     <div class="tab" id="fd-REC" onclick="setDirFilt('REC')">REC</div>
     <div class="tab" id="fd-LOOPS" onclick="setDirFilt('LOOPS')">LOOPS</div>
+    <div class="tab" id="fd-SLICES" onclick="setDirFilt('SLICES')">SLICES</div>
   </div>
   <table id="ftab">
     <thead><tr>
@@ -231,7 +232,7 @@ function filesTab(n){
   document.getElementById('ftab').style.display=n===0?'':'none';
   document.getElementById('mtab').style.display=n===1?'':'none';
   // the folder chips only mean something for samples
-  ['fd-all','fd-pool','fd-REC','fd-LOOPS'].forEach(function(id){
+  ['fd-all','fd-pool','fd-REC','fd-LOOPS','fd-SLICES'].forEach(function(id){
     document.getElementById(id).style.display=n===0?'':'none';
   });
   n===0?loadFiles():loadMods();
@@ -241,7 +242,7 @@ function filesTab(n){
 var libFilt=null;   // null = all, else 'pool'/'REC'/'LOOPS'
 function setDirFilt(d){
   libFilt=d;
-  [[null,'fd-all'],['pool','fd-pool'],['REC','fd-REC'],['LOOPS','fd-LOOPS']].forEach(function(p){
+  [[null,'fd-all'],['pool','fd-pool'],['REC','fd-REC'],['LOOPS','fd-LOOPS'],['SLICES','fd-SLICES']].forEach(function(p){
     document.getElementById(p[1]).className='tab'+(libFilt===p[0]?' on':'');
   });
   renderFiles();
@@ -329,7 +330,7 @@ function renderFiles(){
     // lives; picking another folder moves it (audio+sidecar+slices together)
     var dirSel='<select style="width:auto;font-size:10px;padding:1px 2px;color:#888" '
       +'onchange="moveFile(\''+esc(f.name)+'\',this.value)">';
-    ['pool','REC','LOOPS'].forEach(function(dd){
+    ['pool','REC','LOOPS','SLICES'].forEach(function(dd){
       dirSel+='<option value="'+dd+'"'+((f.dir||'pool')===dd?' selected':'')+'>'+dd+'</option>';
     });
     dirSel+='</select>';
@@ -663,10 +664,40 @@ function loadRemote(){
     // seed the bar columns once; pollStatus animates the fills
     var mh='';
     for(var i=0;i<8;i++)
-      mh+='<div class="rcol"><div class="rbar"><div class="rfill" id="rf'+i+'" style="height:0%"></div></div>CV'+(i+1)+'<span id="rv'+i+'">-</span></div>';
-    mh+='<div class="rcol"><div class="rdot" id="rt0"></div>TR1</div><div class="rcol"><div class="rdot" id="rt1"></div>TR2</div>';
+      mh+='<div class="rcol"><div class="rbar"><div class="rfill" id="rf'+i+'" style="height:0%"></div></div><span id="rl'+i+'">CV'+(i+1)+'</span><span id="rv'+i+'">-</span></div>';
+    mh+='<div class="rcol"><div class="rdot" id="rt0"></div><span id="rlt0">TR1</span></div><div class="rcol"><div class="rdot" id="rt1"></div><span id="rlt1">TR2</span></div>';
+    // stereo audio level bars ride with the input monitor (green = audio):
+    // L/R tags above each pair, IN/OUT below — same anatomy as the CV columns
+    ['in','out'].forEach(function(g){
+      mh+='<div class="rcol">'
+        +'<div style="display:flex;gap:2px;font-size:9px;color:#555">'
+        +'<span style="width:22px;text-align:center">L</span><span style="width:22px;text-align:center">R</span></div>'
+        +'<div style="display:flex;gap:2px">'
+        +'<div class="rbar"><div class="rfill" id="rv'+g+'l" style="height:0%;background:#3a7"></div></div>'
+        +'<div class="rbar"><div class="rfill" id="rv'+g+'r" style="height:0%;background:#3a7"></div></div>'
+        +'</div>'+g.toUpperCase()+'</div>';
+    });
     document.getElementById('rmon').innerHTML=mh;
+    updateClkTag();
   }).catch(function(){});
+}
+
+// tag the channel the active machine clocks from (clk_src in its settings):
+// the CV label turns cyan with a CLK mark, so the meter explains the patch
+function updateClkTag(){
+  var cs=(rpData&&typeof rpData.clk_src==='number')?rpData.clk_src:null;
+  for(var i=0;i<8;i++){
+    var l=document.getElementById('rl'+i);
+    if(!l)continue;
+    l.textContent='CV'+(i+1)+(cs===i?'·CLK':'');
+    l.style.color=cs===i?'#0af':'';
+  }
+  [['rlt0',8,'TR1'],['rlt1',9,'TR2']].forEach(function(p){
+    var l=document.getElementById(p[0]);
+    if(!l)return;
+    l.textContent=p[2]+(cs===p[1]?'·CLK':'');
+    l.style.color=cs===p[1]?'#0af':'';
+  });
 }
 
 var rpData=null;
@@ -752,6 +783,7 @@ function rpLoad(){
   fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
     if(d.error){document.getElementById('rparams').innerHTML='<div class="msg er">'+esc(d.error)+'</div>';return;}
     rpData=d;
+    updateClkTag();
     var el=document.getElementById('rparams');
     if(curMach==='Drums'&&d.pad){
       fetch('/files').then(function(r){return r.json();}).then(function(fd){
@@ -815,6 +847,11 @@ function updateRemote(d){
   var t0=document.getElementById('rt0'),t1=document.getElementById('rt1');
   if(t0)t0.className='rdot'+((tr&1)?'':' on');
   if(t1)t1.className='rdot'+((tr&2)?'':' on');
+  var vu=d.vu||[0,0,0,0];
+  [['rvinl',0],['rvinr',1],['rvoutl',2],['rvoutr',3]].forEach(function(p){
+    var e=document.getElementById(p[0]);
+    if(e)e.style.height=Math.round((vu[p[1]]||0)/255*100)+'%';
+  });
   remMachines.forEach(function(m){
     var b=document.getElementById('rmb-'+m);
     if(b)b.className='btn'+(m===d.machine?' cur':'');
@@ -953,10 +990,10 @@ function pollStatus(){
       h+='<div class="cvb" style="height:14px"><div class="cvf" style="height:'+pct+'%"></div></div>';
     }
     document.getElementById('cvb').innerHTML=h;
-    var vu=d.vu||[0,0];
+    var vu=d.vu||[0,0,0,0];
     var vi=document.getElementById('vui'),vo=document.getElementById('vuo');
-    if(vi)vi.style.width=Math.round(vu[0]/255*100)+'%';
-    if(vo)vo.style.width=Math.round(vu[1]/255*100)+'%';
+    if(vi)vi.style.width=Math.round(Math.max(vu[0]||0,vu[1]||0)/255*100)+'%';
+    if(vo)vo.style.width=Math.round(Math.max(vu[2]||0,vu[3]||0)/255*100)+'%';
     var ri=document.getElementById('ri');
     ri.className='ri'+(d.recording?' on':'');
     document.getElementById('v0').textContent='V0: '+(d.v0||'--');

@@ -10,11 +10,13 @@
 #include "ui_events.h"
 #include "sample_browser.h"
 
+#define BR_ROWS (SAMPLE_DIR_N + 1)   // "all" + one per folder
+
 static struct {
     int  level;          // 0 = folder screen, 1 = list
-    int  fsel;           // folder row 0..3 (0 = all)
+    int  fsel;           // folder row 0..BR_ROWS-1 (0 = all)
     int  dir;            // SAMPLE_DIR_* chosen for the list level
-    int  counts[3];
+    int  counts[SAMPLE_DIR_N];
     bool recent;
     char title[28];
     char current[24];
@@ -22,7 +24,7 @@ static struct {
     int  n, sel;
 } b;
 
-static const char *const k_rows[4] = {"all", "pool", "REC", "LOOPS"};
+static const char *const k_rows[BR_ROWS] = {"all", "pool", "REC", "LOOPS", "SLICES"};
 
 static void folder_draw(void)
 {
@@ -33,8 +35,9 @@ static void folder_draw(void)
     char h[64];
     snprintf(h, sizeof(h), "%s - folder", b.title);
     TFT_print(h, _width / 2 - TFT_getStringWidth(h) / 2, 4);
-    int total = b.counts[0] + b.counts[1] + b.counts[2];
-    for (int i = 0; i < 4; i++) {
+    int total = 0;
+    for (int i = 0; i < SAMPLE_DIR_N; i++) total += b.counts[i];
+    for (int i = 0; i < BR_ROWS; i++) {
         int y = fh + 22 + i * (fh + 14);
         _bg = (i == b.fsel) ? (color_t){10, 18, 56} : TFT_BLACK;
         _fg = (i == b.fsel) ? TFT_WHITE : (color_t){150, 150, 150};
@@ -115,8 +118,8 @@ int sample_browser_event(int event)
 {
     if (b.level == 0) {
         switch (event) {
-            case EV_FWD: b.fsel = (b.fsel + 1) % 4; folder_draw(); break;
-            case EV_BWD: b.fsel = (b.fsel + 3) % 4; folder_draw(); break;
+            case EV_FWD: b.fsel = (b.fsel + 1) % BR_ROWS; folder_draw(); break;
+            case EV_BWD: b.fsel = (b.fsel + BR_ROWS - 1) % BR_ROWS; folder_draw(); break;
             case EV_SHORT_PRESS:
                 b.dir = (b.fsel == 0) ? SAMPLE_DIR_ALL : b.fsel - 1;
                 b.level = 1;

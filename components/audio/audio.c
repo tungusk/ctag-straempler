@@ -172,25 +172,30 @@ static void audio_task(void *pvParams)
         // optional clock OUT: overwrite one channel with beat pulses
         beatlisten_out_render(out);
 
-        // rough VU: decayed per-block peak of both buses (16-bit magnitude
-        // >> 7 => 0..255). A "is signal arriving / leaving" meter, no more.
+        // rough STEREO VU: decayed per-block peak per channel (16-bit
+        // magnitude >> 7 => 0..255), order inL/inR/outL/outR. A "is signal
+        // arriving / leaving, and on which side" meter, no more.
         {
-            static uint8_t vu_i = 0, vu_o = 0;
-            int32_t pi = 0, po = 0;
-            for (int i = 0; i < BUF_SZ; i++) {
-                int32_t a = in[i] >> 16, b = out[i] >> 16;
-                if (a < 0) a = -a;
-                if (b < 0) b = -b;
-                if (a > pi) pi = a;
-                if (b > po) po = b;
+            static uint8_t vu[4] = {0};
+            int32_t pk[4] = {0};
+            for (int i = 0; i < BUF_SZ; i += 2) {
+                int32_t il = in[i] >> 16, ir = in[i + 1] >> 16;
+                int32_t ol = out[i] >> 16, orr = out[i + 1] >> 16;
+                if (il < 0) il = -il;
+                if (ir < 0) ir = -ir;
+                if (ol < 0) ol = -ol;
+                if (orr < 0) orr = -orr;
+                if (il > pk[0]) pk[0] = il;
+                if (ir > pk[1]) pk[1] = ir;
+                if (ol > pk[2]) pk[2] = ol;
+                if (orr > pk[3]) pk[3] = orr;
             }
-            uint8_t ni = (uint8_t)(pi >> 7 > 255 ? 255 : pi >> 7);
-            uint8_t no = (uint8_t)(po >> 7 > 255 ? 255 : po >> 7);
-            vu_i = ni > vu_i ? ni : (uint8_t)((vu_i * 15) >> 4);   // fast up, ~11ms decay steps
-            vu_o = no > vu_o ? no : (uint8_t)((vu_o * 15) >> 4);
             portENTER_CRITICAL(&_status_mux);
-            _audio_status.vu_in = vu_i;
-            _audio_status.vu_out = vu_o;
+            for (int k = 0; k < 4; k++) {
+                uint8_t n = (uint8_t)(pk[k] >> 7 > 255 ? 255 : pk[k] >> 7);
+                vu[k] = n > vu[k] ? n : (uint8_t)((vu[k] * 15) >> 4);   // fast up, decayed down
+                _audio_status.vu[k] = vu[k];
+            }
             portEXIT_CRITICAL(&_status_mux);
         }
 

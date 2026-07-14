@@ -23,8 +23,8 @@ int sample_list_recent_dir(int only, char (**out)[24])
     // f_readdir hands over the timestamps in the SAME pass (a per-file stat()
     // would re-scan the directory once per entry). All pool folders feed the
     // one dated list — or just the one folder the browser is inside.
-    static const char *const dirs[] = {"usr", "usr/REC", "usr/LOOPS"};
-    for (int di = 0; di < 3; di++) {
+    static const char *const dirs[] = {"usr", "usr/REC", "usr/LOOPS", "usr/SLICES"};
+    for (int di = 0; di < SAMPLE_DIR_N; di++) {
     if (only >= 0 && di != only) continue;
     FF_DIR d;
     if (f_opendir(&d, dirs[di]) == FR_OK) {         // FatFS path: no /sdcard

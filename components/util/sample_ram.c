@@ -12,21 +12,21 @@
 // saves) can feed ONE flat id list, or be walked alone (the folder browser);
 // loaders resolve ids back to folders either way
 static const char *const dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
-                                   "/sdcard/usr/LOOPS"};
+                                   "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES"};
 
 const char *sample_dir_name(int di)
 {
-    static const char *const names[] = {"pool", "REC", "LOOPS"};
-    return (di >= 0 && di < 3) ? names[di] : "all";
+    static const char *const names[] = {"pool", "REC", "LOOPS", "SLICES"};
+    return (di >= 0 && di < SAMPLE_DIR_N) ? names[di] : "all";
 }
 
-void sample_folder_counts(int out[3])
+void sample_folder_counts(int out[SAMPLE_DIR_N])
 {
     // display counts for the folder screen: one name-only pass per folder,
     // NO cross-folder dedup (a base living in two folders counts in both —
     // that is what the browser will show when you enter each one)
     char id[24];
-    for (int di = 0; di < 3; di++) {
+    for (int di = 0; di < SAMPLE_DIR_N; di++) {
         out[di] = 0;
         sd_lock_take();
         DIR *d = opendir(dirs[di]);
@@ -43,7 +43,7 @@ static int sample_list_dir(int only, char out[][24], int max)
 {
     int n = 0;
     char id[24];
-    for (int di = 0; di < 3 && n < max; di++) {
+    for (int di = 0; di < SAMPLE_DIR_N && n < max; di++) {
         if (only >= 0 && di != only) continue;
         sd_lock_take();   // brief name-only walk; hold the bus for its duration
         DIR *d = opendir(dirs[di]);
