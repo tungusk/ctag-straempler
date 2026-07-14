@@ -19,6 +19,7 @@
 #include "recording.h"
 #include "beatlisten.h"
 #include "menu_config.h"
+#include "sample_browser.h"
 #include "sampler3_priv.h"
 
 static const color_t ACCENT   = {230, 160, 40};
@@ -28,16 +29,7 @@ static const color_t COL_PLAY = {25, 120, 50};
 static const color_t COL_IDLE = {30, 60, 140};
 
 static int s_voice_sel = 0;                    // lane focus on Live / Setup target
-static char (*s_samples)[S3_NAME_LEN] = NULL;
-static int  s_n_samples = 0, s_sample_idx = 0;
-static int  s_load_ret = M_S3_LIVE;
-
-static void refresh_samples(void){
-    s_n_samples = s3_list_samples(&s_samples);
-    s_sample_idx = 0;
-    for (int i = 0; i < s_n_samples; i++)
-        if (strcmp(s_samples[i], s3.v[s_voice_sel].name) == 0) { s_sample_idx = i; break; }
-}
+static int s_load_ret = M_S3_LIVE;
 
 // ---- Live ---------------------------------------------------------------------
 // change-driven redraws only (full-region repaints strobe — deck lesson)
@@ -402,7 +394,6 @@ static int s3_live_handler(int it_id, int event, void *ev_data){
             live_full_redraw();
             break;
         case EV_SHORT_PRESS:
-            refresh_samples();
             s_load_ret = M_S3_LIVE;
             return M_S3_LOAD;
         case EV_LONG_PRESS: return M_S3_SETUP;
@@ -578,57 +569,22 @@ static int s3_setup_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
-// ---- Load browser ---------------------------------------------------------------
-static void load_redraw(void){
-    TFT_resetclipwin();
-    TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
-    _bg = TFT_BLACK; _fg = TFT_LIGHTGREY;
-    char h[48];
-    snprintf(h, sizeof(h), "Load -> V%d  (%d/%d)", s_voice_sel + 1,
-             s_n_samples ? s_sample_idx + 1 : 0, s_n_samples);
-    TFT_print(h, _width / 2 - TFT_getStringWidth(h) / 2, 4);
-    if (!s_n_samples){
-        char *m = "no files in usr/";
-        TFT_print(m, _width / 2 - TFT_getStringWidth(m) / 2, _height / 2);
-        return;
-    }
-    int cy = _height / 2;
-    Font f = cfont;
-    TFT_setFont(DEJAVU24_FONT, NULL);
-    int bigfh = TFT_getfontheight();
-    _fg = TFT_WHITE;
-    char *selnm = s_samples[s_sample_idx];
-    TFT_print(selnm, _width / 2 - TFT_getStringWidth(selnm) / 2, cy - bigfh / 2);
-    cfont = f;
-    _fg = (color_t){110, 110, 110};
-    for (int k = 1; k <= 4; k++){
-        int up = s_sample_idx - k, dn = s_sample_idx + k;
-        int yup = cy - bigfh / 2 - k * (fh + 4) - 4;
-        int ydn = cy + bigfh / 2 + (k - 1) * (fh + 4) + 6;
-        if (up >= 0){ char *nn = s_samples[up]; TFT_print(nn, _width / 2 - TFT_getStringWidth(nn) / 2, yup); }
-        if (dn < s_n_samples){ char *nn = s_samples[dn]; TFT_print(nn, _width / 2 - TFT_getStringWidth(nn) / 2, ydn); }
-    }
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    char *hint = "turn:browse  press:load  hold:cancel";
-    TFT_print(hint, _width / 2 - TFT_getStringWidth(hint) / 2, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
-}
-
+// ---- Load browser: the shared two-level widget (folders -> big-name list) --
 static int s3_load_handler(int it_id, int event, void *ev_data){
-    switch(event){
-        case EV_ENTERED_MENU: load_redraw(); break;
-        case EV_FWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + 1) % s_n_samples; load_redraw(); } break;
-        case EV_BWD: if(s_n_samples){ s_sample_idx = (s_sample_idx + s_n_samples - 1) % s_n_samples; load_redraw(); } break;
-        case EV_SHORT_PRESS:
-            if(s_n_samples && strcmp(s_samples[s_sample_idx], s3.v[s_voice_sel].name) != 0)
-                s3_load_sample(s_voice_sel, s_samples[s_sample_idx]);
-            return s_load_ret;
-        case EV_LONG_PRESS:
-            return s_load_ret;      // escape without loading
-        default: break;
+    if (event == EV_ENTERED_MENU){
+        char t[24];
+        snprintf(t, sizeof(t), "Load -> V%d", s_voice_sel + 1);
+        sample_browser_enter(true, t, s3.v[s_voice_sel].name);
+        return 0;
     }
+    int r = sample_browser_event(event);
+    if (r == 1){
+        const char *sel = sample_browser_selected();
+        if (strcmp(sel, s3.v[s_voice_sel].name) != 0)
+            s3_load_sample(s_voice_sel, (char*)sel);
+        return s_load_ret;
+    }
+    if (r == 2) return s_load_ret;   // escape without loading
     return 0;
 }
 

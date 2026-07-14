@@ -8,15 +8,43 @@
 #include "sd_lock.h"
 #include "sampfile.h"
 
-int sample_list(char out[][24], int max)
+// every pool folder (flat usr/ = legacy + uploads, REC = takes, LOOPS =
+// saves) can feed ONE flat id list, or be walked alone (the folder browser);
+// loaders resolve ids back to folders either way
+static const char *const dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
+                                   "/sdcard/usr/LOOPS"};
+
+const char *sample_dir_name(int di)
 {
-    // every pool folder (flat usr/ = legacy + uploads, REC = takes, LOOPS =
-    // saves) feeds ONE flat id list; loaders resolve ids back to folders
-    static const char *const dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
-                                       "/sdcard/usr/LOOPS"};
+    static const char *const names[] = {"pool", "REC", "LOOPS"};
+    return (di >= 0 && di < 3) ? names[di] : "all";
+}
+
+void sample_folder_counts(int out[3])
+{
+    // display counts for the folder screen: one name-only pass per folder,
+    // NO cross-folder dedup (a base living in two folders counts in both —
+    // that is what the browser will show when you enter each one)
+    char id[24];
+    for (int di = 0; di < 3; di++) {
+        out[di] = 0;
+        sd_lock_take();
+        DIR *d = opendir(dirs[di]);
+        if (!d) { sd_lock_give(); continue; }
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL)
+            if (sample_name_id(e->d_name, id, sizeof(id))) out[di]++;
+        closedir(d);
+        sd_lock_give();
+    }
+}
+
+static int sample_list_dir(int only, char out[][24], int max)
+{
     int n = 0;
     char id[24];
     for (int di = 0; di < 3 && n < max; di++) {
+        if (only >= 0 && di != only) continue;
         sd_lock_take();   // brief name-only walk; hold the bus for its duration
         DIR *d = opendir(dirs[di]);
         if (!d) { sd_lock_give(); continue; }
@@ -38,6 +66,11 @@ int sample_list(char out[][24], int max)
     return n;
 }
 
+int sample_list(char out[][24], int max)
+{
+    return sample_list_dir(SAMPLE_DIR_ALL, out, max);
+}
+
 static char s_shared_list[SAMPLE_LIST_MAX][24];
 
 static int cmp_name24(const void *a, const void *b)
@@ -45,12 +78,17 @@ static int cmp_name24(const void *a, const void *b)
     return strcasecmp((const char *)a, (const char *)b);
 }
 
-int sample_list_shared(char (**out)[24])
+int sample_list_shared_dir(int di, char (**out)[24])
 {
-    int n = sample_list(s_shared_list, SAMPLE_LIST_MAX);
+    int n = sample_list_dir(di, s_shared_list, SAMPLE_LIST_MAX);
     qsort(s_shared_list, n, sizeof(s_shared_list[0]), cmp_name24);
     *out = s_shared_list;
     return n;
+}
+
+int sample_list_shared(char (**out)[24])
+{
+    return sample_list_shared_dir(SAMPLE_DIR_ALL, out);
 }
 
 uint32_t sample_load(const char *name, int16_t *dst, uint32_t max_frames, bool mono)

@@ -10,7 +10,7 @@
 #include "sample_ram.h"
 #include "sampfile.h"
 
-int sample_list_recent(char (**out)[24])
+int sample_list_recent_dir(int only, char (**out)[24])
 {
     static char (*list)[24] = NULL;
     static uint32_t when[SAMPLE_LIST_RECENT_MAX];   // FatFS date<<16|time
@@ -22,9 +22,10 @@ int sample_list_recent(char (**out)[24])
     sd_lock_take();
     // f_readdir hands over the timestamps in the SAME pass (a per-file stat()
     // would re-scan the directory once per entry). All pool folders feed the
-    // one dated list.
+    // one dated list — or just the one folder the browser is inside.
     static const char *const dirs[] = {"usr", "usr/REC", "usr/LOOPS"};
     for (int di = 0; di < 3; di++) {
+    if (only >= 0 && di != only) continue;
     FF_DIR d;
     if (f_opendir(&d, dirs[di]) == FR_OK) {         // FatFS path: no /sdcard
         FILINFO fi;
@@ -76,4 +77,9 @@ int sample_list_recent(char (**out)[24])
     }
     *out = list;
     return n;
+}
+
+int sample_list_recent(char (**out)[24])
+{
+    return sample_list_recent_dir(SAMPLE_DIR_ALL, out);
 }

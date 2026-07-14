@@ -29,6 +29,19 @@ int sample_list_shared(char (**out)[24]);
 #define SAMPLE_LIST_RECENT_MAX 512
 int sample_list_recent(char (**out)[24]);
 
+// ---- folder dimension (the two-level browser) ---------------------------------
+// The same three-dir walk, restricted to ONE folder — organization, not
+// restriction: every file stays reachable, the folder screen just makes a
+// grown library navigable and turns the list caps into per-folder budgets.
+#define SAMPLE_DIR_ALL   (-1)
+#define SAMPLE_DIR_POOL  0     // usr/ — imports, bounces, legacy
+#define SAMPLE_DIR_REC   1     // usr/REC — takes
+#define SAMPLE_DIR_LOOPS 2     // usr/LOOPS — looper saves
+const char *sample_dir_name(int di);            // "all"/"pool"/"REC"/"LOOPS"
+void sample_folder_counts(int out[3]);          // per-folder entry counts (display)
+int sample_list_shared_dir(int di, char (**out)[24]);
+int sample_list_recent_dir(int di, char (**out)[24]);
+
 // load /sdcard/usr/<name>.RAW into dst. mono=false writes interleaved stereo
 // (dst must hold max_frames*2 int16); mono=true averages L/R to one int16 per
 // frame (dst holds max_frames). returns frames loaded, 0 on failure.
