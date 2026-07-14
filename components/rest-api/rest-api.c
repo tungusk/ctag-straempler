@@ -86,15 +86,21 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     // building the whole file array + printing it in one shot OOMs (the list
     // came back empty). Instead we emit one small object per file as we walk
     // the directory, so peak memory stays flat no matter how many files exist.
-    // We also skip reading each .JSN sidecar: names come free from readdir and
-    // sizes from stat, so the listing never touches the failing per-file reads
-    // that were dragging the handler and tripping browser socket resets.
+    // Sidecars ARE read now (Arlo wants bpm + duration + newest-first), but under
+    // the constraint that made them forbidden before: the old attempt built cJSON
+    // per file into PSRAM, and SDMMC DMA cannot target PSRAM — every read failed and
+    // the handler dragged until sockets reset. So: ONE small INTERNAL-RAM buffer,
+    // reused per file, and a substring parse for the two numbers we want. No cJSON,
+    // no allocation, flat memory, and the socket-abort path is untouched.
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_send_chunk(req, "{\"files\":[", HTTPD_RESP_USE_STRLEN);
 
     static const char *const jdirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
                                         "/sdcard/usr/LOOPS"};
+    // INTERNAL RAM, reused for every sidecar. Never PSRAM: SDMMC DMA cannot target it,
+    // which is the whole reason sidecars were skipped here in the first place.
+    static char sidecar_buf[512];
     bool first = true;
     bool dead = false;   // client hung up mid-stream — stop sending (same
                          // disease as the /files/raw abort fix: a dead socket
@@ -120,14 +126,42 @@ static esp_err_t files_get_handler(httpd_req_t *req)
             char id[260] = {0};
             strncpy(id, ent->d_name, len - 4);
 
-            // audio size via stat — light, no file open needed; the resolver
+            // audio size + mtime via stat — light, no file open needed; the resolver
             // finds whichever container (.RAW/.WAV/.AIF) carries this id
             char raw_path[280];
             struct stat st;
+            long fsize = 0;
+            long mtime = 0;
             sd_lock_take();
-            long fsize = (sample_resolve(id, raw_path, sizeof(raw_path)) == 0 &&
-                          stat(raw_path, &st) == 0) ? st.st_size : 0;
+            if (sample_resolve(id, raw_path, sizeof(raw_path)) == 0 && stat(raw_path, &st) == 0) {
+                fsize = st.st_size;
+                mtime = (long)st.st_mtime;
+            }
             sd_lock_give();
+
+            // the sidecar's bpm, read into a SMALL INTERNAL buffer and scanned as text
+            float bpm = 0.0f;
+            {
+                char jp[300];
+                sample_resolve_aux(id, ".JSN", jp, sizeof(jp));
+                sd_lock_take();
+                FILE *jf = fopen(jp, "rb");
+                if (jf) {
+                    size_t got = fread(sidecar_buf, 1, sizeof(sidecar_buf) - 1, jf);
+                    fclose(jf);
+                    sidecar_buf[got] = 0;
+                    const char *b = strstr(sidecar_buf, "\"bpm\"");
+                    if (b) {
+                        b = strchr(b, ':');
+                        if (b) bpm = strtof(b + 1, NULL);
+                    }
+                }
+                sd_lock_give();
+            }
+            // duration: stereo 16-bit at 44.1k is the pool's native shape, so bytes/4
+            // is frames. A WAV/AIFF header is a rounding error at this scale — this is
+            // a browsing aid, not a timeline.
+            int dur = fsize > 0 ? (int)(fsize / (4L * 44100L)) : 0;
 
             // build ONE tiny object (cJSON just for correct string escaping),
             // print it small, stream it, free it — flat memory footprint
@@ -136,6 +170,9 @@ static esp_err_t files_get_handler(httpd_req_t *req)
             cJSON_AddStringToObject(o, "description", "");
             cJSON_AddStringToObject(o, "tags", "");
             cJSON_AddNumberToObject(o, "size", fsize);
+            cJSON_AddNumberToObject(o, "bpm", bpm);
+            cJSON_AddNumberToObject(o, "dur", dur);
+            cJSON_AddNumberToObject(o, "mtime", mtime);
             char *os = cJSON_PrintUnformatted(o);
             cJSON_Delete(o);
             if (os) {
@@ -182,6 +219,92 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_sendstr(req, "{}");
+    return ESP_OK;
+}
+
+// ─── POST /files/rename?name=xxx&to=yyy ───────────────────────────────────────
+//
+// A pool id is not just a filename: it is an audio file, a .JSN sidecar (carrying the
+// bpm/grid stamp the deck and DoubleDecker depend on), and possibly an .OT slice map —
+// all of which must move together, in whichever pool folder they live in. Renaming only
+// the audio would orphan the analysis and the loop would then silently refuse to engage
+// ("no grid"), which is exactly the class of bug we spent today chasing.
+static esp_err_t files_rename_handler(httpd_req_t *req)
+{
+    char name[32], to[32];
+    if (!get_query_param(req, "name", name, sizeof(name)) ||
+        !get_query_param(req, "to", to, sizeof(to))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name/to");
+        return ESP_FAIL;
+    }
+    // ids are bare, uppercase and 8.3-friendly — keep the pool's shape enforceable
+    int tl = strlen(to);
+    if (tl < 1 || tl > 8) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Name must be 1-8 chars");
+        return ESP_FAIL;
+    }
+    for (int i = 0; i < tl; i++) {
+        char c = to[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Use A-Z 0-9 _ only");
+            return ESP_FAIL;
+        }
+    }
+    // never clobber: renaming onto an existing id would silently merge two samples
+    char probe[300];
+    struct stat pst;
+    sd_lock_take();
+    bool taken = (sample_resolve(to, probe, sizeof(probe)) == 0 && stat(probe, &pst) == 0);
+    sd_lock_give();
+    if (taken) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Target name already exists");
+        return ESP_FAIL;
+    }
+
+    static const char *const rn_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF", ".JSN", ".OT"};
+    static const char *const rn_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
+                                          "/sdcard/usr/LOOPS"};
+    char from_p[80], to_p[80];
+    int moved = 0;
+    sd_lock_take();
+    for (int d = 0; d < 3; d++)
+        for (int i = 0; i < 6; i++) {
+            snprintf(from_p, sizeof(from_p), "%s/%s%s", rn_dirs[d], name, rn_exts[i]);
+            struct stat st;
+            if (stat(from_p, &st) != 0) continue;      // this piece does not exist
+            snprintf(to_p, sizeof(to_p), "%s/%s%s", rn_dirs[d], to, rn_exts[i]);
+            if (rename(from_p, to_p) == 0) moved++;
+        }
+    sd_lock_give();
+
+    if (!moved) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No such sample");
+        return ESP_FAIL;
+    }
+
+    // the sidecar names ITSELF inside. Leave it stale and the pool disagrees with its
+    // own metadata: the browser lists the new id while the JSN still claims the old one.
+    char jp[300];
+    sample_resolve_aux(to, ".JSN", jp, sizeof(jp));
+    cJSON *root = readJSONFileAsCJSON(jp);
+    if (root) {
+        cJSON_DeleteItemFromObject(root, "id");
+        cJSON_AddStringToObject(root, "id", to);
+        if (cJSON_GetObjectItemCaseSensitive(root, "name")) {
+            cJSON_DeleteItemFromObject(root, "name");
+            cJSON_AddStringToObject(root, "name", to);
+        }
+        char *js = cJSON_Print(root);
+        cJSON_Delete(root);
+        if (js) {
+            writeJSONFile(jp, js);
+            free(js);
+        }
+    }
+
+    ESP_LOGI(TAG, "rename %s -> %s (%d files)", name, to, moved);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;
 }
 
@@ -1052,6 +1175,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/sysinfo",    .method = HTTP_GET,    .handler = sysinfo_get_handler },
     { .uri = "/files",      .method = HTTP_GET,    .handler = files_get_handler },
     { .uri = "/files",      .method = HTTP_DELETE, .handler = files_delete_handler },
+    { .uri = "/files/rename", .method = HTTP_POST, .handler = files_rename_handler },
     { .uri = "/files/raw",  .method = HTTP_GET,    .handler = files_raw_handler },
     { .uri = "/import",     .method = HTTP_POST,   .handler = import_post_handler },
     { .uri = "/import",     .method = HTTP_GET,    .handler = import_get_handler },

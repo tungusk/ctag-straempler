@@ -30,6 +30,7 @@ typedef struct {
     uint8_t  dn;          // consecutive blocks seen DOWN (debounce)
     uint8_t  up;          // consecutive blocks seen UP
     bool     state;       // the DEBOUNCED level
+    bool     pulse;       // a SHORT validated gate is being synthesised as a tap
 } trig_gate_t;
 
 #define TG_LONG_FRAMES ((uint32_t)(0.6f * 44100.0f))
@@ -41,22 +42,30 @@ typedef struct {
 // loop mode and the loops are jumping around on their own"). A press must now
 // PERSIST for TG_DEBOUNCE blocks before it counts, and a release likewise.
 //
-// KNOWN LIMIT (2026-07-14, review): a block is 0.726 ms, so TG_DEBOUNCE 2 is ~1.45 ms
-// — and audio.c samples the pins ONCE per block. At that rate a real ~1 ms eurorack
-// gate and a floating-input glitch are INDISTINGUISHABLE, so no debounce counted in
-// blocks can separate them: 2 drops short gates, 1 lets a floating TR2 toggle the loop.
-// The fix is in the acquisition layer — a GPIO edge interrupt measuring pulse WIDTH
-// (>= ~200 us = real, sub-100 us = glitch) — requested in HANDOFF.md, since audio.c is
-// the other agent's area. Until it lands, 2 is the lesser evil: it fixes the bug Arlo
-// actually hit, at the cost of very short gates.
+// TWO SOURCES, EACH FOR WHAT IT IS GOOD AT (resolved 2026-07-14):
+//   - `raw` = the per-block LEVEL sample. Debounced by TG_DEBOUNCE blocks, which
+//     rejects a floating-input glitch that happens to coincide with the sample.
+//   - `rising` = a VALIDATED assert edge from the acquisition layer (audio.c GPIO
+//     ISRs; the low must hold >= 200 us). This catches a short gate that fell
+//     ENTIRELY BETWEEN block samples — which the level path structurally cannot see,
+//     because a block is 0.726 ms and a eurorack trigger can be 1 ms.
+//
+// Together they kill both bugs at once: a 1 ms gate always registers (via `rising`,
+// synthesised as a tap), and a sub-200 us glitch never does (it is neither validated
+// nor able to survive the level debounce). This is why TG_DEBOUNCE STAYS AT 2 rather
+// than going back to 1 as the acquisition note suggested — with the rising path in
+// place, the debounce no longer costs us short gates, and it still guards the level
+// path against a floating pin.
 #define TG_DEBOUNCE 2
 
 // `down` = gate active (caller maps the active-low trig bit); `frames` = block
 // size. Returns at most one event per call — PRESS on the down edge, HOLD at
 // the threshold, REL_* on the up edge.
-static inline tg_event_t trig_gate_step(trig_gate_t *g, bool raw, int frames)
+// `raw` = the pin this block (active = asserted). `rising` = a validated assert edge
+// since the last block (io->trig_rising). Returns at most one event per call.
+static inline tg_event_t trig_gate_step_ex(trig_gate_t *g, bool raw, bool rising, int frames)
 {
-    // debounce first: `raw` is the pin, `g->state` is what the grammar sees
+    // debounce the LEVEL: `raw` is the pin, `g->state` is what the grammar sees
     if (raw) {
         g->up = 0;
         if (g->dn < 255) g->dn++;
@@ -67,6 +76,25 @@ static inline tg_event_t trig_gate_step(trig_gate_t *g, bool raw, int frames)
         if (g->up >= TG_DEBOUNCE) g->state = false;
     }
     bool down = g->state;
+
+    // A SHORT validated gate is synthesised as a TAP: press now, release next block.
+    // Without this a 1 ms trigger is simply invisible — it can fall entirely between
+    // two level samples.
+    if (g->pulse) {
+        if (down) g->pulse = false;              // the level path owns it now
+        else if (!raw) {                         // the pulse is over: complete the tap
+            g->pulse = false;
+            g->held = 0;
+            g->long_fired = false;
+            return TG_REL_SHORT;
+        }
+    } else if (!down && rising && g->held == 0) {
+        g->pulse = true;                         // press now; the release follows
+        g->held = (uint32_t)frames;
+        g->long_fired = false;
+        return TG_PRESS;
+    }
+
     if (down) {
         if (g->held == 0) {
             g->held = (uint32_t)frames;
@@ -84,9 +112,16 @@ static inline tg_event_t trig_gate_step(trig_gate_t *g, bool raw, int frames)
         bool was_long = g->long_fired || g->held >= TG_LONG_FRAMES;
         g->held = 0;
         g->long_fired = false;
+        g->pulse = false;
         return was_long ? TG_REL_LONG : TG_REL_SHORT;
     }
     return TG_NONE;
+}
+
+// level-only shim: a machine that does not care about sub-block gates
+static inline tg_event_t trig_gate_step(trig_gate_t *g, bool raw, int frames)
+{
+    return trig_gate_step_ex(g, raw, false, frames);
 }
 
 // ---- BOTH-GATE COMBO: the shared RESYNC gesture (Arlo, 2026-07-13) ----------

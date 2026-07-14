@@ -704,8 +704,8 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // toggle (beat-true), held past 0.6 s = momentary (long release exits).
     int fo = dd.focus;
     bool d1 = !(io->trig_level & 1), d2 = !(io->trig_level & 2);
-    tg_event_t e1 = trig_gate_step(&s_tg[0], d1, frames);
-    tg_event_t e2 = trig_gate_step(&s_tg[1], d2, frames);
+    tg_event_t e1 = trig_gate_step_ex(&s_tg[0], d1, io->trig_rising & 1, frames);
+    tg_event_t e2 = trig_gate_step_ex(&s_tg[1], d2, io->trig_rising & 2, frames);
     // BOTH-TRIG RESYNC on the focused deck. It arms at 0.35 s — ahead of either
     // gate's own 0.6 s hold — and while it owns the trigs their individual
     // events are swallowed, or the same gesture would also stop the deck and
