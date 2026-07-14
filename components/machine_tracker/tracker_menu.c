@@ -38,7 +38,7 @@ static void refresh_mods(void){
 #define TITLE_Y  22
 #define TYPE_Y   58
 #define STAT_Y   80
-#define BODY_Y   118
+#define BODY_Y   140        // sample-name panel: BELOW the bar (off by default)
 static char s_type[48] = "", s_stat[48] = "";
 static char s_title[TRK_TITLE_LEN] = "";
 static char s_body_sig[32] = "";
@@ -57,30 +57,35 @@ static const char *state_word(void){
     }
 }
 
-// TRANSPORT BAR — a 1px RULE with a scrubber crossing it (Arlo; the DoubleDecker
-// idiom). While looping, the LOOP WINDOW is the lit part of the rule and the rest
-// goes dim, so the loop's SIZE and where it sits both read at a glance.
+// THE PLAY BAR (Arlo: "beef the whole thing up... make it glorious"). A big
+// solid bar: LIGHT green body with the LOOP WINDOW punched into it DARK ("invert
+// the greens so the loop is dark on light"). The loop reads as a hole cut in the
+// song rather than a bright sticker laid on top — and the white playhead pops
+// against both.
 //
-// Both the window and the playhead are measured in STEPS. They used to disagree:
-// the head came from module TIME while the window came from step positions, so on
-// any module whose tempo moves the two axes drift apart and the window never sat
-// where the head actually was (Arlo: "i'm not seeing the loop size").
+// Both the window and the playhead are measured in STEPS. They used to disagree
+// — the head came from module TIME while the window came from step positions, so
+// on any module whose tempo moves, the two axes drift apart and the window never
+// sat where the head was (Arlo: "i'm not seeing the loop size").
 #define TBAR_X  8
-#define TBAR_Y  100          // the rule's line
-#define TBAR_H  16           // the band the scrubber sweeps (erase geometry)
+#define TBAR_Y  106        // clear of the status line (the beefy bar ran into it)
+#define TBAR_H  26           // beefy
 #define TBAR_W  (_width - 16)
-#define TBAR_RULE 2          // a 2px line (Arlo: 1px read too faint)
-#define TBAR_HEAD_W 3
+#define TBAR_HEAD_W 4
+#define LOOP_MIN_W  6        // a 4-step loop in a 1000-step song is ~1px: floor it
 
-static const color_t BAR_DIM = {40, 44, 60};   // the rule outside the loop
-
-static color_t tbar_bg(void){
-    if (trk.state == TRK_FAIL) return (color_t){120, 40, 40};
-    if (trk.loop_engage)       return (color_t){235, 120, 175};   // pink = loop mode
-    return trk.playing ? (color_t){25, 200, 90} : (color_t){60, 110, 190};
+// LIGHT = the song (the bar's body), DARK = the loop window cut into it. Green
+// while playing, blue when stopped, red on a failed load — same pairing either way.
+static color_t bar_body(void){
+    if (trk.state == TRK_FAIL) return (color_t){190, 70, 70};
+    return trk.playing ? (color_t){70, 215, 115} : (color_t){70, 130, 210};
+}
+static color_t bar_loop(void){
+    if (trk.state == TRK_FAIL) return (color_t){70, 20, 20};
+    return trk.playing ? (color_t){16, 62, 32} : (color_t){22, 42, 88};
 }
 
-// the playhead's position, in per-mille of the song — in STEPS, the same axis the
+// the playhead's position in per-mille of the song — in STEPS, the same axis the
 // loop window uses (falls back to time only if the step map is missing)
 static int bar_pos_pm(void){
     if (trk.total_steps && trk.n_orders && trk.cur_pos >= 0 &&
@@ -95,17 +100,6 @@ static int bar_pos_pm(void){
 
 static int bar_x_of(int pm){ return TBAR_X + 2 + pm * (TBAR_W - 8) / 1000; }
 
-// paint the RULE across [sx, sx+sw): lit inside the loop window, dim outside
-// (and lit end to end when there is no loop). This is also the playhead's erase.
-// LOOP WINDOW GEOMETRY. Honest about the pixels: the loop is measured in STEPS
-// (1..32 rows) and the bar spans the WHOLE SONG, so on a 1000-step module a
-// 4-step loop is 0.4% of the width — about ONE pixel. No colour scheme rescues
-// that. So the window is drawn as a BLOCK (thick, solid, bright) with a
-// legibility FLOOR: never thinner than LOOP_MIN_W, and it grows honestly beyond
-// that, so 4 vs 32 steps still reads as small vs large.
-#define LOOP_BLK_H  14     // a FAT solid block (Arlo: "thicken it up")
-#define LOOP_MIN_W  5      // ...and never narrower than this, however few steps
-
 static void loop_px(int *pa, int *pb){
     int a = bar_x_of(trk.loop_a_pm), b = bar_x_of(trk.loop_b_pm);
     if (b < a + LOOP_MIN_W) b = a + LOOP_MIN_W;
@@ -114,26 +108,33 @@ static void loop_px(int *pa, int *pb){
     *pa = a; *pb = b;
 }
 
+// paint the bar across [sx, sx+sw): the body is LIGHT, the loop window is cut
+// into it DARK (all light when there is no loop). Doubles as the playhead's erase.
 static void bar_paint_bg(int sx, int sw){
     if (sw <= 0) return;
-    int ry = TBAR_Y + TBAR_H / 2;
-    TFT_fillRect(sx, TBAR_Y - 1, sw, TBAR_H + 2, TFT_BLACK);   // band + head overhang
+    int iy = TBAR_Y + 1, ih = TBAR_H - 2;          // inside the frame
     if (!trk.loop_engage){
-        TFT_fillRect(sx, ry, sw, TBAR_RULE, tbar_bg());
+        TFT_fillRect(sx, iy, sw, ih, bar_body());
         return;
     }
-    // the SONG is a dim rule; the LOOP is a solid block sitting on it
-    TFT_fillRect(sx, ry, sw, TBAR_RULE, BAR_DIM);
     int a, b;
     loop_px(&a, &b);
-    int x0 = a > sx ? a : sx;
-    int x1 = (b < sx + sw) ? b : sx + sw;
-    if (x1 > x0)
-        TFT_fillRect(x0, ry - LOOP_BLK_H / 2, x1 - x0, LOOP_BLK_H, tbar_bg());
+    int x = sx, end = sx + sw;
+    while (x < end){
+        int run;
+        color_t c;
+        if (x < a)      { run = a < end ? a : end; c = bar_body(); }
+        else if (x < b) { run = b < end ? b : end; c = bar_loop(); }
+        else            { run = end;               c = bar_body(); }
+        if (run > x) TFT_fillRect(x, iy, run - x, ih, c);
+        x = run;
+    }
 }
 
 static void draw_bar_frame(void){
-    bar_paint_bg(TBAR_X, TBAR_W);
+    _fg = (color_t){60, 70, 90};
+    TFT_drawRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, _fg);      // a thin containing frame
+    bar_paint_bg(TBAR_X + 1, TBAR_W - 2);
     _bg = TFT_BLACK;
     s_last_barx = -1;
     s_last_loopa = -1; s_last_loopb = -1;
@@ -153,10 +154,8 @@ static void draw_bar(void){
     }
     int x = bar_x_of(bar_pos_pm());
     if (x == s_last_barx) return;
-    if (s_last_barx > 0) bar_paint_bg(s_last_barx - 1, TBAR_HEAD_W + 2);   // erase
-    // (the erase repaints rule + block underneath, so the head can overhang them)
-    // the scrubber CROSSES the rule (and the loop block) — white reads on both
-    TFT_fillRect(x, TBAR_Y - 1, TBAR_HEAD_W, TBAR_H + 2, (color_t){245, 245, 245});
+    if (s_last_barx > 0) bar_paint_bg(s_last_barx, TBAR_HEAD_W);       // erase
+    TFT_fillRect(x, TBAR_Y + 1, TBAR_HEAD_W, TBAR_H - 2, (color_t){245, 245, 245});
     s_last_barx = x;
 }
 
