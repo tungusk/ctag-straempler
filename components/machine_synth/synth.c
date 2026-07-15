@@ -40,6 +40,8 @@ static esp_err_t synth_start(void)
     sy.fm_index = 3.0f;         // FM: a bright-ish plucky depth
     sy.atk = 0.005f; sy.dec = 0.20f; sy.sus = 0.7f; sy.rel = 0.30f;
     sy.env_to_cut = 0.5f;
+    sy.glide = 0.0f;
+    sy.cur_freq = 0.0f;
     sy.level = 0.8f;
     sy.cutoff_base = 1200.0f;
     sy.res01 = 0.2f;
@@ -80,7 +82,16 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
     float dec_inc = (1.0f - sy.sus) / (dec * SY_RATE);
     float rel_inc = 1.0f / (rel * SY_RATE);
 
-    float dt = sy.freq / SY_RATE;                     // phase increment
+    // glide (portamento): slew the sounding frequency toward the target note
+    if (sy.cur_freq <= 0.0f) sy.cur_freq = sy.freq;    // first note: snap, no glide from 0
+    if (sy.glide > 0.0005f) {
+        float blockdur = (float)(MACHINE_BLOCK / 2) / SY_RATE;   // one block of frames
+        float coef = 1.0f - expf(-blockdur / sy.glide);
+        sy.cur_freq += (sy.freq - sy.cur_freq) * coef;
+    } else {
+        sy.cur_freq = sy.freq;
+    }
+    float dt = sy.cur_freq / SY_RATE;                  // phase increment
     if (dt > 0.5f) dt = 0.5f;                          // Nyquist guard
     float q = svf_damp(sy.res01, 0.6f, 2.0f);         // 0..1 knob -> damping (2 = clean)
 
@@ -144,6 +155,7 @@ static cJSON *synth_preset_save(void)
     cJSON_AddNumberToObject(o, "sus", sy.sus);
     cJSON_AddNumberToObject(o, "rel", sy.rel);
     cJSON_AddNumberToObject(o, "e2c", sy.env_to_cut);
+    cJSON_AddNumberToObject(o, "gld", sy.glide);
     cJSON_AddNumberToObject(o, "lvl", sy.level);
     return o;
 }
@@ -163,6 +175,7 @@ static void synth_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sus"))   && cJSON_IsNumber(j)) sy.sus = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rel"))   && cJSON_IsNumber(j)) sy.rel = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "e2c"))   && cJSON_IsNumber(j)) sy.env_to_cut = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) sy.glide = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) sy.level = (float)j->valuedouble;
 }
 

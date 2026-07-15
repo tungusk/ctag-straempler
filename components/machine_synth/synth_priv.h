@@ -26,7 +26,8 @@ typedef struct {
     float mphase;                // FM modulator phase 0..1
     int   env_stage;
     float env;                   // envelope level 0..1
-    float freq;                  // current note frequency (Hz)
+    float freq;                  // TARGET note frequency (Hz)
+    float cur_freq;              // glide-slewed frequency actually sounding
     bool  gate;                  // last gate level
     svf_t flt_l;                 // (mono voice, one filter; L used, mirrored to R)
 
@@ -39,6 +40,7 @@ typedef struct {
     float fm_index;              // FM: modulation index (depth), scaled by the envelope
     float atk, dec, sus, rel;    // ADSR: times in seconds, sustain 0..1
     float env_to_cut;            // 0..1 envelope -> cutoff amount
+    float glide;                 // portamento time in seconds (0 = off)
     float level;                 // master 0..1
 
     // live (from knobs, per block)
