@@ -80,6 +80,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <div class="tab" id="t1" onclick="tab(1)">Upload</div>
     <div class="tab" id="t2" onclick="tab(2)">Freesound</div>
     <div class="tab" id="t6" onclick="tab(6)">Radio</div>
+    <div class="tab" id="t7" onclick="tab(7)">Editor</div>
     <div class="tab" id="t4" onclick="tab(4)">Settings</div>
   </div>
 </header>
@@ -256,6 +257,20 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <div class="row" style="margin-top:8px"><button class="btn del" style="flex:0 0 88px" onclick="rdStop()">Stop</button></div>
   <div class="msg" id="rdm"></div>
 </div>
+<div class="pane" id="p7">
+  <div class="msg" id="ednote">Switch the module to the <b>Editor</b> machine (Remote tab &#8594; Machine) to use this.</div>
+  <label>Sample</label>
+  <div class="row"><select id="edsel" style="flex:1"></select><button class="btn" style="flex:0 0 64px" onclick="edLoad()">&#8635;</button></div>
+  <label style="margin-top:10px">Operation (non-destructive &#8212; writes a new take)</label>
+  <div class="row" id="edops" style="flex-wrap:wrap"></div>
+  <label style="margin-top:10px">Fade length (ms, for fade in/out)</label>
+  <div class="row"><input id="edparam" type="number" value="50" style="flex:0 0 100px"></div>
+  <div class="card" style="margin-top:10px">
+    <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af" id="edstate">idle</b><span id="edout" style="color:#888"></span></div>
+    <div class="bar" style="margin-top:6px"><i id="edbar" style="width:0%"></i></div>
+  </div>
+  <div class="msg" id="edm"></div>
+</div>
 <div class="sbar">
   <div class="cv" id="cvb"></div>
   <span class="sep">|</span>
@@ -273,7 +288,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 <script>
 
 function tab(n){
-  for(var i=0;i<7;i++){
+  for(var i=0;i<8;i++){
     document.getElementById('t'+i).className='tab'+(i===n?' on':'');
     document.getElementById('p'+i).className='pane'+(i===n?' on':'');
   }
@@ -282,6 +297,8 @@ function tab(n){
   if(n===4)loadSet();
   if(n===6){rdState();rdTimer=rdTimer||setInterval(rdState,1000);}
   else if(rdTimer){clearInterval(rdTimer);rdTimer=null;}
+  if(n===7){edLoad();edState();edTimer=edTimer||setInterval(edState,1000);}
+  else if(edTimer){clearInterval(edTimer);edTimer=null;}
 }
 
 // Files-page sub-tabs: 0 = Samples (usr/*.RAW), 1 = Modules (usr/MODS)
@@ -984,6 +1001,39 @@ function rdState(){
 function rdPlayStation(i){fetch('/radio/play?station='+i,{method:'POST'}).catch(function(){});}
 function rdPlayUrl(){var u=document.getElementById('rdurl').value.trim();if(u)fetch('/radio/play?url='+encodeURIComponent(u),{method:'POST'}).catch(function(){});}
 function rdStop(){fetch('/radio/stop',{method:'POST'}).catch(function(){});}
+// Editor tab — /edit/* served only while the Editor machine is active
+var edTimer=null,edLast='';
+function edLoad(){
+  fetch('/files').then(function(r){return r.json();}).then(function(d){
+    var files=Array.isArray(d)?d:(d.files||[]);
+    var sel=document.getElementById('edsel'),cur=sel.value;
+    sel.innerHTML='';
+    files.forEach(function(f){var nm=f.name||f;var o=document.createElement('option');o.value=nm;o.textContent=nm;sel.appendChild(o);});
+    if(cur)sel.value=cur;
+  }).catch(function(){});
+}
+function edState(){
+  fetch('/edit/state').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('ednote').style.display='none';
+    var s=d.state||'idle';
+    document.getElementById('edstate').textContent=s+(s==='running'&&d.op?(' — '+d.op):'');
+    document.getElementById('edout').textContent=d.out?('→ '+d.out):'';
+    document.getElementById('edbar').style.width=(d.progress||0)+'%';
+    document.getElementById('edm').textContent=d.err?d.err:(s==='done'?('created '+d.out):'');
+    var box=document.getElementById('edops');
+    if(box.dataset.n!==String((d.ops||[]).length)){
+      box.dataset.n=String((d.ops||[]).length);box.innerHTML='';
+      (d.ops||[]).forEach(function(nm,i){var b=document.createElement('button');b.className='btn';b.style.flex='0 0 auto';b.textContent=nm;b.onclick=function(){edApply(i);};box.appendChild(b);});
+    }
+    if(s==='done'&&edLast!=='done')edLoad();   // new take appeared — refresh the list once
+    edLast=s;
+  }).catch(function(){document.getElementById('ednote').style.display='';});
+}
+function edApply(op){
+  var nm=document.getElementById('edsel').value;if(!nm)return;
+  var pr=document.getElementById('edparam').value||0;
+  fetch('/edit/apply?name='+encodeURIComponent(nm)+'&op='+op+'&param='+pr,{method:'POST'}).catch(function(){});
+}
 function remMach(n){
   fetch('/remote/machine?name='+encodeURIComponent(n),{method:'POST'}).then(function(r){return r.json();}).then(function(d){
     var m=document.getElementById('rm');

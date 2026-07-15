@@ -53,6 +53,8 @@ typedef enum{
     M_RADIO_SETUP,
     M_SYNTH_LIVE,
     M_SYNTH_SETUP,
+    M_EDITOR_LIVE,
+    M_EDITOR_SETUP,
     M_STUB_HOME,
     M_SETTINGS,
     M_SETTINGS_INPUT,
