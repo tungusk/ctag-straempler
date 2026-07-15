@@ -324,6 +324,7 @@ static float s_last_out[2][2];               // per-deck declick tails
 static uint32_t s_tl_sig[2] = {0, 0};        // track-loop window signature
 static int s_cv6_ref[2] = {-2, -2}, s_cv7_ref[2] = {-2, -2};   // loop window / length grabs
 static int s_catch_x = 0, s_catch_f = 0;     // blocks of gentle catch-up after a borrow
+static int s_xf_pick = 0, s_flt_pick = 0;    // fader/filter PICKUP pending after a loop borrow
 static int s_mv6[2] = {0, 0}, s_mv7[2] = {0, 0};   // move debounce (ADC spikes)
 static int s_c6_last[2] = {-1, -1};          // knob position the last move was made AT
 static int s_len_idx[2] = {4, 4};            // ladder index while looping
@@ -338,6 +339,7 @@ static void dd_reset_statics(void)
     s_tl_sig[0] = s_tl_sig[1] = 0;
     s_focus_prev = -1;
     s_catch_x = s_catch_f = 0;
+    s_xf_pick = s_flt_pick = 0;
     for (int i = 0; i < 2; i++) {
         s_cv6_ref[i] = s_cv7_ref[i] = -2;
         s_mv6[i] = s_mv7[i] = 0;
@@ -454,8 +456,8 @@ void dualdeck_loop_toggle(int deck)
         {
             int d = deck & 1;
             int lp = dd_eff_lpos(d), ll = dd_eff_llen(d);
-            if (lp == dd_eff_filt()  || ll == dd_eff_filt())  s_catch_f = 420;
-            if (lp == dd_eff_fader() || ll == dd_eff_fader()) s_catch_x = 420;
+            if (lp == dd_eff_filt()  || ll == dd_eff_filt())  { s_catch_f = 420; s_flt_pick = 1; }
+            if (lp == dd_eff_fader() || ll == dd_eff_fader()) { s_catch_x = 420; s_xf_pick = 1; }
         }
         s_cv6_ref[deck & 1] = s_cv7_ref[deck & 1] = -2;
         return;
@@ -683,6 +685,7 @@ static esp_err_t dualdeck_start(void)
                                          // loop borrows the filter (harmless, frozen)
                                          // and NEVER the fader (a dead fader is not).
     dd.xf = 0.0f;
+    dd.filt_cv[0] = dd.filt_cv[1] = 2048;   // both filters start CENTRE (off), not a heavy LP at 0
     dd.manual = true;
     clockin_reset(&dd.ci, dd_ppb[dd.ppb_idx]);
     s_run = true;
@@ -793,6 +796,9 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     int ctx_sig = dd.focus | (dd.d[0].loop_active ? 2 : 0) | (dd.d[1].loop_active ? 4 : 0)
                 | (dd.knob_mode << 3) | (dd.fader_lock ? 16 : 0);
     if (ctx_sig != s_focus_prev) {
+        // focus flipped -> CV6 now sweeps the OTHER deck's filter: pick it up so
+        // it doesn't snap (bit 0 of ctx_sig is dd.focus)
+        if (s_focus_prev >= 0 && (ctx_sig & 1) != (s_focus_prev & 1)) s_flt_pick = 1;
         s_focus_prev = ctx_sig;
         for (int i = 0; i < 2; i++) {
             if (dd.d[i].loop_active) { s_cv6_ref[i] = -1; s_cv7_ref[i] = -1; }
@@ -922,16 +928,9 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         if (d < 0.01f) s_catch_x = 0;
         else s_catch_x--;
     }
-    if (!flt_taken && s_catch_f > 0) {
-        int d = c_flt - dd.filt_cv;
-        if (d < 0) d = -d;
-        if (d < 40) s_catch_f = 0;
-        else s_catch_f--;
-    }
     bool flt_live = !flt_taken;
     bool xf_live  = !fad_taken;
     float xf_slew  = (s_catch_x > 0) ? 0.004f : 0.2f;   // ~0.6 s catch-up, else snappy
-    float flt_slew = (s_catch_f > 0) ? 0.01f  : 0.2f;
     int c7 = c_fad;
 
     // ---- crossfade: three states — AUTO (takeover fade in flight), HELD
@@ -959,8 +958,14 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         if (dd.xf == xf_target) dd.auto_active = false;   // -> HELD, not manual
     } else if (dd.manual && xf_live) {
         float xf_target = (float)dd.xf_cv / 4095.0f;
-        // slewed, so neither a jumpy ADC read nor a return from a loop steps the mix
-        dd.xf += xf_slew * (xf_target - dd.xf);
+        // PICKUP after a loop borrow: HOLD the mix until the knob sweeps back to
+        // it, then take over — no snap (Arlo: fader "snaps to the knob" on leaving
+        // loop). Outside pickup it slews, so a jumpy ADC read never steps the mix.
+        if (s_xf_pick) {
+            if (fabsf(xf_target - dd.xf) < 0.03f) s_xf_pick = 0;
+        } else {
+            dd.xf += xf_slew * (xf_target - dd.xf);
+        }
     }
     if (dd.xf < 0) dd.xf = 0;
     if (dd.xf > 1) dd.xf = 1;
@@ -968,26 +973,37 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     float ga = cosf(dd.xf * (float)M_PI_2);
     float gb = sinf(dd.xf * (float)M_PI_2);
 
-    // ---- master DJ filter on knob6 (Arlo: "reverse the cv6/7 assignments, that
-    // way filter freq stays on cv6 like other machines" — the deck, drums and
-    // looper all put the sweep there; crossfade moves to knob7)
-    if (flt_live) dd.filt_cv = c_flt;  // else FROZEN: a loop is holding this knob
-    int fcv = dd.filt_cv;
-    int mode = 0;
-    float fc = 0;
-    if (fcv < 2048 - 150) {
-        mode = 1;
-        float t = (float)fcv / (2048.0f - 150.0f);
-        fc = 80.0f * powf(150.0f, t);
-    } else if (fcv > 2048 + 150) {
-        mode = 2;
-        float t = (float)(fcv - 2048 - 150) / (4095.0f - 2048.0f - 150.0f);
-        fc = 30.0f * powf(200.0f, t);
+    // ---- per-deck DJ filter on CV6 (Arlo: two independent filters, one per deck).
+    // CV6 sweeps the FOCUSED deck's cutoff; the other deck's filter FREEZES at its
+    // last value. PICKUP: after a loop release OR a focus switch the knob is inert
+    // until it sweeps back to the focused deck's cutoff, so it never snaps.
+    if (flt_live) {
+        int fdk = dd.focus;
+        if (s_flt_pick) {
+            int d = c_flt - dd.filt_cv[fdk]; if (d < 0) d = -d;
+            if (d < 60) s_flt_pick = 0;                  // knob reached it -> live
+        } else {
+            dd.filt_cv[fdk] = c_flt;
+        }
     }
-    dd.flt_mode = mode;
-    float f_target = mode ? svf_coef(fc, (float)DD_RATE, 1.2f) : 0;
-    dd.flt_f += flt_slew * (f_target - dd.flt_f);
     const float q = 0.9f;
+    for (int i = 0; i < 2; i++) {                        // both decks filter their own signal
+        int fcv = dd.filt_cv[i];
+        int mode = 0;
+        float fc = 0;
+        if (fcv < 2048 - 150) {
+            mode = 1;
+            float t = (float)fcv / (2048.0f - 150.0f);
+            fc = 80.0f * powf(150.0f, t);
+        } else if (fcv > 2048 + 150) {
+            mode = 2;
+            float t = (float)(fcv - 2048 - 150) / (4095.0f - 2048.0f - 150.0f);
+            fc = 30.0f * powf(200.0f, t);
+        }
+        dd.flt_mode[i] = mode;
+        float f_target = mode ? svf_coef(fc, (float)DD_RATE, 1.2f) : 0;
+        dd.flt_f[i] += 0.2f * (f_target - dd.flt_f[i]);  // smooth the cutoff sweep
+    }
 
     // ---- per-deck rate for this block
     float rate[2];
@@ -1046,18 +1062,19 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
                 // so there is no engine-side cursor wrap any more.
                 while (v->rpos_f >= 1.0) { v->rpos_f -= 1.0; v->rpos_i++; }
             }
+            // per-deck DJ filter on THIS deck's signal, BEFORE the crossfade sum
+            if (dd.flt_mode[i]) {
+                float lo, hi;
+                svf_step(&dd.flt_l[i], l, dd.flt_f[i], q, &lo, NULL, &hi);
+                l = (dd.flt_mode[i] == 1) ? lo : hi;
+                svf_step(&dd.flt_r[i], r, dd.flt_f[i], q, &lo, NULL, &hi);
+                r = (dd.flt_mode[i] == 1) ? lo : hi;
+            } else {
+                svf_park(&dd.flt_l[i], l);
+                svf_park(&dd.flt_r[i], r);
+            }
             mix_l += l * g;
             mix_r += r * g;
-        }
-        if (mode) {
-            float lo, hi;
-            svf_step(&dd.flt_l, mix_l, dd.flt_f, q, &lo, NULL, &hi);
-            mix_l = (mode == 1) ? lo : hi;
-            svf_step(&dd.flt_r, mix_r, dd.flt_f, q, &lo, NULL, &hi);
-            mix_r = (mode == 1) ? lo : hi;
-        } else {
-            svf_park(&dd.flt_l, mix_l);
-            svf_park(&dd.flt_r, mix_r);
         }
         if (mix_l > 32767) mix_l = 32767;
         if (mix_l < -32768) mix_l = -32768;

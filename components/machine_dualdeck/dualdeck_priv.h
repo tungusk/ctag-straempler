@@ -180,11 +180,12 @@ typedef struct {
     volatile int cv_lpos[2];       // per deck: loop window position
     volatile int cv_llen[2];       // per deck: loop length
 
-    // master DJ filter (knob7 on the summed mix; deck sweep, fixed q)
-    volatile int filt_cv;
-    float flt_f;
-    volatile int flt_mode;         // 0 off, 1 LP, 2 HP (UI)
-    svf_t flt_l, flt_r;
+    // per-deck DJ filter: CV6 sweeps the FOCUSED deck's filter; each deck filters
+    // its own signal before the crossfade sum. [0]=deck A, [1]=deck B.
+    volatile int filt_cv[2];
+    float flt_f[2];
+    volatile int flt_mode[2];      // 0 off, 1 LP, 2 HP (UI)
+    svf_t flt_l[2], flt_r[2];
 } dd_state_t;
 
 extern dd_state_t dd;
