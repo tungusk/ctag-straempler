@@ -255,6 +255,10 @@ static void v_hdr(int i, bool full){
     // each deck spans the screen: its number on one edge, its state on the other
     bool inf_right = !right;
     deck_info_str(i, info, sizeof(info), inf_right);
+    // auto-BPM in progress on this (stopped) deck — tells you WHY it can't loop
+    // yet, right where "no grid" would otherwise sit. Progress in the sig repaints.
+    if (dd.an_running && dd.an_deck == i)
+        snprintf(info, sizeof(info), "analyzing %d%%", dd.an_progress);
     const char *tn = v->track[0] ? v->track : "(empty)";
     snprintf(nm, sizeof(nm), "%.10s", tn);
     snprintf(sig, sizeof(sig), "%d|%s|%s", focus ? 1 : 0, nm, info);
