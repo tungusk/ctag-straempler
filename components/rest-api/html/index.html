@@ -79,6 +79,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <div class="tab" id="t0" onclick="tab(0)">Files</div>
     <div class="tab" id="t1" onclick="tab(1)">Upload</div>
     <div class="tab" id="t2" onclick="tab(2)">Freesound</div>
+    <div class="tab" id="t6" onclick="tab(6)">Radio</div>
     <div class="tab" id="t4" onclick="tab(4)">Settings</div>
   </div>
 </header>
@@ -241,6 +242,20 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   </div>
   <div class="msg">GROOVE = tempo model (steady grid, never octave-hops); PULSE/KICK/FLUX = raw onset pulses. Machines follow via Clock Src = AUDIO.</div>
 </div>
+<div class="pane" id="p6">
+  <div class="msg" id="rdnote">Switch the module to the <b>Radio</b> machine (Remote tab &#8594; Machine, or System &#8594; Machine on the device) to use this.</div>
+  <div class="card">
+    <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af">NOW PLAYING</b><span id="rdstate" style="color:#888">&#8212;</span></div>
+    <div class="kv" id="rdinfo" style="margin-top:4px">&#8212;</div>
+    <div class="bar" style="margin-top:6px"><i id="rdbuf" style="width:0%"></i></div>
+  </div>
+  <label>Stations</label>
+  <div class="row" id="rdstations" style="flex-wrap:wrap"></div>
+  <label style="margin-top:10px">Custom stream URL (MP3, 44.1kHz)</label>
+  <div class="row"><input id="rdurl" placeholder="http://.../stream.mp3" onkeydown="if(event.key==='Enter')rdPlayUrl()"><button class="btn" style="flex:0 0 64px" onclick="rdPlayUrl()">Play</button></div>
+  <div class="row" style="margin-top:8px"><button class="btn del" style="flex:0 0 88px" onclick="rdStop()">Stop</button></div>
+  <div class="msg" id="rdm"></div>
+</div>
 <div class="sbar">
   <div class="cv" id="cvb"></div>
   <span class="sep">|</span>
@@ -258,13 +273,15 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 <script>
 
 function tab(n){
-  for(var i=0;i<6;i++){
+  for(var i=0;i<7;i++){
     document.getElementById('t'+i).className='tab'+(i===n?' on':'');
     document.getElementById('p'+i).className='pane'+(i===n?' on':'');
   }
   if(n===0)loadFiles();
   if(n===3)loadRemote();
   if(n===4)loadSet();
+  if(n===6){rdState();rdTimer=rdTimer||setInterval(rdState,1000);}
+  else if(rdTimer){clearInterval(rdTimer);rdTimer=null;}
 }
 
 // Files-page sub-tabs: 0 = Samples (usr/*.RAW), 1 = Modules (usr/MODS)
@@ -943,6 +960,30 @@ function cvHold(ch){
     cvHoldT[ch]=setInterval(function(){postCV(ch,cvLast[ch],400);},250);   // re-post within the decay
   }else if(cvHoldT[ch]){clearInterval(cvHoldT[ch]);cvHoldT[ch]=null;}       // release -> decays to the knob
 }
+// Radio tab — /radio/* is served only while the Radio machine is active
+var rdTimer=null;
+function rdState(){
+  fetch('/radio/state').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('rdnote').style.display='none';
+    document.getElementById('rdstate').textContent=d.state||'stopped';
+    var info = d.err ? d.err
+             : (d.bitrate ? (d.station+'  '+d.bitrate+' kbps  '+d.samprate+' Hz  '+d.nchans+'ch'+(d.underruns?('  drops '+d.underruns):''))
+                          : (d.station||'—'));
+    document.getElementById('rdinfo').textContent=info;
+    document.getElementById('rdbuf').style.width=(d.buf||0)+'%';
+    var box=document.getElementById('rdstations'),st=d.stations||[];
+    if(box.dataset.n!==String(st.length)){          // build station buttons once
+      box.dataset.n=String(st.length);box.innerHTML='';
+      st.forEach(function(nm,i){
+        var b=document.createElement('button');b.className='btn';b.style.flex='0 0 auto';b.textContent=nm;
+        b.onclick=function(){rdPlayStation(i);};box.appendChild(b);
+      });
+    }
+  }).catch(function(){document.getElementById('rdnote').style.display='';});
+}
+function rdPlayStation(i){fetch('/radio/play?station='+i,{method:'POST'}).catch(function(){});}
+function rdPlayUrl(){var u=document.getElementById('rdurl').value.trim();if(u)fetch('/radio/play?url='+encodeURIComponent(u),{method:'POST'}).catch(function(){});}
+function rdStop(){fetch('/radio/stop',{method:'POST'}).catch(function(){});}
 function remMach(n){
   fetch('/remote/machine?name='+encodeURIComponent(n),{method:'POST'}).then(function(r){return r.json();}).then(function(d){
     var m=document.getElementById('rm');
