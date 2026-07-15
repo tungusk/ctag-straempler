@@ -123,9 +123,20 @@ proof passes. VERIFIED via teleremote: CV1 pitch + TR1 gate → clean
 attack→decay→sustain, released to silence, mono out. Commit 8b9a994. v2: FM +
 wavetable engines, poly, glide, filter env, pitch calibration by ear.
 
+## ✅ 9. Audio editor S-core — offline file→file ops
+New `machine_editor` (silent, web-driven): non-destructive ops on pool samples,
+each writes a new derived take. Background job streams src→transform→WAV under
+sd_lock. v1: normalize (2-pass peak), reverse (tail-chunk flip), fade in/out,
+trim silence (2-pass). Web "Editor" tab (pick sample + op + progress);
+`/edit/apply` + `/edit/state`. Registered; proof passes. VERIFIED on device:
+reverse + normalize → valid same-length WAVs (RV_/NM_ outputs, deleted after
+test). LESSON: card is FatFS 8.3/LFN-off → ids MUST be ≤8 chars (first attempt
+`<src>_<tag>` fopen'd EINVAL); now `<PFX>NNNN` via sample_next_index. Recorded in
+CLAUDE.md Code rules. v2: crop + zero-cross loop-snap (needs a crop UI).
+
 ---
 
-## 9. _(more — to be recalled)_
+## 10. _(more — to be recalled)_
 Arlo had more ideas last night that were lost to the clear; add them here as they
 resurface. Separate/older backlogs: `ideas-round2-20260713.md`,
 `plans/roadmap-speculation-20260714.md` (B1–B9).

@@ -61,7 +61,15 @@ sniff = ID3 or THREE chained frame headers (clipped audio fakes fewer). Take num
 per-index stat probing with a missing extension walks the whole FAT dir per
 call and starves the capture queue (bench-caught: 1804 dropped chunks).
 
-**FatFS paths only** — file paths passed to `f_open()` must NOT have a `/sdcard` prefix. VFS-style paths (`/sdcard/...`) cause an `f_open` abort crash. Use bare paths like `usr/REC_0001.RAW`.
+**FatFS paths only** — file paths passed to `f_open()` must NOT have a `/sdcard` prefix. VFS-style paths (`/sdcard/...`) cause an `f_open` abort crash. Use bare paths like `usr/REC_0001.RAW`. (VFS `fopen()` is the opposite — it DOES want `/sdcard/usr/...`.)
+
+**Sample ids must be ≤ 8 chars — the card is FatFS 8.3, LFN OFF.** A base name
+over 8 chars is an invalid 8.3 filename and `fopen`/`f_open` rejects it with
+EINVAL (errno 22). This is why every id in the system is short: recording uses
+`REC_NNNN`, the web upload truncates names to 8, and generators use
+`<PFX>NNNN`. When you MINT a new id (editor outputs, bounces, derived takes) keep
+it ≤ 8 chars — do NOT append `_<tag>` to an existing (already up-to-8-char) id.
+`sample_next_index("XX_")` gives a safe `XX_NNNN`.
 
 **SD bus is serialized by `sd_lock`** (`components/util/sd_lock.{h,c}`) — a global recursive mutex that EVERY SD I/O burst must hold: the audio raw-FatFS reads, REST file serving, recording writer, config/JSON, `sample_ram`. Acquired INSIDE the per-voice `file_mutex` (consistent order → no deadlock), released between bursts. The raw audio read path bypasses the esp_vfs_fat lock, so without this it races VFS I/O and wedges/corrupts the card. Don't add SD access that skips `sd_lock`.
 
@@ -93,7 +101,7 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
 - **Registry**: `main/machine_registry.c` is the ONLY file outside a machine's
   own component that may name a machine symbol. Registry (selector order):
   Sampler2 / Sampler / Looper / Slicer / Granular / Glitch / Drums / Deck /
-  Tracker / Freesound / Radio / Synth / Stub. (Display names: "Sampler" = the deck-pattern
+  Tracker / Freesound / Radio / Synth / Editor / Stub. (Display names: "Sampler" = the deck-pattern
   rebuild in machine_sampler3; "Sampler2" = the legacy `s2_` fork in
   machine_sampler2, kept as a fallback until sampler3 has a full hardware
   verdict, then scheduled for removal. The frozen original machine_sampler
@@ -226,6 +234,15 @@ The machines (all working; archives in `bin/`):
   soft trigs too). knob6 = cutoff (30 Hz..6 kHz log), knob7 = resonance. Pure-DSP
   process(). v2 roadmap: FM + wavetable engines (single-cycle waves from the pool
   via `sampfile`), polyphony, glide, dedicated filter env.
+- `machine_editor` ("Editor", 2026-07-15) — offline, NON-destructive file→file
+  ops on pool samples; each writes a new derived take. Background job streams the
+  source (sampfile) through a transform under `sd_lock` and writes a WAV via
+  `sampwav`; process() is silent. v1 ops: normalize (two-pass peak + scale),
+  reverse (tail-chunk read + flip), fade in/out (gain ramp), trim silence
+  (two-pass). Control via web_uris (`/edit/apply?name=&op=&param=`,
+  `/edit/state`) + an "Editor" web tab; on-device Live is status-only. Output ids
+  are short generated `<PFX>NNNN` (see the 8.3 rule in Code rules). v2: crop +
+  zero-crossing loop-snap (needs a crop UI), audition-while-tweaking.
 - `machine_freesound` — silent web-driven utility: freesound search/preview
   download (`/fs/search`, `/fs/get`, `/fs/state`) and direct MP3-URL import
   (`/fs/fetch`), decoding to `usr/` (mono→stereo expand, sidecar). Auth behind
