@@ -77,6 +77,16 @@ it ≤ 8 chars — do NOT append `_<tag>` to an existing (already up-to-8-char) 
 
 **No core pinning for tasks that read files** — pinning reader tasks to core 0 causes WiFi preemption and produces constant clicks on both voices. Leave file-reading tasks unpinned.
 
+**Network tasks must start AFTER `initWifi()`.** `initAudio()` runs BEFORE
+`initWifi()` (see ui.c), and the TCP/IP stack + the WiFi event group don't exist
+until initWifi. A task that calls `socket()` (assert: "Invalid mbox") or
+`isWiFiConnected()` (assert: "xEventGroup") before then crash-LOOPS the boot. The
+output-broadcast server is created by `audio_broadcast_init()`, called from ui.c
+right after `initWifi()`, not from initAudio — do the same for any new socket
+task. There is a raw lwip socket server on **port 8000** streaming the live
+output bus as WAV (`http://<ip>:8000/`) — deliberately NOT on the shared httpd,
+whose single request task a forever-streaming handler would freeze.
+
 **Sleep at least one tick.** `CONFIG_FREERTOS_HZ=100`: one tick is 10 ms, so
 `pdMS_TO_TICKS(n)` for n<10 is ZERO and `vTaskDelay(0)` never yields to
 LOWER-priority tasks — an "idle" loop built on it is a busy-spin that starves
