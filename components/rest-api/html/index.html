@@ -166,6 +166,8 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <button class="btn" onclick="remTrig(1)">TR1 pulse</button>
     <button class="btn" onclick="remTrig(2)">TR2 pulse</button>
   </div>
+  <label>Perform &#8212; inject CV / knobs (releases back to the physical knob unless <b>held</b>)</label>
+  <div id="cvperf"></div>
   <label>Encoder</label>
   <div class="row tight enc4">
     <button class="btn" onclick="remEv('bwd')">&#8592; turn</button>
@@ -910,6 +912,37 @@ function rpApply(){
 
 function remEv(e){fetch('/remote/event?ev='+e,{method:'POST'}).catch(function(){});}
 function remTrig(t){fetch('/remote/trig?t='+t+'&ms=40',{method:'POST'}).catch(function(){});}
+// Perform CV: POST /remote/cv overrides a channel in the audio task with a
+// timeout decay, so a released slider returns to the physical knob. "hold"
+// re-posts within that window to sustain a value; unchecking (or leaving the
+// page) lets it decay — nothing can be pinned by a stale value.
+var cvLast=[0,0,0,0,0,0,0,0,0],cvHoldT={},cvThr={};
+function postCV(ch,v,ms){fetch('/remote/cv?ch='+ch+'&v='+v+'&ms='+(ms||300),{method:'POST'}).catch(function(){});}
+function buildCvPerf(){
+  var el=document.getElementById('cvperf');if(!el)return;var h='';
+  for(var i=1;i<=8;i++){
+    h+='<div class="row tight" style="align-items:center;gap:8px;margin:2px 0">'
+      +'<span style="flex:0 0 30px;color:#8ad">CV'+i+'</span>'
+      +'<input type="range" min="0" max="4095" value="2048" id="cvs'+i+'" style="flex:1;min-width:120px" oninput="cvSlide('+i+',this.value)" onchange="cvEnd('+i+')">'
+      +'<span id="cvsv'+i+'" style="flex:0 0 38px;text-align:right;color:#888;font-size:12px">50%</span>'
+      +'<label style="flex:0 0 auto;color:#888;font-size:12px"><input type="checkbox" id="cvh'+i+'" style="width:auto;margin-right:4px" onchange="cvHold('+i+')">hold</label>'
+      +'</div>';
+  }
+  el.innerHTML=h;
+}
+function cvSlide(ch,v){
+  v=+v;cvLast[ch]=v;
+  var sv=document.getElementById('cvsv'+ch);if(sv)sv.textContent=Math.round(v/4095*100)+'%';
+  var now=Date.now();                       // throttle drag posts to ~1/70ms per channel
+  if(!cvThr[ch]||now-cvThr[ch]>=70){cvThr[ch]=now;postCV(ch,v,300);}
+}
+function cvEnd(ch){postCV(ch,cvLast[ch],document.getElementById('cvh'+ch).checked?400:300);}  // land the final value
+function cvHold(ch){
+  if(document.getElementById('cvh'+ch).checked){
+    postCV(ch,cvLast[ch],400);
+    cvHoldT[ch]=setInterval(function(){postCV(ch,cvLast[ch],400);},250);   // re-post within the decay
+  }else if(cvHoldT[ch]){clearInterval(cvHoldT[ch]);cvHoldT[ch]=null;}       // release -> decays to the knob
+}
 function remMach(n){
   fetch('/remote/machine?name='+encodeURIComponent(n),{method:'POST'}).then(function(r){return r.json();}).then(function(d){
     var m=document.getElementById('rm');
@@ -1092,6 +1125,7 @@ function pollStatus(){
 }
 setInterval(pollStatus,500);
 pollImport();
+buildCvPerf();   // Remote-tab perform sliders
 tab(3);          // Remote is the default tab
 pollStatus();
 </script>
