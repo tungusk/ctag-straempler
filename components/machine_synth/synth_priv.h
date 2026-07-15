@@ -18,8 +18,10 @@
 
 enum { ENV_IDLE = 0, ENV_ATK, ENV_DEC, ENV_SUS, ENV_REL };
 
-enum { ENG_VA = 0, ENG_FM };     // oscillator engine
+enum { ENG_VA = 0, ENG_FM, ENG_WT };     // oscillator engine (VA / FM / wavetable)
 enum { LFO_OFF = 0, LFO_CUT, LFO_PITCH };   // LFO destination
+
+#define SY_WT_MAX 4096           // wavetable cap (a single-cycle wave is 256..2048)
 
 typedef struct {
     // performance state
@@ -32,6 +34,10 @@ typedef struct {
     float cur_freq;              // glide-slewed frequency actually sounding
     bool  gate;                  // last gate level
     svf_t flt_l;                 // (mono voice, one filter; L used, mirrored to R)
+
+    int16_t *wave;               // wavetable buffer (PSRAM, lazy-alloc)
+    int      wave_len;           // samples in the wavetable (0 = none loaded)
+    char     wave_name[24];      // loaded wave id (for the preset + UI)
 
     // params (Setup + knobs)
     int   engine;                // ENG_VA / ENG_FM
@@ -55,3 +61,7 @@ typedef struct {
 } sy_state_t;
 
 extern sy_state_t sy;
+
+// load a pool sample as the wavetable (mono, up to SY_WT_MAX). Does NOT change
+// the engine — the caller (menu) selects ENG_WT on success. 0 ok, <0 fail.
+int synth_load_wave(const char *name);
