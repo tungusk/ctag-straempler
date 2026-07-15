@@ -27,6 +27,18 @@ export PATH=/path/to/xtensa-esp32-elf/bin:/path/to/esp32ulp-elf/bin:$PATH
 
 **No CV/gate OUTPUT** — the only output is audio via the I2S codec (WM8731 line out on GPIO22). There is no CV/gate DAC anywhere; a machine's `process()` can only write the two audio channels, and those outputs are AC-coupled (can't hold a DC level). So true analog CV/gates are NOT achievable — any "output" feature must be an audio-rate signal. (Input side is rich: 8 CV in + 2 gate in.)
 
+**No reliable TFT readback on this unit.** The ILI9341 GRAM read path
+(`read_data`/`TFT_RAMRD`, 0x2E) returns ALL 0xFF at runtime — MISO idles high,
+the panel drives nothing back (verified 2026-07-15: a `/screenshot` endpoint
+came back a solid white 320×240 BMP, every pixel byte 0xFF). **`find_rd_speed()`
+does NOT prove readback works** — it starts `max_speed=1000000` and only raises
+it on a *successful* compare, so a total read failure silently returns the 1 MHz
+fallback and the boot log looks normal. So a web screenshot cannot be built on
+panel readback; it would need a **PSRAM shadow framebuffer** (draws write through
+to a 320×240 RGB565 copy, serve that). The dormant `/screenshot` endpoint +
+`components/util/disp_lock.{h,c}` (a display-bus mutex; UI task holds it around
+each `menuProcessEvent`, readers per-burst) are left in as infra for that.
+
 **Audio block size:** 64 samples per I2S DMA block at 44100 Hz (~1.45ms per audio loop tick).
 
 ## Code rules

@@ -14,6 +14,7 @@
 #include "gpio.h"
 #include "pin_defs.h"
 #include "tft.h"
+#include "disp_lock.h"
 #include "menu.h"
 #include "freesound.h"
 #include "mp3.h"
@@ -50,8 +51,13 @@ static void ui_ev_loop(void* pvParams)
 
     for(;;) {
         if(xQueueReceive(ui_evt_queue, &ev, portMAX_DELAY)) {
-            
-            static ui_ev_t btn_state = EV_NONE, btn_serviced = 0; 
+
+            static ui_ev_t btn_state = EV_NONE, btn_serviced = 0;
+            // Every draw funnels through menuProcessEvent below; hold the display
+            // bus for the whole event so a /screenshot readback can't interleave
+            // SPI transactions with a draw (released between events — a capture
+            // waits at most one event).
+            disp_lock_take();
             switch(ev.event){
                 case EV_ENC1_FWD:
                     menuProcessEvent(EV_FWD, NULL);
@@ -96,6 +102,7 @@ static void ui_ev_loop(void* pvParams)
                     menuProcessEvent(ev.event, ev.event_data);
                     break;
             }
+            disp_lock_give();
         }
     }
     vTaskDelete(NULL);
@@ -203,6 +210,7 @@ void initUI(){
     initMenu(ui_ev_queue);
 
     //xTaskCreatePinnedToCore(ui_task, "ui_task", usStackDepth, params, 10, gpio_task, 1);
+    disp_lock_init();   // guard the TFT/SPI bus before drawing goes multi-task (screenshot reader)
     xTaskCreatePinnedToCore(ui_ev_loop, "ui_ev_loop", 4096*2, params, 11, ui_task, 0);
     
     //initGPIO(ui_ev_queue, au_q);
