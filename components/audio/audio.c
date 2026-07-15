@@ -76,14 +76,16 @@ static volatile bool s_bounce = false;
 void audio_bounce_start(void) {
     if (s_bounce || recording_is_active()) return;
     recording_set_enabled(true);
+    recording_set_prefix("BNC");                     // bounces are BNC_, not REC_
     s_bounce = true;
     recording_start(-1);                             // vid -1 = no auto-load into a voice
-    if (!recording_is_active()) s_bounce = false;    // prepare/trigger failed
+    if (!recording_is_active()) { s_bounce = false; recording_set_prefix("REC"); }
 }
 void audio_bounce_stop(void) {
     if (!s_bounce) return;
     recording_stop();
     s_bounce = false;
+    recording_set_prefix("REC");                     // restore for sampler takes
 }
 bool audio_bounce_active(void) { return s_bounce; }
 
