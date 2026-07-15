@@ -162,6 +162,14 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 </div>
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
+  <div class="card" id="bouncecard">
+    <div class="row tight" style="align-items:center">
+      <b style="flex:1;color:#0af">BOUNCE</b>
+      <span id="bncstate" style="color:#888;margin-right:8px">idle</span>
+      <button class="btn" id="bncbtn" style="flex:0 0 84px" onclick="bncToggle()">Record</button>
+    </div>
+    <div class="msg" style="margin-top:4px">Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.</div>
+  </div>
   <label>Inputs</label>
   <div class="rmon" id="rmon"></div>
   <div class="row tight tr2" style="margin-top:4px">
@@ -1001,6 +1009,19 @@ function rdState(){
 function rdPlayStation(i){fetch('/radio/play?station='+i,{method:'POST'}).catch(function(){});}
 function rdPlayUrl(){var u=document.getElementById('rdurl').value.trim();if(u)fetch('/radio/play?url='+encodeURIComponent(u),{method:'POST'}).catch(function(){});}
 function rdStop(){fetch('/radio/stop',{method:'POST'}).catch(function(){});}
+// Bounce — record the output bus to a pool take (core, any machine)
+var bncOn=false;
+function bncPoll(){
+  fetch('/bounce/state').then(function(r){return r.json();}).then(function(d){
+    bncOn=!!d.active;
+    document.getElementById('bncstate').textContent=bncOn?('recording'+(d.drops?(' (drops '+d.drops+')'):'')):'idle';
+    var b=document.getElementById('bncbtn');b.textContent=bncOn?'Stop':'Record';b.className='btn'+(bncOn?' del':'');
+  }).catch(function(){});
+}
+function bncToggle(){
+  var stop=bncOn;
+  fetch(stop?'/bounce/stop':'/bounce/start',{method:'POST'}).then(function(){setTimeout(bncPoll,200);if(stop)setTimeout(loadFiles,700);}).catch(function(){});
+}
 // Editor tab — /edit/* served only while the Editor machine is active
 var edTimer=null,edLast='';
 function edLoad(){
@@ -1212,6 +1233,7 @@ function pollStatus(){
     updateRemote(d);
     updateBl(d);
     updateScope(d.cv);
+    if(document.getElementById('p3').className.indexOf('on')>=0)bncPoll();   // bounce state while Remote is open
   }).catch(function(){});
 }
 setInterval(pollStatus,500);

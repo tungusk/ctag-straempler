@@ -42,3 +42,9 @@ void audio_remote_trig(int t, int ms);
 // milliseconds — the audio task substitutes it for the ADC reading, then
 // decays back to the physical knob (a stale web value can never pin a knob)
 void audio_remote_cv(int ch, int v, int ms);
+
+// output bounce — record the active machine's OUTPUT bus to a pool REC_ take
+// (any machine). Reuses the recording service, fed `out` instead of line-in.
+void audio_bounce_start(void);
+void audio_bounce_stop(void);
+bool audio_bounce_active(void);
