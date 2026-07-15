@@ -9,6 +9,9 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include "lwip/sockets.h"
+#include "wifi.h"
 #include "audio.h"
 #include "recording.h"
 #include "machine.h"
@@ -83,6 +86,89 @@ void audio_bounce_stop(void) {
     s_bounce = false;
 }
 bool audio_bounce_active(void) { return s_bounce; }
+
+// ---- broadcast: stream the OUTPUT bus live as WAV over a dedicated socket ----
+// A raw TCP server on BC_PORT (NOT the shared httpd — a forever-streaming handler
+// there would freeze the whole web UI). One client: point a browser / VLC at
+// http://<ip>:8000/ to hear the live output of whatever machine is running. The
+// audio task pushes int16 stereo output into a PSRAM ring; the server drains it,
+// dropping the OLDEST audio if the client lags (a live stream stays current).
+#define BC_PORT   8000
+#define BC_FRAMES 44100                    // ~1 s stereo ring
+static int16_t *s_bc_ring = NULL;
+static volatile uint32_t s_bc_w = 0, s_bc_r = 0;
+static volatile bool s_bc_on = false;      // a client is connected
+
+bool audio_broadcast_active(void) { return s_bc_on; }
+
+static void broadcast_push(const int32_t *out, int frames)
+{
+    if (!s_bc_on || !s_bc_ring) return;
+    for (int f = 0; f < frames; f++) {
+        if (s_bc_w - s_bc_r >= BC_FRAMES) s_bc_r++;   // ring full: drop oldest
+        uint32_t idx = (s_bc_w % BC_FRAMES) * 2;
+        s_bc_ring[idx] = (int16_t)(out[f * 2] >> 16);
+        s_bc_ring[idx + 1] = (int16_t)(out[f * 2 + 1] >> 16);
+        s_bc_w++;
+    }
+}
+
+static void bc_put_le32(uint8_t *p, uint32_t v){ p[0]=v; p[1]=v>>8; p[2]=v>>16; p[3]=v>>24; }
+static void bc_put_le16(uint8_t *p, uint16_t v){ p[0]=v; p[1]=v>>8; }
+
+static void broadcast_server_task(void *pv)
+{
+    s_bc_ring = heap_caps_malloc((size_t)BC_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    int16_t *sbuf = malloc(1024 * 2 * sizeof(int16_t));
+    if (!s_bc_ring || !sbuf) { ESP_LOGE("BCAST", "alloc failed"); vTaskDelete(NULL); return; }
+
+    // WAIT for the network: initAudio (and this task) runs BEFORE initWifi, so
+    // the TCP/IP stack isn't up yet — calling socket() early asserts (Invalid
+    // mbox). isWiFiConnected() implies tcpip_adapter_init + GOT_IP are done.
+    while (!isWiFiConnected()) vTaskDelay(pdMS_TO_TICKS(200));
+
+    // streaming WAV header: 16-bit 44.1k stereo, max sizes so players keep going
+    uint8_t wav[44] = {0};
+    memcpy(wav, "RIFF", 4);      bc_put_le32(wav + 4, 0xFFFFFFFF);
+    memcpy(wav + 8, "WAVE", 4);  memcpy(wav + 12, "fmt ", 4);
+    bc_put_le32(wav + 16, 16);   bc_put_le16(wav + 20, 1);   bc_put_le16(wav + 22, 2);
+    bc_put_le32(wav + 24, 44100); bc_put_le32(wav + 28, 44100 * 4);
+    bc_put_le16(wav + 32, 4);    bc_put_le16(wav + 34, 16);
+    memcpy(wav + 36, "data", 4); bc_put_le32(wav + 40, 0xFFFFFFFF);
+
+    static const char HDR[] = "HTTP/1.0 200 OK\r\nContent-Type: audio/wav\r\n"
+                              "Connection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
+
+    int srv = socket(AF_INET, SOCK_STREAM, 0);
+    if (srv < 0) { ESP_LOGE("BCAST", "socket failed"); vTaskDelete(NULL); return; }
+    int yes = 1; setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    struct sockaddr_in sa = {0};
+    sa.sin_family = AF_INET; sa.sin_port = htons(BC_PORT); sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(srv, (struct sockaddr *)&sa, sizeof(sa)) < 0 || listen(srv, 1) < 0) {
+        ESP_LOGE("BCAST", "bind/listen failed"); close(srv); vTaskDelete(NULL); return;
+    }
+    ESP_LOGI("BCAST", "output broadcast on :%d (http://<ip>:%d/)", BC_PORT, BC_PORT);
+
+    for (;;) {
+        int cl = accept(srv, NULL, NULL);
+        if (cl < 0) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
+        s_bc_w = s_bc_r = 0;
+        s_bc_on = true;
+        bool ok = send(cl, HDR, strlen(HDR), 0) > 0 && send(cl, wav, 44, 0) > 0;
+        while (ok) {
+            int fr = 0;
+            while (fr < 1024 && s_bc_r < s_bc_w) {
+                uint32_t idx = (s_bc_r % BC_FRAMES) * 2;
+                sbuf[fr * 2] = s_bc_ring[idx]; sbuf[fr * 2 + 1] = s_bc_ring[idx + 1];
+                s_bc_r++; fr++;
+            }
+            if (fr > 0) { if (send(cl, sbuf, fr * 4, 0) < 0) ok = false; }
+            else vTaskDelay(pdMS_TO_TICKS(8));
+        }
+        s_bc_on = false;
+        close(cl);
+    }
+}
 
 // ---- trig edge acquisition ----------------------------------------------------
 // The audio task samples the trig pins once per block (0.726 ms), so a real
@@ -223,6 +309,7 @@ static void audio_task(void *pvParams)
             portEXIT_CRITICAL(&_status_mux);
         }
 
+        broadcast_push(out, BUF_SZ / 2);   // live WAV stream tap (the final output)
         i2s_write(I2S_NUM_0, out, BUF_SZ * 4, &nb, portMAX_DELAY);
     }
 }
@@ -244,4 +331,12 @@ void initAudio(void)
     gpio_isr_handler_add(TRIG1_PIN, trig_isr, (void *)1);
     ESP_LOGI("AUDIO", "Starting audio task");
     xTaskCreatePinnedToCore(audio_task, "audio_task", 4096, NULL, 23, &audio_task_h, 1);
+}
+
+// Start the output-broadcast socket server. MUST be called AFTER initWifi() —
+// both socket() and isWiFiConnected() touch state that initWifi creates, and
+// calling either earlier asserts (Invalid mbox / xEventGroup). Unpinned.
+void audio_broadcast_init(void)
+{
+    xTaskCreate(broadcast_server_task, "bc_srv", 4096, NULL, 5, NULL);
 }

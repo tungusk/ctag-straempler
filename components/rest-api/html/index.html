@@ -170,6 +170,15 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     </div>
     <div class="msg" style="margin-top:4px">Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.</div>
   </div>
+  <div class="card" id="bcastcard">
+    <div class="row tight" style="align-items:center">
+      <b style="flex:1;color:#0af">BROADCAST</b>
+      <span id="bcstate" style="color:#888;margin-right:8px">idle</span>
+      <a class="btn" id="bclink" href="#" target="_blank" style="flex:0 0 74px;text-align:center;text-decoration:none">Listen</a>
+    </div>
+    <audio id="bcaudio" controls preload="none" style="width:100%;margin-top:6px"></audio>
+    <div class="msg" style="margin-top:4px">Live stream of the module OUTPUT as WAV (port 8000). Open the Listen link or this player in any browser/VLC on the network.</div>
+  </div>
   <label>Inputs</label>
   <div class="rmon" id="rmon"></div>
   <div class="row tight tr2" style="margin-top:4px">
@@ -1023,6 +1032,17 @@ function bncToggle(){
   var stop=bncOn;
   fetch(stop?'/bounce/stop':'/bounce/start',{method:'POST'}).then(function(){setTimeout(bncPoll,200);if(stop)setTimeout(loadFiles,700);}).catch(function(){});
 }
+// Broadcast — a live WAV stream of the output on port 8000 (separate socket server)
+function bcastInit(){
+  var url=location.protocol+'//'+location.hostname+':8000/';
+  var l=document.getElementById('bclink'); if(l)l.href=url;
+  var a=document.getElementById('bcaudio'); if(a&&!a.getAttribute('src'))a.setAttribute('src',url);
+}
+function bcastPoll(){
+  fetch('/bcast/state').then(function(r){return r.json();}).then(function(d){
+    var s=document.getElementById('bcstate'); if(s)s.textContent=d.live?'listener connected':'idle';
+  }).catch(function(){});
+}
 // Editor tab — /edit/* served only while the Editor machine is active
 var edTimer=null,edLast='';
 function edLoad(){
@@ -1234,12 +1254,13 @@ function pollStatus(){
     updateRemote(d);
     updateBl(d);
     updateScope(d.cv);
-    if(document.getElementById('p3').className.indexOf('on')>=0)bncPoll();   // bounce state while Remote is open
+    if(document.getElementById('p3').className.indexOf('on')>=0){bncPoll();bcastPoll();}   // bounce+broadcast state while Remote is open
   }).catch(function(){});
 }
 setInterval(pollStatus,500);
 pollImport();
 buildCvPerf();   // Remote-tab perform sliders
+bcastInit();     // broadcast Listen link + player URL (:8000)
 tab(3);          // Remote is the default tab
 pollStatus();
 </script>
