@@ -16,6 +16,7 @@
 #include "sd_lock.h"
 #include "trig_gate.h"
 #include "cvsmooth.h"
+#include "bpm_analysis.h"
 #include "dualdeck_priv.h"
 
 static const char *TAG = "DDECK";
@@ -254,6 +255,97 @@ static void reader_task(void *pv)
     vTaskDelete(NULL);
 }
 
+// ---- auto-BPM analysis (shared engine) --------------------------------------
+// So an UNSTAMPED track can be looped: on load, a stopped + gridless deck kicks
+// the shared analyser (util/bpm_analysis), which pauses whenever EITHER deck
+// touches the SD bus and, on success, stamps the sidecar + adopts the grid live.
+static bool dd_busy(void)
+{
+    // one starved ring is a PHASE SLIP, and both decks share the card — so
+    // analysis yields the SD bus if EITHER deck is streaming, not just this one.
+    return dd.d[0].playing || dd.d[0].loading || dd.d[1].playing || dd.d[1].loading;
+}
+
+static void dd_write_sidecar(const char *id, const bpm_result_t *r)
+{
+    char jp[64];
+    sample_resolve_aux(id, ".JSN", jp, sizeof(jp));
+    cJSON *root = readJSONFileAsCJSON(jp);
+    if (!root) root = cJSON_CreateObject();
+    cJSON_DeleteItemFromObjectCaseSensitive(root, "bpm");
+    cJSON_DeleteItemFromObjectCaseSensitive(root, "grid");
+    cJSON_DeleteItemFromObjectCaseSensitive(root, "dver");
+    cJSON_DeleteItemFromObjectCaseSensitive(root, "conf");
+    cJSON_AddNumberToObject(root, "bpm", r->bpm);
+    cJSON_AddNumberToObject(root, "grid", (double)r->grid);
+    cJSON_AddNumberToObject(root, "dver", 2);
+    cJSON_AddNumberToObject(root, "conf", (double)r->conf);
+    char *s = cJSON_Print(root);
+    cJSON_Delete(root);
+    if (s) { writeJSONFile(jp, s); free(s); }
+}
+
+static void dd_analyze_start(int deck);   // fwd
+
+static void dd_analysis_task(void *pv)
+{
+    bpm_result_t res;
+    int rc = bpm_analyze(dd.an_track, dd_busy, &dd.an_progress, &res);
+    if (rc == 0) {
+        dd_write_sidecar(dd.an_track, &res);
+        // adopt live ONLY if still the loaded track on that deck AND it is
+        // STOPPED — never move a playing deck's grid out from under the PLL
+        int d = dd.an_deck;
+        if (d >= 0 && d < 2 && strcmp(dd.d[d].track, dd.an_track) == 0 && !dd.d[d].playing) {
+            dd.d[d].grid_offset = res.grid;   // grid FIRST: track_bpm>20 is the loop-engage gate
+            dd.d[d].track_bpm  = res.bpm;     // DoubleDecker has no per-track "feel"
+            dd_tl_update(&dd.d[d]);
+        }
+    }
+    // hand off to a queued deck if one is waiting, keeping an_running set across
+    // the gap so a concurrent load can't spawn a second analyser
+    int p = dd.an_pending;
+    dd.an_pending = -1;
+    dd.an_progress = 0;
+    if (rc != -2 && p >= 0 && p < 2 && dd.d[p].track[0] && dd.d[p].track_bpm <= 20.0f) {
+        dd_analyze_start(p);
+    } else {
+        dd.an_running = false;
+        dd.an_deck = -1;
+    }
+    vTaskDelete(NULL);
+}
+
+static void dd_analyze_start(int deck)
+{
+    deck &= 1;
+    dd.an_deck = deck;
+    strlcpy(dd.an_track, dd.d[deck].track, sizeof(dd.an_track));
+    dd.an_progress = 0;
+    if (xTaskCreate(dd_analysis_task, "dd_an", 6144, NULL, 4, NULL) == pdPASS) {
+        dd.an_running = true;
+    } else {
+        ESP_LOGE(TAG, "analyze xTaskCreate failed (heap %u)",
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        dd.an_running = false;
+        dd.an_deck = -1;
+    }
+}
+
+// kick analysis for a freshly loaded UNSTAMPED track — stopped decks only
+static void dd_maybe_analyze(int deck)
+{
+    deck &= 1;
+    dd_deck_t *v = &dd.d[deck];
+    if (!v->track[0] || v->track_bpm > 20.0f) return;   // empty or already stamped
+    if (v->playing) return;                              // Arlo: only analyse a STOPPED track
+    if (dd.an_running) {                                 // one at a time (SD bus + envelope)
+        if (dd.an_deck != deck) dd.an_pending = deck;
+        return;
+    }
+    dd_analyze_start(deck);
+}
+
 // ---- UI-side controls -------------------------------------------------------
 int dualdeck_load_track(int deck, const char *name)
 {
@@ -283,6 +375,10 @@ int dualdeck_load_track(int deck, const char *name)
     }
     strlcpy(v->pending, name, sizeof(v->pending));
     v->track_req = true;   // reader opens + parks at the cue
+
+    // an unstamped track can't loop (needs bpm+grid) — analyse it now while it's
+    // stopped so it becomes loopable, exactly like the deck auto-analyses on load
+    dd_maybe_analyze(deck & 1);
     return 0;
 }
 
@@ -687,6 +783,7 @@ static esp_err_t dualdeck_start(void)
     dd.xf = 0.0f;
     dd.filt_cv[0] = dd.filt_cv[1] = 2048;   // both filters start CENTRE (off), not a heavy LP at 0
     dd.manual = true;
+    dd.an_deck = -1; dd.an_pending = -1;    // memset zeroed these to 0, a valid deck idx
     clockin_reset(&dd.ci, dd_ppb[dd.ppb_idx]);
     s_run = true;
     xTaskCreate(reader_task, "dd_reader", 4096, NULL, 6, NULL);
@@ -696,9 +793,13 @@ static esp_err_t dualdeck_start(void)
 
 static void dualdeck_stop(void)
 {
+    bpm_analyze_abort();           // bail any running analysis before we tear down
     dd.d[0].playing = dd.d[1].playing = false;
     s_run = false;
     for (int i = 0; i < 100 && s_alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    // let the analysis task see the abort and exit before the next start()'s
+    // memset(&dd) lands under it (statics-survive-switch hazard)
+    for (int i = 0; i < 100 && dd.an_running; i++) vTaskDelay(pdMS_TO_TICKS(10));
     free(dd.d[0].ring); dd.d[0].ring = NULL;
     free(dd.d[1].ring); dd.d[1].ring = NULL;
 }

@@ -186,6 +186,16 @@ typedef struct {
     float flt_f[2];
     volatile int flt_mode[2];      // 0 off, 1 LP, 2 HP (UI)
     svf_t flt_l[2], flt_r[2];
+
+    // auto-BPM analysis (shared engine, util/bpm_analysis) so an UNSTAMPED track
+    // can be looped. One run at a time (shared SD bus + the ~208 KB envelope);
+    // kicked when a track loads STOPPED + unstamped, paused whenever EITHER deck
+    // touches the SD bus. an_pending queues the other deck behind a running one.
+    volatile int  an_deck;         // deck being analysed, -1 = none
+    volatile int  an_pending;      // deck queued next, -1 = none
+    volatile int  an_progress;     // 0..100
+    volatile bool an_running;
+    char          an_track[DD_NAME_LEN];   // snapshot of the analysed track id
 } dd_state_t;
 
 extern dd_state_t dd;
