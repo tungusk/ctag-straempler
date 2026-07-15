@@ -32,9 +32,12 @@ static void note_from_cv(int cv1)
 static esp_err_t synth_start(void)
 {
     memset(&sy, 0, sizeof(sy));
+    sy.engine = ENG_VA;
     sy.base_note = 48;          // C3
     sy.quantize = true;
     sy.shape = 0.15f;           // mostly saw
+    sy.fm_ratio = 2.0f;         // FM: modulator = 2x carrier
+    sy.fm_index = 3.0f;         // FM: a bright-ish plucky depth
     sy.atk = 0.005f; sy.dec = 0.20f; sy.sus = 0.7f; sy.rel = 0.30f;
     sy.env_to_cut = 0.5f;
     sy.level = 0.8f;
@@ -92,12 +95,24 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
             default:      sy.env = 0.0f; break;
         }
 
-        // oscillator: polyBLEP saw <-> square morph
-        float saw = 2.0f * sy.phase - 1.0f - polyblep(sy.phase, dt);
-        float sq  = (sy.phase < 0.5f ? 1.0f : -1.0f) + polyblep(sy.phase, dt);
-        float t2 = sy.phase + 0.5f; if (t2 >= 1.0f) t2 -= 1.0f;
-        sq -= polyblep(t2, dt);
-        float osc = saw + (sq - saw) * sy.shape;
+        // oscillator
+        float osc;
+        if (sy.engine == ENG_FM) {
+            // 2-operator FM: carrier phase-modulated by a sine at ratio*freq,
+            // modulation index scaled by the envelope (classic FM pluck/bell)
+            const float TWO_PI = 6.2831853f;
+            float mod = sinf(TWO_PI * sy.mphase);
+            osc = sinf(TWO_PI * sy.phase + sy.fm_index * sy.env * mod);
+            float mdt = dt * sy.fm_ratio;
+            sy.mphase += mdt; sy.mphase -= (float)(int)sy.mphase;   // wrap 0..1
+        } else {
+            // polyBLEP saw <-> square morph
+            float saw = 2.0f * sy.phase - 1.0f - polyblep(sy.phase, dt);
+            float sq  = (sy.phase < 0.5f ? 1.0f : -1.0f) + polyblep(sy.phase, dt);
+            float t2 = sy.phase + 0.5f; if (t2 >= 1.0f) t2 -= 1.0f;
+            sq -= polyblep(t2, dt);
+            osc = saw + (sq - saw) * sy.shape;
+        }
         sy.phase += dt; if (sy.phase >= 1.0f) sy.phase -= 1.0f;
 
         // filter: cutoff opened by the envelope; SVF low-pass tap
@@ -118,9 +133,12 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
 static cJSON *synth_preset_save(void)
 {
     cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "eng", sy.engine);
     cJSON_AddNumberToObject(o, "note", sy.base_note);
     cJSON_AddBoolToObject(o, "quant", sy.quantize);
     cJSON_AddNumberToObject(o, "shape", sy.shape);
+    cJSON_AddNumberToObject(o, "fmr", sy.fm_ratio);
+    cJSON_AddNumberToObject(o, "fmi", sy.fm_index);
     cJSON_AddNumberToObject(o, "atk", sy.atk);
     cJSON_AddNumberToObject(o, "dec", sy.dec);
     cJSON_AddNumberToObject(o, "sus", sy.sus);
@@ -134,6 +152,9 @@ static void synth_preset_load(const cJSON *node)
 {
     if (!node) return;
     cJSON *j;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "eng"))   && cJSON_IsNumber(j)) sy.engine = j->valueint ? ENG_FM : ENG_VA;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fmr"))   && cJSON_IsNumber(j)) sy.fm_ratio = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fmi"))   && cJSON_IsNumber(j)) sy.fm_index = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "note"))  && cJSON_IsNumber(j)) sy.base_note = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "quant")) && cJSON_IsBool(j))   sy.quantize = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "shape")) && cJSON_IsNumber(j)) sy.shape = (float)j->valuedouble;
