@@ -991,10 +991,11 @@ function rdState(){
   fetch('/radio/state').then(function(r){return r.json();}).then(function(d){
     document.getElementById('rdnote').style.display='none';
     document.getElementById('rdstate').textContent=d.state||'stopped';
-    var info = d.err ? d.err
-             : (d.bitrate ? (d.station+'  '+d.bitrate+' kbps  '+d.samprate+' Hz  '+d.nchans+'ch'+(d.underruns?('  drops '+d.underruns):''))
-                          : (d.station||'—'));
-    document.getElementById('rdinfo').textContent=info;
+    var np=d.title||'';
+    var tech=d.err ? d.err
+           : (d.bitrate ? (d.station+'  '+d.bitrate+' kbps  '+d.samprate+' Hz'+(d.reconnects?('  reconn '+d.reconnects):'')+(d.underruns?('  drops '+d.underruns):''))
+                        : (d.station||'—'));
+    document.getElementById('rdinfo').innerHTML=(np?'<b>'+esc(np)+'</b><br>':'')+'<span style="color:#888">'+esc(tech)+'</span>';
     document.getElementById('rdbuf').style.width=(d.buf||0)+'%';
     var box=document.getElementById('rdstations'),st=d.stations||[];
     if(box.dataset.n!==String(st.length)){          // build station buttons once

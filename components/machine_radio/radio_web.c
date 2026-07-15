@@ -79,6 +79,8 @@ static esp_err_t radio_state_handler(httpd_req_t *req)
     int st = rd.state; if (st < 0 || st > 3) st = 0;
     cJSON_AddStringToObject(o, "state", names[st]);
     cJSON_AddStringToObject(o, "station", rd.station);
+    cJSON_AddStringToObject(o, "title", rd.title);
+    cJSON_AddNumberToObject(o, "reconnects", (double)rd.reconnects);
     cJSON_AddStringToObject(o, "url", rd.url);
     cJSON_AddNumberToObject(o, "bitrate", rd.bitrate);
     cJSON_AddNumberToObject(o, "samprate", rd.samprate);
