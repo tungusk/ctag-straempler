@@ -38,24 +38,42 @@ another agent's in-progress files into unrelated commits twice).
 Arlo is spinning one agent down. This section is the complete state of my area: what is
 done, what is UNVERIFIED, what to do first, and the traps that will bite you.
 
+## ✅ STATUS UPDATE 2026-07-15 — DoubleDecker is EAR-TESTED (Arlo's call)
+
+Late-night session 2026-07-15 00:54–01:28 (commits `304e66c`, `8ce48bc`, `4d3c21f`)
+loop-tested DoubleDecker on the device and reached a good stopping point. **Arlo:
+"consider doubledecker ear-tested."** What that session verified on hardware:
+- **Loop knobs stable** (`304e66c`): the "loops go wild" symptom got its FINAL diagnosis
+  — the window quantizer compared by POSITION, firing ~20 remaps/sec with the knob dead
+  still (it rendered the flickering PENDING window). Now INDEX-based with hysteresis;
+  start quantizes to a fixed beat grid and length grows FORWARD from it. "box holds
+  steady, length grows forward, knobs pick up cleanly."
+- **Per-deck DJ filters** (`4d3c21f`, "nailed it"): CV6 now sweeps the FOCUSED deck's own
+  filter — **this REVERSES the "master filter only" design intent below.** Fader + both
+  filters use pickup (inert until swept back to live) instead of the catch-up slew.
+- **Single-list browser** (`8ce48bc`): folders inline at the top of one list, replacing
+  the two-level picker; browse position remembered. Shared across all six machines.
+
+**Still UNVERIFIED (the rest of the no-flash convergence batch):** the drums self-fire
+fix (`dip_seen`), the CV-spike hardening sweep across looper/tracker/glitch/granular/
+slicer, and beatlisten (**Arlo: test LATER**). The three original DO-FIRST checks below
+are kept for that residue — item 1 (loop jump) is RESOLVED.
+
 ## THE ONE THING TO DO FIRST
 
-**Nothing of mine has been hardware-verified.** Everything from `c50871c` onward was
-written under the no-flash rule while the soak ran: build-verified, proof-verified,
-JS-syntax-verified, reasoning-verified — *never heard*. On the first flash after the soak:
+~~**Nothing of mine has been hardware-verified.**~~ (DoubleDecker now is — see status
+above.) Everything else from `c50871c` onward was written under the no-flash rule while
+the soak ran: build/proof/reasoning-verified, *never heard*. Residual checks:
 
-1. **Re-test "the loops jump around on their own" in DoubleDecker.** My diagnosis CHANGED.
-   I first blamed a floating TR2 input (real, and fixed by the trig debounce), but the
-   actual cause is almost certainly that I had put the loop-LENGTH knob on **CV8 — which
-   is the clock input** (`clk_src` default). The knob was reading the pulse train. Fixed
-   two ways in `c50871c` (the engine now ignores any loop control on the clock channel,
-   AND the default moved off it). If the loop still jumps, my model is wrong and everything
-   downstream of it deserves suspicion.
+1. ~~**Re-test "the loops jump around on their own" in DoubleDecker.**~~ RESOLVED
+   2026-07-15 (`304e66c`, see status above). Earlier diagnoses (floating TR2; loop-length
+   knob on CV8 = the clock input) were both real and fixed, but the last-mile cause was
+   position-based remap churn. Left here as the diagnostic trail.
 2. **Drums: confirm pads no longer self-fire.** The floor tracker used to adopt a lone ADC
    dip instantly, collapsing the noise floor so the NEXT block read a normal value as a hit
    — at near-max velocity. That is a false TRIGGER, not a click, and it is the most
    musically destructive thing the CV audit found. Fixed by requiring a dip to persist two
-   blocks (`drum.c`, `dip_seen`).
+   blocks (`drum.c`, `dip_seen`). STILL UNVERIFIED.
 3. **Leave the new web CV scope running with hands off the panel.** It flags lone ADC
    outliers. It is the instrument that would have found the original bug in seconds.
 
@@ -157,8 +175,11 @@ TR2 = loop, everywhere). The CV matrix is the escape: give each deck's loop its 
 channels and both go live at once.
 
 **Rejected, with reasons** — don't "fix" these:
-- *Per-deck filters.* Considered; the master filter on the sum is what a blender wants, and
-  it keeps CV6 free.
+- ~~*Per-deck filters.*~~ **REVERSED 2026-07-15 (`4d3c21f`, "nailed it").** Per-deck
+  filters shipped and Arlo prefers them: CV6 sweeps the FOCUSED deck's own filter, the
+  unfocused deck's freezes. Do NOT restore the single master-on-the-sum filter. (The old
+  reasoning was "the master filter on the sum is what a blender wants, and it keeps CV6
+  free" — superseded by ear.)
 - *Auto-crossfade on deck start (takeover).* Built, then made OPT-IN and defaulted OFF —
   Arlo: "it probably shouldn't auto crossfade like that." A machine moving your fader under
   your hand is a machine you stop trusting.
