@@ -310,6 +310,12 @@ static int dd_min_q(void)
 //   pickups:     -2 = live,           -1 = armed (dead until it CROSSES back)
 #define DD_PICKUP  120        // counts of movement that grab a loop knob
 #define DD_PASSTOL 90         // how close a knob must come to reclaim its param
+#define DD_QHYST   40         // quantizer hysteresis: a grabbed loop knob parked on
+                              // a bin EDGE must not strobe between two values on ADC
+                              // noise (Arlo: "on the edge of a change point in the
+                              // voltage" — length flipped rungs / window snapped slots
+                              // with no touch). Hold the current bin until the knob is
+                              // this many counts past its edge. > the ~±5 ADC ripple.
 static trig_gate_t  s_tg[2];                 // TR1/TR2 gate state
 static trig_combo_t s_tc;                    // the both-trig RESYNC gesture
 static cvmed_t s_med[8];                     // per-channel median-of-5
@@ -321,6 +327,7 @@ static int s_catch_x = 0, s_catch_f = 0;     // blocks of gentle catch-up after 
 static int s_mv6[2] = {0, 0}, s_mv7[2] = {0, 0};   // move debounce (ADC spikes)
 static int s_c6_last[2] = {-1, -1};          // knob position the last move was made AT
 static int s_len_idx[2] = {4, 4};            // ladder index while looping
+static int s_win_idx[2] = {-1, -1};          // window SLOT index while looping (-1 = none)
 
 static void dd_reset_statics(void)
 {
@@ -336,6 +343,7 @@ static void dd_reset_statics(void)
         s_mv6[i] = s_mv7[i] = 0;
         s_c6_last[i] = -1;
         s_len_idx[i] = 4;
+        s_win_idx[i] = -1;
     }
 }
 
@@ -412,6 +420,7 @@ void dualdeck_rearm_loop_knobs(int deck)
     s_cv6_ref[d] = s_cv7_ref[d] = -1;
     s_mv6[d] = s_mv7[d] = 0;
     s_c6_last[d] = -1;
+    s_win_idx[d] = -1;
 }
 
 void dualdeck_loop_toggle(int deck)
@@ -497,6 +506,7 @@ void dualdeck_loop_toggle(int deck)
     s_cv6_ref[deck & 1] = s_cv7_ref[deck & 1] = -1;   // dead until MOVED, so engaging
     s_mv6[deck & 1] = s_mv7[deck & 1] = 0;            // can't fling the window
     s_c6_last[deck & 1] = -1;
+    s_win_idx[deck & 1] = -1;
     v->map_p0 = v->rpos_i - off;                  // keeps map(rpos) == ff
     v->rm_at = 0;                                 // no stale scheduled window
     v->loop_active = true;                        // set LAST (write ordering)
@@ -788,6 +798,7 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
             if (dd.d[i].loop_active) { s_cv6_ref[i] = -1; s_cv7_ref[i] = -1; }
             s_mv6[i] = s_mv7[i] = 0;
             s_c6_last[i] = -1;
+            s_win_idx[i] = -1;
         }
     }
     for (int i = 0; i < 2; i++) {
@@ -809,20 +820,27 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         bool pos_ok = (lp != clk), len_ok = (ll != clk);
         int c6 = pos_ok ? cvv[lp] : 0;         // window position
         int c7 = len_ok ? cvv[ll] : 0;         // window length
-        // ARM: seize the reference the block after engage, so the knobs are DEAD
-        // until they MOVE and engaging can never fling the window.
-        if (s_cv6_ref[i] == -1) { s_cv6_ref[i] = c6; s_mv6[i] = 0; }
-        if (s_cv7_ref[i] == -1) { s_cv7_ref[i] = c7; s_mv7[i] = 0; }
+        // PICKUP (contextual, Arlo): on entering loop mode the knobs are ARMED
+        // (s_cv*_ref == -1) and INERT — each takes over (-> -2, live) only when
+        // its quantized value REACHES the live one (length rung / start beat),
+        // so the first touch never jumps the loop.
         if (!pos_ok && !len_ok) continue;      // both on the clock: nothing to do
-        // CV len = the ladder. Grab-then-track.
-        if (len_ok && s_cv7_ref[i] >= 0 &&
-            (c7 - s_cv7_ref[i] > DD_PICKUP || s_cv7_ref[i] - c7 > DD_PICKUP)) s_cv7_ref[i] = -2;
-        if (len_ok && s_cv7_ref[i] == -2) {
+        // CV len = the ladder rung: pick up at the live length, then track.
+        if (len_ok && (s_cv7_ref[i] == -1 || s_cv7_ref[i] == -2)) {
             int minq = dd_min_q();
             int ni = (int)((uint64_t)c7 * DD_LOOP_STEPS / 4096);
             if (ni >= DD_LOOP_STEPS) ni = DD_LOOP_STEPS - 1;
+            // hold the current rung until the knob is DD_QHYST past its bin edge
+            {
+                int cur = s_len_idx[i];
+                int lo = (int)((uint64_t)cur * 4096 / DD_LOOP_STEPS);
+                int hi = (int)((uint64_t)(cur + 1) * 4096 / DD_LOOP_STEPS);
+                if (c7 >= lo - DD_QHYST && c7 < hi + DD_QHYST) ni = cur;
+            }
             while (ni < DD_LOOP_STEPS - 1 && dd_loop_q[ni] < minq) ni++;
-            if (ni != s_len_idx[i] && ++s_mv7[i] >= 3) {
+            if (s_cv7_ref[i] == -1) {
+                if (ni == s_len_idx[i]) s_cv7_ref[i] = -2;          // knob reached live length: pick up
+            } else if (ni != s_len_idx[i] && ++s_mv7[i] >= 3) {
                 s_mv7[i] = 0;
                 uint32_t nl = (uint32_t)((uint64_t)dd_loop_q[ni] * beat_tf / 4);
                 uint32_t cs = dd_live_start(v);
@@ -833,27 +851,55 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
                 }
             } else if (ni == s_len_idx[i]) s_mv7[i] = 0;
         }
-        // CV pos = the window, ABSOLUTE across the track. It acts only when the
-        // KNOB moves: re-evaluating it on a length change would re-quantise the
-        // same knob position onto the new, coarser window grid and drag the start
-        // backwards (the bug the deck and the tracker both had).
-        if (pos_ok && s_cv6_ref[i] >= 0 &&
-            (c6 - s_cv6_ref[i] > DD_PICKUP || s_cv6_ref[i] - c6 > DD_PICKUP)) s_cv6_ref[i] = -2;
+        // CV pos = the loop START, quantized to whole BEATS on a FIXED grid —
+        // independent of the loop LENGTH. Arlo's model: "start and length;
+        // length grows FROM the start point." Quantizing the start into
+        // length-sized slots (the old way) made a longer loop snap the start to a
+        // coarser boundary = "it moves the start back." A fixed beat grid keeps
+        // the start put while the length extends forward. Index-tracked +
+        // hysteresis (like the length ladder) so a still knob fires zero remaps.
         uint32_t llen = dd_live_len(v);
-        int moved = (s_c6_last[i] < 0) || (c6 - s_c6_last[i] > 24) || (s_c6_last[i] - c6 > 24);
-        if (pos_ok && s_cv6_ref[i] == -2 && llen && moved) {
+        if (pos_ok && llen && beat_tf && (s_cv6_ref[i] == -1 || s_cv6_ref[i] == -2)) {
             uint32_t span = (v->file_frames > v->grid_offset)
                           ? v->file_frames - v->grid_offset : 0;
-            uint32_t nwin = span / llen;
+            // START step: a whole number of beats chosen to keep <=128 knob
+            // positions, so each bin stays WELL above the ADC noise + hysteresis.
+            // A per-beat grid on a long track was ~7 counts/bin -> knob felt dead.
+            uint32_t step = beat_tf;
+            {
+                static const int sb[] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512};
+                for (int s = 0; s < 10; s++) {
+                    step = (uint32_t)sb[s] * beat_tf;
+                    if (step && span / step <= 128) break;
+                }
+            }
+            uint32_t nwin = step ? span / step : 0;
             if (nwin) {
-                uint32_t idx = (uint32_t)((uint64_t)c6 * nwin / 4096);
-                if (idx >= nwin) idx = nwin - 1;
-                uint32_t ns = v->grid_offset + idx * llen;
-                if (ns != dd_live_start(v) && ++s_mv6[i] >= 3) {
-                    s_mv6[i] = 0;
-                    s_c6_last[i] = c6;
-                    if (ns + llen <= v->file_frames) dd_loop_remap(v, ns, llen);
-                } else if (ns == dd_live_start(v)) { s_mv6[i] = 0; s_c6_last[i] = c6; }
+                int bin = (int)(4096 / nwin);
+                int hyst = bin / 3; if (hyst < 10) hyst = 10; if (hyst > DD_QHYST) hyst = DD_QHYST;
+                int idx = (int)((uint64_t)c6 * nwin / 4096);
+                if (idx >= (int)nwin) idx = (int)nwin - 1;
+                uint32_t cs = dd_live_start(v);
+                int win_now = (cs >= v->grid_offset) ? (int)((cs - v->grid_offset) / step) : 0;
+                if (win_now >= (int)nwin) win_now = (int)nwin - 1;
+                int wlo = (int)((uint64_t)win_now * 4096 / nwin);
+                int whi = (int)((uint64_t)(win_now + 1) * 4096 / nwin);
+                if (s_cv6_ref[i] == -1) {
+                    // pick up once the knob enters the current start's bin (+/- hyst)
+                    if (c6 >= wlo - hyst && c6 < whi + hyst) { s_cv6_ref[i] = -2; s_win_idx[i] = win_now; }
+                } else {
+                    int cur = s_win_idx[i];
+                    if (cur >= 0 && cur < (int)nwin) {   // hold the current slot within its bin +/- hyst
+                        int lo = (int)((uint64_t)cur * 4096 / nwin);
+                        int hi = (int)((uint64_t)(cur + 1) * 4096 / nwin);
+                        if (c6 >= lo - hyst && c6 < hi + hyst) idx = cur;
+                    }
+                    if (idx != s_win_idx[i] && ++s_mv6[i] >= 3) {
+                        s_mv6[i] = 0;
+                        uint32_t ns = v->grid_offset + (uint32_t)idx * step;
+                        if (ns + llen <= v->file_frames) { s_win_idx[i] = idx; dd_loop_remap(v, ns, llen); }
+                    } else if (idx == s_win_idx[i]) s_mv6[i] = 0;
+                }
             }
         }
     }

@@ -175,6 +175,12 @@ static void v_paint_slice(int i, int x, int w){
             TFT_fillRect(px, wy + (wh - h) / 2, 2, h, WF_GREY);
         }
     }
+    if (i == dd.focus){            // SELECTED track: thin white centre line
+        int cwx = V_TB_X + V_TB_BW, cww = V_TB_W - 2 * V_TB_BW;
+        int lx = x > cwx ? x : cwx;
+        int lr = (x + w) < (cwx + cww) ? (x + w) : (cwx + cww);
+        if (lr > lx) TFT_fillRect(lx, by + V_TB_H / 2, lr - lx, 1, (color_t){245, 245, 245});
+    }
 }
 
 // THE BOX IS THE LOOP: the fat border stops framing the whole track and shrinks
@@ -331,6 +337,11 @@ static void h_bar_slice(int i, int sx, int sw){
             if (h < 2) h = 2;
             TFT_fillRect(x, wy + (wh - h) / 2, 2, h, WF_GREY);
         }
+    }
+    if (i == dd.focus){            // SELECTED track: thin white centre line
+        int lx = sx > bx ? sx : bx;
+        int lr = (sx + sw) < (bx + bw) ? (sx + sw) : (bx + bw);
+        if (lr > lx) TFT_fillRect(lx, by + H_BAR_H / 2, lr - lx, 1, (color_t){245, 245, 245});
     }
     // loop window: rails top and bottom + end posts, in the transport colour
     if (v->loop_active && v->ui_llen && v->file_frames){
@@ -496,6 +507,9 @@ static int dd_live_handler(int it_id, int event, void *ev_data){
             live_full_redraw();      // focus lives in the frame/accent: repaint
             break;
         case EV_SHORT_PRESS:
+            // no reloading a track onto a PLAYING deck (Arlo) — the press is a
+            // no-op while it plays, freeing the gesture for a future use
+            if (dd.d[dd.focus].playing) break;
             return M_DD_LOAD;
         case EV_LONG_PRESS:
             return M_DD_SETUP;
