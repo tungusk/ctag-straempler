@@ -93,8 +93,12 @@ static esp_err_t radio_state_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "sel", rd.sel);
     if (rd.err[0]) cJSON_AddStringToObject(o, "err", rd.err);
     cJSON *arr = cJSON_AddArrayToObject(o, "stations");
-    for (int i = 0; i < radio_n_stations; i++)
-        cJSON_AddItemToArray(arr, cJSON_CreateString(radio_stations[i].name));
+    for (int i = 0; i < rd_n_stations; i++) {
+        cJSON *st = cJSON_CreateObject();
+        cJSON_AddStringToObject(st, "name", rd_stations[i].name);
+        cJSON_AddBoolToObject(st, "saved", i >= RADIO_N_DEFAULT);   // built-ins aren't deletable
+        cJSON_AddItemToArray(arr, st);
+    }
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     esp_err_t rc = send_json(req, s ? s : "{}");
@@ -102,9 +106,36 @@ static esp_err_t radio_state_handler(httpd_req_t *req)
     return rc;
 }
 
+static esp_err_t station_save_handler(httpd_req_t *req)
+{
+    char name[RADIO_NAME_LEN], url[RADIO_URL_LEN];
+    if (!qparam(req, "url", url, sizeof(url))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need ?url=");
+        return ESP_FAIL;
+    }
+    url_decode(url);
+    bool hn = qparam(req, "name", name, sizeof(name));
+    if (hn) url_decode(name);
+    int rc = radio_station_add(hn ? name : "custom", url);
+    return send_json(req, rc == 0 ? "{\"ok\":true}" : "{\"ok\":false,\"err\":\"full or bad url\"}");
+}
+
+static esp_err_t station_del_handler(httpd_req_t *req)
+{
+    char is[8];
+    if (!qparam(req, "i", is, sizeof(is))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need ?i=");
+        return ESP_FAIL;
+    }
+    radio_station_del(atoi(is));
+    return send_json(req, "{\"ok\":true}");
+}
+
 const httpd_uri_t radio_web_uris[] = {
-    { .uri = "/radio/play",  .method = HTTP_POST, .handler = radio_play_handler },
-    { .uri = "/radio/stop",  .method = HTTP_POST, .handler = radio_stop_handler },
-    { .uri = "/radio/state", .method = HTTP_GET,  .handler = radio_state_handler },
+    { .uri = "/radio/play",         .method = HTTP_POST, .handler = radio_play_handler },
+    { .uri = "/radio/stop",         .method = HTTP_POST, .handler = radio_stop_handler },
+    { .uri = "/radio/state",        .method = HTTP_GET,  .handler = radio_state_handler },
+    { .uri = "/radio/station/save", .method = HTTP_POST, .handler = station_save_handler },
+    { .uri = "/radio/station/del",  .method = HTTP_POST, .handler = station_del_handler },
 };
 const int radio_web_n_uris = sizeof(radio_web_uris) / sizeof(radio_web_uris[0]);

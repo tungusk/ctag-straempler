@@ -59,7 +59,7 @@ static void info_block(void)
     // the station line: while stopped, show the SELECTED station (turn to pick);
     // while active, show what's playing
     const char *nm = (rd.state == RADIO_STOPPED)
-                     ? radio_stations[rd.sel % radio_n_stations].name
+                     ? rd_stations[rd.sel % rd_n_stations].name
                      : (rd.station[0] ? rd.station : "—");
     char s[48];
     if (rd.state == RADIO_STOPPED) snprintf(s, sizeof(s), "< %s >", nm);
@@ -104,10 +104,10 @@ static int radio_live_handler(int it_id, int event, void *ev_data)
             info_block();
             break;
         case EV_FWD:
-            if (rd.state == RADIO_STOPPED) { rd.sel = (rd.sel + 1) % radio_n_stations; info_block(); }
+            if (rd.state == RADIO_STOPPED) { rd.sel = (rd.sel + 1) % rd_n_stations; info_block(); }
             break;
         case EV_BWD:
-            if (rd.state == RADIO_STOPPED) { rd.sel = (rd.sel + radio_n_stations - 1) % radio_n_stations; info_block(); }
+            if (rd.state == RADIO_STOPPED) { rd.sel = (rd.sel + rd_n_stations - 1) % rd_n_stations; info_block(); }
             break;
         case EV_SHORT_PRESS:
             radio_play_station(rd.sel);
@@ -196,5 +196,5 @@ const machine_ui_t radio_menu_ui = {
     .main_event = radio_main_event,
     .boot_target = M_RADIO_LIVE,
     .web_uris = radio_web_uris,
-    .n_web_uris = 3,
+    .n_web_uris = 5,
 };

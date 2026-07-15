@@ -19,7 +19,8 @@
 
 enum { RADIO_STOPPED = 0, RADIO_BUFFERING, RADIO_PLAYING, RADIO_ERROR };
 
-typedef struct { const char *name; const char *url; } radio_station_t;
+#define RADIO_MAX_ST      24         // built-in defaults + SD-saved favorites
+typedef struct { char name[RADIO_NAME_LEN]; char url[RADIO_URL_LEN]; } radio_station_t;
 
 typedef struct {
     int16_t *ring;                 // PSRAM interleaved stereo
@@ -38,10 +39,16 @@ typedef struct {
 } radio_state_t;
 
 extern radio_state_t rd;
-extern const radio_station_t radio_stations[];
-extern const int radio_n_stations;
+extern radio_station_t rd_stations[];   // [0..RADIO_N_DEFAULT) built-in, then SD-saved
+extern int rd_n_stations;
+#define RADIO_N_DEFAULT 5               // the first N are built-in (not deletable)
 
 // control — safe from the httpd task (web) and the UI task (menu)
 void radio_play_url(const char *url, const char *name);
 void radio_play_station(int idx);
 void radio_stop_stream(void);
+
+// station favorites (SD-persisted in usr/radio.jsn)
+void radio_stations_load(void);
+int  radio_station_add(const char *name, const char *url);   // 0 ok, <0 full
+int  radio_station_del(int idx);                             // saved-only; 0 ok

@@ -9,6 +9,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "cJSON.h"
+#include "fileio.h"
 #include "machine.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -20,16 +21,76 @@ static const char *TAG = "RADIO";
 
 radio_state_t rd;
 
-// A few known-good icecast MP3 mounts (44.1 kHz) so the machine is usable
-// without typing a URL. Plain HTTP — no TLS handshake cost.
-const radio_station_t radio_stations[] = {
+// Built-in icecast MP3 mounts (44.1 kHz) so the machine is usable without
+// typing a URL. Plain HTTP — no TLS handshake cost. Saved favourites append
+// after these (loaded from usr/radio.jsn).
+static const radio_station_t DEFAULTS[RADIO_N_DEFAULT] = {
     { "Groove Salad", "http://ice1.somafm.com/groovesalad-128-mp3" },
     { "Drone Zone",   "http://ice1.somafm.com/dronezone-128-mp3" },
     { "DEF CON",      "http://ice1.somafm.com/defcon-128-mp3" },
     { "Lush",         "http://ice1.somafm.com/lush-128-mp3" },
     { "Indie Pop",    "http://ice1.somafm.com/indiepop-128-mp3" },
 };
-const int radio_n_stations = sizeof(radio_stations) / sizeof(radio_stations[0]);
+radio_station_t rd_stations[RADIO_MAX_ST];
+int rd_n_stations = 0;
+
+#define RADIO_STATIONS_FILE "/sdcard/usr/radio.jsn"
+
+static void radio_stations_save(void)
+{
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = RADIO_N_DEFAULT; i < rd_n_stations; i++) {
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "name", rd_stations[i].name);
+        cJSON_AddStringToObject(e, "url", rd_stations[i].url);
+        cJSON_AddItemToArray(arr, e);
+    }
+    char *s = cJSON_Print(arr);
+    cJSON_Delete(arr);
+    if (s) { writeJSONFile(RADIO_STATIONS_FILE, s); free(s); }
+}
+
+void radio_stations_load(void)
+{
+    memcpy(rd_stations, DEFAULTS, sizeof(DEFAULTS));
+    rd_n_stations = RADIO_N_DEFAULT;
+    cJSON *root = readJSONFileAsCJSON(RADIO_STATIONS_FILE);
+    if (root && cJSON_IsArray(root)) {
+        cJSON *e;
+        cJSON_ArrayForEach(e, root) {
+            if (rd_n_stations >= RADIO_MAX_ST) break;
+            cJSON *nm = cJSON_GetObjectItemCaseSensitive(e, "name");
+            cJSON *u  = cJSON_GetObjectItemCaseSensitive(e, "url");
+            if (cJSON_IsString(u) && u->valuestring[0]) {
+                strlcpy(rd_stations[rd_n_stations].url, u->valuestring, RADIO_URL_LEN);
+                strlcpy(rd_stations[rd_n_stations].name,
+                        (cJSON_IsString(nm) && nm->valuestring[0]) ? nm->valuestring : "custom", RADIO_NAME_LEN);
+                rd_n_stations++;
+            }
+        }
+    }
+    if (root) cJSON_Delete(root);
+}
+
+int radio_station_add(const char *name, const char *url)
+{
+    if (!url || strncmp(url, "http", 4) != 0) return -1;
+    if (rd_n_stations >= RADIO_MAX_ST) return -1;
+    strlcpy(rd_stations[rd_n_stations].url, url, RADIO_URL_LEN);
+    strlcpy(rd_stations[rd_n_stations].name, (name && name[0]) ? name : "custom", RADIO_NAME_LEN);
+    rd_n_stations++;
+    radio_stations_save();
+    return 0;
+}
+
+int radio_station_del(int idx)
+{
+    if (idx < RADIO_N_DEFAULT || idx >= rd_n_stations) return -1;   // built-ins are permanent
+    for (int i = idx; i < rd_n_stations - 1; i++) rd_stations[i] = rd_stations[i + 1];
+    rd_n_stations--;
+    radio_stations_save();
+    return 0;
+}
 
 static volatile bool s_stream_run = false;   // stream task is alive
 static volatile bool s_stop = false;         // request the stream task to exit
@@ -249,15 +310,16 @@ void radio_play_url(const char *url, const char *name)
 
 void radio_play_station(int idx)
 {
-    if (idx < 0 || idx >= radio_n_stations) return;
+    if (idx < 0 || idx >= rd_n_stations) return;
     rd.sel = idx;
-    radio_play_url(radio_stations[idx].url, radio_stations[idx].name);
+    radio_play_url(rd_stations[idx].url, rd_stations[idx].name);
 }
 
 // ---- machine lifecycle ------------------------------------------------------
 static esp_err_t radio_start(void)
 {
     memset(&rd, 0, sizeof(rd));
+    radio_stations_load();       // defaults + SD-saved favourites
     rd.ring = heap_caps_malloc((size_t)RADIO_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     if (!rd.ring) { ESP_LOGE(TAG, "PSRAM ring alloc failed"); return ESP_ERR_NO_MEM; }
     rd.state = RADIO_STOPPED;
@@ -309,7 +371,7 @@ static void radio_preset_load(const cJSON *node)
     rd.sel = 0;
     if (node) {
         cJSON *j = cJSON_GetObjectItemCaseSensitive(node, "sel");
-        if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint < radio_n_stations)
+        if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint < RADIO_MAX_ST)
             rd.sel = j->valueint;
     }
 }

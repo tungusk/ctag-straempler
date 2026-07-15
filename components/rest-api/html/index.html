@@ -270,7 +270,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <label>Stations</label>
   <div class="row" id="rdstations" style="flex-wrap:wrap"></div>
   <label style="margin-top:10px">Custom stream URL (MP3, 44.1kHz)</label>
-  <div class="row"><input id="rdurl" placeholder="http://.../stream.mp3" onkeydown="if(event.key==='Enter')rdPlayUrl()"><button class="btn" style="flex:0 0 64px" onclick="rdPlayUrl()">Play</button></div>
+  <div class="row"><input id="rdurl" placeholder="http://.../stream.mp3" onkeydown="if(event.key==='Enter')rdPlayUrl()"><button class="btn" style="flex:0 0 58px" onclick="rdPlayUrl()">Play</button><button class="btn" style="flex:0 0 58px" onclick="rdSaveStation()">Save</button></div>
   <div class="row" style="margin-top:8px"><button class="btn del" style="flex:0 0 88px" onclick="rdStop()">Stop</button></div>
   <div class="msg" id="rdm"></div>
 </div>
@@ -1007,11 +1007,19 @@ function rdState(){
     document.getElementById('rdinfo').innerHTML=(np?'<b>'+esc(np)+'</b><br>':'')+'<span style="color:#888">'+esc(tech)+'</span>';
     document.getElementById('rdbuf').style.width=(d.buf||0)+'%';
     var box=document.getElementById('rdstations'),st=d.stations||[];
-    if(box.dataset.n!==String(st.length)){          // build station buttons once
-      box.dataset.n=String(st.length);box.innerHTML='';
-      st.forEach(function(nm,i){
+    var sig=st.map(function(s){return (s.name||s)+(s.saved?'*':'');}).join('|');
+    if(box.dataset.sig!==sig){                       // rebuild on any list change
+      box.dataset.sig=sig;box.innerHTML='';
+      st.forEach(function(s,i){
+        var nm=s.name||s;
+        var wrap=document.createElement('span');wrap.style.cssText='display:inline-flex;margin:2px';
         var b=document.createElement('button');b.className='btn';b.style.flex='0 0 auto';b.textContent=nm;
-        b.onclick=function(){rdPlayStation(i);};box.appendChild(b);
+        b.onclick=function(){rdPlayStation(i);};wrap.appendChild(b);
+        if(s.saved){
+          var x=document.createElement('button');x.className='btn del';x.style.cssText='flex:0 0 auto;padding:3px 7px';x.textContent='×';
+          x.onclick=function(){rdDelStation(i);};wrap.appendChild(x);
+        }
+        box.appendChild(wrap);
       });
     }
   }).catch(function(){document.getElementById('rdnote').style.display='';});
@@ -1019,6 +1027,8 @@ function rdState(){
 function rdPlayStation(i){fetch('/radio/play?station='+i,{method:'POST'}).catch(function(){});}
 function rdPlayUrl(){var u=document.getElementById('rdurl').value.trim();if(u)fetch('/radio/play?url='+encodeURIComponent(u),{method:'POST'}).catch(function(){});}
 function rdStop(){fetch('/radio/stop',{method:'POST'}).catch(function(){});}
+function rdSaveStation(){var u=document.getElementById('rdurl').value.trim();if(!u)return;fetch('/radio/station/save?url='+encodeURIComponent(u),{method:'POST'}).then(function(){document.getElementById('rdstations').dataset.sig='';setTimeout(rdState,300);}).catch(function(){});}
+function rdDelStation(i){fetch('/radio/station/del?i='+i,{method:'POST'}).then(function(){document.getElementById('rdstations').dataset.sig='';setTimeout(rdState,300);}).catch(function(){});}
 // Bounce — record the output bus to a pool take (core, any machine)
 var bncOn=false;
 function bncPoll(){
