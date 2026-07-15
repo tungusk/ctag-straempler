@@ -72,9 +72,49 @@ in-browser RAW bloat.)**
 its small original size (fast), then the IMPORT card shows it converting; it then
 plays. Drop a FLAC → still "audio→RAW" (in-browser), still works.
 
+## ✅ 5. Web instrument — perform CV/knob sliders (Remote tab)
+The teleremote could configure a machine but not PERFORM one (every performance
+control is a knob). Backend already existed (beatlisten agent: `POST /remote/cv`
++ `audio_remote_cv`/`s_remote_cv_val` applied over `io.cv`/`io.cv_raw` with a
+timeout decay). Added the missing UI: a "Perform" card with 8 sliders that POST
+`/remote/cv?ch&v&ms`. Drag = live sweep (throttled ~1/70ms, ms=300 so a moving
+slider holds); per-channel **hold** re-posts within the decay to sustain;
+release/untick/close = decays back to the physical knob (nothing pinned by a
+stale value). FLASHED + verified: a slider drives the target CV in /status and
+releases back. Testable now on the reloaded Remote tab.
+
+## ✅ 6. DoubleDecker auto-BPM analysis (unstamped tracks can loop)
+DoubleDecker refused to loop any track without a sidecar bpm stamp. Lifted the
+deck's proven analyser into `util/bpm_analysis.{h,c}` (DSP-identical; the
+playback gate is now a `busy()` callback, results are out-params, +
+`bpm_analyze_abort()`); `deck_analysis.c` is now a thin wrapper (behaviour
+unchanged). DoubleDecker kicks it on loading an UNSTAMPED track onto a STOPPED
+deck (Arlo's constraint); `busy()` covers BOTH decks (a starved ring = phase
+slip); one run at a time (other deck queues); on done, writes the v2 sidecar and
+adopts bpm/grid live only if still loaded + stopped; reset in start(),
+aborted+waited in stop(). VERIFIED on device: SPLITTIN→86.53 BPM, LANDER→79.99,
+both dver 2 + grids, adopted live. Commit f67659f.
+- Watch tonight: confirm a plain single-Deck track still LOCKS well (shared DSP
+  was refactored — DSP is byte-identical, but ears are the real check).
+
+## ✅ 7. Internet radio IN — new `machine_radio` (flagship pick)
+New isolated machine that streams an icecast/shoutcast MP3 station. One unpinned
+task GETs the endless HTTP body (esp_http_client + crt_bundle → http+https),
+feeds helix frame-by-frame (honours the sync offset; INDATA_UNDERFLOW = "refill,
+keep going"), decoded PCM → 4 s PSRAM stereo ring, `process()` drains it (deck
+discipline). Pre-buffers ~0.5 s; underrun → silence + re-buffer; ring-full
+backpressure paces the decoder to real time. v1 = 44.1k mono/stereo (other rates
+rejected; cubic resampler is v2). Web tab "Radio" (station buttons + custom URL +
+state) + `/radio/play|stop|state`; on-device Live page picks a built-in SomaFM
+station. Registered everywhere; proof passes. VERIFIED ON DEVICE: Groove Salad +
+DEF CON connected, helix decoded 128 kbps/44.1k/stereo, PLAYING, zero underruns.
+Commit 3d0f9cb. v2 ideas: auto-reconnect, ICY now-playing metadata, non-44.1k
+resample, persistent/editable station list, "sample the radio" (bounce the
+output bus into the pool).
+
 ---
 
-## 5. _(more — to be recalled)_
+## 8. _(more — to be recalled)_
 Arlo had more ideas last night that were lost to the clear; add them here as they
 resurface. Separate/older backlogs: `ideas-round2-20260713.md`,
 `plans/roadmap-speculation-20260714.md` (B1–B9).
