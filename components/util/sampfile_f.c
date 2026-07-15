@@ -33,12 +33,15 @@ size_t sampfile_read_f(FIL *f, const sampfile_t *sf, int16_t *dst, size_t n)
 }
 
 static const char *const SF_EXTS_F[] = { ".RAW", ".WAV", ".AIF", ".AIFF" };
-static const char *const SF_DIRS_F[] = { "usr", "usr/REC", "usr/LOOPS" };
+// SLICES was historically missing here (the FatFS resolver couldn't find a bare
+// id living in usr/SLICES); added alongside DRUMS. Bound derives from the array.
+static const char *const SF_DIRS_F[] = { "usr", "usr/REC", "usr/LOOPS", "usr/SLICES", "usr/DRUMS" };
+#define SF_N_DIRS_F ((int)(sizeof(SF_DIRS_F)/sizeof(SF_DIRS_F[0])))
 
 int sample_resolve_f(const char *id, char *path, size_t path_len)
 {
     FILINFO fi;
-    for (int d = 0; d < 3; d++)
+    for (int d = 0; d < SF_N_DIRS_F; d++)
         for (int i = 0; i < 4; i++) {
             snprintf(path, path_len, "%s/%s%s", SF_DIRS_F[d], id, SF_EXTS_F[i]);
             if (f_stat(path, &fi) == FR_OK) return 0;

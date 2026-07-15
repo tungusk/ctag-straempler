@@ -20,6 +20,12 @@
 // NULL/empty).
 void sample_browser_enter(bool recent, const char *title, const char *current);
 
+// Like sample_browser_enter, but FORCES the open to land in folder `dir` (a
+// SAMPLE_DIR_* value) instead of the remembered position — for a machine with a
+// natural home folder (Drums -> usr/DRUMS). Selection lands on that folder's
+// first file. `dir` out of range falls back to the flat ALL view.
+void sample_browser_enter_dir(bool recent, const char *title, const char *current, int dir);
+
 // feed menusys events. Returns:
 //   0 = handled, stay in the browser page
 //   1 = user picked a sample -> sample_browser_selected(), leave the page

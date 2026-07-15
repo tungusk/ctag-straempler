@@ -29,7 +29,7 @@ static struct {
     int  n;              // files in the current folder
 } b;
 
-static const char *const k_fold[BR_NFOLD] = {"ALL", "POOL", "REC", "LOOPS", "SLICES"};
+static const char *const k_fold[BR_NFOLD] = {"ALL", "POOL", "REC", "LOOPS", "SLICES", "DRUMS"};
 static const color_t FOLD_FG  = {120, 205, 130};   // folder rows read green-ish
 static const color_t FOLD_DIM = {70, 120, 75};
 
@@ -101,6 +101,19 @@ void sample_browser_enter(bool recent, const char *title, const char *current)
     snprintf(b.title, sizeof(b.title), "%s", title ? title : "Load");
     sample_folder_counts(b.counts);
     if (!b.primed){ b.dir = SAMPLE_DIR_POOL; b.sel = BR_NFOLD; b.primed = true; }
+    list_refresh();
+    draw();
+}
+
+void sample_browser_enter_dir(bool recent, const char *title, const char *current, int dir)
+{
+    (void)current;                       // folder is forced, selection lands on its first file
+    b.recent = recent;
+    snprintf(b.title, sizeof(b.title), "%s", title ? title : "Load");
+    sample_folder_counts(b.counts);
+    b.dir = (dir >= 0 && dir < SAMPLE_DIR_N) ? dir : SAMPLE_DIR_ALL;
+    b.sel = BR_NFOLD;                    // first file in the folder
+    b.primed = true;
     list_refresh();
     draw();
 }
