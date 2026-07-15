@@ -21,22 +21,30 @@
 #include "menu_config.h"
 #include "looper_priv.h"
 
+// Deck's transport grammar, ported to the 4-lane view (Arlo): the state lives
+// on a FAT color-coded box around the bar, the playhead is a neutral WHITE line
+// (not state-colored), and the selected lane wears its number as a WHITE PLATE
+// (the DoubleDecker focus cue). The grey waveform on a black canvas is unchanged.
 static const color_t LANE_BG   = {5, 9, 28};      // darker blue track background
 static const color_t BAR_BG    = {14, 22, 52};    // empty-lane bar region
-static const color_t COL_EMPTY = {70, 90, 140};
+static const color_t COL_EMPTY = {45, 60, 95};    // dim: the box barely reads
 static const color_t COL_ARMED = {230, 170, 0};
 static const color_t COL_REC   = {220, 40, 40};
 static const color_t COL_PLAY  = {40, 200, 90};
-static const color_t WF_GREY   = {125, 125, 135}; // waveform: reads under the playhead
+static const color_t COL_STOP  = {45, 90, 170};   // deck's stopped-blue family
+static const color_t WF_GREY   = {125, 125, 135}; // waveform: reads under the white playhead
+static const color_t PH_COL    = {240, 240, 245}; // playhead: transport-neutral white (deck)
 
 static const char *state_word(int s){
     switch(s){ case LP_ARMED: return "ARM"; case LP_REC: return "REC";
                case LP_PLAY: return "PLAY"; case LP_STOP: return "STOP";
                default: return "---"; }
 }
+// the STATE colour now drives the fat box border (deck's tbar_bg role)
 static color_t state_col(int s){
     switch(s){ case LP_ARMED: return COL_ARMED; case LP_REC: return COL_REC;
-               case LP_PLAY: return COL_PLAY;  default: return COL_EMPTY; }
+               case LP_PLAY: return COL_PLAY;   case LP_STOP: return COL_STOP;
+               default: return COL_EMPTY; }
 }
 
 // ---- Live lane view -------------------------------------------------------
@@ -71,6 +79,18 @@ static int lane_y(int i){ return TFT_getfontheight() + 11 + i * 46; }
 #define LANE_BX 26
 #define LANE_BW (_width - 150)
 #define LANE_BH 26
+#define BOX_BW 2          // fat state-box border (deck's TBAR_BW, scaled to the lane)
+
+// the fat state box around a lane's bar — deck's "state on the border, not the
+// fill" idiom. Four segments so the interior (canvas + waveform + playhead) is
+// never touched. The bar region is (LANE_BX, y+6) .. +(LANE_BW, LANE_BH).
+static void lane_box(int y, color_t c){
+    _bg = c;
+    TFT_fillRect(LANE_BX, y + 6, LANE_BW, BOX_BW, _bg);                       // top
+    TFT_fillRect(LANE_BX, y + 6 + LANE_BH - BOX_BW, LANE_BW, BOX_BW, _bg);    // bottom
+    TFT_fillRect(LANE_BX, y + 6, BOX_BW, LANE_BH, _bg);                       // left
+    TFT_fillRect(LANE_BX + LANE_BW - BOX_BW, y + 6, BOX_BW, LANE_BH, _bg);    // right
+}
 
 static void wf_build(int i){
     lp_track_t *t = &lp.tr[i];
@@ -104,7 +124,7 @@ static uint32_t lane_denom(lp_track_t *t){
 static void lane_bar_slice(int i, int sx, int sw){
     int y = lane_y(i);
     lp_track_t *t = &lp.tr[i];
-    int bx = LANE_BX + 1, by = y + 7, bh = LANE_BH - 2, bw = LANE_BW - 2;
+    int bx = LANE_BX + BOX_BW, by = y + 6 + BOX_BW, bh = LANE_BH - 2*BOX_BW, bw = LANE_BW - 2*BOX_BW;
     if (sx < bx) { sw -= bx - sx; sx = bx; }
     if (sx + sw > bx + bw) sw = bx + bw - sx;
     if (sw <= 0) return;
@@ -131,7 +151,7 @@ static void lane_bar_slice(int i, int sx, int sw){
 static void lane_playhead(int i, bool restore){
     int y = lane_y(i);
     lp_track_t *t = &lp.tr[i];
-    int bx = LANE_BX + 1, by = y + 7, bh = LANE_BH - 2, bw = LANE_BW - 2;
+    int bx = LANE_BX + BOX_BW, by = y + 6 + BOX_BW, bh = LANE_BH - 2*BOX_BW, bw = LANE_BW - 2*BOX_BW;
     uint32_t denom = lane_denom(t);
     int ph = -1;
     if (denom > 0){
@@ -143,39 +163,43 @@ static void lane_playhead(int i, bool restore){
     if (restore && s_last_ph[i] >= 0)
         lane_bar_slice(i, bx + s_last_ph[i], PH_W);
     if (ph >= 0){
-        _bg = state_col(t->state);
+        _bg = PH_COL;                    // white, transport-neutral (deck)
         TFT_fillRect(bx + ph, by, PH_W, bh, _bg);
     }
     s_last_ph[i] = ph;
 }
 
-// full lane chrome: frame, number, bar, state word, length
+// full lane chrome: number plate, fat state box, bar, state word, length
 static void lane_chrome(int i){
     int y = lane_y(i);
+    int fh = TFT_getfontheight();
     lp_track_t *t = &lp.tr[i];
     _bg = LANE_BG;
     TFT_fillRect(0, y, _width, 44, _bg);
-    // frame color by state so the recording/armed lane is unmistakable;
-    // recording wins over the selection frame
-    color_t frame; bool draw_frame = true;
-    if (t->state == LP_REC)        frame = COL_REC;
-    else if (t->state == LP_ARMED) frame = COL_ARMED;
-    else if (i == lp.sel)          frame = TFT_CYAN;
-    else                           draw_frame = false;
-    if (draw_frame){ _fg = frame; TFT_drawRect(1, y, _width - 2, 43, _fg); }
 
+    // lane number: a WHITE PLATE when this lane is selected (the DoubleDecker
+    // focus cue — the selection must be unmissable), a dim number otherwise.
     char buf[12];
-    _fg = TFT_WHITE;
     snprintf(buf, sizeof(buf), "%d", i + 1);
-    TFT_print(buf, 6, y + 6);
+    if (i == lp.sel){
+        _bg = TFT_WHITE;
+        TFT_fillRect(3, y + 6, 13, fh + 3, _bg);
+        _fg = (color_t){0, 0, 0};                 // black number on the white plate
+        TFT_print(buf, 6, y + 7);
+    } else {
+        _fg = (color_t){110, 120, 150}; _bg = LANE_BG;
+        TFT_print(buf, 6, y + 7);
+    }
 
-    _fg = (color_t){40, 60, 110};
-    TFT_drawRect(LANE_BX, y + 6, LANE_BW, LANE_BH, _fg);
-    lane_bar_slice(i, LANE_BX + 1, LANE_BW - 2);
+    // canvas + waveform, then the fat state box around it (state on the border,
+    // not the fill — deck). The box replaces the old thin outline AND the
+    // full-lane selection frame.
+    lane_bar_slice(i, LANE_BX + BOX_BW, LANE_BW - 2*BOX_BW);
+    lane_box(y, state_col(t->state));
     s_last_ph[i] = -1;
     lane_playhead(i, false);
 
-    _fg = state_col(t->state);
+    _fg = state_col(t->state); _bg = LANE_BG;
     TFT_print((char*)state_word(t->state), LANE_BX + LANE_BW + 8, y + 6);
     if (t->len > 0){
         snprintf(buf, sizeof(buf), "%lus", (unsigned long)(t->len / LP_RATE));
