@@ -31,6 +31,7 @@ bool recording_poll_load(int *vid_out, char *fname_out);
 void recording_set_trig_func(int vid, trig_func_t func);
 trig_func_t recording_get_trig_func(int vid);
 int recording_get_target_vid(void);
+void recording_set_prefix(const char *p);   // take-name prefix ("REC"/"BNC")
 void recording_set_enabled(bool en);
 bool recording_get_enabled(void);
 void recording_set_arm_monitor(bool en);

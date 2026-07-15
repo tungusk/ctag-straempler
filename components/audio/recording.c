@@ -42,6 +42,9 @@ static TaskHandle_t rec_task_handle = NULL;
 static int rec_target_vid = 0;
 static char rec_last_fname[48] = {0};
 static volatile uint32_t rec_drops = 0;   // dropped capture chunks (visible!)
+static char rec_prefix[8] = "REC";        // take-name prefix (bounce sets "BNC")
+
+void recording_set_prefix(const char *p) { if (p && p[0]) strlcpy(rec_prefix, p, sizeof(rec_prefix)); }
 
 static void write_rec_jsn(const char *raw_path)
 {
@@ -94,11 +97,19 @@ static void find_next_filename(char *buf, int buflen)
     // usr/ RECs count — they must not shadow new usr/REC takes), then
     // monotonic within the boot. Takes land SORTED in usr/REC (2026-07-13
     // folder organization; pre-folder cards need no migration).
+    // prefix defaults to REC_ (sampler takes); a bounce sets BNC_ so output
+    // captures are distinguishable in the pool. Re-scan when the prefix changes.
     static int hint = -1;
+    static char last_pfx[12] = "";
+    char pfx[12];
+    snprintf(pfx, sizeof(pfx), "%s_", rec_prefix);
     mkdir("/sdcard/usr/REC", 0777);          // idempotent
-    if (hint < 0) hint = sample_next_index("REC_");
-    if (hint > 9999) { snprintf(buf, buflen, "/sdcard/usr/REC/REC_OVFL.WAV"); return; }
-    snprintf(buf, buflen, "/sdcard/usr/REC/REC_%04d.WAV", hint);
+    if (hint < 0 || strcmp(last_pfx, pfx) != 0) {
+        hint = sample_next_index(pfx);
+        strlcpy(last_pfx, pfx, sizeof(last_pfx));
+    }
+    if (hint > 9999) { snprintf(buf, buflen, "/sdcard/usr/REC/%sOVFL.WAV", pfx); return; }
+    snprintf(buf, buflen, "/sdcard/usr/REC/%s%04d.WAV", pfx, hint);
     hint++;
 }
 
