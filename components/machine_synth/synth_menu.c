@@ -96,9 +96,10 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
 // ---- Setup -----------------------------------------------------------------
 static const char *setup_labels[] = {
     "Engine", "Base Note", "Quantize", "Shape", "FM Ratio", "FM Index",
-    "Attack", "Decay", "Sustain", "Release", "Env>Cut", "Glide", "Level"
+    "Attack", "Decay", "Sustain", "Release", "Env>Cut", "Glide",
+    "LFO Rate", "LFO Depth", "LFO Dest", "Level"
 };
-#define SY_SETUP_N 13
+#define SY_SETUP_N 16
 
 static void setup_val(int i, char *v, size_t n)
 {
@@ -116,7 +117,10 @@ static void setup_val(int i, char *v, size_t n)
         case 9: snprintf(v, n, "%d ms", (int)(sy.rel * 1000.0f)); break;
         case 10: snprintf(v, n, "%.0f%%", sy.env_to_cut * 100.0f); break;
         case 11: snprintf(v, n, "%d ms", (int)(sy.glide * 1000.0f)); break;
-        case 12: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
+        case 12: snprintf(v, n, "%.1f Hz", sy.lfo_rate); break;
+        case 13: snprintf(v, n, "%.0f%%", sy.lfo_depth * 100.0f); break;
+        case 14: snprintf(v, n, "%s", sy.lfo_dest == LFO_CUT ? "cutoff" : sy.lfo_dest == LFO_PITCH ? "pitch" : "off"); break;
+        case 15: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
     }
 }
 
@@ -166,7 +170,10 @@ static void sy_adj(int i, int dir)
         case 9: sy.rel += d * 0.02f;  if (sy.rel < 0.001f) sy.rel = 0.001f; if (sy.rel > 3) sy.rel = 3; break;
         case 10: sy.env_to_cut += d * 0.05f; if (sy.env_to_cut < 0) sy.env_to_cut = 0; if (sy.env_to_cut > 1) sy.env_to_cut = 1; break;
         case 11: sy.glide += d * 0.02f; if (sy.glide < 0) sy.glide = 0; if (sy.glide > 2) sy.glide = 2; break;
-        case 12: sy.level += d * 0.05f; if (sy.level < 0) sy.level = 0; if (sy.level > 1) sy.level = 1; break;
+        case 12: sy.lfo_rate += d * 0.25f; if (sy.lfo_rate < 0.05f) sy.lfo_rate = 0.05f; if (sy.lfo_rate > 20) sy.lfo_rate = 20; break;
+        case 13: sy.lfo_depth += d * 0.05f; if (sy.lfo_depth < 0) sy.lfo_depth = 0; if (sy.lfo_depth > 1) sy.lfo_depth = 1; break;
+        case 14: sy.lfo_dest += dir; if (sy.lfo_dest < 0) sy.lfo_dest = 2; if (sy.lfo_dest > 2) sy.lfo_dest = 0; break;
+        case 15: sy.level += d * 0.05f; if (sy.level < 0) sy.level = 0; if (sy.level > 1) sy.level = 1; break;
     }
 }
 

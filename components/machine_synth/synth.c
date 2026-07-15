@@ -42,6 +42,9 @@ static esp_err_t synth_start(void)
     sy.env_to_cut = 0.5f;
     sy.glide = 0.0f;
     sy.cur_freq = 0.0f;
+    sy.lfo_rate = 5.0f;
+    sy.lfo_depth = 0.0f;
+    sy.lfo_dest = LFO_OFF;
     sy.level = 0.8f;
     sy.cutoff_base = 1200.0f;
     sy.res01 = 0.2f;
@@ -91,7 +94,15 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
     } else {
         sy.cur_freq = sy.freq;
     }
-    float dt = sy.cur_freq / SY_RATE;                  // phase increment
+    // LFO (per block — sub-audio, so block granularity is smooth) -> pitch or cutoff
+    float blockdur2 = (float)(MACHINE_BLOCK / 2) / (float)SY_RATE;
+    sy.lfo_phase += sy.lfo_rate * blockdur2;
+    sy.lfo_phase -= (float)(int)sy.lfo_phase;
+    float lfo = sinf(6.2831853f * sy.lfo_phase);
+    float lfo_cut = (sy.lfo_dest == LFO_CUT)   ? (1.0f + lfo * sy.lfo_depth * 0.8f) : 1.0f;
+    float lfo_pit = (sy.lfo_dest == LFO_PITCH) ? exp2f(lfo * sy.lfo_depth * 2.0f / 12.0f) : 1.0f;
+
+    float dt = sy.cur_freq * lfo_pit / SY_RATE;         // phase increment (+ vibrato)
     if (dt > 0.5f) dt = 0.5f;                          // Nyquist guard
     float q = svf_damp(sy.res01, 0.6f, 2.0f);         // 0..1 knob -> damping (2 = clean)
 
@@ -126,8 +137,9 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
         }
         sy.phase += dt; if (sy.phase >= 1.0f) sy.phase -= 1.0f;
 
-        // filter: cutoff opened by the envelope; SVF low-pass tap
-        float fc = sy.cutoff_base + sy.env * sy.env_to_cut * 5000.0f;
+        // filter: cutoff opened by the envelope + LFO wobble; SVF low-pass tap
+        float fc = (sy.cutoff_base + sy.env * sy.env_to_cut * 5000.0f) * lfo_cut;
+        if (fc < 20.0f) fc = 20.0f;
         float coef = svf_coef(fc, SY_RATE, 1.5f);
         float lp;
         svf_step(&sy.flt_l, osc, coef, q, &lp, NULL, NULL);
@@ -156,6 +168,9 @@ static cJSON *synth_preset_save(void)
     cJSON_AddNumberToObject(o, "rel", sy.rel);
     cJSON_AddNumberToObject(o, "e2c", sy.env_to_cut);
     cJSON_AddNumberToObject(o, "gld", sy.glide);
+    cJSON_AddNumberToObject(o, "lfr", sy.lfo_rate);
+    cJSON_AddNumberToObject(o, "lfd", sy.lfo_depth);
+    cJSON_AddNumberToObject(o, "lfx", sy.lfo_dest);
     cJSON_AddNumberToObject(o, "lvl", sy.level);
     return o;
 }
@@ -176,6 +191,9 @@ static void synth_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rel"))   && cJSON_IsNumber(j)) sy.rel = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "e2c"))   && cJSON_IsNumber(j)) sy.env_to_cut = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) sy.glide = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfr"))   && cJSON_IsNumber(j)) sy.lfo_rate = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfd"))   && cJSON_IsNumber(j)) sy.lfo_depth = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfx"))   && cJSON_IsNumber(j)) sy.lfo_dest = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) sy.level = (float)j->valuedouble;
 }
 
