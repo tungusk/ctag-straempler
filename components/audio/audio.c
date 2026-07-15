@@ -65,6 +65,25 @@ void audio_remote_cv(int ch, int v, int ms) {
     s_remote_cv_until[ch] = xTaskGetTickCount() + pdMS_TO_TICKS(ms > 0 ? ms : 250);
 }
 
+// ---- output bounce: record the machine's OUTPUT bus to a pool take ----------
+// Core service — works for ANY active machine (radio/synth/deck blend). While
+// active, the audio task feeds the recorder `out` (post-process, pre clock-out)
+// instead of the line input, so "sample the radio" etc. lands a REC_ take.
+static volatile bool s_bounce = false;
+void audio_bounce_start(void) {
+    if (s_bounce || recording_is_active()) return;
+    recording_set_enabled(true);
+    s_bounce = true;
+    recording_start(-1);                             // vid -1 = no auto-load into a voice
+    if (!recording_is_active()) s_bounce = false;    // prepare/trigger failed
+}
+void audio_bounce_stop(void) {
+    if (!s_bounce) return;
+    recording_stop();
+    s_bounce = false;
+}
+bool audio_bounce_active(void) { return s_bounce; }
+
 // ---- trig edge acquisition ----------------------------------------------------
 // The audio task samples the trig pins once per block (0.726 ms), so a real
 // ~1 ms eurorack gate and a floating-input glitch are indistinguishable at
@@ -156,7 +175,7 @@ static void audio_task(void *pvParams)
 
         // always read I2S to drain the RX buffer; route to machine or recording
         i2s_read(I2S_NUM_0, in, 256, &nb, portMAX_DELAY);
-        if (recording_is_active())
+        if (recording_is_active() && !s_bounce)
             recording_push(in);
         // beat listener: core input tap like the recorder's, runs every block
         // regardless of machine (OFF = one branch). Runs BEFORE the machine so
@@ -168,6 +187,11 @@ static void audio_task(void *pvParams)
             m->process(out, in, &io);
         else
             memset(out, 0, sizeof(out));
+
+        // BOUNCE tap: capture the machine's output HERE (before clock-out
+        // overwrites a channel), so a bounce is the pure musical signal
+        if (recording_is_active() && s_bounce)
+            recording_push(out);
 
         // optional clock OUT: overwrite one channel with beat pulses
         beatlisten_out_render(out);

@@ -1526,6 +1526,25 @@ static esp_err_t mod_delete_handler(httpd_req_t *req)
     return ESP_FAIL;
 }
 
+// ─── bounce: record the machine output bus to a pool take ────────────────────
+static esp_err_t bounce_start_handler(httpd_req_t *req)
+{
+    audio_bounce_start();
+    return send_json(req, audio_bounce_active() ? "{\"ok\":true}" : "{\"ok\":false,\"err\":\"busy\"}");
+}
+static esp_err_t bounce_stop_handler(httpd_req_t *req)
+{
+    audio_bounce_stop();
+    return send_json(req, "{\"ok\":true}");
+}
+static esp_err_t bounce_state_handler(httpd_req_t *req)
+{
+    char buf[80];
+    snprintf(buf, sizeof(buf), "{\"active\":%s,\"drops\":%u}",
+             audio_bounce_active() ? "true" : "false", (unsigned)recording_get_drops());
+    return send_json(req, buf);
+}
+
 // ─── server lifecycle ────────────────────────────────────────────────────────
 
 static httpd_uri_t uris[] = {
@@ -1552,6 +1571,9 @@ static httpd_uri_t uris[] = {
     { .uri = "/remote/event",  .method = HTTP_POST, .handler = remote_event_handler },
     { .uri = "/remote/trig",   .method = HTTP_POST, .handler = remote_trig_handler },
     { .uri = "/remote/cv",     .method = HTTP_POST, .handler = remote_cv_handler },
+    { .uri = "/bounce/start",  .method = HTTP_POST, .handler = bounce_start_handler },
+    { .uri = "/bounce/stop",   .method = HTTP_POST, .handler = bounce_stop_handler },
+    { .uri = "/bounce/state",  .method = HTTP_GET,  .handler = bounce_state_handler },
     { .uri = "/blisten",       .method = HTTP_POST, .handler = blisten_post_handler },
     { .uri = "/remote/machine",.method = HTTP_POST, .handler = remote_machine_handler },
     { .uri = "/remote/params", .method = HTTP_GET,  .handler = remote_params_get_handler },
