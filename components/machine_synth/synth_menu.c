@@ -10,6 +10,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "sample_browser.h"
 #include "synth_priv.h"
 
 static const color_t GATE_ON  = {40, 200, 90};
@@ -58,6 +59,8 @@ static void live_info(void)
     char t[56];
     if (sy.engine == ENG_FM)
         snprintf(t, sizeof(t), "FM  ratio %.2f  idx %.1f  %s", sy.fm_ratio, sy.fm_index, sy.quantize ? "quant" : "free");
+    else if (sy.engine == ENG_WT)
+        snprintf(t, sizeof(t), "WT  %s  %s", sy.wave_name[0] ? sy.wave_name : "(no wave)", sy.quantize ? "quant" : "free");
     else
         snprintf(t, sizeof(t), "VA  shape %.0f%%  %s", sy.shape * 100.0f, sy.quantize ? "quant" : "free");
     TFT_print(t, _width / 2 - TFT_getStringWidth(t) / 2, y + fh + 4);
@@ -97,14 +100,15 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
 static const char *setup_labels[] = {
     "Engine", "Base Note", "Quantize", "Shape", "FM Ratio", "FM Index",
     "Attack", "Decay", "Sustain", "Release", "Env>Cut", "Glide",
-    "LFO Rate", "LFO Depth", "LFO Dest", "Level"
+    "LFO Rate", "LFO Depth", "LFO Dest", "Level", "Load Wave"
 };
-#define SY_SETUP_N 16
+#define SY_SETUP_N 17
+#define SY_LOAD_ITEM 16          // the "Load Wave" action row
 
 static void setup_val(int i, char *v, size_t n)
 {
     switch (i) {
-        case 0: snprintf(v, n, "%s", sy.engine == ENG_FM ? "FM" : "VA"); break;
+        case 0: snprintf(v, n, "%s", sy.engine == ENG_FM ? "FM" : sy.engine == ENG_WT ? "WT" : "VA"); break;
         case 1: { char nm[12]; note_name(440.0f * powf(2.0f, (sy.base_note - 69) / 12.0f), nm, sizeof(nm));
                   snprintf(v, n, "%s (%d)", nm, sy.base_note); break; }
         case 2: snprintf(v, n, "%s", sy.quantize ? "ON" : "OFF"); break;
@@ -121,6 +125,7 @@ static void setup_val(int i, char *v, size_t n)
         case 13: snprintf(v, n, "%.0f%%", sy.lfo_depth * 100.0f); break;
         case 14: snprintf(v, n, "%s", sy.lfo_dest == LFO_CUT ? "cutoff" : sy.lfo_dest == LFO_PITCH ? "pitch" : "off"); break;
         case 15: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
+        case 16: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
     }
 }
 
@@ -158,7 +163,7 @@ static void sy_adj(int i, int dir)
 {
     float d = (float)dir;
     switch (i) {
-        case 0: sy.engine = (sy.engine == ENG_FM) ? ENG_VA : ENG_FM; break;
+        case 0: sy.engine += dir; if (sy.engine < 0) sy.engine = ENG_WT; if (sy.engine > ENG_WT) sy.engine = ENG_VA; break;
         case 1: sy.base_note += dir; if (sy.base_note < 12) sy.base_note = 12; if (sy.base_note > 96) sy.base_note = 96; break;
         case 2: sy.quantize = !sy.quantize; break;
         case 3: sy.shape += d * 0.05f; if (sy.shape < 0) sy.shape = 0; if (sy.shape > 1) sy.shape = 1; break;
@@ -195,6 +200,7 @@ static int synth_setup_handler(int it_id, int event, void *ev_data)
             break;
         case EV_SHORT_PRESS:
             if (pos == -1) return M_MORE;
+            if (pos == SY_LOAD_ITEM) return M_SYNTH_LOAD;   // -> wave browser
             sel = !sel; setup_redraw(pos, sel);
             break;
         case EV_LONG_PRESS: return M_SYNTH_LIVE;
@@ -203,11 +209,30 @@ static int synth_setup_handler(int it_id, int event, void *ev_data)
     return 0;
 }
 
+// ---- Load Wave: the shared sample browser -> wavetable ----------------------
+static int synth_load_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    if (event == EV_ENTERED_MENU) {
+        sample_browser_enter(false, "Load Wave", sy.wave_name);   // alphabetical
+        return 0;
+    }
+    int r = sample_browser_event(event);
+    if (r == 1) {                                    // picked
+        const char *sel = sample_browser_selected();
+        if (synth_load_wave(sel) == 0) sy.engine = ENG_WT;   // loading a wave selects WT
+        return M_SYNTH_SETUP;
+    }
+    if (r == 2) return M_SYNTH_SETUP;                // cancelled
+    return 0;
+}
+
 static void synth_register_pages(void *menusys)
 {
     menusys_t *_ms = (menusys_t *)menusys;
     menusys_new_item(_ms, M_SYNTH_LIVE);  menusys_item_set_default_cb(_ms, M_SYNTH_LIVE, synth_live_handler);
     menusys_new_item(_ms, M_SYNTH_SETUP); menusys_item_set_default_cb(_ms, M_SYNTH_SETUP, synth_setup_handler);
+    menusys_new_item(_ms, M_SYNTH_LOAD);  menusys_item_set_default_cb(_ms, M_SYNTH_LOAD, synth_load_handler);
 }
 
 static int synth_main_event(int event, void *ev_data)

@@ -3,10 +3,12 @@
 // Pitch on CV1 (1V/oct), gate on TR1. process() is pure DSP — no SD/heap/blocking.
 #include <string.h>
 #include <math.h>
+#include "esp_heap_caps.h"
 #include "cJSON.h"
 #include "machine.h"
 #include "cvsmooth.h"
 #include "svf.h"
+#include "sample_ram.h"
 #include "synth_priv.h"
 
 sy_state_t sy;
@@ -27,6 +29,20 @@ static void note_from_cv(int cv1)
     if (note < 0) note = 0;
     if (note > 127) note = 127;
     sy.freq = 440.0f * powf(2.0f, (note - 69.0f) / 12.0f);      // MIDI note -> Hz
+}
+
+int synth_load_wave(const char *name)
+{
+    if (!name || !name[0]) return -1;
+    if (!sy.wave) {
+        sy.wave = heap_caps_malloc((size_t)SY_WT_MAX * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+        if (!sy.wave) return -1;
+    }
+    uint32_t n = sample_load(name, sy.wave, SY_WT_MAX, true);   // mono
+    if (n < 2) { sy.wave_len = 0; sy.wave_name[0] = 0; return -1; }
+    sy.wave_len = (int)n;
+    strlcpy(sy.wave_name, name, sizeof(sy.wave_name));
+    return 0;
 }
 
 static esp_err_t synth_start(void)
@@ -53,7 +69,11 @@ static esp_err_t synth_start(void)
     return ESP_OK;
 }
 
-static void synth_stop(void) { }
+static void synth_stop(void)
+{
+    if (sy.wave) { heap_caps_free(sy.wave); sy.wave = NULL; }
+    sy.wave_len = 0;
+}
 
 static void synth_process(int32_t out[MACHINE_BLOCK],
                           const int32_t in[MACHINE_BLOCK],
@@ -127,6 +147,15 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
             osc = sinf(TWO_PI * sy.phase + sy.fm_index * sy.env * mod);
             float mdt = dt * sy.fm_ratio;
             sy.mphase += mdt; sy.mphase -= (float)(int)sy.mphase;   // wrap 0..1
+        } else if (sy.engine == ENG_WT && sy.wave && sy.wave_len > 1) {
+            // wavetable: one phase traversal = one pass of the loaded wave, at the
+            // note pitch (linear interpolation; no band-limiting -> some alias high up)
+            float fpos = sy.phase * (float)sy.wave_len;
+            int i0 = (int)fpos;
+            float fr = fpos - (float)i0;
+            if (i0 >= sy.wave_len) i0 = sy.wave_len - 1;
+            int i1 = i0 + 1; if (i1 >= sy.wave_len) i1 = 0;
+            osc = ((float)sy.wave[i0] + ((float)sy.wave[i1] - (float)sy.wave[i0]) * fr) / 32768.0f;
         } else {
             // polyBLEP saw <-> square morph
             float saw = 2.0f * sy.phase - 1.0f - polyblep(sy.phase, dt);
@@ -157,6 +186,7 @@ static cJSON *synth_preset_save(void)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "eng", sy.engine);
+    cJSON_AddStringToObject(o, "wave", sy.wave_name);
     cJSON_AddNumberToObject(o, "note", sy.base_note);
     cJSON_AddBoolToObject(o, "quant", sy.quantize);
     cJSON_AddNumberToObject(o, "shape", sy.shape);
@@ -179,7 +209,8 @@ static void synth_preset_load(const cJSON *node)
 {
     if (!node) return;
     cJSON *j;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "eng"))   && cJSON_IsNumber(j)) sy.engine = j->valueint ? ENG_FM : ENG_VA;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "eng"))   && cJSON_IsNumber(j)) sy.engine = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "wave"))  && cJSON_IsString(j) && j->valuestring[0]) synth_load_wave(j->valuestring);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fmr"))   && cJSON_IsNumber(j)) sy.fm_ratio = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fmi"))   && cJSON_IsNumber(j)) sy.fm_index = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "note"))  && cJSON_IsNumber(j)) sy.base_note = j->valueint;
