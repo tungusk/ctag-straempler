@@ -18,9 +18,12 @@
 
 enum { ENV_IDLE = 0, ENV_ATK, ENV_DEC, ENV_SUS, ENV_REL };
 
+enum { ENG_VA = 0, ENG_FM };     // oscillator engine
+
 typedef struct {
     // performance state
-    float phase;                 // oscillator phase 0..1
+    float phase;                 // oscillator (VA) / carrier (FM) phase 0..1
+    float mphase;                // FM modulator phase 0..1
     int   env_stage;
     float env;                   // envelope level 0..1
     float freq;                  // current note frequency (Hz)
@@ -28,9 +31,12 @@ typedef struct {
     svf_t flt_l;                 // (mono voice, one filter; L used, mirrored to R)
 
     // params (Setup + knobs)
+    int   engine;                // ENG_VA / ENG_FM
     int   base_note;             // MIDI note the CV1 offset is added to (default 48 = C3)
     bool  quantize;              // snap pitch to semitones
-    float shape;                 // 0 = saw, 1 = square (morph)
+    float shape;                 // VA: 0 = saw, 1 = square (morph)
+    float fm_ratio;              // FM: modulator:carrier frequency ratio
+    float fm_index;              // FM: modulation index (depth), scaled by the envelope
     float atk, dec, sus, rel;    // ADSR: times in seconds, sustain 0..1
     float env_to_cut;            // 0..1 envelope -> cutoff amount
     float level;                 // master 0..1

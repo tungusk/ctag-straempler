@@ -55,8 +55,11 @@ static void live_info(void)
              sy.freq, sy.cutoff_base, sy.res01 * 100.0f);
     _fg = TFT_LIGHTGREY;
     TFT_print(s, _width / 2 - TFT_getStringWidth(s) / 2, y);
-    char t[48];
-    snprintf(t, sizeof(t), "shape %.0f%%  %s", sy.shape * 100.0f, sy.quantize ? "quantized" : "free");
+    char t[56];
+    if (sy.engine == ENG_FM)
+        snprintf(t, sizeof(t), "FM  ratio %.2f  idx %.1f  %s", sy.fm_ratio, sy.fm_index, sy.quantize ? "quant" : "free");
+    else
+        snprintf(t, sizeof(t), "VA  shape %.0f%%  %s", sy.shape * 100.0f, sy.quantize ? "quant" : "free");
     TFT_print(t, _width / 2 - TFT_getStringWidth(t) / 2, y + fh + 4);
 }
 
@@ -92,23 +95,27 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
 
 // ---- Setup -----------------------------------------------------------------
 static const char *setup_labels[] = {
-    "Shape", "Base Note", "Quantize", "Attack", "Decay", "Sustain", "Release", "Env>Cut", "Level"
+    "Engine", "Base Note", "Quantize", "Shape", "FM Ratio", "FM Index",
+    "Attack", "Decay", "Sustain", "Release", "Env>Cut", "Level"
 };
-#define SY_SETUP_N 9
+#define SY_SETUP_N 12
 
 static void setup_val(int i, char *v, size_t n)
 {
     switch (i) {
-        case 0: snprintf(v, n, "%.0f%%", sy.shape * 100.0f); break;
+        case 0: snprintf(v, n, "%s", sy.engine == ENG_FM ? "FM" : "VA"); break;
         case 1: { char nm[12]; note_name(440.0f * powf(2.0f, (sy.base_note - 69) / 12.0f), nm, sizeof(nm));
                   snprintf(v, n, "%s (%d)", nm, sy.base_note); break; }
         case 2: snprintf(v, n, "%s", sy.quantize ? "ON" : "OFF"); break;
-        case 3: snprintf(v, n, "%d ms", (int)(sy.atk * 1000.0f)); break;
-        case 4: snprintf(v, n, "%d ms", (int)(sy.dec * 1000.0f)); break;
-        case 5: snprintf(v, n, "%.0f%%", sy.sus * 100.0f); break;
-        case 6: snprintf(v, n, "%d ms", (int)(sy.rel * 1000.0f)); break;
-        case 7: snprintf(v, n, "%.0f%%", sy.env_to_cut * 100.0f); break;
-        case 8: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
+        case 3: snprintf(v, n, "%.0f%%", sy.shape * 100.0f); break;
+        case 4: snprintf(v, n, "%.2f", sy.fm_ratio); break;
+        case 5: snprintf(v, n, "%.1f", sy.fm_index); break;
+        case 6: snprintf(v, n, "%d ms", (int)(sy.atk * 1000.0f)); break;
+        case 7: snprintf(v, n, "%d ms", (int)(sy.dec * 1000.0f)); break;
+        case 8: snprintf(v, n, "%.0f%%", sy.sus * 100.0f); break;
+        case 9: snprintf(v, n, "%d ms", (int)(sy.rel * 1000.0f)); break;
+        case 10: snprintf(v, n, "%.0f%%", sy.env_to_cut * 100.0f); break;
+        case 11: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
     }
 }
 
@@ -138,15 +145,18 @@ static void sy_adj(int i, int dir)
 {
     float d = (float)dir;
     switch (i) {
-        case 0: sy.shape += d * 0.05f; if (sy.shape < 0) sy.shape = 0; if (sy.shape > 1) sy.shape = 1; break;
+        case 0: sy.engine = (sy.engine == ENG_FM) ? ENG_VA : ENG_FM; break;
         case 1: sy.base_note += dir; if (sy.base_note < 12) sy.base_note = 12; if (sy.base_note > 96) sy.base_note = 96; break;
         case 2: sy.quantize = !sy.quantize; break;
-        case 3: sy.atk += d * 0.005f; if (sy.atk < 0.0005f) sy.atk = 0.0005f; if (sy.atk > 2) sy.atk = 2; break;
-        case 4: sy.dec += d * 0.01f;  if (sy.dec < 0.001f) sy.dec = 0.001f; if (sy.dec > 2) sy.dec = 2; break;
-        case 5: sy.sus += d * 0.05f;  if (sy.sus < 0) sy.sus = 0; if (sy.sus > 1) sy.sus = 1; break;
-        case 6: sy.rel += d * 0.02f;  if (sy.rel < 0.001f) sy.rel = 0.001f; if (sy.rel > 3) sy.rel = 3; break;
-        case 7: sy.env_to_cut += d * 0.05f; if (sy.env_to_cut < 0) sy.env_to_cut = 0; if (sy.env_to_cut > 1) sy.env_to_cut = 1; break;
-        case 8: sy.level += d * 0.05f; if (sy.level < 0) sy.level = 0; if (sy.level > 1) sy.level = 1; break;
+        case 3: sy.shape += d * 0.05f; if (sy.shape < 0) sy.shape = 0; if (sy.shape > 1) sy.shape = 1; break;
+        case 4: sy.fm_ratio += d * 0.25f; if (sy.fm_ratio < 0.25f) sy.fm_ratio = 0.25f; if (sy.fm_ratio > 16) sy.fm_ratio = 16; break;
+        case 5: sy.fm_index += d * 0.25f; if (sy.fm_index < 0) sy.fm_index = 0; if (sy.fm_index > 12) sy.fm_index = 12; break;
+        case 6: sy.atk += d * 0.005f; if (sy.atk < 0.0005f) sy.atk = 0.0005f; if (sy.atk > 2) sy.atk = 2; break;
+        case 7: sy.dec += d * 0.01f;  if (sy.dec < 0.001f) sy.dec = 0.001f; if (sy.dec > 2) sy.dec = 2; break;
+        case 8: sy.sus += d * 0.05f;  if (sy.sus < 0) sy.sus = 0; if (sy.sus > 1) sy.sus = 1; break;
+        case 9: sy.rel += d * 0.02f;  if (sy.rel < 0.001f) sy.rel = 0.001f; if (sy.rel > 3) sy.rel = 3; break;
+        case 10: sy.env_to_cut += d * 0.05f; if (sy.env_to_cut < 0) sy.env_to_cut = 0; if (sy.env_to_cut > 1) sy.env_to_cut = 1; break;
+        case 11: sy.level += d * 0.05f; if (sy.level < 0) sy.level = 0; if (sy.level > 1) sy.level = 1; break;
     }
 }
 
