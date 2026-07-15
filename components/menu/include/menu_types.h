@@ -51,6 +51,8 @@ typedef enum{
     M_DD_CV,
     M_RADIO_LIVE,
     M_RADIO_SETUP,
+    M_SYNTH_LIVE,
+    M_SYNTH_SETUP,
     M_STUB_HOME,
     M_SETTINGS,
     M_SETTINGS_INPUT,

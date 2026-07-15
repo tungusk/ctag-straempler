@@ -10,6 +10,7 @@
 #include "machine_dualdeck.h"
 #include "machine_tracker.h"
 #include "machine_radio.h"
+#include "machine_synth.h"
 
 // declared bare: machine_sampler2.h drags the legacy fork's whole type
 // universe into any TU that includes it
@@ -34,6 +35,7 @@ const machine_t *const machine_registry[] = {
     &machine_tracker,
     &machine_freesound,
     &machine_radio,        // "Radio" — icecast/shoutcast MP3 streamer
+    &machine_synth,        // "Synth" — no-sample subtractive voice
     &machine_stub,
     NULL,
 };
