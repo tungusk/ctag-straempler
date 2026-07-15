@@ -815,6 +815,9 @@ function loadRemote(){
     });
     document.getElementById('rmon').innerHTML=mh;
     updateClkTag();
+    // auto-load the machine params so the ·CLK tag (clk_src) shows without a
+    // manual Reload — the CV meters then say which channel is the clock
+    rpLoad();
   }).catch(function(){});
 }
 
