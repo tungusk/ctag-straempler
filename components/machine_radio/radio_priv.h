@@ -15,6 +15,7 @@
 #define RADIO_MIN_FRAME   1600                 // decode only with > a max MP3 frame present
 #define RADIO_URL_LEN     176
 #define RADIO_NAME_LEN    24
+#define RADIO_TITLE_LEN   80          // ICY now-playing "StreamTitle"
 
 enum { RADIO_STOPPED = 0, RADIO_BUFFERING, RADIO_PLAYING, RADIO_ERROR };
 
@@ -30,7 +31,9 @@ typedef struct {
     volatile uint32_t underruns;
     char url[RADIO_URL_LEN];       // active stream URL
     char station[RADIO_NAME_LEN];  // active display name
+    char title[RADIO_TITLE_LEN];   // ICY now-playing (empty if none)
     char err[56];                  // last error (shown in state + UI)
+    volatile uint32_t reconnects;  // auto-reconnects this session
     int  sel;                      // on-device station selector position
 } radio_state_t;
 

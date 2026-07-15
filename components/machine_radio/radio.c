@@ -2,6 +2,7 @@
 // unpinned task -> PSRAM stereo ring -> process() drains it. Control via the web
 // (/radio/*) and the on-device station picker.
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -63,78 +64,157 @@ static void ring_write(const short *pcm, int outputSamps, int nch)
         rd.state = RADIO_PLAYING;
 }
 
+// ---- ICY metadata (now-playing) --------------------------------------------
+static int s_audio_left;              // audio bytes until the next metadata block
+static volatile int s_meta_int_hdr;   // icy-metaint from the RESPONSE header callback
+
+// esp_http_client_get_header reads REQUEST headers, not response ones — the only
+// way to read the server's icy-metaint is this event callback during open().
+static esp_err_t radio_http_evt(esp_http_client_event_t *e)
+{
+    if (e->event_id == HTTP_EVENT_ON_HEADER && e->header_key &&
+        strcasecmp(e->header_key, "icy-metaint") == 0 && e->header_value)
+        s_meta_int_hdr = atoi(e->header_value);
+    return ESP_OK;
+}
+
+static void radio_apply_meta(const char *m)
+{
+    const char *p = strstr(m, "StreamTitle=");
+    if (!p) return;
+    p += 12;
+    if (*p == '\'') p++;
+    const char *e = strstr(p, "';");
+    if (!e) e = strchr(p, '\'');
+    int n = e ? (int)(e - p) : (int)strlen(p);
+    if (n < 0) n = 0;
+    if (n > RADIO_TITLE_LEN - 1) n = RADIO_TITLE_LEN - 1;
+    memcpy(rd.title, p, n);
+    rd.title[n] = 0;
+}
+
+// read up to `want` AUDIO bytes, transparently consuming ICY metadata blocks
+// (every meta_int bytes the stream inserts: 1 length byte L, then L*16 bytes)
+static int icy_read(esp_http_client_handle_t cl, uint8_t *dst, int want, int meta_int)
+{
+    if (meta_int <= 0) return esp_http_client_read(cl, (char *)dst, want);
+    int got = 0;
+    while (got < want) {
+        if (s_audio_left <= 0) {
+            uint8_t lb;
+            int r = esp_http_client_read(cl, (char *)&lb, 1);
+            if (r <= 0) return got > 0 ? got : r;
+            int mlen = (int)lb * 16;
+            if (mlen > 0) {
+                char mb[512];
+                int mr = 0;
+                while (mr < mlen) {
+                    char *into = (mr < (int)sizeof(mb) - 1) ? mb + mr : NULL;
+                    char waste[64];
+                    int cap = mlen - mr;
+                    if (into) { if (cap > (int)sizeof(mb) - 1 - mr) cap = (int)sizeof(mb) - 1 - mr; }
+                    else      { if (cap > (int)sizeof(waste)) cap = (int)sizeof(waste); }
+                    int r2 = esp_http_client_read(cl, into ? into : waste, cap);
+                    if (r2 <= 0) return got > 0 ? got : r2;
+                    mr += r2;
+                }
+                mb[mr < (int)sizeof(mb) ? mr : (int)sizeof(mb) - 1] = 0;
+                radio_apply_meta(mb);
+            }
+            s_audio_left = meta_int;
+        }
+        int chunk = want - got;
+        if (chunk > s_audio_left) chunk = s_audio_left;
+        int r = esp_http_client_read(cl, (char *)dst + got, chunk);
+        if (r <= 0) return got > 0 ? got : r;
+        got += r;
+        s_audio_left -= r;
+    }
+    return got;
+}
+
 static void stream_task(void *pv)
 {
     s_stream_run = true;
-    HMP3Decoder dec = NULL;
-    uint8_t *inbuf = NULL;
-    short *pcm = NULL;
-    esp_http_client_handle_t cl = NULL;
-
-    esp_http_client_config_t cfg = {
-        .url = rd.url,
-        .method = HTTP_METHOD_GET,
-        .timeout_ms = 15000,
-        .crt_bundle_attach = esp_crt_bundle_attach,   // harmless on http, required on https
-    };
-    cl = esp_http_client_init(&cfg);
-    if (!cl) { set_err("http init failed"); goto done; }
-    if (esp_http_client_open(cl, 0) != ESP_OK) { set_err("connect failed"); goto done; }
-    esp_http_client_fetch_headers(cl);   // icecast: unknown length -> returns 0, fine
-
-    dec   = MP3InitDecoder();
-    inbuf = malloc(RADIO_IN_SIZE);
-    pcm   = malloc(2 * 1152 * sizeof(short));
+    HMP3Decoder dec = MP3InitDecoder();
+    uint8_t *inbuf = malloc(RADIO_IN_SIZE);
+    short *pcm = malloc(2 * 1152 * sizeof(short));
     if (!dec || !inbuf || !pcm) { set_err("decoder OOM"); goto done; }
 
-    int fill = 0;
-    bool first = true;
+    int attempts = 0;
     while (!s_stop) {
-        // top up the byte buffer from the socket (blocks -> paces to stream rate)
-        if (fill < RADIO_IN_SIZE) {
-            int r = esp_http_client_read(cl, (char *)inbuf + fill, RADIO_IN_SIZE - fill);
-            if (r < 0) { set_err("stream read error"); break; }
-            if (r == 0) { set_err("stream ended"); break; }   // icecast dropped us
-            fill += r;
+        esp_http_client_config_t cfg = {
+            .url = rd.url, .method = HTTP_METHOD_GET, .timeout_ms = 15000,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .event_handler = radio_http_evt,     // captures icy-metaint from the response
+        };
+        esp_http_client_handle_t cl = esp_http_client_init(&cfg);
+        if (!cl) { set_err("http init failed"); break; }
+        esp_http_client_set_header(cl, "Icy-MetaData", "1");   // ask for now-playing
+        s_meta_int_hdr = 0;
+        if (esp_http_client_open(cl, 0) != ESP_OK) {
+            esp_http_client_cleanup(cl);
+            if (++attempts > 6) { set_err("connect failed"); break; }
+            for (int i = 0; i < 100 && !s_stop; i++) vTaskDelay(pdMS_TO_TICKS(10));   // ~1s backoff
+            continue;
         }
-        // decode every complete frame currently in the buffer
-        int cur = 0;   // bytes consumed from the front so far
-        while (fill - cur > RADIO_MIN_FRAME && !s_stop) {
-            int off = MP3FindSyncWord(inbuf + cur, fill - cur);
-            if (off < 0) { cur = fill - 1; break; }   // no sync; keep last byte (partial)
-            cur += off;
-            unsigned char *rp = inbuf + cur;
-            int bl = fill - cur;
-            int err = MP3Decode(dec, &rp, &bl, pcm, 0);
-            if (err == ERR_MP3_INDATA_UNDERFLOW) break;   // need more bytes -> refill
-            int used = (fill - cur) - bl;
-            if (err == 0) {
-                MP3FrameInfo fi;
-                MP3GetLastFrameInfo(dec, &fi);
-                if (first && fi.nChans > 0) {
-                    first = false;
-                    rd.bitrate = fi.bitrate / 1000;
-                    rd.samprate = fi.samprate;
-                    rd.nchans = fi.nChans;
-                    if (fi.samprate != RADIO_RATE) { set_err("unsupported rate (v1: 44.1k)"); break; }
-                    ESP_LOGI(TAG, "stream: %d kbps, %d Hz, %d ch", rd.bitrate, fi.samprate, fi.nChans);
-                }
-                if (fi.outputSamps > 0) ring_write(pcm, fi.outputSamps, fi.nChans);
-                cur += used;
-            } else {
-                cur += (used > 0 ? used : 1);   // bad frame: guarantee forward progress
+        esp_http_client_fetch_headers(cl);
+        int meta_int = s_meta_int_hdr;   // set by radio_http_evt during open/fetch
+        s_audio_left = meta_int;
+
+        int fill = 0;
+        bool disconnected = false;
+        while (!s_stop && !disconnected) {
+            if (fill < RADIO_IN_SIZE) {
+                int r = icy_read(cl, inbuf + fill, RADIO_IN_SIZE - fill, meta_int);
+                if (r <= 0) { disconnected = true; break; }   // dropped -> reconnect
+                fill += r;
+                attempts = 0;                                  // real data: reset the backoff
             }
+            int cur = 0;
+            while (fill - cur > RADIO_MIN_FRAME && !s_stop) {
+                int off = MP3FindSyncWord(inbuf + cur, fill - cur);
+                if (off < 0) { cur = fill - 1; break; }
+                cur += off;
+                unsigned char *rp = inbuf + cur;
+                int bl = fill - cur;
+                int err = MP3Decode(dec, &rp, &bl, pcm, 0);
+                if (err == ERR_MP3_INDATA_UNDERFLOW) break;
+                int used = (fill - cur) - bl;
+                if (err == 0) {
+                    MP3FrameInfo fi;
+                    MP3GetLastFrameInfo(dec, &fi);
+                    if (rd.samprate == 0 && fi.nChans > 0) {
+                        rd.bitrate = fi.bitrate / 1000;
+                        rd.samprate = fi.samprate;
+                        rd.nchans = fi.nChans;
+                        if (fi.samprate != RADIO_RATE) { set_err("unsupported rate (v1: 44.1k)"); s_stop = true; break; }
+                        ESP_LOGI(TAG, "stream: %d kbps, %d Hz, %d ch, meta_int %d", rd.bitrate, fi.samprate, fi.nChans, meta_int);
+                    }
+                    if (fi.outputSamps > 0) ring_write(pcm, fi.outputSamps, fi.nChans);
+                    cur += used;
+                } else {
+                    cur += (used > 0 ? used : 1);
+                }
+            }
+            if (cur > 0 && cur <= fill) { memmove(inbuf, inbuf + cur, fill - cur); fill -= cur; }
+            if (fill >= RADIO_IN_SIZE) fill = 0;
         }
-        // slide the unconsumed tail to the front
-        if (cur > 0 && cur <= fill) { memmove(inbuf, inbuf + cur, fill - cur); fill -= cur; }
-        if (fill >= RADIO_IN_SIZE) fill = 0;   // full of garbage, no sync -> drop & resync
+        esp_http_client_close(cl);
+        esp_http_client_cleanup(cl);
+        if (s_stop) break;
+        // the stream dropped: drain to silence + re-buffer on reconnect, with a
+        // short backoff. Give up only after several CONSECUTIVE failures.
+        rd.reconnects++;
+        if (rd.state == RADIO_PLAYING) rd.state = RADIO_BUFFERING;
+        if (++attempts > 8) { set_err("stream lost"); break; }
+        for (int i = 0; i < 80 && !s_stop; i++) vTaskDelay(pdMS_TO_TICKS(10));   // ~0.8s
     }
 
 done:
     if (dec) MP3FreeDecoder(dec);
     free(inbuf);
     free(pcm);
-    if (cl) { esp_http_client_close(cl); esp_http_client_cleanup(cl); }
     if (rd.state != RADIO_ERROR) rd.state = RADIO_STOPPED;
     s_stream_run = false;
     vTaskDelete(NULL);
@@ -156,7 +236,9 @@ void radio_play_url(const char *url, const char *name)
     strlcpy(rd.station, name ? name : "custom", sizeof(rd.station));
     rd.wpos = rd.rpos = 0;
     rd.underruns = 0;
+    rd.reconnects = 0;
     rd.bitrate = rd.samprate = rd.nchans = 0;
+    rd.title[0] = 0;
     rd.err[0] = 0;
     rd.state = RADIO_BUFFERING;
     s_stop = false;

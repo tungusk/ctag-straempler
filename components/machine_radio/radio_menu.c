@@ -67,8 +67,9 @@ static void info_block(void)
     _fg = TFT_WHITE;
     TFT_print(s, _width / 2 - TFT_getStringWidth(s) / 2, y);
 
-    char t[64];
+    char t[84];
     if (rd.state == RADIO_ERROR)      snprintf(t, sizeof(t), "%s", rd.err);
+    else if (rd.state == RADIO_PLAYING && rd.title[0]) snprintf(t, sizeof(t), "%.76s", rd.title);
     else if (rd.state == RADIO_PLAYING) snprintf(t, sizeof(t), "%d kbps  %d Hz  buf %d%%",
              rd.bitrate, rd.samprate, (int)((uint64_t)(rd.wpos - rd.rpos) * 100 / RADIO_RING_FRAMES));
     else if (rd.state == RADIO_BUFFERING) snprintf(t, sizeof(t), "buffering  %d%%",
