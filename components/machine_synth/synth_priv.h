@@ -19,11 +19,13 @@
 enum { ENV_IDLE = 0, ENV_ATK, ENV_DEC, ENV_SUS, ENV_REL };
 
 enum { ENG_VA = 0, ENG_FM };     // oscillator engine
+enum { LFO_OFF = 0, LFO_CUT, LFO_PITCH };   // LFO destination
 
 typedef struct {
     // performance state
     float phase;                 // oscillator (VA) / carrier (FM) phase 0..1
     float mphase;                // FM modulator phase 0..1
+    float lfo_phase;             // LFO phase 0..1
     int   env_stage;
     float env;                   // envelope level 0..1
     float freq;                  // TARGET note frequency (Hz)
@@ -41,6 +43,9 @@ typedef struct {
     float atk, dec, sus, rel;    // ADSR: times in seconds, sustain 0..1
     float env_to_cut;            // 0..1 envelope -> cutoff amount
     float glide;                 // portamento time in seconds (0 = off)
+    float lfo_rate;              // LFO Hz
+    float lfo_depth;             // 0..1
+    int   lfo_dest;              // LFO_OFF / LFO_CUT / LFO_PITCH
     float level;                 // master 0..1
 
     // live (from knobs, per block)
