@@ -93,7 +93,7 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
 - **Registry**: `main/machine_registry.c` is the ONLY file outside a machine's
   own component that may name a machine symbol. Registry (selector order):
   Sampler2 / Sampler / Looper / Slicer / Granular / Glitch / Drums / Deck /
-  Tracker / Freesound / Stub. (Display names: "Sampler" = the deck-pattern
+  Tracker / Freesound / Radio / Stub. (Display names: "Sampler" = the deck-pattern
   rebuild in machine_sampler3; "Sampler2" = the legacy `s2_` fork in
   machine_sampler2, kept as a fallback until sampler3 has a full hardware
   verdict, then scheduled for removal. The frozen original machine_sampler
@@ -205,6 +205,18 @@ The machines (all working; archives in `bin/`):
   instrument-verified: 90% of beats ±7 ms, +1.2 ms/min slip
   (tools/analyze_drift.py + tools/make_clicktrack.py are the rig).
   Archived: bin/deck-v2 (deck-v1 = pre-precision baseline).
+- `machine_radio` ("Radio", 2026-07-15) — internet radio: streams an
+  icecast/shoutcast MP3 station. One unpinned task GETs the endless HTTP body
+  (esp_http_client + `esp_crt_bundle_attach` → http+https), decodes with helix
+  frame-by-frame (honours the `MP3FindSyncWord` offset; `INDATA_UNDERFLOW` =
+  refill-and-continue, not fatal) into a 4 s PSRAM stereo ring; `process()` only
+  drains the ring. Pre-buffers ~0.5 s, underrun → silence + re-buffer, ring-full
+  backpressure paces the decoder to real time. v1 accepts 44.1 kHz mono/stereo,
+  rejects other rates (sampimport's cubic resampler is the v2 add). Control via
+  web_uris (`/radio/play?station=N|url=`, `/radio/stop`, `/radio/state`) + a
+  "Radio" web tab; on-device Live page picks a built-in SomaFM station. helix
+  needs `#define MIPS` before `mp3dec.h` (the project's generic-C selector) and a
+  20 KB task stack. No SD in the path.
 - `machine_freesound` — silent web-driven utility: freesound search/preview
   download (`/fs/search`, `/fs/get`, `/fs/state`) and direct MP3-URL import
   (`/fs/fetch`), decoding to `usr/` (mono→stereo expand, sidecar). Auth behind
