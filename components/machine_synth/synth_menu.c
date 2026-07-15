@@ -63,7 +63,30 @@ static void live_info(void)
         snprintf(t, sizeof(t), "WT  %s  %s", sy.wave_name[0] ? sy.wave_name : "(no wave)", sy.quantize ? "quant" : "free");
     else
         snprintf(t, sizeof(t), "VA  shape %.0f%%  %s", sy.shape * 100.0f, sy.quantize ? "quant" : "free");
+    // no-wave cue: WT engine with nothing loaded reads RED, not grey
+    if (sy.engine == ENG_WT && !sy.wave_name[0]) _fg = (color_t){220, 80, 60};
+    else _fg = TFT_LIGHTGREY;
     TFT_print(t, _width / 2 - TFT_getStringWidth(t) / 2, y + fh + 4);
+}
+
+// live envelope meter — a moving bar so you SEE the voice breathing
+static int s_last_env = -1;
+static void live_meters(bool full)
+{
+    int fh = TFT_getfontheight();
+    int x = 20, w = _width - 40, h = 12, y = fh + 122;
+    if (full) {
+        TFT_drawRect(x, y, w, h, (color_t){40, 60, 110});
+        _fg = (color_t){90, 90, 90}; _bg = TFT_BLACK;
+        TFT_print("env", x, y - fh - 2);
+        s_last_env = -1;
+    }
+    int fill = (int)(sy.env * (float)(w - 2));
+    if (fill != s_last_env) {
+        s_last_env = fill;
+        if (fill > 0)     TFT_fillRect(x + 1, y + 1, fill, h - 2, (color_t){40, 200, 90});
+        if (fill < w - 2) TFT_fillRect(x + 1 + fill, y + 1, (w - 2) - fill, h - 2, (color_t){18, 18, 24});
+    }
 }
 
 static void live_full_redraw(void)
@@ -74,6 +97,7 @@ static void live_full_redraw(void)
     TFT_print("Synth", 6, 4);
     live_gate_block();
     live_info();
+    live_meters(true);
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     TFT_print("CV1:pitch(1V/oct)  TR1:gate  knob6:cutoff  knob7:res", 6, _height - TFT_getfontheight() - 1);
@@ -89,6 +113,7 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
         case EV_TIMER_REPEATING_FAST:
             if (sy.gate != s_last_gate) live_gate_block();
             live_info();
+            live_meters(false);
             break;
         case EV_LONG_PRESS: return M_SYNTH_SETUP;
         default: break;
