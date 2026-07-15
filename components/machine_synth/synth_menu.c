@@ -96,9 +96,9 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
 // ---- Setup -----------------------------------------------------------------
 static const char *setup_labels[] = {
     "Engine", "Base Note", "Quantize", "Shape", "FM Ratio", "FM Index",
-    "Attack", "Decay", "Sustain", "Release", "Env>Cut", "Level"
+    "Attack", "Decay", "Sustain", "Release", "Env>Cut", "Glide", "Level"
 };
-#define SY_SETUP_N 12
+#define SY_SETUP_N 13
 
 static void setup_val(int i, char *v, size_t n)
 {
@@ -115,7 +115,8 @@ static void setup_val(int i, char *v, size_t n)
         case 8: snprintf(v, n, "%.0f%%", sy.sus * 100.0f); break;
         case 9: snprintf(v, n, "%d ms", (int)(sy.rel * 1000.0f)); break;
         case 10: snprintf(v, n, "%.0f%%", sy.env_to_cut * 100.0f); break;
-        case 11: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
+        case 11: snprintf(v, n, "%d ms", (int)(sy.glide * 1000.0f)); break;
+        case 12: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
     }
 }
 
@@ -126,8 +127,16 @@ static void setup_redraw(int pos, int sel)
     int fh = TFT_getfontheight();
     _fg = TFT_WHITE; TFT_print("Synth Setup", 6, 4);
     menuTFTPrintAffordance("Machine", pos == -1);
-    for (int i = 0; i < SY_SETUP_N; i++) {
-        int y = fh + 14 + i * (fh + 5);
+    // scrollable list — the param count exceeds the screen; keep the cursor in view
+    int row_h = fh + 5, y0 = fh + 14;
+    int vis = (_height - fh - 6 - y0) / row_h;
+    if (vis < 1) vis = 1;
+    int top = 0;
+    if (pos >= vis) top = pos - vis + 1;
+    for (int r = 0; r < vis; r++) {
+        int i = top + r;
+        if (i >= SY_SETUP_N) break;
+        int y = y0 + r * row_h;
         _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
         _fg = (i == pos && sel) ? TFT_CYAN : TFT_WHITE;
         TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
@@ -137,7 +146,7 @@ static void setup_redraw(int pos, int sel)
     }
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("polyBLEP saw<->square; TR1 gates the ADSR", 8, _height - TFT_getfontheight() - 1);
+    TFT_print("VA/FM; TR1 gates the ADSR; turn to scroll", 8, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
@@ -156,7 +165,8 @@ static void sy_adj(int i, int dir)
         case 8: sy.sus += d * 0.05f;  if (sy.sus < 0) sy.sus = 0; if (sy.sus > 1) sy.sus = 1; break;
         case 9: sy.rel += d * 0.02f;  if (sy.rel < 0.001f) sy.rel = 0.001f; if (sy.rel > 3) sy.rel = 3; break;
         case 10: sy.env_to_cut += d * 0.05f; if (sy.env_to_cut < 0) sy.env_to_cut = 0; if (sy.env_to_cut > 1) sy.env_to_cut = 1; break;
-        case 11: sy.level += d * 0.05f; if (sy.level < 0) sy.level = 0; if (sy.level > 1) sy.level = 1; break;
+        case 11: sy.glide += d * 0.02f; if (sy.glide < 0) sy.glide = 0; if (sy.glide > 2) sy.glide = 2; break;
+        case 12: sy.level += d * 0.05f; if (sy.level < 0) sy.level = 0; if (sy.level > 1) sy.level = 1; break;
     }
 }
 
