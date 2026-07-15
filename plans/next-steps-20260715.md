@@ -112,9 +112,20 @@ Commit 3d0f9cb. v2 ideas: auto-reconnect, ICY now-playing metadata, non-44.1k
 resample, persistent/editable station list, "sample the radio" (bounce the
 output bus into the pool).
 
+## ✅ 8. Synth voice machine — subtractive mono synth
+New `machine_synth`: no-sample sound source. v1 mono subtractive voice —
+polyBLEP saw↔square osc (shape morph, anti-aliased) → reused `util/svf` low-pass
+(cutoff opened by the env) → linear ADSR VCA. Pitch on CV1 at 1V/oct (unit scale
+~49 ADC counts/semitone from sampler2's LUT, zeroed at the ch1 idle so unpatched
+= base note; quantize default). TR1 gates the ADSR. knob6 cutoff / knob7 res.
+Setup: shape/note/quantize/ADSR/env→cut/level (preset-persisted). Registered;
+proof passes. VERIFIED via teleremote: CV1 pitch + TR1 gate → clean
+attack→decay→sustain, released to silence, mono out. Commit 8b9a994. v2: FM +
+wavetable engines, poly, glide, filter env, pitch calibration by ear.
+
 ---
 
-## 8. _(more — to be recalled)_
+## 9. _(more — to be recalled)_
 Arlo had more ideas last night that were lost to the clear; add them here as they
 resurface. Separate/older backlogs: `ideas-round2-20260713.md`,
 `plans/roadmap-speculation-20260714.md` (B1–B9).

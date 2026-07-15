@@ -93,7 +93,7 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
 - **Registry**: `main/machine_registry.c` is the ONLY file outside a machine's
   own component that may name a machine symbol. Registry (selector order):
   Sampler2 / Sampler / Looper / Slicer / Granular / Glitch / Drums / Deck /
-  Tracker / Freesound / Radio / Stub. (Display names: "Sampler" = the deck-pattern
+  Tracker / Freesound / Radio / Synth / Stub. (Display names: "Sampler" = the deck-pattern
   rebuild in machine_sampler3; "Sampler2" = the legacy `s2_` fork in
   machine_sampler2, kept as a fallback until sampler3 has a full hardware
   verdict, then scheduled for removal. The frozen original machine_sampler
@@ -217,6 +217,15 @@ The machines (all working; archives in `bin/`):
   "Radio" web tab; on-device Live page picks a built-in SomaFM station. helix
   needs `#define MIPS` before `mp3dec.h` (the project's generic-C selector) and a
   20 KB task stack. No SD in the path.
+- `machine_synth` ("Synth", 2026-07-15) — no-sample sound source, v1 = a mono
+  subtractive voice: polyBLEP saw<->square osc (shape morph) → reused `util/svf`
+  low-pass (cutoff opened by the env) → linear ADSR VCA. Pitch on CV1 at 1V/oct
+  using THIS unit's measured scale (~49 ADC counts/semitone, lifted from
+  sampler2's pitch LUT), zeroed at the ch1 idle (~877) so an unpatched jack plays
+  the base note; quantize-to-semitone by default. TR1 gates the ADSR (teleremote
+  soft trigs too). knob6 = cutoff (30 Hz..6 kHz log), knob7 = resonance. Pure-DSP
+  process(). v2 roadmap: FM + wavetable engines (single-cycle waves from the pool
+  via `sampfile`), polyphony, glide, dedicated filter env.
 - `machine_freesound` — silent web-driven utility: freesound search/preview
   download (`/fs/search`, `/fs/get`, `/fs/state`) and direct MP3-URL import
   (`/fs/fetch`), decoding to `usr/` (mono→stereo expand, sidecar). Auth behind
