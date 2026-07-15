@@ -318,8 +318,10 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
   `/drop_sample` (upload — sniffs the payload and kicks convert-on-import for
   MP3/48k/24-bit arrivals; pad appended at END, never leading), POST/GET
   `/import` (pool-wide convert-on-import scan / progress), DELETE `/files`,
-  `/remote/*` (teleremote, gated),
-  plus the active machine's own URIs (e.g. `/fs/*`). Tabs: Files, Upload
+  `/remote/*` (teleremote, gated), `/bounce/{start,stop,state}` (record the
+  active machine's OUTPUT bus to a REC_ take — "sample the radio"; core, any
+  machine, reuses the recording service fed `out` instead of line-in),
+  plus the active machine's own URIs (e.g. `/fs/*`, `/radio/*`, `/edit/*`). Tabs: Files, Upload
   (**converts any audio file in-browser** via Web Audio → 44.1k stereo RAW),
   Freesound (search/Get + direct-URL fetch), Remote (monitor + controls +
   machine settings form), Settings. Device IP also appears on the on-device

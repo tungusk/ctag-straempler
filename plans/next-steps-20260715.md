@@ -134,9 +134,19 @@ test). LESSON: card is FatFS 8.3/LFN-off → ids MUST be ≤8 chars (first attem
 `<src>_<tag>` fopen'd EINVAL); now `<PFX>NNNN` via sample_next_index. Recorded in
 CLAUDE.md Code rules. v2: crop + zero-cross loop-snap (needs a crop UI).
 
+## ✅ 10. Output bounce — "sample the radio" (record the output bus)
+Core service (any machine): while bouncing, the audio task feeds the recorder
+`out` (post-process, pre-clock-out) instead of line-in, so radio/synth/deck-blend
+output lands as a REC_ take. Reuses the recording service verbatim
+(`recording_start(-1)` = no auto-load); only the pushed buffer changes, gated by
+`s_bounce` in audio.c. `audio_bounce_start/stop/active`; REST /bounce/start|stop|
+state; BOUNCE card on the Remote web tab. VERIFIED: bounced 6.46s of a playing
+SomaFM stream → REC take, correct length, real (non-silent) audio. Commit 69f0bad.
+v2: dedicated BNC_ prefix, on-device bounce button, bounce→auto-open in Editor.
+
 ---
 
-## 10. _(more — to be recalled)_
+## 11. _(more — to be recalled)_
 Arlo had more ideas last night that were lost to the clear; add them here as they
 resurface. Separate/older backlogs: `ideas-round2-20260713.md`,
 `plans/roadmap-speculation-20260714.md` (B1–B9).
