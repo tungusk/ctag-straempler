@@ -48,3 +48,8 @@ void audio_remote_cv(int ch, int v, int ms);
 void audio_bounce_start(void);
 void audio_bounce_stop(void);
 bool audio_bounce_active(void);
+
+// broadcast — a dedicated socket server (port 8000) streams the live output bus
+// as WAV to one browser/VLC client. Call audio_broadcast_init() AFTER initWifi().
+void audio_broadcast_init(void);       // start the server task (post-WiFi only)
+bool audio_broadcast_active(void);     // a client is currently connected

@@ -1545,6 +1545,11 @@ static esp_err_t bounce_state_handler(httpd_req_t *req)
     return send_json(req, buf);
 }
 
+static esp_err_t bcast_state_handler(httpd_req_t *req)
+{
+    return send_json(req, audio_broadcast_active() ? "{\"live\":true}" : "{\"live\":false}");
+}
+
 // ─── server lifecycle ────────────────────────────────────────────────────────
 
 static httpd_uri_t uris[] = {
@@ -1574,6 +1579,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/bounce/start",  .method = HTTP_POST, .handler = bounce_start_handler },
     { .uri = "/bounce/stop",   .method = HTTP_POST, .handler = bounce_stop_handler },
     { .uri = "/bounce/state",  .method = HTTP_GET,  .handler = bounce_state_handler },
+    { .uri = "/bcast/state",   .method = HTTP_GET,  .handler = bcast_state_handler },
     { .uri = "/blisten",       .method = HTTP_POST, .handler = blisten_post_handler },
     { .uri = "/remote/machine",.method = HTTP_POST, .handler = remote_machine_handler },
     { .uri = "/remote/params", .method = HTTP_GET,  .handler = remote_params_get_handler },

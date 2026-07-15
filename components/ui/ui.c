@@ -218,6 +218,7 @@ void initUI(){
     xTaskCreatePinnedToCore(timerRepeatFast, "timerRepeatFast", 2048, NULL, 10, NULL, 0);
     
     initWifi();
+    audio_broadcast_init();   // output-broadcast socket server — AFTER initWifi (needs tcpip + the wifi event group)
     freesoundInit(ui_ev_queue);
     initMP3Engine(ui_ev_queue);
     startRestAPI(ui_ev_queue);
