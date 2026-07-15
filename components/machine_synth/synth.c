@@ -73,6 +73,7 @@ static void synth_stop(void)
 {
     if (sy.wave) { heap_caps_free(sy.wave); sy.wave = NULL; }
     sy.wave_len = 0;
+    reverb_free(&sy.rv);
 }
 
 static void synth_process(int32_t out[MACHINE_BLOCK],
@@ -180,6 +181,10 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
         out[f * 2] = s;
         out[f * 2 + 1] = s;
     }
+
+    // output reverb (equal-power wet/dry, in place) — AFTER the voice/filter
+    if (sy.rv.mode != RV_OFF && sy.rv.slab)
+        reverb_block_i32(&sy.rv, out, frames);
 }
 
 static cJSON *synth_preset_save(void)
@@ -198,6 +203,8 @@ static cJSON *synth_preset_save(void)
     cJSON_AddNumberToObject(o, "rel", sy.rel);
     cJSON_AddNumberToObject(o, "e2c", sy.env_to_cut);
     cJSON_AddNumberToObject(o, "gld", sy.glide);
+    cJSON_AddNumberToObject(o, "rv", sy.rv.mode);
+    cJSON_AddNumberToObject(o, "rvmx", (int)(sy.rv.wet * 100 + 0.5f));
     cJSON_AddNumberToObject(o, "lfr", sy.lfo_rate);
     cJSON_AddNumberToObject(o, "lfd", sy.lfo_depth);
     cJSON_AddNumberToObject(o, "lfx", sy.lfo_dest);
@@ -222,6 +229,12 @@ static void synth_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rel"))   && cJSON_IsNumber(j)) sy.rel = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "e2c"))   && cJSON_IsNumber(j)) sy.env_to_cut = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) sy.glide = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rv"))    && cJSON_IsNumber(j)) {
+        int m = j->valueint; if (m < 0 || m >= RV_N_MODES) m = RV_OFF;
+        if (m != RV_OFF && !sy.rv.slab && reverb_init(&sy.rv) != ESP_OK) m = RV_OFF;
+        reverb_set_mode(&sy.rv, m);
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx"))  && cJSON_IsNumber(j)) reverb_set_mix(&sy.rv, (float)j->valueint / 100.0f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfr"))   && cJSON_IsNumber(j)) sy.lfo_rate = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfd"))   && cJSON_IsNumber(j)) sy.lfo_depth = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfx"))   && cJSON_IsNumber(j)) sy.lfo_dest = j->valueint;

@@ -100,10 +100,10 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
 static const char *setup_labels[] = {
     "Engine", "Base Note", "Quantize", "Shape", "FM Ratio", "FM Index",
     "Attack", "Decay", "Sustain", "Release", "Env>Cut", "Glide",
-    "LFO Rate", "LFO Depth", "LFO Dest", "Level", "Load Wave"
+    "LFO Rate", "LFO Depth", "LFO Dest", "Level", "Reverb", "Rev Mix", "Load Wave"
 };
-#define SY_SETUP_N 17
-#define SY_LOAD_ITEM 16          // the "Load Wave" action row
+#define SY_SETUP_N 19
+#define SY_LOAD_ITEM 18          // the "Load Wave" action row
 
 static void setup_val(int i, char *v, size_t n)
 {
@@ -125,7 +125,9 @@ static void setup_val(int i, char *v, size_t n)
         case 13: snprintf(v, n, "%.0f%%", sy.lfo_depth * 100.0f); break;
         case 14: snprintf(v, n, "%s", sy.lfo_dest == LFO_CUT ? "cutoff" : sy.lfo_dest == LFO_PITCH ? "pitch" : "off"); break;
         case 15: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
-        case 16: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
+        case 16: snprintf(v, n, "%s", reverb_mode_name(sy.rv.mode)); break;
+        case 17: snprintf(v, n, "%.0f%%", sy.rv.wet * 100.0f); break;
+        case 18: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
     }
 }
 
@@ -179,6 +181,21 @@ static void sy_adj(int i, int dir)
         case 13: sy.lfo_depth += d * 0.05f; if (sy.lfo_depth < 0) sy.lfo_depth = 0; if (sy.lfo_depth > 1) sy.lfo_depth = 1; break;
         case 14: sy.lfo_dest += dir; if (sy.lfo_dest < 0) sy.lfo_dest = 2; if (sy.lfo_dest > 2) sy.lfo_dest = 0; break;
         case 15: sy.level += d * 0.05f; if (sy.level < 0) sy.level = 0; if (sy.level > 1) sy.level = 1; break;
+        case 16: {   // reverb mode (lazy-init the tank on first non-off)
+            int m = sy.rv.mode + dir;
+            if (m < 0) m = RV_N_MODES - 1;
+            if (m >= RV_N_MODES) m = RV_OFF;
+            if (m != RV_OFF && !sy.rv.slab && reverb_init(&sy.rv) != ESP_OK) m = RV_OFF;
+            reverb_set_mode(&sy.rv, m);
+            break;
+        }
+        case 17: {
+            float w = sy.rv.wet + d * 0.05f;
+            if (w < 0) w = 0;
+            if (w > 1) w = 1;
+            reverb_set_mix(&sy.rv, w);
+            break;
+        }
     }
 }
 
