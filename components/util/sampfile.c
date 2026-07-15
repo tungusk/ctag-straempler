@@ -71,8 +71,8 @@ int sampwav_finish(FILE *f)
 static const char *const SF_EXTS[] = { ".RAW", ".WAV", ".AIF", ".AIFF" };
 #define SF_N_EXTS 4
 
-static const char *const SF_DIRS[] = { "usr", "usr/REC", "usr/LOOPS", "usr/SLICES" };
-#define SF_N_DIRS 4
+static const char *const SF_DIRS[] = { "usr", "usr/REC", "usr/LOOPS", "usr/SLICES", "usr/DRUMS" };
+#define SF_N_DIRS 5
 
 int sample_resolve(const char *id, char *path, size_t path_len)
 {

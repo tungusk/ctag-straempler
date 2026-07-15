@@ -13,6 +13,8 @@
 #include "sampfile.h"
 #include "sampimport.h"
 #include "sd_lock.h"
+#include "disp_lock.h"
+#include "tftspi.h"
 #include "audio.h"
 #include "machine.h"
 #include "beatlisten.h"
@@ -152,11 +154,12 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     // the opening brace rides in the output batcher below (obuf)
 
     static const char *const jdirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
-                                        "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES"};
+                                        "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
+                                        "/sdcard/usr/DRUMS"};
     // short folder tag streamed with each entry so the browser can SHOW the
     // card's organization instead of flattening it (pool/takes/loops/slices)
-    static const char *const jdir_tag[] = {"pool", "REC", "LOOPS", "SLICES"};
-    #define JN_DIRS 4
+    static const char *const jdir_tag[] = {"pool", "REC", "LOOPS", "SLICES", "DRUMS"};
+    #define JN_DIRS 5
     // INTERNAL RAM, reused for every sidecar. Never PSRAM: SDMMC DMA cannot target it,
     // which is the whole reason sidecars were skipped here in the first place.
     static char sidecar_buf[512];
@@ -186,7 +189,7 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     #define FIDX_MAX 512
     static fidx_t *idx = NULL;   // PSRAM, one folder at a time (~22 KB)
     if (!idx) idx = heap_caps_malloc(FIDX_MAX * sizeof(fidx_t), MALLOC_CAP_SPIRAM);
-    static const char *const fdirs[] = {"usr", "usr/REC", "usr/LOOPS", "usr/SLICES"};
+    static const char *const fdirs[] = {"usr", "usr/REC", "usr/LOOPS", "usr/SLICES", "usr/DRUMS"};
 
     for (int di = 0; idx && di < JN_DIRS && !dead; di++) {
         int n_idx = 0;
@@ -306,10 +309,14 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
 
     char path[72];
     static const char *const del_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF", ".JSN", ".OT"};
+    // SLICES + DRUMS were historically absent here, so a web delete couldn't
+    // reach a file living in those folders; added, and the bound now derives
+    // from the array so it can't drift again.
     static const char *const del_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
-                                           "/sdcard/usr/LOOPS"};
+                                           "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
+                                           "/sdcard/usr/DRUMS"};
     sd_lock_take();
-    for (int d = 0; d < 3; d++)
+    for (int d = 0; d < (int)(sizeof(del_dirs)/sizeof(del_dirs[0])); d++)
         for (int i = 0; i < 6; i++) {
             snprintf(path, sizeof(path), "%s/%s%s", del_dirs[d], name, del_exts[i]);
             remove(path);
@@ -325,9 +332,10 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
 // Folder organization from the web: the same all-pieces sweep as rename (audio
 // + .JSN + .OT travel together), destination = another pool folder, id kept.
 static const char *const mv_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
-                                      "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES"};
-static const char *const mv_tags[] = {"pool", "REC", "LOOPS", "SLICES"};
-#define MV_DIRS 4
+                                      "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
+                                      "/sdcard/usr/DRUMS"};
+static const char *const mv_tags[] = {"pool", "REC", "LOOPS", "SLICES", "DRUMS"};
+#define MV_DIRS 5
 
 // sweep every piece of a sample (audio + .JSN + .OT, wherever each lives)
 // into mv_dirs[dst]. Creates the folder on first use; never clobbers a twin.
@@ -367,7 +375,7 @@ static esp_err_t files_move_handler(httpd_req_t *req)
     for (int d = 0; d < MV_DIRS; d++)
         if (strcasecmp(dir, mv_tags[d]) == 0) dst = d;
     if (dst < 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "dir must be pool/REC/LOOPS/SLICES");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "dir must be pool/REC/LOOPS/SLICES/DRUMS");
         return ESP_FAIL;
     }
     if (!files_move_pieces(name, dst)) {
@@ -419,11 +427,12 @@ static esp_err_t files_rename_handler(httpd_req_t *req)
 
     static const char *const rn_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF", ".JSN", ".OT"};
     static const char *const rn_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
-                                          "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES"};
+                                          "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
+                                          "/sdcard/usr/DRUMS"};
     char from_p[80], to_p[80];
     int moved = 0;
     sd_lock_take();
-    for (int d = 0; d < 4; d++)
+    for (int d = 0; d < (int)(sizeof(rn_dirs)/sizeof(rn_dirs[0])); d++)
         for (int i = 0; i < 6; i++) {
             snprintf(from_p, sizeof(from_p), "%s/%s%s", rn_dirs[d], name, rn_exts[i]);
             struct stat st;
@@ -533,6 +542,80 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
     fclose(f);
     sd_lock_give();
     free(buf);
+    return ESP_OK;
+}
+
+// ─── /screenshot — the live TFT display as a 24-bit BMP ─────────────────────
+// There is no RAM framebuffer (the driver draws straight to the panel), so the
+// only capture route is reading the panel's GRAM back over SPI — the same
+// TFT_RAMRD path find_rd_speed() exercises at boot, so it works on this unit.
+// Held under disp_lock PER ROW so a UI draw can't interleave SPI transactions,
+// released between rows so a slow client can't freeze the UI (at the cost of
+// possible tearing on a fast-changing screen — fine for a screenshot).
+// read_data yields len*3+1 bytes: a dummy byte, then R,G,B per pixel (packed
+// color_t). BMP wants B,G,R and is stored bottom-up.
+static void put_le32(uint8_t *p, uint32_t v){ p[0]=v; p[1]=v>>8; p[2]=v>>16; p[3]=v>>24; }
+static void put_le16(uint8_t *p, uint16_t v){ p[0]=v; p[1]=v>>8; }
+
+static esp_err_t screenshot_get_handler(httpd_req_t *req)
+{
+    int w = _width, h = _height;
+    if (w <= 0 || h <= 0 || w > 640 || h > 640) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "bad display dims");
+        return ESP_FAIL;
+    }
+    uint32_t row_bytes = (uint32_t)w * 3;            // 24bpp (w=320 -> 960, already 4-aligned)
+    uint32_t pad = (4 - (row_bytes & 3)) & 3;        // BMP rows pad to 4 bytes
+    uint32_t img = (row_bytes + pad) * (uint32_t)h;
+    uint32_t filesz = 54 + img;
+
+    uint8_t hdr[54] = {0};
+    hdr[0] = 'B'; hdr[1] = 'M';
+    put_le32(hdr + 2,  filesz);
+    put_le32(hdr + 10, 54);       // pixel-data offset
+    put_le32(hdr + 14, 40);       // DIB header size (BITMAPINFOHEADER)
+    put_le32(hdr + 18, (uint32_t)w);
+    put_le32(hdr + 22, (uint32_t)h);  // positive height => bottom-up
+    put_le16(hdr + 26, 1);        // planes
+    put_le16(hdr + 28, 24);       // bpp
+    put_le32(hdr + 30, 0);        // BI_RGB (uncompressed)
+    put_le32(hdr + 34, img);
+    put_le32(hdr + 38, 2835);     // ~72 dpi
+    put_le32(hdr + 42, 2835);
+
+    uint8_t *raw = malloc(row_bytes + 1);            // read_data: len*3 + 1 dummy
+    uint8_t *out = malloc(row_bytes + pad);
+    if (!raw || !out) {
+        free(raw); free(out);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    if (pad) memset(out + row_bytes, 0, pad);
+
+    char len_str[16];
+    snprintf(len_str, sizeof(len_str), "%u", (unsigned)filesz);
+    httpd_resp_set_type(req, "image/bmp");
+    httpd_resp_set_hdr(req, "Content-Length", len_str);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    esp_err_t rc = httpd_resp_send_chunk(req, (const char *)hdr, sizeof(hdr));
+    for (int y = h - 1; y >= 0 && rc == ESP_OK; y--) {   // bottom-up
+        disp_lock_take();
+        int r = read_data(0, y, w - 1, y, w, raw, 1);
+        disp_lock_give();
+        if (r < 0) memset(raw, 0, row_bytes + 1);        // read failed -> black row, stream stays valid
+        for (int x = 0; x < w; x++) {
+            uint8_t *px = raw + 1 + x * 3;               // R,G,B
+            uint8_t *o  = out + x * 3;
+            o[0] = px[2];                                // B
+            o[1] = px[1];                                // G
+            o[2] = px[0];                                // R
+        }
+        rc = httpd_resp_send_chunk(req, (const char *)out, row_bytes + pad);
+        vTaskDelay(1);
+    }
+    httpd_resp_send_chunk(req, NULL, 0);
+    free(raw); free(out);
     return ESP_OK;
 }
 
@@ -1453,6 +1536,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/files/rename", .method = HTTP_POST, .handler = files_rename_handler },
     { .uri = "/files/move",   .method = HTTP_POST, .handler = files_move_handler },
     { .uri = "/files/raw",  .method = HTTP_GET,    .handler = files_raw_handler },
+    { .uri = "/screenshot", .method = HTTP_GET,    .handler = screenshot_get_handler },
     { .uri = "/import",     .method = HTTP_POST,   .handler = import_post_handler },
     { .uri = "/import",     .method = HTTP_GET,    .handler = import_get_handler },
     { .uri = "/settings",   .method = HTTP_GET,    .handler = settings_get_handler },

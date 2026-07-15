@@ -782,7 +782,8 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
             snprintf(t, sizeof(t), "Pad %d%c", dr.sel_pad + 1, s_layer ? 'B' : 'A');
         else
             snprintf(t, sizeof(t), "Pad %d", dr.sel_pad + 1);
-        sample_browser_enter(true, t, dr.pad[dr.sel_pad].ly[s_layer].sample);
+        // Drums opens into its home folder (usr/DRUMS) — kits live there
+        sample_browser_enter_dir(true, t, dr.pad[dr.sel_pad].ly[s_layer].sample, SAMPLE_DIR_DRUMS);
         return 0;
     }
     int r = sample_browser_event(event);

@@ -340,12 +340,15 @@ static bool ext_is(const char *name, const char *ext)
 
 static void import_task(void *pv)
 {
+    // SLICES + DRUMS added so an MP3/48k/24-bit file dropped straight into
+    // those folders is still convert-on-import scanned (SLICES was missing).
     static const char *const dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
-                                       "/sdcard/usr/LOOPS"};
+                                       "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
+                                       "/sdcard/usr/DRUMS"};
     samp_import_done = 0;
     samp_import_fail = 0;
     samp_import_seen = 0;
-    for (int di = 0; di < 3; di++) {
+    for (int di = 0; di < (int)(sizeof(dirs)/sizeof(dirs[0])); di++) {
         sd_lock_take();
         DIR *d = opendir(dirs[di]);
         sd_lock_give();

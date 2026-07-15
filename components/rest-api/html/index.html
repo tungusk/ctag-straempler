@@ -92,6 +92,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <div class="tab" id="fd-REC" onclick="setDirFilt('REC')">REC</div>
     <div class="tab" id="fd-LOOPS" onclick="setDirFilt('LOOPS')">LOOPS</div>
     <div class="tab" id="fd-SLICES" onclick="setDirFilt('SLICES')">SLICES</div>
+    <div class="tab" id="fd-DRUMS" onclick="setDirFilt('DRUMS')">DRUMS</div>
   </div>
   <table id="ftab">
     <thead><tr>
@@ -121,7 +122,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <span class="kv" id="impmsg" style="margin-left:8px"></span>
   </div>
   <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
-    Drop files here (one or many): audio (wav/mp3/flac/ogg/m4a &#8594; converted), 16-bit 44.1kHz stereo RAW, or <b>tracker modules</b> (MOD/XM/IT/&#8230; &#8594; usr/MODS). Review &amp; rename below, then Upload.
+    Drop files here (one or many): <b>MP3/WAV/AIFF</b> upload as-is and convert on the module (fast &#8212; no giant RAW over WiFi); other audio (flac/ogg/m4a &#8594; decoded in-browser to RAW); 16-bit 44.1kHz stereo RAW; or <b>tracker modules</b> (MOD/XM/IT/&#8230; &#8594; usr/MODS). Review &amp; rename below, then Upload.
   </div>
   <input type="file" id="fi" multiple accept="audio/*,.raw,.RAW,.ot,.OT,.mod,.xm,.it,.s3m,.669,.mtm,.okt,.ult,.far,.med,.dbm,.amf,.ptm,.stm,.dmf,.gdm,.imf,.liq,.mdl,.pt3,.oxm,.digi,.emod,.MOD,.XM,.IT,.S3M" style="display:none" onchange="onFiles(this.files)">
   <div id="batch" style="display:none;margin-top:12px">
@@ -271,7 +272,7 @@ function filesTab(n){
   document.getElementById('ftab').style.display=n===0?'':'none';
   document.getElementById('mtab').style.display=n===1?'':'none';
   // the folder chips only mean something for samples
-  ['fd-all','fd-pool','fd-REC','fd-LOOPS','fd-SLICES'].forEach(function(id){
+  ['fd-all','fd-pool','fd-REC','fd-LOOPS','fd-SLICES','fd-DRUMS'].forEach(function(id){
     document.getElementById(id).style.display=n===0?'':'none';
   });
   n===0?loadFiles():loadMods();
@@ -281,7 +282,7 @@ function filesTab(n){
 var libFilt=null;   // null = all, else 'pool'/'REC'/'LOOPS'
 function setDirFilt(d){
   libFilt=d;
-  [[null,'fd-all'],['pool','fd-pool'],['REC','fd-REC'],['LOOPS','fd-LOOPS'],['SLICES','fd-SLICES']].forEach(function(p){
+  [[null,'fd-all'],['pool','fd-pool'],['REC','fd-REC'],['LOOPS','fd-LOOPS'],['SLICES','fd-SLICES'],['DRUMS','fd-DRUMS']].forEach(function(p){
     document.getElementById(p[1]).className='tab'+(libFilt===p[0]?' on':'');
   });
   renderFiles();
@@ -369,7 +370,7 @@ function renderFiles(){
     // lives; picking another folder moves it (audio+sidecar+slices together)
     var dirSel='<select style="width:auto;font-size:10px;padding:1px 2px;color:#888" '
       +'onchange="moveFile(\''+esc(f.name)+'\',this.value)">';
-    ['pool','REC','LOOPS','SLICES'].forEach(function(dd){
+    ['pool','REC','LOOPS','SLICES','DRUMS'].forEach(function(dd){
       dirSel+='<option value="'+dd+'"'+((f.dir||'pool')===dd?' selected':'')+'>'+dd.toUpperCase()+'</option>';
     });
     dirSel+='</select>';
@@ -449,6 +450,12 @@ function del(name){
 }
 
 var MOD_EXTS=['mod','xm','it','s3m','669','mtm','okt','ult','far','med','dbm','amf','ptm','stm','dmf','gdm','imf','liq','mdl','pt3','oxm','digi','emod'];
+// formats the DEVICE converts on import (helix MP3 + PCM WAV/AIFF at any depth/
+// rate). Uploading these VERBATIM and letting the module convert avoids the
+// in-browser decode to giant 44.1k-stereo RAW — an MP3 goes up ~10x smaller,
+// which matters a lot on the TX-power-capped WiFi. Anything NOT here (flac/ogg/
+// m4a/aac/opus/webm) the module can't decode, so it still decodes in-browser.
+var DEV_EXTS=['mp3','wav','wave','aif','aiff'];
 
 // decode any browser-supported audio to a 44.1k stereo int16 RAW Blob
 var MAX_AUDIO_SECS=600;   // ~10 min — long enough for Deck song tracks
@@ -495,7 +502,11 @@ var batchFiles=[];   // [{file, name(custom|null), base(sanitized), ext, kind}]
 function fileMeta(file){
   var m=file.name.match(/\.([^.]+)$/),ext=m?m[1]:'';
   var base=file.name.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_]/g,'');
-  var kind=(m&&ext.toLowerCase()==='ot')?'ot':(m&&MOD_EXTS.indexOf(ext.toLowerCase())>=0)?'mod':(/\.raw$/i.test(file.name)?'raw':'audio');
+  var lo=ext.toLowerCase();
+  var kind=(m&&lo==='ot')?'ot':(m&&MOD_EXTS.indexOf(lo)>=0)?'mod'
+          :(/\.raw$/i.test(file.name))?'raw'
+          :(m&&DEV_EXTS.indexOf(lo)>=0)?'native'   // upload as-is, module converts on import
+          :'audio';                                // browser-only format: decode in-browser
   return {file:file,name:null,base:base,ext:ext,kind:kind};
 }
 function nameOf(b){return b.name||b.base.substring(0,8)||'FILE';}
@@ -521,7 +532,10 @@ function renderBatch(){
       actCell='<button class="btn" onclick="renameBatch('+i+')">rename</button> '
         +'<button class="btn del" onclick="removeBatch('+i+')">&#10005;</button>';
     }
-    var typ=b.kind==='mod'?('.'+esc(b.ext.toUpperCase())):(b.kind==='raw'?'RAW':'audio&#8594;RAW');
+    var typ=b.kind==='mod'?('.'+esc(b.ext.toUpperCase()))
+           :b.kind==='raw'?'RAW'
+           :b.kind==='native'?('.'+esc(b.ext.toUpperCase())+'&#8594;module')   // uploaded as-is, converts on device
+           :'audio&#8594;RAW';                                                 // in-browser decode
     h+='<tr><td>'+nameCell+'</td><td style="color:#666">'+typ+'</td><td style="white-space:nowrap">'+actCell+'</td></tr>';
   });
   tb.innerHTML=h||'<tr><td colspan="3" style="color:#555;padding:8px">Batch empty</td></tr>';
@@ -566,8 +580,11 @@ function doBatchUpload(){
     if(i>=N){finish('Done: '+ok+' uploaded'+(fail?', '+fail+' failed ('+lastErr+')':''),!!fail);return;}
     var b=batchFiles[i],name=nameOf(b),pfx=(i+1)+'/'+N+': '+name;
     bm.className='msg';
-    if(b.kind==='mod'||b.kind==='raw'||b.kind==='ot'){
-      pr.value=0;bm.textContent='Uploading '+pfx;
+    if(b.kind==='mod'||b.kind==='raw'||b.kind==='ot'||b.kind==='native'){
+      // all of these upload the ORIGINAL file bytes (no in-browser convert) —
+      // 'native' rides the module's convert-on-import, and gets a real upload
+      // progress bar instead of the indeterminate convert spinner
+      pr.value=0;bm.textContent='Uploading '+pfx+' ('+Math.round(b.file.size/1048576*10)/10+'MB)';
       var u=b.kind==='mod'?'/trk/upload':(b.kind==='ot'?'/drop_ot':'/drop_sample');
       putFile(u,b.kind==='mod'?{Name:name,Ext:b.ext}:{Name:name},b.file,setUp).then(okcb,failcb);
       return;
