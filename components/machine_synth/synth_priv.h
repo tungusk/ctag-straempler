@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "svf.h"
+#include "reverb.h"
 
 // Synth voice — a no-sample sound source. v1 is a monophonic subtractive voice:
 // polyBLEP saw<->square oscillator, 1V/oct pitch on CV1, TR1 gate -> linear ADSR
@@ -38,6 +39,8 @@ typedef struct {
     int16_t *wave;               // wavetable buffer (PSRAM, lazy-alloc)
     int      wave_len;           // samples in the wavetable (0 = none loaded)
     char     wave_name[24];      // loaded wave id (for the preset + UI)
+
+    reverb_t rv;                 // output reverb (lazy PSRAM slab; RV_OFF = bypass)
 
     // params (Setup + knobs)
     int   engine;                // ENG_VA / ENG_FM
