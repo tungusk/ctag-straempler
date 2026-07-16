@@ -125,7 +125,8 @@ typedef enum{
     SID_TIMEZONE,
     SID_REMOTE,
     SID_LISTEN,        // beatlisten mode (System Settings row)
-    SID_CLKOUT         // beatlisten clock-out channel
+    SID_CLKOUT,        // beatlisten clock-out channel
+    SID_BOUNCE         // record the active machine's OUTPUT bus (press to toggle)
 } submenu_ids_t;
 
 typedef enum{

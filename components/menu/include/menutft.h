@@ -52,6 +52,7 @@ void menuTFTPrintTimezone(const char** items, const int* n_items, int *shift);
 void menuTFTPrintRemote(const char** items, const int* n_items, int *on);
 void menuTFTPrintListen(const char** items, const int* n_items, int *mode);
 void menuTFTPrintClkOut(const char** items, const int* n_items, int *ch);
+void menuTFTPrintBounce(const char** items, const int* n_items);
 void menuTFTPrintIP(const char** items, const int* n_items);
 
 
