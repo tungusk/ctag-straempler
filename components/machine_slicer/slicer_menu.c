@@ -31,6 +31,7 @@ static const color_t CUR_COL = {40, 200, 90};    // playing slice
 #define INFO_Y 18             // info line above the bar, bigger font
 
 static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1, s_last_peaks = -1;
+static bool s_last_loading = true;   // reader-load in progress at the last redraw
 static char s_msg[24];
 
 // x pixel of slice boundary s (slices are non-uniform in transient mode)
@@ -143,6 +144,7 @@ static void live_full_redraw(void){
     TFT_print("turn:select  press:fire  hold:exit", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
     s_last_cur = sl.cur; s_last_sel = sl.sel; s_last_slices = sl.n_slices; s_last_peaks = sl.peak_n;
+    s_last_loading = sl.loading;
 }
 
 static int slicer_live_handler(int it_id, int event, void *ev_data){
@@ -152,7 +154,11 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
             break;
         case EV_TIMER_REPEATING_SLOW:
         case EV_TIMER_REPEATING_FAST:
-            if (sl.n_slices != s_last_slices || sl.peak_n != s_last_peaks) live_full_redraw();   // grid or async peaks arrived
+            // redraw when the reader-load finishes (loading true->false) — the
+            // definitive "peaks + slices ready" signal, even if the counts didn't
+            // change — or if the grid/peak count changed
+            if (sl.loading != s_last_loading || sl.n_slices != s_last_slices || sl.peak_n != s_last_peaks)
+                live_full_redraw();
             else if (sl.cur != s_last_cur || sl.sel != s_last_sel)
                 live_update_highlights();                           // just move highlights
             if (event == EV_TIMER_REPEATING_SLOW){
