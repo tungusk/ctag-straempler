@@ -67,12 +67,13 @@ static void repaint_slice(int s, int cur, int sel){
     bool is_cur = sl.playing && s == cur;
     _bg = is_cur ? (color_t){20, 40, 50} : BG;
     TFT_fillRect(x0, WY, x1 - x0, WH, _bg);
+    color_t wcol = (s == sel) ? SEL_COL : WAVE;    // selected slice's waveform is green
     for (int c = 0; c < sl.peak_n; c++){
         int x = WX + c * WW / sl.peak_n;
         if (x < x0 || x >= x1) continue;
         int h = sl.peaks[c] * (WH / 2) / 31;
         if (h < 1 && sl.peaks[c] > 0) h = 1;
-        TFT_drawLine(x, cy - h, x, cy + h, WAVE);
+        TFT_drawLine(x, cy - h, x, cy + h, wcol);
     }
     TFT_drawLine(x0, cy, x1, cy, TFT_WHITE);        // white center line (this column)
     TFT_drawLine(x0, WY, x0, WY + WH, GRID);
@@ -169,12 +170,12 @@ static void draw_waveform(void){
     // current slice block gets a tinted fill first (background layer)
     if (sl.playing) draw_slice_region(sl.cur, CUR_COL, true);
     // peaks
-    _fg = WAVE;
+    int sx0 = slice_x(sl.sel), sx1 = slice_x(sl.sel + 1);   // selected slice x-range -> green peaks
     for (int c = 0; c < sl.peak_n; c++){
         int x = WX + c * WW / (sl.peak_n ? sl.peak_n : 1);
         int h = sl.peaks[c] * (WH / 2) / 31;
         if (h < 1 && sl.peaks[c] > 0) h = 1;
-        TFT_drawLine(x, cy - h, x, cy + h, WAVE);
+        TFT_drawLine(x, cy - h, x, cy + h, (x >= sx0 && x < sx1) ? SEL_COL : WAVE);
     }
     TFT_drawLine(WX, cy, WX + WW - 1, cy, TFT_WHITE);   // white center line
     // slice division grid (boundaries may be non-uniform in transient mode)
