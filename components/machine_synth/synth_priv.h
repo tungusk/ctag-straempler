@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "svf.h"
 #include "reverb.h"
 
@@ -87,3 +88,8 @@ extern sy_state_t sy;
 // load a pool sample as the wavetable (mono, up to SY_WT_MAX). Does NOT change
 // the engine — the caller (menu) selects ENG_WT on success. 0 ok, <0 fail.
 int synth_load_wave(const char *name);
+
+// named patches — usr/synth/PAT_NNN.jsn, one file per patch (see synth.c).
+int synth_patch_save(char *id_out, size_t n);   // mint next id + save; id_out = the id
+int synth_patch_load(const char *id);           // load a patch by id (0 ok)
+int synth_patch_list(char ids[][12], int max);  // ids newest-first; returns count
