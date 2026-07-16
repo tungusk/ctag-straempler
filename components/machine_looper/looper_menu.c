@@ -19,6 +19,7 @@
 #include "clock.h"
 #include "beatlisten.h"
 #include "menu_config.h"
+#include "setup_menu.h"
 #include "looper_priv.h"
 
 // Deck's transport grammar, ported to the 4-lane view (Arlo): the state lives
@@ -318,14 +319,23 @@ static int looper_live_handler(int it_id, int event, void *ev_data){
 // flip right on the click — no edit mode; lists/ranges keep click-to-edit +
 // turn with an explicit "[ value ]" bracket while editing. Value edits and
 // toggles repaint ONE row; only navigation repaints the page.
-static const char *setup_labels[] = {"Sync", "Clock Src", "Bars", "Monitor",
-                                     "BP Filter", "Clock PPQ", "Save Trk", "Bounce"};
+// Migrated onto the shared setup-menu framework (setup_menu.h): ON/OFF and the
+// mode/list cycles are ST_TOGGLE (press cycles), numeric rows are ST_RANGE
+// (press [ ] edit + turn), the Save/Bounce action rows are ST_ACTION (press
+// fires, stays on the page and repaints with its result message).
+static const setup_item_t setup_items[] = {
+    {"Sync",      ST_TOGGLE},   // 0
+    {"Clock Src", ST_TOGGLE},   // 1  clock-source cycle
+    {"Bars",      ST_RANGE },   // 2
+    {"Monitor",   ST_TOGGLE},   // 3
+    {"BP Filter", ST_TOGGLE},   // 4
+    {"Clock PPQ", ST_RANGE },   // 5  ladder 1/2/4/8
+    {"Save Trk",  ST_ACTION},   // 6
+    {"Bounce",    ST_ACTION},   // 7
+};
 #define SETUP_N 8
-#define SETUP_PPQ_ROW 5
 #define SETUP_SAVE_ROW 6
 #define SETUP_BOUNCE_ROW 7
-#define SETUP_IS_TOGGLE(i) ((i) == 0 || (i) == 3 || (i) == 4)
-#define SETUP_ROW_Y(i) (TFT_getfontheight() + 12 + (i) * (TFT_getfontheight() + 8))
 static const char *s_save_msg = "";   // transient result shown on the Save row
 static const char *s_bounce_msg = ""; // transient result shown on the Bounce row
 
@@ -374,80 +384,30 @@ static void setup_adj(int i, int dir){
     }
 }
 
-// one row only — value adjustments must not repaint the whole menu
-static void setup_row_redraw(int i, int pos, int sel){
-    int fh = TFT_getfontheight();
-    int y = SETUP_ROW_Y(i);
-    bool editing = (i == pos && sel);
-    _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-    _fg = editing ? TFT_CYAN : TFT_WHITE;
-    TFT_fillRect(0, y - 2, _width, fh + 6, _bg);
-    TFT_print((char*)setup_labels[i], 8, y);
-    char raw[24], val[28];
-    setup_value_str(i, raw, sizeof(raw));
-    if (editing) snprintf(val, sizeof(val), "[ %s ]", raw);   // edit-mode bracket
-    else snprintf(val, sizeof(val), "%s", raw);
-    TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
-    _bg = TFT_BLACK;
-}
-
-static void setup_redraw(int pos, int sel){
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    _fg = TFT_WHITE;
-    TFT_print("Looper Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);
-    for (int i = 0; i < SETUP_N; i++) setup_row_redraw(i, pos, sel);
-}
-
-static int looper_setup_handler(int it_id, int event, void *ev_data){
-    static int pos = 0, sel = 0;
-    switch(event){
-        case EV_ENTERED_MENU:
-            pos = 0; sel = 0; s_save_msg = ""; s_bounce_msg = "";
-            setup_redraw(pos, sel);
-            break;
-        case EV_FWD:
-        case EV_BWD: {
-            int dir = (event == EV_FWD) ? +1 : -1;
-            if(sel){
-                setup_adj(pos, dir);
-                setup_row_redraw(pos, pos, sel);       // value edit: one row only
-            } else {
-                pos += dir;
-                if(pos >= SETUP_N) pos = -1;
-                if(pos < -1) pos = SETUP_N - 1;
-                s_save_msg = ""; s_bounce_msg = "";
-                setup_redraw(pos, sel);
-            }
-            break;
-        }
-        case EV_SHORT_PRESS:
-            if(pos == -1) return M_MORE;   // System affordance
-            if(pos == SETUP_SAVE_ROW){
-                // action row: write the selected track to the SD library
-                int r = looper_save_track(lp.sel);
-                s_save_msg = (r == 0) ? "SAVED" : "EMPTY";
-                setup_row_redraw(pos, pos, 0);
-            } else if(pos == SETUP_BOUNCE_ROW){
-                // action row: resample all tracks down into track 1
-                int r = looper_bounce();
-                s_bounce_msg = (r == 0) ? "BOUNCED" : (r == -2) ? "STOP REC" : "EMPTY";
-                if (r == 0) lp.sel = 0;   // the bounce lands on track 1 — focus it
-                setup_row_redraw(pos, pos, 0);
-            } else if(SETUP_IS_TOGGLE(pos)){
-                // toggles flip right here — no edit mode to enter
-                setup_adj(pos, +1);
-                setup_row_redraw(pos, pos, 0);
-            } else {
-                sel = !sel;
-                setup_row_redraw(pos, pos, sel);
-            }
-            break;
-        case EV_LONG_PRESS: return M_LOOPER_LIVE;   // toggle Setup -> Live
-        default: break;
+// ST_ACTION press: Save writes the selected track to the SD library; Bounce
+// resamples all tracks into track 1. Both do their work in place, set the row's
+// transient result message, and return 0 so the framework repaints the page.
+static int looper_setup_action(int i){
+    if(i == SETUP_SAVE_ROW){
+        int r = looper_save_track(lp.sel);
+        s_save_msg = (r == 0) ? "SAVED" : "EMPTY";
+    } else if(i == SETUP_BOUNCE_ROW){
+        int r = looper_bounce();
+        s_bounce_msg = (r == 0) ? "BOUNCED" : (r == -2) ? "STOP REC" : "EMPTY";
+        if (r == 0) lp.sel = 0;   // the bounce lands on track 1 — focus it
     }
     return 0;
+}
+
+static setup_menu_t lp_setup = {
+    .items = setup_items, .n = SETUP_N, .title = "Looper Setup",
+    .aff_label = "Machine", .aff_target = M_MORE, .live_target = M_LOOPER_LIVE,
+    .render = setup_value_str, .adjust = setup_adj, .action = looper_setup_action,
+};
+
+static int looper_setup_handler(int it_id, int event, void *ev_data){
+    (void)it_id; (void)ev_data;
+    return setup_menu_event(&lp_setup, event);
 }
 
 // ---- registration ---------------------------------------------------------

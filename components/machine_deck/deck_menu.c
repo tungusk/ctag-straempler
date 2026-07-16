@@ -18,6 +18,7 @@
 #include "beatlisten.h"
 #include "menu_config.h"
 #include "sample_browser.h"
+#include "setup_menu.h"
 #include "deck_priv.h"
 
 static const color_t ACCENT = {40, 200, 230};
@@ -347,16 +348,26 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
-// ---- Setup --------------------------------------------------------------------
-static const char *setup_labels[] = {"Track", "Sync", "Clock Src", "Clock", "Loop", "BPM", "Grid Nudge", "Analyze", "Auto BPM", "Loop Freeze", "Feel", "Clk Scale"};
-#define DK_SETUP_N 12
-
-// house Setup grammar (sampler3 pilot, now everywhere): TOGGLES and short
-// cycles flip right on the click; lists/ranges keep click-to-edit and show an
-// explicit "[ value ]" bracket while editing. Value edits repaint ONE row.
-#define SETUP_IS_TOGGLE(i) ((i) == 1 || (i) == 4 || (i) == 8 || (i) == 9 || \
-                            (i) == 10 || (i) == 11)
-#define SETUP_ROW_Y(i) (TFT_getfontheight() + 14 + (i) * (TFT_getfontheight() + 7))
+// ---- Setup — migrated onto the shared setup-menu framework -------------------
+// House grammar now lives in components/menu/setup_menu.c: TOGGLE/mode-cycle
+// rows flip on the click; RANGE rows keep click-to-edit with the "[ value ]"
+// bracket; ACTION rows open a sub-page. Clock Src and Clock (ppb) were
+// click-to-edit before and now CYCLE on press (both are discrete mode
+// selectors) — the intended house-grammar change.
+static const setup_item_t dk_setup_items[] = {
+    {"Track",       ST_ACTION},   // 0  -> track browser
+    {"Sync",        ST_TOGGLE},   // 1
+    {"Clock Src",   ST_TOGGLE},   // 2  CV1..8 + AUDIO cycle
+    {"Clock",       ST_TOGGLE},   // 3  ppb (pulses-per-beat) names
+    {"Loop",        ST_TOGGLE},   // 4
+    {"BPM",         ST_RANGE},    // 5
+    {"Grid Nudge",  ST_RANGE},    // 6  ms
+    {"Analyze",     ST_ACTION},   // 7  fires deck_analyze_start()
+    {"Auto BPM",    ST_TOGGLE},   // 8
+    {"Loop Freeze", ST_TOGGLE},   // 9
+    {"Feel",        ST_TOGGLE},   // 10
+    {"Clk Scale",   ST_TOGGLE},   // 11
+};
 
 static void setup_value_str(int i, char *v, size_t n){
     switch(i){
@@ -381,33 +392,6 @@ static void setup_value_str(int i, char *v, size_t n){
         case 10: snprintf(v, n, dk.feel == 0.5f ? "x0.5" : dk.feel == 2.0f ? "x2" : "x1"); break;
         case 11: snprintf(v, n, dk.clk_scale == 0.5f ? "x0.5" : dk.clk_scale == 2.0f ? "x2" : "x1"); break;
     }
-}
-
-static void setup_row_redraw(int i, int pos, int sel){
-    int fh = TFT_getfontheight();
-    int y = SETUP_ROW_Y(i);
-    bool editing = (i == pos && sel);
-    _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-    _fg = editing ? TFT_CYAN : TFT_WHITE;
-    TFT_fillRect(0, y - 2, _width, fh + 5, _bg);
-    TFT_print((char*)setup_labels[i], 8, y);
-    char raw[28], val[32];
-    setup_value_str(i, raw, sizeof(raw));
-    if (editing) snprintf(val, sizeof(val), "[ %s ]", raw);   // edit-mode bracket
-    else snprintf(val, sizeof(val), "%s", raw);
-    TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
-    _bg = TFT_BLACK;
-}
-
-static void setup_redraw(int pos, int sel){
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    _fg = TFT_WHITE;
-    TFT_print("Deck Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);   // top-right; pos -1 = System
-    for (int i = 0; i < DK_SETUP_N; i++) setup_row_redraw(i, pos, sel);
-    // no hint line: the row list grew (Feel / Clk Scale) and the hint was
-    // overlapping the last rows (Arlo)
 }
 
 static void setup_adj(int i, int dir){
@@ -456,52 +440,26 @@ static void setup_adj(int i, int dir){
     }
 }
 
-static int deck_setup_handler(int it_id, int event, void *ev_data){
-    static int pos = 0, sel = 0;
-    switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
-        case EV_TIMER_REPEATING_SLOW: {
-            an_auto_poll();
-            // repaint per tick only while analysis runs (progress %); paint
-            // DONE/FAIL once on the transition — DONE persists after an
-            // analysis, and repainting it every tick strobed the screen
-            static int s_an_drawn = DK_AN_IDLE;
-            if (dk.an_state == DK_AN_RUNNING || dk.an_state != s_an_drawn){
-                s_an_drawn = dk.an_state;
-                setup_redraw(pos, sel);
-            }
-            break;
-        }
-        case EV_FWD:
-        case EV_BWD: {
-            int dir = (event == EV_FWD) ? +1 : -1;
-            if(sel){
-                setup_adj(pos, dir);
-                setup_row_redraw(pos, pos, sel);      // value edit: ONE row
-            } else {
-                pos += dir;
-                if(pos >= DK_SETUP_N) pos = -1;       // past bottom -> System
-                if(pos < -1) pos = DK_SETUP_N - 1;    // past System -> bottom
-                setup_redraw(pos, sel);
-            }
-            break;
-        }
-        case EV_SHORT_PRESS:
-            if(pos == -1) return M_MORE;                       // System affordance
-            if(pos == 0){ s_load_ret = M_DECK_SETUP; return M_DECK_LOAD; }
-            if(pos == 7){ deck_analyze_start(); setup_redraw(pos, sel); break; }
-            if(SETUP_IS_TOGGLE(pos)){
-                setup_adj(pos, +1);                   // toggles flip on the click
-                setup_row_redraw(pos, pos, 0);
-            } else {
-                sel = !sel;                           // lists/ranges: edit mode
-                setup_row_redraw(pos, pos, sel);
-            }
-            break;
-        case EV_LONG_PRESS: return M_DECK_LIVE;   // toggle Setup -> Live (no hub)
-        default: break;
-    }
+static int dk_setup_action(int i){
+    if (i == 0){ s_load_ret = M_DECK_SETUP; return M_DECK_LOAD; }   // Track -> browser
+    if (i == 7){ deck_analyze_start(); return 0; }                  // Analyze: fire, stay
     return 0;
+}
+
+static setup_menu_t dk_setup = {
+    .items = dk_setup_items, .n = 12, .title = "Deck Setup",
+    .aff_label = "Machine", .aff_target = M_MORE, .live_target = M_DECK_LIVE,
+    .render = setup_value_str, .adjust = setup_adj, .action = dk_setup_action,
+};
+
+static int deck_setup_handler(int it_id, int event, void *ev_data){
+    (void)it_id; (void)ev_data;
+    // Auto-analysis still needs kicking while the user sits on Setup: a track
+    // loaded from here returns to Setup with a pending request, and the shared
+    // framework has no timer hook. Keep this one deck-specific poll; render,
+    // scrolling and the press/turn grammar are all the framework's now.
+    if (event == EV_TIMER_REPEATING_SLOW) an_auto_poll();
+    return setup_menu_event(&dk_setup, event);
 }
 
 // ---- Load browser: the shared two-level widget (folders -> big-name list) --

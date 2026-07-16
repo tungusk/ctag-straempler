@@ -19,6 +19,7 @@
 #include "recording.h"
 #include "beatlisten.h"
 #include "menu_config.h"
+#include "setup_menu.h"
 #include "sample_browser.h"
 #include "sampler3_priv.h"
 
@@ -403,19 +404,16 @@ static int s3_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup --------------------------------------------------------------------
-// Row behavior (Arlo, 2026-07-12): simple TOGGLES flip right on the click;
-// long lists / wide ranges keep click-to-edit + turn, with an explicit
-// "< value >" bracket while editing (the cyan alone didn't read as a mode).
-static const char *setup_labels[] = {"Voice", "Mode", "Reverse", "Crop",
-                                     "Speed CV", "Start CV", "Len CV",
-                                     "Level", "Pan", "Start", "Length",
-                                     "Record"};
+// Standard scrollable settings list on the shared setup-menu framework.
+// Row grammar (Arlo, 2026-07-12): small option sets flip right on the click
+// (TOGGLE); numeric ranges keep click-to-edit + turn with a [ value ] bracket.
+static const setup_item_t s3_setup_items[] = {
+    {"Voice",    ST_TOGGLE}, {"Mode",     ST_TOGGLE}, {"Reverse",  ST_TOGGLE},
+    {"Crop",     ST_TOGGLE}, {"Speed CV", ST_TOGGLE}, {"Start CV", ST_TOGGLE},
+    {"Len CV",   ST_TOGGLE}, {"Level",    ST_RANGE},  {"Pan",      ST_RANGE},
+    {"Start",    ST_RANGE},  {"Length",   ST_RANGE},  {"Record",   ST_ACTION},
+};
 #define S3_SETUP_N 12
-#define SETUP_ROW_Y(i) (TFT_getfontheight() + 12 + (i) * (TFT_getfontheight() + 5))
-
-// click flips these in place; everything else is click-to-edit
-// (Crop is a 3-state cycle — still a click affair, no edit mode)
-#define SETUP_IS_TOGGLE(i) ((i) <= 3)
 
 static void src_name(int src, char *val, size_t n){
     if (src < 0) snprintf(val, n, "off");
@@ -448,33 +446,6 @@ static void setup_value_str(int i, char *val, size_t n){
         case 11: snprintf(val, n, "%s", s3.arm_target >= 0 ? "ARMED" : "open"); break;
         default: val[0] = 0;
     }
-}
-
-// one row only — value adjustments must NOT repaint the whole menu (Arlo:
-// "they redraw the whole menu when changed and need to be performable")
-static void setup_row_redraw(int i, int pos, int sel){
-    int fh = TFT_getfontheight();
-    int y = SETUP_ROW_Y(i);
-    bool editing = (i == pos && sel);
-    _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-    _fg = editing ? TFT_CYAN : TFT_WHITE;
-    TFT_fillRect(0, y - 2, _width, fh + 3, _bg);
-    TFT_print((char*)setup_labels[i], 8, y);
-    char raw[24], val[28];
-    setup_value_str(i, raw, sizeof(raw));
-    if (editing) snprintf(val, sizeof(val), "[ %s ]", raw);   // edit-mode bracket
-    else strlcpy(val, raw, sizeof(val));
-    TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
-    _bg = TFT_BLACK;
-}
-
-static void setup_redraw(int pos, int sel){
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    _fg = TFT_WHITE;
-    TFT_print("Sampler Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);
-    for (int i = 0; i < S3_SETUP_N; i++) setup_row_redraw(i, pos, sel);
 }
 
 // cycle a CV source: off -> CV1 -> ... -> CV8 -> off
@@ -533,40 +504,27 @@ static void setup_adj(int i, int dir){
     }
 }
 
-static int s3_setup_handler(int it_id, int event, void *ev_data){
-    static int pos = 0, sel = 0;
-    switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
-        case EV_FWD:
-        case EV_BWD: {
-            int dir = (event == EV_FWD) ? +1 : -1;
-            if(sel){
-                setup_adj(pos, dir);
-                setup_row_redraw(pos, pos, sel);           // value edit: one row only
-            } else {
-                pos += dir;
-                if(pos >= S3_SETUP_N) pos = -1;
-                if(pos < -1) pos = S3_SETUP_N - 1;
-                setup_redraw(pos, sel);
-            }
-            break;
-        }
-        case EV_SHORT_PRESS:
-            if(pos == -1) return M_MORE;
-            if(pos == S3_SETUP_N - 1) return M_S3_REC;
-            if(SETUP_IS_TOGGLE(pos)){
-                // toggles flip right here — no edit mode to enter
-                setup_adj(pos, +1);
-                if (pos == 0) setup_redraw(pos, sel);      // voice switch: all values change
-                else setup_row_redraw(pos, pos, 0);
-            } else {
-                sel = !sel; setup_row_redraw(pos, pos, sel);
-            }
-            break;
-        case EV_LONG_PRESS: return M_S3_LIVE;
-        default: break;
-    }
+// Record row (last item) opens the Record page; Voice/Crop/CV cycles and the
+// numeric ranges are all driven by setup_adj/setup_value_str above. A Voice
+// switch changes every row's value — the framework repaints the whole list on
+// each event, so no special-case redraw is needed here.
+static int s3_setup_action(int i){
+    if (i == S3_SETUP_N - 1) return M_S3_REC;   // Record -> Record page
     return 0;
+}
+
+static setup_menu_t s3_setup = {
+    .items = s3_setup_items,
+    .n = S3_SETUP_N,
+    .title = "Sampler Setup",
+    .aff_label = "Machine", .aff_target = M_MORE,
+    .live_target = M_S3_LIVE,
+    .render = setup_value_str, .adjust = setup_adj, .action = s3_setup_action,
+};
+
+static int s3_setup_handler(int it_id, int event, void *ev_data){
+    (void)it_id; (void)ev_data;
+    return setup_menu_event(&s3_setup, event);
 }
 
 // ---- Load browser: the shared two-level widget (folders -> big-name list) --

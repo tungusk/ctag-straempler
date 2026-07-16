@@ -10,6 +10,7 @@
 #include "menusys.h"
 #include "menu_types.h"
 #include "menutft.h"
+#include "setup_menu.h"
 #include "ui_events.h"
 #include "tft.h"
 #include "tftspi.h"
@@ -536,15 +537,23 @@ static int dd_load_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
-// ---- Setup (house grammar: toggles click, lists bracket-edit, per-row paint) ----
-static const char *setup_labels[] = {"Clock Src", "Clock", "Takeover", "Loop Len", "Layout",
-                                     "Knobs", "Fader Lock", "CV Map"};
-#define DD_SETUP_N 8
+// ---- Setup (shared setup-menu framework) ----
+// TOGGLE = small cycle-on-press option set; RANGE = press [ ] edit + turn (the
+// wide Clock Src CV list + the ppb list); ACTION = press opens a sub-page.
 #define DD_ROW_KNOBS 5
 #define DD_ROW_FLOCK 6
 #define DD_ROW_CVMAP 7                                     // opens its own page
-#define SETUP_IS_TOGGLE(i) ((i) == 2 || (i) == 3 || (i) == 4 || (i) == 5 || (i) == 6)
-#define SETUP_ROW_Y(i) (TFT_getfontheight() + 12 + (i) * (TFT_getfontheight() + 8))
+static const setup_item_t dd_setup_items[] = {
+    {"Clock Src",  ST_RANGE},    // 0  CV1..8 + AUDIO
+    {"Clock",      ST_RANGE},    // 1  pulses per beat
+    {"Takeover",   ST_TOGGLE},   // 2  off / cut / N beats
+    {"Loop Len",   ST_TOGGLE},   // 3  quarter-beat ladder
+    {"Layout",     ST_TOGGLE},   // 4  stacked / side by side
+    {"Knobs",      ST_TOGGLE},   // 5  contextual / fixed  (DD_ROW_KNOBS)
+    {"Fader Lock", ST_TOGGLE},   // 6  on / off            (DD_ROW_FLOCK)
+    {"CV Map",     ST_ACTION},   // 7  sub-page            (DD_ROW_CVMAP)
+};
+#define DD_SETUP_N ((int)(sizeof(dd_setup_items) / sizeof(dd_setup_items[0])))
 
 static void setup_value_str(int i, char *v, size_t n){
     switch(i){
@@ -618,64 +627,26 @@ static void setup_adj(int i, int dir){
     }
 }
 
-static void setup_row_redraw(int i, int pos, int sel){
-    int fh = TFT_getfontheight();
-    int y = SETUP_ROW_Y(i);
-    bool editing = (i == pos && sel);
-    _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-    _fg = editing ? TFT_CYAN : TFT_WHITE;
-    TFT_fillRect(0, y - 2, _width, fh + 6, _bg);
-    TFT_print((char*)setup_labels[i], 8, y);
-    char raw[24], val[28];
-    setup_value_str(i, raw, sizeof(raw));
-    if (editing) snprintf(val, sizeof(val), "[ %s ]", raw);
-    else snprintf(val, sizeof(val), "%s", raw);
-    TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
-    _bg = TFT_BLACK;
+static int dd_setup_action(int i){
+    if (i == DD_ROW_CVMAP) return M_DD_CV;                 // its own page (drums idiom)
+    return 0;
 }
 
-static void setup_redraw(int pos, int sel){
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    _fg = TFT_WHITE;
-    TFT_print("DoubleDecker Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);
-    for (int i = 0; i < DD_SETUP_N; i++) setup_row_redraw(i, pos, sel);
-}
+static setup_menu_t dd_setup = {
+    .items       = dd_setup_items,
+    .n           = DD_SETUP_N,
+    .title       = "DoubleDecker Setup",
+    .aff_label   = "Machine",
+    .aff_target  = M_MORE,
+    .live_target = M_DD_LIVE,
+    .render      = setup_value_str,
+    .adjust      = setup_adj,
+    .action      = dd_setup_action,
+};
 
 static int dd_setup_handler(int it_id, int event, void *ev_data){
-    static int pos = 0, sel = 0;
-    switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
-        case EV_FWD:
-        case EV_BWD: {
-            int dir = (event == EV_FWD) ? +1 : -1;
-            if(sel){
-                setup_adj(pos, dir);
-                setup_row_redraw(pos, pos, sel);
-            } else {
-                pos += dir;
-                if(pos >= DD_SETUP_N) pos = -1;
-                if(pos < -1) pos = DD_SETUP_N - 1;
-                setup_redraw(pos, sel);
-            }
-            break;
-        }
-        case EV_SHORT_PRESS:
-            if(pos == -1) return M_MORE;
-            if(pos == DD_ROW_CVMAP) return M_DD_CV;        // its own page (drums idiom)
-            if(SETUP_IS_TOGGLE(pos)){
-                setup_adj(pos, +1);
-                setup_row_redraw(pos, pos, 0);
-            } else {
-                sel = !sel;
-                setup_row_redraw(pos, pos, sel);
-            }
-            break;
-        case EV_LONG_PRESS: return M_DD_LIVE;
-        default: break;
-    }
-    return 0;
+    (void)it_id; (void)ev_data;
+    return setup_menu_event(&dd_setup, event);
 }
 
 // ---- registration ---------------------------------------------------------

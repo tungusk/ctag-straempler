@@ -13,6 +13,7 @@
 #include "machine.h"
 #include "sample_ram.h"
 #include "sample_browser.h"
+#include "setup_menu.h"
 #include "granular_priv.h"
 
 static const color_t BG   = {5, 9, 28};
@@ -103,35 +104,25 @@ static int gran_live_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- Setup ----------------------------------------------------------------
-static const char *setup_labels[] = {"Grain ms", "Density", "Spray", "Spread", "Sample"};
-#define GR_SETUP_N 5
+static const setup_item_t gr_setup_items[] = {
+    {"Grain ms", ST_RANGE},
+    {"Density",  ST_RANGE},
+    {"Spray",    ST_RANGE},
+    {"Spread",   ST_RANGE},
+    {"Sample",   ST_ACTION},
+};
 
-static void setup_redraw(int pos, int sel){
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
-    _fg = TFT_WHITE;
-    TFT_print("Granular Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);
-    for (int i = 0; i < GR_SETUP_N; i++){
-        int y = fh + 14 + i * (fh + 8);
-        _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-        _fg = (i == pos && sel) ? TFT_CYAN : TFT_WHITE;
-        TFT_fillRect(0, y - 2, _width, fh + 6, _bg);
-        TFT_print((char*)setup_labels[i], 8, y);
-        char v[24];
-        switch(i){
-            case 0: snprintf(v, sizeof(v), "%d", gr.grain_ms); break;
-            case 1: snprintf(v, sizeof(v), "%d", gr.density); break;
-            case 2: snprintf(v, sizeof(v), "%d", gr.spray); break;
-            case 3: snprintf(v, sizeof(v), "%d", gr.spread); break;
-            case 4: snprintf(v, sizeof(v), "%s", gr.sample[0] ? gr.sample : "(none)"); break;
-        }
-        TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
+static void gr_render(int i, char *v, size_t n){
+    switch(i){
+        case 0: snprintf(v, n, "%d", gr.grain_ms); break;
+        case 1: snprintf(v, n, "%d", gr.density); break;
+        case 2: snprintf(v, n, "%d", gr.spray); break;
+        case 3: snprintf(v, n, "%d", gr.spread); break;
+        case 4: snprintf(v, n, "%s", gr.sample[0] ? gr.sample : "(none)"); break;
     }
 }
 
-static void adj(int i, int dir){
+static void gr_adj(int i, int dir){
     switch(i){
         case 0: gr.grain_ms += dir * 10; if(gr.grain_ms < 10) gr.grain_ms = 10; if(gr.grain_ms > 500) gr.grain_ms = 500; break;
         case 1: gr.density  += dir * 2;  if(gr.density < 1) gr.density = 1;      if(gr.density > 120) gr.density = 120; break;
@@ -140,29 +131,19 @@ static void adj(int i, int dir){
     }
 }
 
+static int gr_setup_action(int i){ if(i == 4) return M_GRAN_LOAD; return 0; }
+
+static setup_menu_t gr_setup = {
+    .items = gr_setup_items, .n = 5,
+    .title = "Granular Setup",
+    .aff_label = "Machine", .aff_target = M_MORE,
+    .live_target = M_GRAN_LIVE,
+    .render = gr_render, .adjust = gr_adj, .action = gr_setup_action,
+};
+
 static int gran_setup_handler(int it_id, int event, void *ev_data){
-    static int pos = 0, sel = 0;
-    switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
-        case EV_FWD:
-            if(sel){ if(pos >= 0 && pos < 4) adj(pos, +1); }
-            else { pos++; if(pos >= GR_SETUP_N) pos = -1; }
-            setup_redraw(pos, sel);
-            break;
-        case EV_BWD:
-            if(sel){ if(pos >= 0 && pos < 4) adj(pos, -1); }
-            else { pos--; if(pos < -1) pos = GR_SETUP_N - 1; }
-            setup_redraw(pos, sel);
-            break;
-        case EV_SHORT_PRESS:
-            if(pos == -1) return M_MORE;   // System affordance
-            if(pos == 4) return M_GRAN_LOAD;
-            sel = !sel; setup_redraw(pos, sel);
-            break;
-        case EV_LONG_PRESS: return M_GRAN_LIVE;   // toggle Setup -> Live
-        default: break;
-    }
-    return 0;
+    (void)it_id; (void)ev_data;
+    return setup_menu_event(&gr_setup, event);
 }
 
 // ---- Load browser: the shared two-level widget (folders -> big-name list) --
