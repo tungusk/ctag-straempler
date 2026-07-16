@@ -55,6 +55,7 @@ typedef enum{
     M_SYNTH_SETUP,
     M_SYNTH_LOAD,
     M_SYNTH_MATRIX,
+    M_SYNTH_PATCH,
     M_EDITOR_LIVE,
     M_EDITOR_SETUP,
     M_STUB_HOME,

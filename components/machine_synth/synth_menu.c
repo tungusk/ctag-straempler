@@ -195,7 +195,11 @@ static const setup_item_t sy_setup_items[] = {
     {"LFO Rate",  ST_RANGE},  {"LFO Depth", ST_RANGE},  {"LFO Dest",  ST_TOGGLE},
     {"Level",     ST_RANGE},  {"Reverb",    ST_TOGGLE}, {"Rev Mix",   ST_RANGE},
     {"Load Wave", ST_ACTION}, {"CV Matrix", ST_ACTION},
+    {"Save Patch", ST_ACTION}, {"Load Patch", ST_ACTION},
 };
+
+// last saved patch id, shown inline on the Save Patch row as confirmation
+static char s_last_saved[12];
 
 static void setup_val(int i, char *v, size_t n)
 {
@@ -222,6 +226,8 @@ static void setup_val(int i, char *v, size_t n)
         case 18: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
         case 19: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx_src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
+        case 20: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
+        case 21: snprintf(v, n, "load >"); break;
     }
 }
 
@@ -267,12 +273,18 @@ static int sy_setup_action(int i)
 {
     if (i == 18) return M_SYNTH_LOAD;      // Load Wave -> browser
     if (i == 19) return M_SYNTH_MATRIX;    // CV Matrix -> matrix page
+    if (i == 20) {                         // Save Patch: mint + write, stay on Setup
+        if (synth_patch_save(s_last_saved, sizeof(s_last_saved)) != 0)
+            snprintf(s_last_saved, sizeof(s_last_saved), "err");
+        return 0;                          // framework redraws -> row shows the id
+    }
+    if (i == 21) return M_SYNTH_PATCH;     // Load Patch -> patch browser
     return 0;
 }
 
 static setup_menu_t sy_setup = {
     .items = sy_setup_items,
-    .n = 20,
+    .n = 22,
     .title = "Synth Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_SYNTH_LIVE,
@@ -381,6 +393,68 @@ static int synth_matrix_handler(int it_id, int event, void *ev_data)
     return 0;
 }
 
+// ---- Load Patch: a scrollable list of usr/synth/PAT_NNN.jsn (newest first) --
+#define SY_PATCH_MAX 64
+static char s_patches[SY_PATCH_MAX][12];
+static int  s_npatch = 0, s_patch_sel = 0;
+
+static void patch_redraw(void)
+{
+    TFT_resetclipwin();
+    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
+    int fh = TFT_getfontheight();
+    _fg = TFT_WHITE; TFT_print("Load Patch", 6, 4);
+    menuTFTPrintAffordance("Setup", s_patch_sel == -1);
+    if (s_npatch == 0) {
+        _fg = (color_t){150, 150, 160};
+        TFT_print("(no saved patches)", 8, fh + 20);
+        return;
+    }
+    int row_h = fh + 5, y0 = fh + 14;
+    int vis = (_height - fh - 6 - y0) / row_h;
+    if (vis < 1) vis = 1;
+    int top = 0;
+    if (s_patch_sel >= vis) top = s_patch_sel - vis + 1;
+    for (int r = 0; r < vis; r++) {
+        int i = top + r;
+        if (i >= s_npatch) break;
+        int y = y0 + r * row_h;
+        _bg = (i == s_patch_sel) ? (color_t){10, 18, 56} : TFT_BLACK;
+        _fg = (i == s_patch_sel) ? TFT_CYAN : TFT_WHITE;
+        TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
+        TFT_print(s_patches[i], 8, y);
+    }
+    _fg = (color_t){90, 90, 90};
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    TFT_print("turn: pick   press: load   hold: back", 8, _height - TFT_getfontheight() - 1);
+    TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+static int synth_patch_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    switch (event) {
+        case EV_ENTERED_MENU:
+            s_npatch = synth_patch_list(s_patches, SY_PATCH_MAX);
+            s_patch_sel = s_npatch ? 0 : -1;
+            patch_redraw();
+            break;
+        case EV_FWD:
+            if (s_npatch) { s_patch_sel++; if (s_patch_sel >= s_npatch) s_patch_sel = -1; patch_redraw(); }
+            break;
+        case EV_BWD:
+            if (s_npatch) { s_patch_sel--; if (s_patch_sel < -1) s_patch_sel = s_npatch - 1; patch_redraw(); }
+            break;
+        case EV_SHORT_PRESS:
+            if (s_patch_sel < 0) return M_SYNTH_SETUP;          // affordance / empty
+            synth_patch_load(s_patches[s_patch_sel]);
+            return M_SYNTH_SETUP;
+        case EV_LONG_PRESS: return M_SYNTH_SETUP;
+        default: break;
+    }
+    return 0;
+}
+
 static void synth_register_pages(void *menusys)
 {
     menusys_t *_ms = (menusys_t *)menusys;
@@ -388,6 +462,7 @@ static void synth_register_pages(void *menusys)
     menusys_new_item(_ms, M_SYNTH_SETUP);  menusys_item_set_default_cb(_ms, M_SYNTH_SETUP, synth_setup_handler);
     menusys_new_item(_ms, M_SYNTH_LOAD);   menusys_item_set_default_cb(_ms, M_SYNTH_LOAD, synth_load_handler);
     menusys_new_item(_ms, M_SYNTH_MATRIX); menusys_item_set_default_cb(_ms, M_SYNTH_MATRIX, synth_matrix_handler);
+    menusys_new_item(_ms, M_SYNTH_PATCH);  menusys_item_set_default_cb(_ms, M_SYNTH_PATCH, synth_patch_handler);
 }
 
 static int synth_main_event(int event, void *ev_data)
