@@ -171,6 +171,15 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     </div>
     <div class="msg" style="margin-top:4px">Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.</div>
   </div>
+  <div class="card" id="scrcard">
+    <div class="row tight" style="align-items:center">
+      <b style="flex:1;color:#0af">SCREEN</b>
+      <label style="color:#888;margin-right:8px"><input type="checkbox" id="scrauto"> auto</label>
+      <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
+    </div>
+    <img id="scrimg" alt="(press Refresh)" style="width:100%;max-width:480px;display:block;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333;background:#000;min-height:60px">
+    <div class="msg" style="margin-top:4px">Live TFT screenshot (PSRAM shadow framebuffer). Auto refreshes every 3s while this tab is open.</div>
+  </div>
   <div class="card" id="bcastcard">
     <div class="row tight" style="align-items:center">
       <b style="flex:1;color:#0af">BROADCAST</b>
@@ -1090,6 +1099,22 @@ function bcastPoll(){
     var s=document.getElementById('bcstate'); if(s)s.textContent=d.live?'listener connected':'idle';
   }).catch(function(){});
 }
+// Screen — live TFT screenshot from the PSRAM shadow framebuffer
+var scrLast=0,scrBusy=false;
+function scrShot(){
+  if(scrBusy)return; scrBusy=true;
+  var img=document.getElementById('scrimg');
+  var next=new Image();
+  next.onload=function(){img.src=next.src;scrBusy=false;};
+  next.onerror=function(){scrBusy=false;};
+  next.src='/screenshot?t='+Date.now();
+}
+function scrPoll(){
+  if(!document.getElementById('scrauto').checked)return;
+  var now=Date.now();
+  if(now-scrLast<3000)return;
+  scrLast=now; scrShot();
+}
 // Editor tab — /edit/* served only while the Editor machine is active
 var edTimer=null,edLast='';
 function edLoad(){
@@ -1301,7 +1326,7 @@ function pollStatus(){
     updateRemote(d);
     updateBl(d);
     updateScope(d.cv);
-    if(document.getElementById('p3').className.indexOf('on')>=0){bncPoll();bcastPoll();}   // bounce+broadcast state while Remote is open
+    if(document.getElementById('p3').className.indexOf('on')>=0){bncPoll();bcastPoll();scrPoll();}   // bounce+broadcast+screen while Remote is open
   }).catch(function(){});
 }
 setInterval(pollStatus,500);
