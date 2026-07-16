@@ -133,9 +133,9 @@ static void box_border(int x, int y, int w, int h, color_t c, int thick){
 // borders encode the MENU LEVEL: thin (1-2 px) while browsing elements, THICK
 // (4 px, green) once the transport is entered (level 2); exit -> thin again.
 static void draw_highlights(void){
-    color_t sel = TFT_CYAN, act = {60, 200, 120}, dim = {46, 46, 60};
-    if (s_in_bar)         box_border(EB_X, TB_Y, EB_W, TB_H, act, 4);   // transport: level 2 (thick)
-    else if (s_elem == 0) box_border(EB_X, TB_Y, EB_W, TB_H, sel, 2);   // selected (thin)
+    color_t sel = TFT_WHITE, dim = {46, 46, 60};
+    if (s_in_bar)         box_border(EB_X, TB_Y, EB_W, TB_H, sel, 4);   // transport: level 2 (thick white)
+    else if (s_elem == 0) box_border(EB_X, TB_Y, EB_W, TB_H, sel, 2);   // selected (thin white)
     else                  box_border(EB_X, TB_Y, EB_W, TB_H, dim, 1);   // unselected
     box_border(EB_X, FB_Y, EB_W, FB_H, s_elem == 1 ? sel : dim, s_elem == 1 ? 2 : 1);
     box_border(EB_X, XB_Y, EB_W, XB_H, s_elem == 2 ? sel : dim, s_elem == 2 ? 2 : 1);
