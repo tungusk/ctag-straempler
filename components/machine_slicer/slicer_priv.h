@@ -23,6 +23,7 @@
 #define SL_MAX_SLICES  128
 #define SL_RING_FRAMES (SL_RATE * 2)         // 2 s tail ring (~352 KB)
 #define SL_WIN         512                   // transient envelope hop
+#define SL_XFADE       64                    // ~1.45 ms fire crossfade (declick on interrupting fire)
 #define SL_ENV_MAX     (10 * 60 * SL_RATE / SL_WIN + 2)   // <=10 min detection
 #define SL_PEAKS       300                   // waveform display columns
 #define SL_OT_SLICES   64                    // Elektron .ot format limit
@@ -75,6 +76,9 @@ typedef struct {
     uint32_t s_len;               // current slice length (frames)
     float   inc;
     volatile uint32_t dbg_starve; // blocks the tail wasn't ready
+    float   last_l, last_r;       // last output frame (declick / starve decay)
+    float   xf_l, xf_r;           // crossfade-FROM (last output at the last fire)
+    int     xfade;                // frames left in the fire crossfade (0 = none)
 
     // Octatrack .ot sidecar
     uint32_t ot_pt[SL_OT_SLICES + 1];
