@@ -124,9 +124,10 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <span class="kv" id="impmsg" style="margin-left:8px"></span>
   </div>
   <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
-    Drop files here (one or many): <b>MP3/WAV/AIFF</b> upload as-is and convert on the module (fast &#8212; no giant RAW over WiFi); other audio (flac/ogg/m4a &#8594; decoded in-browser to RAW); 16-bit 44.1kHz stereo RAW; or <b>tracker modules</b> (MOD/XM/IT/&#8230; &#8594; usr/MODS). Review &amp; rename below, then Upload.
+    <b>Drop files here, or tap to browse</b> (one or many): <b>MP3/WAV/AIFF</b> upload as-is and convert on the module (fast &#8212; no giant RAW over WiFi); other audio (flac/ogg/m4a &#8594; decoded in-browser to RAW); 16-bit 44.1kHz stereo RAW; or <b>tracker modules</b> (MOD/XM/IT/&#8230; &#8594; usr/MODS). Review &amp; rename below, then Upload.
   </div>
   <input type="file" id="fi" multiple accept="audio/*,.raw,.RAW,.ot,.OT,.mod,.xm,.it,.s3m,.669,.mtm,.okt,.ult,.far,.med,.dbm,.amf,.ptm,.stm,.dmf,.gdm,.imf,.liq,.mdl,.pt3,.oxm,.digi,.emod,.MOD,.XM,.IT,.S3M" style="display:none" onchange="onFiles(this.files)">
+  <div class="row" style="margin-top:6px"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('fi').click()">Choose files&#8230;</button></div>
   <div id="batch" style="display:none;margin-top:12px">
     <div class="row"><b style="flex:1;color:#0af">To upload (<span id="bcount">0</span>)</b>
       <button class="btn" id="bup" style="flex:0 0 84px" onclick="doBatchUpload()">Upload</button>
@@ -271,6 +272,7 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
   <div class="row" id="rdstations" style="flex-wrap:wrap"></div>
   <label style="margin-top:10px">Custom stream URL (MP3, 44.1kHz)</label>
   <div class="row"><input id="rdurl" placeholder="http://.../stream.mp3" onkeydown="if(event.key==='Enter')rdPlayUrl()"><button class="btn" style="flex:0 0 58px" onclick="rdPlayUrl()">Play</button><button class="btn" style="flex:0 0 58px" onclick="rdSaveStation()">Save</button></div>
+  <div class="row" style="margin-top:4px"><input type="file" id="rdm3u" accept=".m3u,.m3u8,audio/x-mpegurl,audio/mpegurl" style="display:none" onchange="rdImportM3u(this.files)"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('rdm3u').click()">Import .m3u playlist&#8230;</button><span class="msg" id="rdm3umsg" style="flex:1;align-self:center"></span></div>
   <div class="row" style="margin-top:8px"><button class="btn del" style="flex:0 0 88px" onclick="rdStop()">Stop</button></div>
   <div class="msg" id="rdm"></div>
 </div>
@@ -979,7 +981,6 @@ function buildCvPerf(){
       +'<span style="flex:0 0 30px;color:#8ad">CV'+i+'</span>'
       +'<input type="range" min="0" max="4095" value="2048" id="cvs'+i+'" style="flex:1;min-width:120px" oninput="cvSlide('+i+',this.value)" onchange="cvEnd('+i+')">'
       +'<span id="cvsv'+i+'" style="flex:0 0 38px;text-align:right;color:#888;font-size:12px">50%</span>'
-      +((i==6||i==7)?'<span style="flex:0 0 auto;color:#5c5;font-size:10px" title="knobs 6 and 7 are the two fully-good knobs on this unit">knob</span>':'')
       +'<label style="flex:0 0 auto;color:#888;font-size:12px"><input type="checkbox" id="cvh'+i+'" style="width:auto;margin-right:4px" onchange="cvHold('+i+')">hold</label>'
       +'</div>';
   }
@@ -1033,6 +1034,28 @@ function rdPlayUrl(){var u=document.getElementById('rdurl').value.trim();if(u)fe
 function rdStop(){fetch('/radio/stop',{method:'POST'}).catch(function(){});}
 function rdSaveStation(){var u=document.getElementById('rdurl').value.trim();if(!u)return;fetch('/radio/station/save?url='+encodeURIComponent(u),{method:'POST'}).then(function(){document.getElementById('rdstations').dataset.sig='';setTimeout(rdState,300);}).catch(function(){});}
 function rdDelStation(i){fetch('/radio/station/del?i='+i,{method:'POST'}).then(function(){document.getElementById('rdstations').dataset.sig='';setTimeout(rdState,300);}).catch(function(){});}
+// parse an .m3u/.m3u8 playlist in-browser and add each stream via /radio/station/save
+function rdImportM3u(files){
+  if(!files||!files.length)return;
+  var msg=document.getElementById('rdm3umsg'),rd=new FileReader();
+  rd.onload=function(){
+    var lines=String(rd.result).split(/\r?\n/),jobs=[],name='';
+    for(var i=0;i<lines.length;i++){
+      var ln=lines[i].trim();if(!ln)continue;
+      if(ln.charAt(0)=='#'){var m=ln.match(/^#EXTINF:[^,]*,(.+)$/);if(m)name=m[1].trim();continue;}
+      if(/^https?:\/\//i.test(ln)){jobs.push({url:ln,name:name||'m3u'});name='';}
+    }
+    if(!jobs.length){msg.textContent='No stream URLs found in that file.';return;}
+    msg.textContent='Importing '+jobs.length+'…';
+    var i=0,ok=0,fail=0;
+    (function next(){
+      if(i>=jobs.length){msg.textContent='Added '+ok+' station'+(ok==1?'':'s')+(fail?' ('+fail+' failed — switch the module to the Radio machine)':'.');document.getElementById('rdstations').dataset.sig='';setTimeout(rdState,300);return;}
+      var j=jobs[i++];
+      fetch('/radio/station/save?url='+encodeURIComponent(j.url)+'&name='+encodeURIComponent(j.name),{method:'POST'}).then(function(r){r&&r.ok?ok++:fail++;next();}).catch(function(){fail++;next();});
+    })();
+  };
+  rd.readAsText(files[0]);
+}
 // Bounce — record the output bus to a pool take (core, any machine)
 var bncOn=false;
 function bncPoll(){
