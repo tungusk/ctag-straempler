@@ -122,23 +122,23 @@ static void draw_fx_box(void){
 // a box border: 3 px THICK when selected, thin when not (inner 2 px cleared to
 // black on deselect so a previous thick border leaves no ghost — box interiors
 // are black / the waveform starts 3 px in)
-static void box_border(int x, int y, int w, int h, bool selu, color_t selc, int thick){
-    color_t dim = {46, 46, 60};
-    // draw `thick` concentric rects when selected; on deselect clear the same
-    // depth to black so a previous thick border leaves no ghost (border sits in
-    // each box's margin, clear of content)
-    for (int i = thick - 1; i >= 1; i--)
-        TFT_drawRect(x + i, y + i, w - 2 * i, h - 2 * i, selu ? selc : (color_t){0, 0, 0});
-    TFT_drawRect(x, y, w, h, selu ? selc : dim);
+// draw a box border `thick` px in `c`. Always clears the 4 px border band to
+// black first, so a border can shrink (level 2 -> level 1) with no ghost. Every
+// box margin is >= 5 px, so this never touches content.
+static void box_border(int x, int y, int w, int h, color_t c, int thick){
+    for (int i = 1; i <= 4; i++) TFT_drawRect(x + i, y + i, w - 2 * i, h - 2 * i, (color_t){0, 0, 0});
+    for (int i = 0; i < thick; i++) TFT_drawRect(x + i, y + i, w - 2 * i, h - 2 * i, c);
 }
 
-// color-coded selection borders on the three element boxes (deck grammar);
-// the transport reads THICK when selected (a colour change alone was too subtle)
+// borders encode the MENU LEVEL: thin (1-2 px) while browsing elements, THICK
+// (4 px, green) once the transport is entered (level 2); exit -> thin again.
 static void draw_highlights(void){
-    color_t sel = TFT_CYAN, act = {60, 200, 120};
-    box_border(EB_X, TB_Y, EB_W, TB_H, s_elem == 0, s_in_bar ? act : sel, 5);   // transport (thick)
-    box_border(EB_X, FB_Y, EB_W, FB_H, s_elem == 1, sel, 3);                    // file
-    box_border(EB_X, XB_Y, EB_W, XB_H, s_elem == 2, sel, 3);                    // fx
+    color_t sel = TFT_CYAN, act = {60, 200, 120}, dim = {46, 46, 60};
+    if (s_in_bar)         box_border(EB_X, TB_Y, EB_W, TB_H, act, 4);   // transport: level 2 (thick)
+    else if (s_elem == 0) box_border(EB_X, TB_Y, EB_W, TB_H, sel, 2);   // selected (thin)
+    else                  box_border(EB_X, TB_Y, EB_W, TB_H, dim, 1);   // unselected
+    box_border(EB_X, FB_Y, EB_W, FB_H, s_elem == 1 ? sel : dim, s_elem == 1 ? 2 : 1);
+    box_border(EB_X, XB_Y, EB_W, XB_H, s_elem == 2 ? sel : dim, s_elem == 2 ? 2 : 1);
 }
 
 // move highlights by repainting only the vacated + newly-marked slices
