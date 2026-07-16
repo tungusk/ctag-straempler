@@ -93,8 +93,11 @@ int radio_station_del(int idx)
     return 0;
 }
 
-static volatile bool s_stream_run = false;   // stream task is alive
-static volatile bool s_stop = false;         // request the stream task to exit
+static volatile int  s_ntasks = 0;           // # live stream tasks (0/1 normally; briefly >1 on a fast restart)
+static volatile bool s_stop = false;         // request the stream task(s) to exit
+static volatile int  s_gen = 0;              // play generation: a task whose gen != s_gen retires WITHOUT
+                                             // touching the ring or rd.state (prevents the two-task race that
+                                             // wedged radio when a station change raced a blocked socket read)
 
 static void set_err(const char *m)
 {
@@ -197,16 +200,19 @@ static int icy_read(esp_http_client_handle_t cl, uint8_t *dst, int want, int met
 
 static void stream_task(void *pv)
 {
-    s_stream_run = true;
+    int gen = (int)(intptr_t)pv;   // this task's generation; retire when superseded
+    s_ntasks++;
     HMP3Decoder dec = MP3InitDecoder();
     uint8_t *inbuf = malloc(RADIO_IN_SIZE);
     short *pcm = malloc(2 * 1152 * sizeof(short));
     if (!dec || !inbuf || !pcm) { set_err("decoder OOM"); goto done; }
 
     int attempts = 0;
-    while (!s_stop) {
+    while (!s_stop && gen == s_gen) {
         esp_http_client_config_t cfg = {
-            .url = rd.url, .method = HTTP_METHOD_GET, .timeout_ms = 15000,
+            // shorter timeout so a superseded/dead connection unblocks and the
+            // task exits promptly (was 15s -> a station change could orphan it)
+            .url = rd.url, .method = HTTP_METHOD_GET, .timeout_ms = 6000,
             .crt_bundle_attach = esp_crt_bundle_attach,
             .event_handler = radio_http_evt,     // captures icy-metaint from the response
         };
@@ -217,7 +223,7 @@ static void stream_task(void *pv)
         if (esp_http_client_open(cl, 0) != ESP_OK) {
             esp_http_client_cleanup(cl);
             if (++attempts > 6) { set_err("connect failed"); break; }
-            for (int i = 0; i < 100 && !s_stop; i++) vTaskDelay(pdMS_TO_TICKS(10));   // ~1s backoff
+            for (int i = 0; i < 100 && !s_stop && gen == s_gen; i++) vTaskDelay(pdMS_TO_TICKS(10));   // ~1s backoff
             continue;
         }
         esp_http_client_fetch_headers(cl);
@@ -226,7 +232,7 @@ static void stream_task(void *pv)
 
         int fill = 0;
         bool disconnected = false;
-        while (!s_stop && !disconnected) {
+        while (!s_stop && !disconnected && gen == s_gen) {
             if (fill < RADIO_IN_SIZE) {
                 int r = icy_read(cl, inbuf + fill, RADIO_IN_SIZE - fill, meta_int);
                 if (r <= 0) { disconnected = true; break; }   // dropped -> reconnect
@@ -234,7 +240,7 @@ static void stream_task(void *pv)
                 attempts = 0;                                  // real data: reset the backoff
             }
             int cur = 0;
-            while (fill - cur > RADIO_MIN_FRAME && !s_stop) {
+            while (fill - cur > RADIO_MIN_FRAME && !s_stop && gen == s_gen) {
                 int off = MP3FindSyncWord(inbuf + cur, fill - cur);
                 if (off < 0) { cur = fill - 1; break; }
                 cur += off;
@@ -253,7 +259,7 @@ static void stream_task(void *pv)
                         if (fi.samprate != RADIO_RATE) { set_err("unsupported rate (v1: 44.1k)"); s_stop = true; break; }
                         ESP_LOGI(TAG, "stream: %d kbps, %d Hz, %d ch, meta_int %d", rd.bitrate, fi.samprate, fi.nChans, meta_int);
                     }
-                    if (fi.outputSamps > 0) ring_write(pcm, fi.outputSamps, fi.nChans);
+                    if (fi.outputSamps > 0 && gen == s_gen) ring_write(pcm, fi.outputSamps, fi.nChans);
                     cur += used;
                 } else {
                     cur += (used > 0 ? used : 1);
@@ -264,28 +270,32 @@ static void stream_task(void *pv)
         }
         esp_http_client_close(cl);
         esp_http_client_cleanup(cl);
-        if (s_stop) break;
+        if (s_stop || gen != s_gen) break;
         // the stream dropped: drain to silence + re-buffer on reconnect, with a
         // short backoff. Give up only after several CONSECUTIVE failures.
         rd.reconnects++;
         if (rd.state == RADIO_PLAYING) rd.state = RADIO_BUFFERING;
         if (++attempts > 8) { set_err("stream lost"); break; }
-        for (int i = 0; i < 80 && !s_stop; i++) vTaskDelay(pdMS_TO_TICKS(10));   // ~0.8s
+        for (int i = 0; i < 80 && !s_stop && gen == s_gen; i++) vTaskDelay(pdMS_TO_TICKS(10));   // ~0.8s
     }
 
 done:
     if (dec) MP3FreeDecoder(dec);
     free(inbuf);
     free(pcm);
-    if (rd.state != RADIO_ERROR) rd.state = RADIO_STOPPED;
-    s_stream_run = false;
+    // don't stomp a newer task's state — only the current generation owns rd.state
+    if (gen == s_gen && rd.state != RADIO_ERROR) rd.state = RADIO_STOPPED;
+    s_ntasks--;
     vTaskDelete(NULL);
 }
 
+// FULL stop (machine switch / ring free): must guarantee no task is still
+// writing the ring before the caller frees it, so this one waits.
 void radio_stop_stream(void)
 {
     s_stop = true;
-    for (int i = 0; i < 250 && s_stream_run; i++) vTaskDelay(pdMS_TO_TICKS(10));   // up to 2.5 s
+    s_gen++;                           // retire every running task
+    for (int i = 0; i < 700 && s_ntasks > 0; i++) vTaskDelay(pdMS_TO_TICKS(10));   // up to 7 s (> read timeout)
     if (rd.state != RADIO_ERROR) rd.state = RADIO_STOPPED;
     rd.wpos = rd.rpos = 0;
 }
@@ -293,7 +303,16 @@ void radio_stop_stream(void)
 void radio_play_url(const char *url, const char *name)
 {
     if (!url || !url[0]) return;
-    radio_stop_stream();               // kill any current stream first
+    if (!rd.ring) { set_err("no ring (machine stopped)"); return; }
+    // Bump the generation to retire any current task: it will stop writing the
+    // ring / touching rd.state immediately (gen guard) and exit on its own when
+    // its socket unblocks. So we do NOT block here — a new play is instant and
+    // can never orphan a second live task fighting over the ring.
+    s_gen++;
+    s_stop = false;
+    // give a fast-exiting old task a brief moment to drain (common case: <100ms),
+    // purely to avoid piling up tasks; correctness does not depend on it
+    for (int i = 0; i < 40 && s_ntasks > 0; i++) vTaskDelay(pdMS_TO_TICKS(10));
     strlcpy(rd.url, url, sizeof(rd.url));
     strlcpy(rd.station, name ? name : "custom", sizeof(rd.station));
     rd.wpos = rd.rpos = 0;
@@ -303,9 +322,8 @@ void radio_play_url(const char *url, const char *name)
     rd.title[0] = 0;
     rd.err[0] = 0;
     rd.state = RADIO_BUFFERING;
-    s_stop = false;
-    if (!rd.ring) { set_err("no ring (machine stopped)"); return; }
-    if (xTaskCreate(stream_task, "radio_dl", 20480, NULL, 5, NULL) != pdPASS)
+    int gen = ++s_gen;                 // this play's generation (bump again after the drain wait)
+    if (xTaskCreate(stream_task, "radio_dl", 20480, (void *)(intptr_t)gen, 5, NULL) != pdPASS)
         set_err("stream task create failed");
 }
 
@@ -325,7 +343,7 @@ static esp_err_t radio_start(void)
     if (!rd.ring) { ESP_LOGE(TAG, "PSRAM ring alloc failed"); return ESP_ERR_NO_MEM; }
     rd.state = RADIO_STOPPED;
     s_stop = false;
-    s_stream_run = false;
+    s_ntasks = 0;
     return ESP_OK;
 }
 
