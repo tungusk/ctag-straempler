@@ -25,8 +25,8 @@
 // on a FAT color-coded box around the bar, the playhead is a neutral WHITE line
 // (not state-colored), and the selected lane wears its number as a WHITE PLATE
 // (the DoubleDecker focus cue). The grey waveform on a black canvas is unchanged.
-static const color_t LANE_BG   = {5, 9, 28};      // darker blue track background
-static const color_t BAR_BG    = {14, 22, 52};    // empty-lane bar region
+static const color_t LANE_BG   = {0, 0, 0};       // black track background (deck grammar)
+static const color_t BAR_BG    = {0, 0, 0};       // empty-lane bar region — black too (box border delineates lanes)
 static const color_t COL_EMPTY = {45, 60, 95};    // dim: the box barely reads
 static const color_t COL_ARMED = {230, 170, 0};
 static const color_t COL_REC   = {220, 40, 40};

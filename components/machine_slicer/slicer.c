@@ -5,6 +5,7 @@
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
@@ -434,15 +435,26 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
         last_cv6 = cv6;
     }
 
-    // CV1 jack = level (when driven, else unity)
-    uint16_t c1 = cvm[0] > 900 ? cvm[0] - 900 : 0;
-    sl.level = c1 ? (uint16_t)((uint32_t)c1 * 255 / 3195) : 255;
+    // CV2 jack = level (when driven, else unity) — CV1 is now the 1V/oct pitch in
+    uint16_t c2 = cvm[1] > 900 ? cvm[1] - 900 : 0;
+    sl.level = c2 ? (uint16_t)((uint32_t)c2 * 255 / 3195) : 255;
 
     // knob 7 (CV7) pitch: unity plateau, 0.5x..2.0x outside it
     sl.pitch_cv = cvm[6];
     if (sl.pitch_cv >= 1843 && sl.pitch_cv <= 2253) sl.inc = 1.0f;
     else if (sl.pitch_cv > 2253) sl.inc = 1.0f + (float)(sl.pitch_cv - 2253) / 1842.0f;
     else                         sl.inc = 0.5f + (float)sl.pitch_cv / 1843.0f * 0.5f;
+
+    // CV1 = quantized 1V/oct pitch in (the module's primary 1V/oct jack, matches
+    // the synth), multiplies the knob7 varispeed. Idle ~877 -> 0 semitones (no
+    // transpose when unpatched); ~49 ADC counts/semitone (the sampler2/synth
+    // scale). Quantized so idle drift snaps to 0.
+    int voct = (int)lroundf(((float)cvm[0] - 877.0f) / 49.0f);
+    if (voct < -24) voct = -24;
+    if (voct >  24) voct =  24;
+    if (voct != 0) sl.inc *= exp2f((float)voct / 12.0f);
+    if (sl.inc > 4.0f) sl.inc = 4.0f;          // 80 ms head budgets ~2x; cap + self-heal cover brief starves
+    else if (sl.inc < 0.25f) sl.inc = 0.25f;
 
     if (sl.cmd_fire)    { sl.cmd_fire = 0;    fire_slice(sl.sel); }
     if (sl.cmd_advance) { sl.cmd_advance = 0; fire_slice(sl.sel); sl.sel = (sl.sel + 1) % sl.n_slices; }
