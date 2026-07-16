@@ -24,11 +24,20 @@ static const color_t SEL_COL = {40, 200, 230};   // selected slice
 static const color_t CUR_COL = {40, 200, 90};    // playing slice
 
 // waveform box — near the top now; sample/grid info sits below it
-#define WX 8
-#define WY 82                 // vertically centered (bar is half-height now)
-#define WW (_width - 16)
-#define WH 75
-#define INFO_Y 18             // info line above the bar, bigger font
+// three selectable screen elements, each a box (deck/sampler grammar):
+//   transport (waveform)  |  file name (big, under it)  |  FX box
+#define EB_X 6
+#define EB_W (_width - 12)
+#define TB_Y 6                     // transport box top
+#define WH   80                    // waveform height (inside the box)
+#define TB_H (WH + 6)              // transport box height
+#define WX  (EB_X + 3)             // waveform inside the transport box
+#define WY  (TB_Y + 3)
+#define WW  (EB_W - 6)
+#define FB_Y (TB_Y + TB_H + 5)     // file-name box
+#define FB_H 42
+#define XB_Y (FB_Y + FB_H + 5)     // FX box
+#define XB_H 54
 
 static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1, s_last_peaks = -1;
 static bool s_last_loading = true;   // reader-load in progress at the last redraw
@@ -36,21 +45,6 @@ static bool s_last_loading = true;   // reader-load in progress at the last redr
 // enters level 2 (s_in_bar) where turns hand-select slices and press fires.
 static int  s_elem = 0;
 static bool s_in_bar = false;
-
-// bottom selector: [Bar] [File] [FX:on/off], the active element in cyan
-static void draw_elements(void){
-    int fh = TFT_getfontheight();
-    int y = _height - fh - 2;
-    _bg = TFT_BLACK; TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
-    char fxl[12]; snprintf(fxl, sizeof(fxl), "FX:%s", sl.fx_on ? "on" : "off");
-    const char *labs[3] = { s_in_bar ? "[Bar]" : "Bar", "File", fxl };
-    int x = 6;
-    for (int i = 0; i < 3; i++){
-        _fg = (i == s_elem) ? TFT_CYAN : (color_t){120, 120, 130};
-        TFT_print((char*)labs[i], x, y);
-        x += TFT_getStringWidth((char*)labs[i]) + 18;
-    }
-}
 static char s_msg[24];
 
 // x pixel of slice boundary s (slices are non-uniform in transient mode)
@@ -87,17 +81,51 @@ static void repaint_slice(int s, int cur, int sel){
 }
 
 // sample name + grid size + live slice number, below the waveform
-static void draw_info_line(void){
-    Font f = cfont; TFT_setFont(DEJAVU18_FONT, NULL);
+// slice count on the right of the file box (cheap; updated on slice moves)
+static void draw_slice_count(void){
+    Font f = cfont; TFT_setFont(DEFAULT_FONT, NULL);
     int fh = TFT_getfontheight();
-    _bg = TFT_BLACK; TFT_fillRect(0, INFO_Y, _width, fh + 4, _bg);
-    _fg = TFT_WHITE;
-    char s[64];
-    snprintf(s, sizeof(s), "%s  x%d  %d/%d %s%s",
-             sl.sample[0] ? sl.sample : "(none)", sl.n_slices, sl.sel + 1, sl.n_slices,
-             sl.auto_on ? "A" : "", sl.reverse ? "R" : "");
-    TFT_print(s, 6, INFO_Y + 2);
+    char sc[16]; snprintf(sc, sizeof(sc), "%d/%d", sl.n_slices ? sl.sel + 1 : 0, sl.n_slices);
+    _bg = TFT_BLACK; TFT_fillRect(EB_X + EB_W - 78, FB_Y + FB_H/2 - fh/2 - 2, 74, fh + 4, _bg);
+    _fg = (color_t){120, 160, 210};
+    TFT_print(sc, EB_X + EB_W - TFT_getStringWidth(sc) - 12, FB_Y + FB_H/2 - fh/2);
     cfont = f;
+}
+
+// file-name box: big sample name + slice count
+static void draw_file_box(void){
+    _bg = TFT_BLACK; TFT_fillRect(EB_X + 1, FB_Y + 1, EB_W - 2, FB_H - 2, _bg);
+    Font f = cfont; TFT_setFont(DEJAVU24_FONT, NULL);
+    _fg = sl.sample[0] ? TFT_WHITE : TFT_LIGHTGREY;
+    char nm[28]; snprintf(nm, sizeof(nm), "%s", sl.sample[0] ? sl.sample : "(none)");
+    TFT_print(nm, EB_X + 10, FB_Y + FB_H/2 - TFT_getfontheight()/2);
+    cfont = f;
+    draw_slice_count();
+}
+
+// FX box (drums filter-box style): FX on/off + filter + reverb readout
+static void draw_fx_box(void){
+    _bg = TFT_BLACK; TFT_fillRect(EB_X + 1, XB_Y + 1, EB_W - 2, XB_H - 2, _bg);
+    int fh = TFT_getfontheight();
+    _fg = sl.fx_on ? (color_t){60, 200, 120} : (color_t){110, 110, 120};
+    char s[16]; snprintf(s, sizeof(s), "FX  %s", sl.fx_on ? "ON" : "off");
+    TFT_print(s, EB_X + 10, XB_Y + 7);
+    _fg = sl.fx_on ? (color_t){140, 160, 200} : (color_t){80, 80, 90};
+    char t[52];
+    snprintf(t, sizeof(t), "cut %.0f  res %.0f%%   %s %.0f%%",
+             sl.fx_cut, sl.fx_res * 100.0f, reverb_mode_name(sl.fx_rv.mode), sl.fx_rvmix * 100.0f);
+    TFT_print(t, EB_X + 10, XB_Y + 7 + fh + 5);
+}
+
+// color-coded selection borders on the three element boxes (deck grammar)
+static void draw_highlights(void){
+    color_t sel = TFT_CYAN, dim = {46, 46, 60}, act = {60, 200, 120};
+    color_t c = (s_elem == 0) ? (s_in_bar ? act : sel) : dim;   // transport
+    TFT_drawRect(EB_X, TB_Y, EB_W, TB_H, c);
+    c = (s_elem == 1) ? sel : dim;                              // file
+    TFT_drawRect(EB_X, FB_Y, EB_W, FB_H, c);
+    c = (s_elem == 2) ? sel : dim;                              // fx
+    TFT_drawRect(EB_X, XB_Y, EB_W, XB_H, c);
 }
 
 // move highlights by repainting only the vacated + newly-marked slices
@@ -109,7 +137,7 @@ static void live_update_highlights(void){
     repaint_slice(sel, cur, sel);
     s_last_cur = cur;
     s_last_sel = sel;
-    draw_info_line();                   // keep the slice number current
+    draw_slice_count();                 // keep the slice number current
 }
 
 static void draw_slice_region(int s, color_t c, bool fill){
@@ -157,8 +185,9 @@ static void live_full_redraw(void){
     } else {
         draw_waveform();
     }
-    draw_info_line();
-    draw_elements();
+    draw_file_box();
+    draw_fx_box();
+    draw_highlights();
     s_last_cur = sl.cur; s_last_sel = sl.sel; s_last_slices = sl.n_slices; s_last_peaks = sl.peak_n;
     s_last_loading = sl.loading;
 }
@@ -178,6 +207,14 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
                 live_full_redraw();
             else if (sl.cur != s_last_cur || sl.sel != s_last_sel)
                 live_update_highlights();                           // just move highlights
+            {   // live FX readout while the filter knobs / reverb settings move
+                static unsigned s_fxsig = 0;
+                unsigned fxsig = (sl.fx_on ? 1u : 0u) + (unsigned)sl.fx_cut
+                               + (unsigned)(sl.fx_res * 1000.0f) * 7u
+                               + (unsigned)sl.fx_rv.mode * 131u
+                               + (unsigned)(sl.fx_rvmix * 1000.0f) * 17u;
+                if (fxsig != s_fxsig){ draw_fx_box(); s_fxsig = fxsig; }
+            }
             if (event == EV_TIMER_REPEATING_SLOW){
                 // streaming internals through /status v1 (remote debugging)
                 char dbg[48];
@@ -191,20 +228,20 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
             break;
         case EV_FWD:
             if (s_in_bar){ sl.sel = (sl.sel + 1) % sl.n_slices; live_update_highlights(); }
-            else { s_elem = (s_elem + 1) % 3; sl.ui_ctx = (s_elem == 2) ? 1 : 0; draw_elements(); }
+            else { s_elem = (s_elem + 1) % 3; sl.ui_ctx = (s_elem == 2) ? 1 : 0; draw_highlights(); }
             break;
         case EV_BWD:
             if (s_in_bar){ sl.sel = (sl.sel + sl.n_slices - 1) % sl.n_slices; live_update_highlights(); }
-            else { s_elem = (s_elem + 2) % 3; sl.ui_ctx = (s_elem == 2) ? 1 : 0; draw_elements(); }
+            else { s_elem = (s_elem + 2) % 3; sl.ui_ctx = (s_elem == 2) ? 1 : 0; draw_highlights(); }
             break;
         case EV_SHORT_PRESS:
-            if (s_in_bar) sl.cmd_fire = 1;              // play the selected slice
-            else if (s_elem == 0){ s_in_bar = true; draw_elements(); }   // enter the bar
-            else if (s_elem == 1) return M_SLICER_LOAD;                  // File -> browser (SLICES)
-            else { sl.fx_on = !sl.fx_on; draw_elements(); }             // FX toggle
+            if (s_in_bar) sl.cmd_fire = 1;                                    // play the selected slice
+            else if (s_elem == 0){ s_in_bar = true; draw_highlights(); }      // enter the bar
+            else if (s_elem == 1) return M_SLICER_LOAD;                       // File -> browser (SLICES)
+            else { sl.fx_on = !sl.fx_on; draw_fx_box(); draw_highlights(); }  // FX toggle
             break;
         case EV_LONG_PRESS:
-            if (s_in_bar){ s_in_bar = false; draw_elements(); break; }  // pop out of the bar
+            if (s_in_bar){ s_in_bar = false; draw_highlights(); break; }      // pop out of the bar
             sl.ui_ctx = 0;
             return M_SLICER_SETUP;   // element level: Live -> Setup (no hub)
         default: break;
@@ -342,11 +379,12 @@ static void sens_draw_wave(void){
 
 static void sens_draw_info(void){
     int fh = TFT_getfontheight();
-    _bg = TFT_BLACK; TFT_fillRect(0, INFO_Y, _width, fh + 4, _bg);
+    int y = WY + WH + 10;
+    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, fh + 4, _bg);
     _fg = TFT_WHITE;
     char s[48];
     snprintf(s, sizeof(s), "Sensitivity  %d      slices: %d", sl.sensitivity, sl.n_slices);
-    TFT_print(s, 6, INFO_Y + 2);
+    TFT_print(s, 6, y + 2);
 }
 
 static void sens_full_redraw(void){
