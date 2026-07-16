@@ -612,7 +612,7 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
         }
         disp_lock_give();
         rc = httpd_resp_send_chunk(req, (const char *)out, row_bytes + pad);
-        vTaskDelay(1);
+        if ((y & 15) == 0) vTaskDelay(1);   // shadow reads are RAM-fast; sparse yields suffice
     }
     httpd_resp_send_chunk(req, NULL, 0);
     free(out);
