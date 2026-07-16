@@ -6,6 +6,7 @@
 #include "menusys.h"
 #include "menu_types.h"
 #include "menutft.h"
+#include "setup_menu.h"
 #include "ui_events.h"
 #include "tft.h"
 #include "tftspi.h"
@@ -185,15 +186,16 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
     return 0;
 }
 
-// ---- Setup -----------------------------------------------------------------
-static const char *setup_labels[] = {
-    "Engine", "Base Note", "Quantize", "Shape", "FM Ratio", "FM Index",
-    "Attack", "Decay", "Sustain", "Release", "Env>Cut", "Glide",
-    "LFO Rate", "LFO Depth", "LFO Dest", "Level", "Reverb", "Rev Mix", "Load Wave", "CV Matrix"
+// ---- Setup (shared framework: press cycles TOGGLEs, [ ] edits RANGEs) -------
+static const setup_item_t sy_setup_items[] = {
+    {"Engine",    ST_TOGGLE}, {"Base Note", ST_RANGE},  {"Quantize",  ST_TOGGLE},
+    {"Shape",     ST_RANGE},  {"FM Ratio",  ST_RANGE},  {"FM Index",  ST_RANGE},
+    {"Attack",    ST_RANGE},  {"Decay",     ST_RANGE},  {"Sustain",   ST_RANGE},
+    {"Release",   ST_RANGE},  {"Env>Cut",   ST_RANGE},  {"Glide",     ST_RANGE},
+    {"LFO Rate",  ST_RANGE},  {"LFO Depth", ST_RANGE},  {"LFO Dest",  ST_TOGGLE},
+    {"Level",     ST_RANGE},  {"Reverb",    ST_TOGGLE}, {"Rev Mix",   ST_RANGE},
+    {"Load Wave", ST_ACTION}, {"CV Matrix", ST_ACTION},
 };
-#define SY_SETUP_N 20
-#define SY_LOAD_ITEM 18          // the "Load Wave" action row
-#define SY_MATRIX_ITEM 19        // the "CV Matrix" action row -> M_SYNTH_MATRIX
 
 static void setup_val(int i, char *v, size_t n)
 {
@@ -221,36 +223,6 @@ static void setup_val(int i, char *v, size_t n)
         case 19: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx_src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
     }
-}
-
-static void setup_redraw(int pos, int sel)
-{
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
-    _fg = TFT_WHITE; TFT_print("Synth Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);
-    // scrollable list — the param count exceeds the screen; keep the cursor in view
-    int row_h = fh + 5, y0 = fh + 14;
-    int vis = (_height - fh - 6 - y0) / row_h;
-    if (vis < 1) vis = 1;
-    int top = 0;
-    if (pos >= vis) top = pos - vis + 1;
-    for (int r = 0; r < vis; r++) {
-        int i = top + r;
-        if (i >= SY_SETUP_N) break;
-        int y = y0 + r * row_h;
-        _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-        _fg = (i == pos && sel) ? TFT_CYAN : TFT_WHITE;
-        TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
-        TFT_print((char *)setup_labels[i], 8, y);
-        char v[24]; setup_val(i, v, sizeof(v));
-        TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
-    }
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("VA/FM; TR1 gates the ADSR; turn to scroll", 8, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
 }
 
 static void sy_adj(int i, int dir)
@@ -291,32 +263,26 @@ static void sy_adj(int i, int dir)
     }
 }
 
+static int sy_setup_action(int i)
+{
+    if (i == 18) return M_SYNTH_LOAD;      // Load Wave -> browser
+    if (i == 19) return M_SYNTH_MATRIX;    // CV Matrix -> matrix page
+    return 0;
+}
+
+static setup_menu_t sy_setup = {
+    .items = sy_setup_items,
+    .n = 20,
+    .title = "Synth Setup",
+    .aff_label = "Machine", .aff_target = M_MORE,
+    .live_target = M_SYNTH_LIVE,
+    .render = setup_val, .adjust = sy_adj, .action = sy_setup_action,
+};
+
 static int synth_setup_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
-    static int pos = 0, sel = 0;
-    switch (event) {
-        case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
-        case EV_FWD:
-            if (sel) sy_adj(pos, +1);
-            else { pos++; if (pos >= SY_SETUP_N) pos = -1; }
-            setup_redraw(pos, sel);
-            break;
-        case EV_BWD:
-            if (sel) sy_adj(pos, -1);
-            else { pos--; if (pos < -1) pos = SY_SETUP_N - 1; }
-            setup_redraw(pos, sel);
-            break;
-        case EV_SHORT_PRESS:
-            if (pos == -1) return M_MORE;
-            if (pos == SY_LOAD_ITEM) return M_SYNTH_LOAD;      // -> wave browser
-            if (pos == SY_MATRIX_ITEM) return M_SYNTH_MATRIX;  // -> CV matrix page
-            sel = !sel; setup_redraw(pos, sel);
-            break;
-        case EV_LONG_PRESS: return M_SYNTH_LIVE;
-        default: break;
-    }
-    return 0;
+    return setup_menu_event(&sy_setup, event);
 }
 
 // ---- Load Wave: the shared sample browser -> wavetable ----------------------
