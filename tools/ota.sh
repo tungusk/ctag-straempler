@@ -1,0 +1,20 @@
+#!/bin/bash
+# OTA-flash the current build over WiFi — no serial cable, ~14s, untethered.
+# Usage: tools/ota.sh [IP]     (default 192.168.3.227)
+# Requires the device to be running an OTA-capable image (synth-v1 migration+).
+# Serial recovery if a pushed image ever fails to boot: bin/<archive>/flash.sh
+set -e
+IP="${1:-192.168.3.227}"
+BIN="$(cd "$(dirname "$0")/.." && pwd)/build/ctag-straempler.bin"
+[ -f "$BIN" ] || { echo "no build at $BIN — run idf.py build first"; exit 1; }
+echo "OTA -> http://$IP/ota  ($(du -h "$BIN" | cut -f1))"
+echo "before: $(curl -s -m 5 http://$IP/ota/state 2>/dev/null || echo '(no response)')"
+curl -s -m 120 --data-binary @"$BIN" -H "Content-Type: application/octet-stream" "http://$IP/ota"
+echo
+echo "waiting for reboot into the new slot..."
+for i in $(seq 1 15); do
+  sleep 4
+  s=$(curl -s -m 4 "http://$IP/ota/state" 2>/dev/null || true)
+  [ -n "$s" ] && { echo "after:  $s"; exit 0; }
+done
+echo "device not back yet — check http://$IP/ota/state manually"
