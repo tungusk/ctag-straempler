@@ -347,11 +347,22 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
   archive; without it IDF falls back to git-describe with a `-dirty`
   suffix on any uncommitted build.
 - **Build**: `export PATH="$HOME/.espressif/tools/xtensa-esp32-elf/esp-2021r2-patch3-8.4.0/xtensa-esp32-elf/bin:$HOME/.espressif/tools/esp32ulp-elf/2.28.51-esp-20191205/esp32ulp-elf-binutils/bin:$PATH"; export IDF_PATH="$HOME/esp/esp-idf-v4.3"` then `idf.py build -DCMAKE_POLICY_VERSION_MINIMUM=3.5`.
-- **Flash**: port is `/dev/cu.usbserial-3110`; use the esptool invocation with
-  `--flash_size detect`. ALWAYS announce before flashing (it reboots the
-  device). Autonomous flashing is the default during feature iteration; the
-  stricter one-flash-per-explicit-go regime applies when chasing crashes or
-  hardware faults (an unexpected reboot destroys evidence).
+- **Flash — OTA is the primary path now (2026-07-15).** The device runs an
+  OTA-capable image (two 3 MB app slots `ota_0`/`ota_1` + otadata; see
+  `partitions.csv`). Update over WiFi with **`tools/ota.sh [IP]`** (`POST /ota`
+  streams the build into the inactive slot and reboots into it) — ~14 s,
+  untethered, no ROM-download-mode risk. `GET /ota/state` reports the running
+  slot. Still announce before flashing (it reboots). No rollback yet (a bad
+  image needs serial recovery — a deliberate follow-up).
+- **Serial flash = migration + recovery only.** Use the esptool invocation with
+  `--flash_size detect` when (a) migrating the partition layout, or (b)
+  recovering a device that won't boot: `bin/<archive>/flash.sh` restores a
+  known-good image. NOTE the OTA layout offsets differ — a fresh serial flash of
+  an OTA build is `0x1000 bootloader / 0x8000 partition-table / 0xf000
+  ota_data_initial.bin / 0x20000 app` (idf.py prints the exact command).
+  `bin/synth-v1` is the OLD single-app layout (app @ 0x10000) — flashing it
+  reverts OTA; re-migrate to get OTA back. Autonomous flashing is the default
+  during feature iteration; one-flash-per-explicit-go when chasing crashes.
 - **Opening the serial port REBOOTS the device** even with rts/dtr deasserted,
   and occasionally drops it into ROM download mode (`boot:0x3 ... waiting for
   download`) — the display freezes on its last frame, looking like a hang.
