@@ -1,1 +1,1 @@
-machines-20260713n (doubledecker-v1, refreshed ee177ff)
+synth-v1-20260715 (Synth: 4-macro-knob dashboard + engine-aware K5 + CV matrix)
