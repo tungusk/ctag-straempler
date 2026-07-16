@@ -22,6 +22,11 @@ enum { ENV_IDLE = 0, ENV_ATK, ENV_DEC, ENV_SUS, ENV_REL };
 enum { ENG_VA = 0, ENG_FM, ENG_WT };     // oscillator engine (VA / FM / wavetable)
 enum { LFO_OFF = 0, LFO_CUT, LFO_PITCH };   // LFO destination
 
+// CV matrix destinations — each carries its own source (-1 off / 0..7 = CV1..8)
+// and a bipolar amount; the modulation ADDS to the knob/Setup base per block.
+enum { SYM_CUTOFF = 0, SYM_RES, SYM_TIMBRE, SYM_ENVCUT,
+       SYM_LFORATE, SYM_LFODEPTH, SYM_LEVEL, SYM_PITCH, SYM_N };
+
 #define SY_WT_MAX 4096           // wavetable cap (a single-cycle wave is 256..2048)
 
 typedef struct {
@@ -70,6 +75,11 @@ typedef struct {
     float knob_capt[4];          // captured position per knob at the last (re)capture
     bool  knob_live[4];          // knob has moved past threshold -> it drives its param
     int   knob_engine;           // engine the captures are valid for (-1 = recapture)
+
+    // CV matrix: per-destination source + bipolar amount (adds on top of base)
+    int8_t mtx_src[SYM_N];       // -1 = off, 0..7 = CV1..CV8
+    float  mtx_amt[SYM_N];       // -1..+1 depth
+    int    cv12_floor[2];        // tracked idle floor for ch1/2 (1V/oct jacks idle ~21%)
 } sy_state_t;
 
 extern sy_state_t sy;

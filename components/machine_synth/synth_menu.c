@@ -333,12 +333,83 @@ static int synth_load_handler(int it_id, int event, void *ev_data)
     return 0;
 }
 
+// ---- CV Matrix page: per-destination source + bipolar amount ---------------
+static const char *const mtx_labels[SYM_N] = {
+    "Cutoff", "Reso", "Timbre", "Env>Cut", "LFO Rate", "LFO Dep", "Level", "Pitch"
+};
+
+static void mtx_redraw(int pos, int field)   // field: 0 nav / 1 edit src / 2 edit amt
+{
+    TFT_resetclipwin();
+    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
+    int fh = TFT_getfontheight();
+    _fg = TFT_WHITE; TFT_print("Synth CV Matrix", 6, 4);
+    menuTFTPrintAffordance("Setup", pos == -1);
+    int row_h = fh + 5, y0 = fh + 14;
+    int vis = (_height - fh - 6 - y0) / row_h;
+    if (vis < 1) vis = 1;
+    int top = 0;
+    if (pos >= vis) top = pos - vis + 1;
+    for (int r = 0; r < vis; r++) {
+        int i = top + r;
+        if (i >= SYM_N) break;
+        int y = y0 + r * row_h;
+        _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
+        TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
+        _fg = TFT_WHITE;
+        TFT_print((char *)mtx_labels[i], 8, y);
+        char src[8];
+        if (sy.mtx_src[i] < 0) snprintf(src, sizeof(src), "off");
+        else                   snprintf(src, sizeof(src), "CV%d", sy.mtx_src[i] + 1);
+        char amt[10]; snprintf(amt, sizeof(amt), "%+d%%", (int)(sy.mtx_amt[i] * 100.0f));
+        _fg = (i == pos && field == 1) ? TFT_CYAN : (color_t){170,170,180};
+        TFT_print(src, _width - 128, y);
+        _fg = (sy.mtx_src[i] < 0) ? (color_t){80,80,80}
+            : (i == pos && field == 2) ? TFT_CYAN : TFT_WHITE;
+        TFT_print(amt, _width - TFT_getStringWidth(amt) - 10, y);
+    }
+    _fg = (color_t){90, 90, 90};
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    TFT_print("press: src > amt > done   turn: change", 8, _height - TFT_getfontheight() - 1);
+    TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+static int synth_matrix_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    static int pos = 0, field = 0;
+    switch (event) {
+        case EV_ENTERED_MENU: pos = 0; field = 0; mtx_redraw(pos, field); break;
+        case EV_FWD:
+            if (field == 1)      { int s = sy.mtx_src[pos] + 1; if (s > 7)  s = -1; sy.mtx_src[pos] = (int8_t)s; }
+            else if (field == 2) { float a = sy.mtx_amt[pos] + 0.05f; if (a > 1.0f) a = 1.0f; sy.mtx_amt[pos] = a; }
+            else { pos++; if (pos >= SYM_N) pos = -1; }
+            mtx_redraw(pos, field);
+            break;
+        case EV_BWD:
+            if (field == 1)      { int s = sy.mtx_src[pos] - 1; if (s < -1) s = 7; sy.mtx_src[pos] = (int8_t)s; }
+            else if (field == 2) { float a = sy.mtx_amt[pos] - 0.05f; if (a < -1.0f) a = -1.0f; sy.mtx_amt[pos] = a; }
+            else { pos--; if (pos < -1) pos = SYM_N - 1; }
+            mtx_redraw(pos, field);
+            break;
+        case EV_SHORT_PRESS:
+            if (pos == -1) return M_SYNTH_SETUP;
+            field = (field + 1) % 3;                     // nav -> src -> amt -> nav
+            mtx_redraw(pos, field);
+            break;
+        case EV_LONG_PRESS: return M_SYNTH_LIVE;
+        default: break;
+    }
+    return 0;
+}
+
 static void synth_register_pages(void *menusys)
 {
     menusys_t *_ms = (menusys_t *)menusys;
-    menusys_new_item(_ms, M_SYNTH_LIVE);  menusys_item_set_default_cb(_ms, M_SYNTH_LIVE, synth_live_handler);
-    menusys_new_item(_ms, M_SYNTH_SETUP); menusys_item_set_default_cb(_ms, M_SYNTH_SETUP, synth_setup_handler);
-    menusys_new_item(_ms, M_SYNTH_LOAD);  menusys_item_set_default_cb(_ms, M_SYNTH_LOAD, synth_load_handler);
+    menusys_new_item(_ms, M_SYNTH_LIVE);   menusys_item_set_default_cb(_ms, M_SYNTH_LIVE, synth_live_handler);
+    menusys_new_item(_ms, M_SYNTH_SETUP);  menusys_item_set_default_cb(_ms, M_SYNTH_SETUP, synth_setup_handler);
+    menusys_new_item(_ms, M_SYNTH_LOAD);   menusys_item_set_default_cb(_ms, M_SYNTH_LOAD, synth_load_handler);
+    menusys_new_item(_ms, M_SYNTH_MATRIX); menusys_item_set_default_cb(_ms, M_SYNTH_MATRIX, synth_matrix_handler);
 }
 
 static int synth_main_event(int event, void *ev_data)
@@ -355,13 +426,13 @@ static int synth_main_event(int event, void *ev_data)
     return 0;
 }
 
-static const char *const synth_main_items[] = { "Live", "Setup" };
-static const int synth_main_targets[] = { M_SYNTH_LIVE, M_SYNTH_SETUP };
+static const char *const synth_main_items[] = { "Live", "Setup", "Matrix" };
+static const int synth_main_targets[] = { M_SYNTH_LIVE, M_SYNTH_SETUP, M_SYNTH_MATRIX };
 
 const machine_ui_t synth_menu_ui = {
     .main_items = synth_main_items,
     .main_targets = synth_main_targets,
-    .n_main = 2,
+    .n_main = 3,
     .register_pages = synth_register_pages,
     .main_event = synth_main_event,
     .boot_target = M_SYNTH_LIVE,

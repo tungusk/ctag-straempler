@@ -66,6 +66,8 @@ static esp_err_t synth_start(void)
     sy.res01 = 0.2f;
     sy.freq = 261.6f;           // C4-ish until CV read
     sy.knob_engine = -1;        // force a knob recapture on the first block
+    for (int d = 0; d < SYM_N; d++) { sy.mtx_src[d] = -1; sy.mtx_amt[d] = 0.0f; }  // matrix off
+    sy.cv12_floor[0] = sy.cv12_floor[1] = 4095;
     svf_reset(&sy.flt_l);
     return ESP_OK;
 }
@@ -75,6 +77,22 @@ static void synth_stop(void)
     if (sy.wave) { heap_caps_free(sy.wave); sy.wave = NULL; }
     sy.wave_len = 0;
     reverb_free(&sy.rv);
+}
+
+// CV matrix source read -> 0..1, from the median-conditioned snapshot. ch1/2 are
+// 1V/oct jacks that idle ~21% up the scale, so rescale from the tracked floor
+// (like sampler3) so a patched source spans the full range.
+static inline float sy_mtx_cv01(const int *cvm, const int *floor, int src)
+{
+    int c = cvm[src & 7];
+    if ((src & 7) < 2) {
+        int fl = floor[src & 7];
+        if (fl > 3800) return 0.0f;                     // channel not converged / dead
+        c = (int)((int32_t)(c - fl) * 4095 / (4095 - fl));
+        if (c < 0) c = 0;
+        if (c > 4095) c = 4095;
+    }
+    return (float)c / 4095.0f;
 }
 
 static void synth_process(int32_t out[MACHINE_BLOCK],
@@ -112,6 +130,43 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
     sy.cv1_disp = cvm[0];
     note_from_cv(cvm[0]);                             // CV1 = 1V/oct pitch
 
+    // ---- CV matrix: assigned CVs modulate params ON TOP of the knob/Setup base
+    // (block-rate; median-conditioned; ch1/2 rescaled from their idle floor) ----
+    for (int c = 0; c < 2; c++) {                     // track ch1/2 idle floor
+        int cv = io->cv[c];
+        if (cv < sy.cv12_floor[c]) sy.cv12_floor[c] = cv;
+        else if (sy.cv12_floor[c] < 4095) sy.cv12_floor[c]++;
+    }
+    float m_cut = 0, m_res = 0, m_tmb = 0, m_e2c = 0, m_lfr = 0, m_lfd = 0, m_lvl = 0, m_semi = 0;
+    for (int d = 0; d < SYM_N; d++) {
+        int src = sy.mtx_src[d];
+        if (src < 0) continue;
+        float cv01 = sy_mtx_cv01(cvm, sy.cv12_floor, src);
+        float a = sy.mtx_amt[d];
+        switch (d) {
+            case SYM_CUTOFF:   m_cut  += a * 4000.0f * cv01; break;
+            case SYM_RES:      m_res  += a * cv01;           break;
+            case SYM_TIMBRE:   m_tmb  += a * cv01;           break;
+            case SYM_ENVCUT:   m_e2c  += a * cv01;           break;
+            case SYM_LFORATE:  m_lfr  += a * 20.0f * cv01;   break;
+            case SYM_LFODEPTH: m_lfd  += a * cv01;           break;
+            case SYM_LEVEL:    m_lvl  += a * cv01;           break;
+            case SYM_PITCH:    m_semi += a * 24.0f * cv01;   break;
+        }
+    }
+    float cutoff_eff = sy.cutoff_base + m_cut;
+    if (cutoff_eff < 8.0f) cutoff_eff = 8.0f;
+    if (cutoff_eff > 6500.0f) cutoff_eff = 6500.0f;
+    float res_eff = sy.res01 + m_res;       if (res_eff < 0) res_eff = 0; else if (res_eff > 1) res_eff = 1;
+    float e2c_eff = sy.env_to_cut + m_e2c;  if (e2c_eff < 0) e2c_eff = 0; else if (e2c_eff > 1) e2c_eff = 1;
+    float lvl_eff = sy.level + m_lvl;        if (lvl_eff < 0) lvl_eff = 0; else if (lvl_eff > 1.2f) lvl_eff = 1.2f;
+    float lfr_eff = sy.lfo_rate + m_lfr;     if (lfr_eff < 0.01f) lfr_eff = 0.01f; else if (lfr_eff > 30.0f) lfr_eff = 30.0f;
+    float lfd_eff = sy.lfo_depth + m_lfd;    if (lfd_eff < 0) lfd_eff = 0; else if (lfd_eff > 1) lfd_eff = 1;
+    float pitch_mult = (m_semi != 0.0f) ? exp2f(m_semi / 12.0f) : 1.0f;
+    float shape_eff = sy.shape + m_tmb;      if (shape_eff < 0) shape_eff = 0; else if (shape_eff > 1) shape_eff = 1;
+    float fmidx_eff = sy.fm_index + m_tmb * 8.0f; if (fmidx_eff < 0) fmidx_eff = 0; else if (fmidx_eff > 12.0f) fmidx_eff = 12.0f;
+    float fold_eff  = sy.fold + m_tmb;       if (fold_eff < 0) fold_eff = 0; else if (fold_eff > 1) fold_eff = 1;
+
     // gate on TR1 (active low); soft trigs from teleremote are already merged in
     bool g = !(io->trig_level & 1);
     if (g && !sy.gate)      sy.env_stage = ENV_ATK;   // note on (retrigger)
@@ -137,15 +192,15 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
     }
     // LFO (per block — sub-audio, so block granularity is smooth) -> pitch or cutoff
     float blockdur2 = (float)(MACHINE_BLOCK / 2) / (float)SY_RATE;
-    sy.lfo_phase += sy.lfo_rate * blockdur2;
+    sy.lfo_phase += lfr_eff * blockdur2;
     sy.lfo_phase -= (float)(int)sy.lfo_phase;
     float lfo = sinf(6.2831853f * sy.lfo_phase);
-    float lfo_cut = (sy.lfo_dest == LFO_CUT)   ? (1.0f + lfo * sy.lfo_depth * 0.8f) : 1.0f;
-    float lfo_pit = (sy.lfo_dest == LFO_PITCH) ? exp2f(lfo * sy.lfo_depth * 2.0f / 12.0f) : 1.0f;
+    float lfo_cut = (sy.lfo_dest == LFO_CUT)   ? (1.0f + lfo * lfd_eff * 0.8f) : 1.0f;
+    float lfo_pit = (sy.lfo_dest == LFO_PITCH) ? exp2f(lfo * lfd_eff * 2.0f / 12.0f) : 1.0f;
 
-    float dt = sy.cur_freq * lfo_pit / SY_RATE;         // phase increment (+ vibrato)
+    float dt = sy.cur_freq * lfo_pit * pitch_mult / SY_RATE;   // phase increment (+ vibrato + matrix pitch)
     if (dt > 0.5f) dt = 0.5f;                          // Nyquist guard
-    float q = svf_damp(sy.res01, 0.6f, 2.0f);         // 0..1 knob -> damping (2 = clean)
+    float q = svf_damp(res_eff, 0.6f, 2.0f);          // 0..1 -> damping (2 = clean)
 
     // a NaN/Inf latched in the SVF is PERMANENT silence (NaN fails the output
     // clamp below, so every sample reads 0) — it looked like "FM killed the
@@ -172,7 +227,7 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
             // modulation index scaled by the envelope (classic FM pluck/bell)
             const float TWO_PI = 6.2831853f;
             float mod = sinf(TWO_PI * sy.mphase);
-            osc = sinf(TWO_PI * sy.phase + sy.fm_index * sy.env * mod);
+            osc = sinf(TWO_PI * sy.phase + fmidx_eff * sy.env * mod);
             float mdt = dt * sy.fm_ratio;
             sy.mphase += mdt; sy.mphase -= (float)(int)sy.mphase;   // wrap 0..1
         } else if (sy.engine == ENG_WT && sy.wave && sy.wave_len > 1) {
@@ -184,8 +239,8 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
             if (i0 >= sy.wave_len) i0 = sy.wave_len - 1;
             int i1 = i0 + 1; if (i1 >= sy.wave_len) i1 = 0;
             osc = ((float)sy.wave[i0] + ((float)sy.wave[i1] - (float)sy.wave[i0]) * fr) / 32768.0f;
-            if (sy.fold > 0.001f) {                   // knob7 wavefold: drive + reflect for a WT timbre sweep
-                osc *= 1.0f + sy.fold * 4.0f;
+            if (fold_eff > 0.001f) {                  // knob7 wavefold: drive + reflect for a WT timbre sweep
+                osc *= 1.0f + fold_eff * 4.0f;
                 while (osc >  1.0f) osc =  2.0f - osc;
                 while (osc < -1.0f) osc = -2.0f - osc;
             }
@@ -195,12 +250,12 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
             float sq  = (sy.phase < 0.5f ? 1.0f : -1.0f) + polyblep(sy.phase, dt);
             float t2 = sy.phase + 0.5f; if (t2 >= 1.0f) t2 -= 1.0f;
             sq -= polyblep(t2, dt);
-            osc = saw + (sq - saw) * sy.shape;
+            osc = saw + (sq - saw) * shape_eff;
         }
         sy.phase += dt; if (sy.phase >= 1.0f) sy.phase -= 1.0f;
 
         // filter: cutoff opened by the envelope + LFO wobble; SVF low-pass tap
-        float fc = (sy.cutoff_base + sy.env * sy.env_to_cut * 5000.0f) * lfo_cut;
+        float fc = (cutoff_eff + sy.env * e2c_eff * 5000.0f) * lfo_cut;
         if (fc < 8.0f) fc = 8.0f;   // let the cutoff close nearly all the way down
         // 1.0 = Chamberlin stability ceiling (fc ~ SR/6); 1.5 let a bright,
         // high-energy FM tone drive the low-damping filter into self-oscillation
@@ -210,7 +265,7 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
         svf_step(&sy.flt_l, osc, coef, q, &lp, NULL, NULL);
 
         // VCA + scale to int16 with headroom + hard clamp
-        float y = lp * sy.env * sy.level * 12000.0f;
+        float y = lp * sy.env * lvl_eff * 12000.0f;
         if (y > 32767.0f) y = 32767.0f; else if (y < -32768.0f) y = -32768.0f;
         int32_t s = ((int32_t)(int16_t)y) << 16;
         out[f * 2] = s;
@@ -244,6 +299,12 @@ static cJSON *synth_preset_save(void)
     cJSON_AddNumberToObject(o, "lfd", sy.lfo_depth);
     cJSON_AddNumberToObject(o, "lfx", sy.lfo_dest);
     cJSON_AddNumberToObject(o, "lvl", sy.level);
+    cJSON *ms = cJSON_AddArrayToObject(o, "msrc");
+    cJSON *ma = cJSON_AddArrayToObject(o, "mamt");
+    for (int d = 0; d < SYM_N; d++) {
+        cJSON_AddItemToArray(ms, cJSON_CreateNumber(sy.mtx_src[d]));
+        cJSON_AddItemToArray(ma, cJSON_CreateNumber(sy.mtx_amt[d]));
+    }
     return o;
 }
 
@@ -274,6 +335,15 @@ static void synth_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfd"))   && cJSON_IsNumber(j)) sy.lfo_depth = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfx"))   && cJSON_IsNumber(j)) sy.lfo_dest = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) sy.level = (float)j->valuedouble;
+    cJSON *ms = cJSON_GetObjectItemCaseSensitive(node, "msrc");
+    cJSON *ma = cJSON_GetObjectItemCaseSensitive(node, "mamt");
+    if (cJSON_IsArray(ms) && cJSON_IsArray(ma)) {
+        for (int d = 0; d < SYM_N; d++) {
+            cJSON *si = cJSON_GetArrayItem(ms, d), *ai = cJSON_GetArrayItem(ma, d);
+            if (cJSON_IsNumber(si)) { int v = si->valueint; sy.mtx_src[d] = (v < -1 || v > 7) ? -1 : (int8_t)v; }
+            if (cJSON_IsNumber(ai)) { float a = (float)ai->valuedouble; sy.mtx_amt[d] = a < -1 ? -1 : a > 1 ? 1 : a; }
+        }
+    }
 }
 
 extern const machine_ui_t synth_menu_ui;
