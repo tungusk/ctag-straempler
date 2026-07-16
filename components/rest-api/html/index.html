@@ -179,7 +179,7 @@ input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:verti
   </div>
   <label>Inputs + Perform</label>
   <div class="rmon" id="rmon"></div>
-  <div class="msg">Faders inject CV / knobs &#8212; release returns to the physical knob, <b>hold</b> sustains.</div>
+  <div class="msg">Faders inject CV / knobs &#8212; release returns to the physical knob; the checkbox = <b>hold</b>.</div>
   <div class="row tight tr2" style="margin-top:4px">
     <button class="btn" onclick="remTrig(1)">TR1 pulse</button>
     <button class="btn" onclick="remTrig(2)">TR2 pulse</button>
@@ -824,9 +824,9 @@ function loadRemote(){
         +'<div class="rbar"><div class="rfill" id="rf'+i+'" style="height:0%"></div></div>'
         +'<input type="range" class="vsl" orient="vertical" min="0" max="4095" value="2048" id="cvs'+(i+1)+'" oninput="cvSlide('+(i+1)+',this.value)" onchange="cvEnd('+(i+1)+')">'
         +'</div>'
-        +'<span id="rl'+i+'">CV'+(i+1)+'</span><span id="rv'+i+'">-</span>'
+        +'<span id="rl'+i+'">CV'+(i+1)+'</span>'
         +'<span id="cvclk'+(i+1)+'" style="color:#0af;font-size:9px;min-height:11px">&nbsp;</span>'
-        +'<label style="color:#666;font-size:9px;display:flex;flex-direction:column;align-items:center;gap:1px"><input type="checkbox" id="cvh'+(i+1)+'" style="width:auto" onchange="cvHold('+(i+1)+')">hold</label>'
+        +'<input type="checkbox" id="cvh'+(i+1)+'" title="hold" style="width:auto;margin:0" onchange="cvHold('+(i+1)+')">'
         +'</div>';
     // TR dots stack vertically in one column (Arlo) — less width, same read
     mh+='<div class="rcol">'
@@ -1173,9 +1173,8 @@ function updateRemote(d){
   if(!document.getElementById('p3').className.match(/on/))return;
   var cv=d.cv||[];
   for(var i=0;i<cv.length;i++){
-    var f=document.getElementById('rf'+i),v=document.getElementById('rv'+i);
+    var f=document.getElementById('rf'+i);
     if(f)f.style.height=Math.round(cv[i]/4095*100)+'%';
-    if(v)v.textContent=Math.round(cv[i]/4095*100)+'%';
   }
   // active low: bit clear = gate asserted
   var tr=(typeof d.trig==='number')?d.trig:3;
