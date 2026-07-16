@@ -30,6 +30,7 @@ static const radio_station_t DEFAULTS[RADIO_N_DEFAULT] = {
     { "DEF CON",      "http://ice1.somafm.com/defcon-128-mp3" },
     { "Lush",         "http://ice1.somafm.com/lush-128-mp3" },
     { "Indie Pop",    "http://ice1.somafm.com/indiepop-128-mp3" },
+    { "SPAZ",         "http://radio.spaz.org:8050/radio" },
 };
 radio_station_t rd_stations[RADIO_MAX_ST];
 int rd_n_stations = 0;

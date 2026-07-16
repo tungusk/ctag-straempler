@@ -41,7 +41,7 @@ typedef struct {
 extern radio_state_t rd;
 extern radio_station_t rd_stations[];   // [0..RADIO_N_DEFAULT) built-in, then SD-saved
 extern int rd_n_stations;
-#define RADIO_N_DEFAULT 5               // the first N are built-in (not deletable)
+#define RADIO_N_DEFAULT 6               // the first N are built-in (not deletable)
 
 // control — safe from the httpd task (web) and the UI task (menu)
 void radio_play_url(const char *url, const char *name);

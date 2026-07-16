@@ -50,14 +50,18 @@ static void state_block(void)
     s_last_state = rd.state;
 }
 
+// cache of the last-drawn lines so a timer tick only repaints on real change
+// (was clearing + reprinting every tick -> a constant flicker). Cleared by
+// live_full_redraw so a page (re)entry always repaints.
+static char s_info_s[48], s_info_t[84];
+
 static void info_block(void)
 {
     int fh = TFT_getfontheight();
     int y = fh + 90;
-    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, (fh + 6) * 2, _bg);
 
-    // the station line: while stopped, show the SELECTED station (turn to pick);
-    // while active, show what's playing
+    // the station line: while stopped/errored, show the SELECTED station (turn
+    // to pick); while active, show what's playing
     bool browsing = (rd.state == RADIO_STOPPED || rd.state == RADIO_ERROR);
     const char *nm = browsing
                      ? rd_stations[rd.sel % rd_n_stations].name
@@ -65,17 +69,24 @@ static void info_block(void)
     char s[48];
     if (browsing) snprintf(s, sizeof(s), "< %s >", nm);
     else          snprintf(s, sizeof(s), "%s", nm);
-    _fg = TFT_WHITE;
-    TFT_print(s, _width / 2 - TFT_getStringWidth(s) / 2, y);
 
     char t[84];
     if (rd.state == RADIO_ERROR)      snprintf(t, sizeof(t), "%s", rd.err);
     else if (rd.state == RADIO_PLAYING && rd.title[0]) snprintf(t, sizeof(t), "%.76s", rd.title);
-    else if (rd.state == RADIO_PLAYING) snprintf(t, sizeof(t), "%d kbps  %d Hz  buf %d%%",
-             rd.bitrate, rd.samprate, (int)((uint64_t)(rd.wpos - rd.rpos) * 100 / RADIO_RING_FRAMES));
+    // steady playback: kbps/Hz only — the buffer% churned every tick and forced
+    // a repaint; it belongs on the BUFFERING line, not the settled one
+    else if (rd.state == RADIO_PLAYING) snprintf(t, sizeof(t), "%d kbps  %d Hz", rd.bitrate, rd.samprate);
     else if (rd.state == RADIO_BUFFERING) snprintf(t, sizeof(t), "buffering  %d%%",
              (int)((uint64_t)(rd.wpos - rd.rpos) * 100 / RADIO_LOW_WATER));
     else                              snprintf(t, sizeof(t), "press to play");
+
+    if (strcmp(s, s_info_s) == 0 && strcmp(t, s_info_t) == 0) return;   // unchanged -> no repaint
+    strlcpy(s_info_s, s, sizeof(s_info_s));
+    strlcpy(s_info_t, t, sizeof(s_info_t));
+
+    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, (fh + 6) * 2, _bg);
+    _fg = TFT_WHITE;
+    TFT_print(s, _width / 2 - TFT_getStringWidth(s) / 2, y);
     _fg = (rd.state == RADIO_ERROR) ? COL_ERR : TFT_LIGHTGREY;
     TFT_print(t, _width / 2 - TFT_getStringWidth(t) / 2, y + fh + 4);
 }
@@ -86,11 +97,12 @@ static void live_full_redraw(void)
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
     TFT_print("Radio", 6, 4);
+    s_info_s[0] = 0; s_info_t[0] = 0;   // force info_block to repaint after the screen clear
     state_block();
     info_block();
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:station  press:play  hold:setup/stop", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:station  press:play/stop  hold:setup", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
@@ -113,7 +125,9 @@ static int radio_live_handler(int it_id, int event, void *ev_data)
             if (rd.state == RADIO_STOPPED || rd.state == RADIO_ERROR) { rd.sel = (rd.sel + rd_n_stations - 1) % rd_n_stations; info_block(); }
             break;
         case EV_SHORT_PRESS:
-            radio_play_station(rd.sel);
+            // press toggles: playing/buffering -> stop; otherwise play the selection
+            if (rd.state == RADIO_PLAYING || rd.state == RADIO_BUFFERING) radio_stop_stream();
+            else radio_play_station(rd.sel);
             state_block(); info_block();
             break;
         case EV_LONG_PRESS: return M_RADIO_SETUP;
