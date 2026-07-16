@@ -60,6 +60,7 @@ typedef enum{
     M_ISMP_SETUP,
     M_ISMP_LOAD,
     M_ISMP_MATRIX,
+    M_ISMP_PATCH,
     M_EDITOR_LIVE,
     M_EDITOR_SETUP,
     M_STUB_HOME,

@@ -2,19 +2,14 @@
 // polyBLEP saw<->square osc -> SVF low-pass (env-modulated cutoff) -> ADSR VCA.
 // Pitch on CV1 (1V/oct), gate on TR1. process() is pure DSP — no SD/heap/blocking.
 #include <string.h>
-#include <strings.h>
-#include <stdlib.h>
 #include <math.h>
-#include <sys/stat.h>
-#include <dirent.h>
 #include "esp_heap_caps.h"
 #include "cJSON.h"
 #include "machine.h"
 #include "cvsmooth.h"
 #include "svf.h"
 #include "sample_ram.h"
-#include "fileio.h"
-#include "sd_lock.h"
+#include "preset_store.h"
 #include "synth_priv.h"
 
 sy_state_t sy;
@@ -352,79 +347,21 @@ static void synth_preset_load(const cJSON *node)
     }
 }
 
-// ---- named patch files: usr/synth/PAT_NNN.jsn -----------------------------
-// One JSON file per patch, reusing the autosave (de)serializers above. Auto-
-// numbered (PAT_NNN, 7 chars = 8.3-safe, up to 999) — the firmware's REC_/BNC_
-// convention, so no on-device text entry. Every SD burst holds sd_lock (it's
-// recursive, so any nested helper lock is fine); synth process() touches no SD,
-// so there is no audio-side race.
-#define SY_PATCH_DIR  "/sdcard/usr/synth"
-#define SY_PATCH_PFX  "PAT_"
-#define SY_PATCH_EXT  ".jsn"
+// ---- named patch files: usr/synth/PAT_NNN.jsn (shared preset_store) --------
+// The #23 mint/write/list/read code moved to components/util/preset_store
+// when Keys became its second consumer; these wrappers keep the machine-local
+// bits (the (de)serializers + the knob-takeover re-arm on load).
+static const preset_store_t SY_PS = { "/sdcard/usr/synth", "PAT_" };
 
-static void sy_patch_path(const char *id, char *out, size_t n)
-{
-    snprintf(out, n, "%s/%s%s", SY_PATCH_DIR, id, SY_PATCH_EXT);
-}
-
-// a patch file? -> strip the extension into out and return true
-static bool sy_patch_id(const char *fname, char *out, size_t n)
-{
-    int L = (int)strlen(fname), el = (int)strlen(SY_PATCH_EXT);
-    if (L <= el || strcasecmp(fname + L - el, SY_PATCH_EXT) != 0) return false;
-    if (strncasecmp(fname, SY_PATCH_PFX, strlen(SY_PATCH_PFX)) != 0) return false;
-    int keep = L - el;
-    if (keep >= (int)n) keep = (int)n - 1;
-    memcpy(out, fname, keep); out[keep] = 0;
-    return true;
-}
-
-// mint the next free PAT_NNN and save the current voice to it (id_out gets it)
 int synth_patch_save(char *id_out, size_t n)
 {
-    struct stat st;
-    int maxn = -1;
-    sd_lock_take();
-    if (stat(SY_PATCH_DIR, &st) != 0) mkdir(SY_PATCH_DIR, 0777);
-    DIR *d = opendir(SY_PATCH_DIR);
-    if (d) {
-        struct dirent *e;
-        while ((e = readdir(d)) != NULL) {
-            char id[12];
-            if (sy_patch_id(e->d_name, id, sizeof(id))) {
-                int k = atoi(id + strlen(SY_PATCH_PFX));
-                if (k > maxn) maxn = k;
-            }
-        }
-        closedir(d);
-    }
-    sd_lock_give();
-
-    int idx = maxn + 1; if (idx < 0) idx = 0; if (idx > 999) idx = 999;
-    char id[16]; snprintf(id, sizeof(id), "%s%03d", SY_PATCH_PFX, idx);
-
-    cJSON *o = synth_preset_save();
-    char *txt = o ? cJSON_Print(o) : NULL;
-    if (o) cJSON_Delete(o);
-    if (!txt) return -1;
-
-    char path[64]; sy_patch_path(id, path, sizeof(path));
-    sd_lock_take();
-    writeJSONFile(path, txt);
-    sd_lock_give();
-    free(txt);
-    if (id_out) snprintf(id_out, n, "%s", id);
-    return 0;
+    return preset_store_save(&SY_PS, synth_preset_save(), id_out, n);
 }
 
 // load a patch by id (0 ok). Re-arms knob takeover against the new values.
 int synth_patch_load(const char *id)
 {
-    if (!id || !id[0]) return -1;
-    char path[64]; sy_patch_path(id, path, sizeof(path));
-    sd_lock_take();
-    cJSON *root = readJSONFileAsCJSON(path);
-    sd_lock_give();
+    cJSON *root = preset_store_load(&SY_PS, id);
     if (!root) return -1;
     synth_preset_load(root);
     cJSON_Delete(root);
@@ -432,27 +369,9 @@ int synth_patch_load(const char *id)
     return 0;
 }
 
-// fill ids[] NEWEST FIRST (PAT_NNN is zero-padded, so string-desc == numeric
-// desc). Returns the count (<= max).
 int synth_patch_list(char ids[][12], int max)
 {
-    int n = 0;
-    sd_lock_take();
-    DIR *d = opendir(SY_PATCH_DIR);
-    if (d) {
-        struct dirent *e;
-        while (n < max && (e = readdir(d)) != NULL)
-            if (sy_patch_id(e->d_name, ids[n], 12)) n++;
-        closedir(d);
-    }
-    sd_lock_give();
-    for (int i = 1; i < n; i++) {                     // insertion sort, descending
-        char key[12]; snprintf(key, sizeof(key), "%s", ids[i]);
-        int j = i - 1;
-        while (j >= 0 && strcasecmp(ids[j], key) < 0) { snprintf(ids[j+1], 12, "%s", ids[j]); j--; }
-        snprintf(ids[j+1], 12, "%s", key);
-    }
-    return n;
+    return preset_store_list(&SY_PS, ids, max);
 }
 
 extern const machine_ui_t synth_menu_ui;
