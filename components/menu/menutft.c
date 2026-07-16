@@ -12,6 +12,7 @@
 #include "freertos/timers.h"
 #include "strampler_version.h"
 #include "recording.h"
+#include "audio.h"
 #include "wifi.h"
 
 //definitions for element highlighting and selection
@@ -407,6 +408,11 @@ void menuTFTPrintClkOut(const char** items, const int* n_items, int *ch){
     static const char *names[] = {"OFF", "LEFT", "RIGHT"};
     int c = (*ch >= 0 && *ch <= 2) ? *ch : 0;
     printSettingsValue(items, n_items, "ClkOut", names[c]);
+}
+
+// live output-bus recorder toggle (press the row to start/stop); shows state
+void menuTFTPrintBounce(const char** items, const int* n_items){
+    printSettingsValue(items, n_items, "Bounce", audio_bounce_active() ? "REC" : "idle");
 }
 
 

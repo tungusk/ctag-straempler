@@ -40,8 +40,8 @@ static void autosave_kick(void);
 static xQueueHandle s_ev_queue = NULL;
 
 // core menu labels (machine-independent pages)
-static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "Listen", "ClkOut", "IP"};
-static const int n_settings_menus = 8;
+static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "Listen", "ClkOut", "Bounce", "IP"};
+static const int n_settings_menus = 9;
 
 static void incSettingsItem(int *tz, int index){
     if (index == SID_TIMEZONE) { if(*tz + 1 >= 12) *tz = 12; else (*tz)++; }
@@ -292,7 +292,7 @@ static int listen_cycle(int cur, int dir){
 }
 
 static int settings_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE, SID_LISTEN, SID_CLKOUT};
+    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE, SID_LISTEN, SID_CLKOUT, SID_BOUNCE};
     const int items = sizeof(menu_items)/sizeof(int);
     static int menu_pos = 0, selected = 0;
     static int remote_on = 1;
@@ -325,6 +325,7 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 clkout_ch = beatlisten_get_out();
                 menuTFTPrintListen(settings_menus, &n_settings_menus, &listen_mode);
                 menuTFTPrintClkOut(settings_menus, &n_settings_menus, &clkout_ch);
+                menuTFTPrintBounce(settings_menus, &n_settings_menus);
                 menuTFTPrintIP(settings_menus, &n_settings_menus);
             }else ESP_LOGE("UI", "couldn't fetch cfgData from state or file");
             break;
@@ -370,6 +371,11 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             break;
         case EV_SHORT_PRESS:
             if(menu_pos == -1) return M_ABOUT;   // About affordance
+            if(menu_items[menu_pos] == SID_BOUNCE){   // press-to-act: toggle output-bus record
+                if(audio_bounce_active()) audio_bounce_stop(); else audio_bounce_start();
+                menuTFTPrintBounce(settings_menus, &n_settings_menus);
+                break;
+            }
             if(menu_items[menu_pos] != SID_TIMEZONE && menu_items[menu_pos] != SID_REMOTE &&
                menu_items[menu_pos] != SID_LISTEN && menu_items[menu_pos] != SID_CLKOUT){
                 _state_json = (void*) cfgData;

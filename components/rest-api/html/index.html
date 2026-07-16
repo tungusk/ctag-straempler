@@ -979,6 +979,7 @@ function buildCvPerf(){
       +'<span style="flex:0 0 30px;color:#8ad">CV'+i+'</span>'
       +'<input type="range" min="0" max="4095" value="2048" id="cvs'+i+'" style="flex:1;min-width:120px" oninput="cvSlide('+i+',this.value)" onchange="cvEnd('+i+')">'
       +'<span id="cvsv'+i+'" style="flex:0 0 38px;text-align:right;color:#888;font-size:12px">50%</span>'
+      +((i==6||i==7)?'<span style="flex:0 0 auto;color:#5c5;font-size:10px" title="knobs 6 and 7 are the two fully-good knobs on this unit">knob</span>':'')
       +'<label style="flex:0 0 auto;color:#888;font-size:12px"><input type="checkbox" id="cvh'+i+'" style="width:auto;margin-right:4px" onchange="cvHold('+i+')">hold</label>'
       +'</div>';
   }

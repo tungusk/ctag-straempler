@@ -142,7 +142,11 @@ output lands as a REC_ take. Reuses the recording service verbatim
 `s_bounce` in audio.c. `audio_bounce_start/stop/active`; REST /bounce/start|stop|
 state; BOUNCE card on the Remote web tab. VERIFIED: bounced 6.46s of a playing
 SomaFM stream → REC take, correct length, real (non-silent) audio. Commit 69f0bad.
-v2: dedicated BNC_ prefix, on-device bounce button, bounce→auto-open in Editor.
+v2: dedicated BNC_ prefix, bounce→auto-open in Editor.
+POLISH (2026-07-15): on-device bounce toggle ADDED — a "Bounce" row in
+System→Settings (between ClkOut and IP), press-to-act, shows REC/idle, calls the
+same audio_bounce_start/stop. Also web perform sliders now tag CV6/CV7 as "knob"
+(the two fully-good knobs). Both TEST TONIGHT. Build+proof pass, flashed.
 
 ---
 
