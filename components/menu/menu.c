@@ -144,8 +144,8 @@ static void menuSwitchMachine(const machine_t *m);   // defined below
 
 // System (M_MORE): the machine list itself, with a "Settings" affordance
 // top-right. pos == -1 selects Settings; 0..n-1 select a machine to switch to.
-static const char *s_sys_names[16];
-static const machine_t *s_sys_machines[16];
+static const char *s_sys_names[17];
+static const machine_t *s_sys_machines[17];
 static int s_sys_n = 0;
 static int s_sys_pos = 0;   // -1 = Settings affordance
 static int s_sys_top = 0;   // first visible row (scroll offset; the roster now overflows the screen)
@@ -232,7 +232,7 @@ static int more_def_handler(int it_id, int event, void* event_data){
     switch(event){
         case EV_ENTERED_MENU:
             s_sys_n = 0;
-            for(int i = 0; machine_registry[i] != NULL && s_sys_n < 16; i++){
+            for(int i = 0; machine_registry[i] != NULL && s_sys_n < 17; i++){
                 if(strcmp(machine_registry[i]->name, "Stub") == 0) continue;
                 if(strcmp(machine_registry[i]->name, "Sampler2") == 0) continue;   // fallback until sampler3 verified
                 s_sys_machines[s_sys_n] = machine_registry[i];
@@ -285,8 +285,8 @@ static void menuSwitchMachine(const machine_t *m){
 }
 
 static int machine_sel_def_handler(int it_id, int event, void* event_data){
-    static const char *names[16];
-    static const machine_t *machines[16];   // visible-position -> machine (Stub filtered out)
+    static const char *names[17];
+    static const machine_t *machines[17];   // visible-position -> machine (Stub filtered out)
     static int n = 0;
     static int pos = 0;
 
@@ -294,7 +294,7 @@ static int machine_sel_def_handler(int it_id, int event, void* event_data){
         case EV_ENTERED_MENU:
             n = 0;
             pos = 0;
-            for(int i = 0; machine_registry[i] != NULL && n < 16; i++){
+            for(int i = 0; machine_registry[i] != NULL && n < 17; i++){
                 if(strcmp(machine_registry[i]->name, "Stub") == 0) continue; // hidden fallback
                 if(strcmp(machine_registry[i]->name, "Sampler2") == 0) continue;
                 if(machine_registry[i] == machine_active()) pos = n;
