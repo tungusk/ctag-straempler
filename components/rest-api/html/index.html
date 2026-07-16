@@ -50,8 +50,11 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 .vl{color:#555;font-size:11px}
 .sep{color:#333}
 .rmon{display:flex;gap:8px;align-items:flex-end;margin:4px 0 8px}
-.cvcol{display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;min-width:34px}
-.vsl{writing-mode:vertical-lr;direction:rtl;-webkit-appearance:slider-vertical;appearance:slider-vertical;width:26px;height:150px;padding:0}
+input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:vertical-lr;direction:rtl;width:22px;height:140px;padding:0;margin:2px 0;background:transparent;border:none}
+.vsl::-webkit-slider-runnable-track{background:#222;border-radius:3px}
+.vsl::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:18px;height:9px;background:#0af;border:none;border-radius:2px;cursor:pointer}
+.vsl::-moz-range-track{background:#222;border-radius:3px}
+.vsl::-moz-range-thumb{width:16px;height:9px;background:#0af;border:none;border-radius:2px;cursor:pointer}
 .rcol{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;color:#666}
 .rbar{width:22px;height:70px;background:#1e1e1e;border:1px solid #2a2a2a;border-radius:2px;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden}
 .rfill{background:#0af;width:100%;transition:height .12s}
@@ -170,18 +173,17 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
       <b style="flex:1;color:#0af">SCREEN</b>
       <label style="color:#888;margin-right:8px"><input type="checkbox" id="scrauto"> auto</label>
       <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
+      <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:6px;display:none" onclick="scrClose()">&#10005;</button>
     </div>
-    <img id="scrimg" alt="(press Refresh)" style="width:100%;max-width:480px;display:block;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333;background:#000;min-height:60px">
-    <div class="msg" style="margin-top:4px">Live TFT screenshot (PSRAM shadow framebuffer). Auto refreshes every 3s while this tab is open.</div>
+    <img id="scrimg" style="width:100%;max-width:480px;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
   </div>
-  <label>Inputs</label>
+  <label>Inputs + Perform</label>
   <div class="rmon" id="rmon"></div>
+  <div class="msg">Faders inject CV / knobs &#8212; release returns to the physical knob, <b>hold</b> sustains.</div>
   <div class="row tight tr2" style="margin-top:4px">
     <button class="btn" onclick="remTrig(1)">TR1 pulse</button>
     <button class="btn" onclick="remTrig(2)">TR2 pulse</button>
   </div>
-  <label>Perform &#8212; inject CV / knobs (releases back to the physical knob unless <b>held</b>)</label>
-  <div id="cvperf"></div>
   <label>Encoder</label>
   <div class="row tight enc4">
     <button class="btn" onclick="remEv('bwd')">&#8592; turn</button>
@@ -812,12 +814,18 @@ function loadRemote(){
       h+='<button class="btn" style="flex:0 0 auto" id="rmb-'+m+'" onclick="remMach(\''+m+'\')">'+esc(m)+'</button>';
     });
     document.getElementById('rmach').innerHTML=h;
-    // seed the bar columns once; pollStatus animates the fills
+    // seed the bar columns once; pollStatus animates the fills. Each CV column
+    // carries its perform FADER (meter above, fader below — one aligned strip):
+    // bar / CV# / value / fader / CLK tag / hold (Arlo: mixer layout)
     var mh='';
     for(var i=0;i<8;i++)
-      mh+='<div class="rcol"><div class="rbar"><div class="rfill" id="rf'+i+'" style="height:0%"></div></div><span id="rl'+i+'">CV'+(i+1)+'</span><span id="rv'+i+'">-</span></div>';
+      mh+='<div class="rcol"><div class="rbar"><div class="rfill" id="rf'+i+'" style="height:0%"></div></div><span id="rl'+i+'">CV'+(i+1)+'</span><span id="rv'+i+'">-</span>'
+        +'<input type="range" class="vsl" orient="vertical" min="0" max="4095" value="2048" id="cvs'+(i+1)+'" oninput="cvSlide('+(i+1)+',this.value)" onchange="cvEnd('+(i+1)+')">'
+        +'<span id="cvclk'+(i+1)+'" style="color:#0af;font-size:9px;min-height:11px">&nbsp;</span>'
+        +'<label style="color:#666;font-size:9px;display:flex;flex-direction:column;align-items:center;gap:1px"><input type="checkbox" id="cvh'+(i+1)+'" style="width:auto" onchange="cvHold('+(i+1)+')">hold</label>'
+        +'</div>';
     // TR dots stack vertically in one column (Arlo) — less width, same read
-    mh+='<div class="rcol" style="justify-content:flex-end">'
+    mh+='<div class="rcol">'
       +'<div class="rdot" id="rt0"></div><span id="rlt0">TR1</span>'
       +'<div class="rdot" id="rt1" style="margin-top:4px"></div><span id="rlt1">TR2</span></div>';
     // stereo audio level bars ride with the input monitor (green = audio):
@@ -847,8 +855,10 @@ function updateClkTag(){
   for(var i=0;i<8;i++){
     var l=document.getElementById('rl'+i);
     if(!l)continue;
-    l.textContent='CV'+(i+1)+(cs===i?'·CLK':'');
     l.style.color=cs===i?'#0af':'';
+    // the tag rides in its own slot under the fader (replaced the old % readout)
+    var t=document.getElementById('cvclk'+(i+1));
+    if(t)t.innerHTML=cs===i?'CLK':'&nbsp;';
   }
   // 8/9 = TR1/TR2; 10 = AUDIO (the beat listener) — then the ear IS the clock,
   // so the IN meter wears the tag
@@ -991,23 +1001,8 @@ function remTrig(t){fetch('/remote/trig?t='+t+'&ms=40',{method:'POST'}).catch(fu
 // page) lets it decay — nothing can be pinned by a stale value.
 var cvLast=[0,0,0,0,0,0,0,0,0],cvHoldT={},cvThr={};
 function postCV(ch,v,ms){fetch('/remote/cv?ch='+ch+'&v='+v+'&ms='+(ms||300),{method:'POST'}).catch(function(){});}
-function buildCvPerf(){
-  // vertical faders, mixer-style: label / fader / % / hold, 8 columns
-  var el=document.getElementById('cvperf');if(!el)return;
-  var h='<div style="display:flex;gap:6px;justify-content:space-between;max-width:480px">';
-  for(var i=1;i<=8;i++){
-    h+='<div class="cvcol">'
-      +'<span style="color:#8ad">CV'+i+'</span>'
-      +'<input type="range" class="vsl" orient="vertical" min="0" max="4095" value="2048" id="cvs'+i+'" oninput="cvSlide('+i+',this.value)" onchange="cvEnd('+i+')">'
-      +'<span id="cvsv'+i+'" style="color:#888;font-size:12px">50%</span>'
-      +'<label style="color:#888;font-size:11px;display:flex;flex-direction:column;align-items:center;gap:2px"><input type="checkbox" id="cvh'+i+'" style="width:auto" onchange="cvHold('+i+')">hold</label>'
-      +'</div>';
-  }
-  el.innerHTML=h+'</div>';
-}
 function cvSlide(ch,v){
   v=+v;cvLast[ch]=v;
-  var sv=document.getElementById('cvsv'+ch);if(sv)sv.textContent=Math.round(v/4095*100)+'%';
   var now=Date.now();                       // throttle drag posts to ~1/70ms per channel
   if(!cvThr[ch]||now-cvThr[ch]>=70){cvThr[ch]=now;postCV(ch,v,300);}
 }
@@ -1109,9 +1104,18 @@ function scrShot(){
   if(scrBusy)return; scrBusy=true;
   var img=document.getElementById('scrimg');
   var next=new Image();
-  next.onload=function(){img.src=next.src;scrBusy=false;};
+  next.onload=function(){
+    img.src=next.src;img.style.display='block';                 // card expands on first shot
+    document.getElementById('scrclose').style.display='block';
+    scrBusy=false;
+  };
   next.onerror=function(){scrBusy=false;};
   next.src='/screenshot?t='+Date.now();
+}
+function scrClose(){          // collapse back to the header line; stop auto too
+  document.getElementById('scrimg').style.display='none';
+  document.getElementById('scrclose').style.display='none';
+  document.getElementById('scrauto').checked=false;
 }
 function scrPoll(){
   if(!document.getElementById('scrauto').checked)return;
@@ -1335,7 +1339,7 @@ function pollStatus(){
 }
 setInterval(pollStatus,500);
 pollImport();
-buildCvPerf();   // Remote-tab perform sliders
+// (perform faders are built into the input-meter columns by loadRemote)
 bcastInit();     // broadcast Listen link + player URL (:8000)
 tab(3);          // Remote is the default tab
 pollStatus();
