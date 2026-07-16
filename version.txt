@@ -1,1 +1,1 @@
-shadow-fb-v1a-20260716 (web SCREEN card - live screenshot on the Remote tab)
+web-remote-v2-20260716 (Remote tab: vertical CV faders, bounce+broadcast at bottom)
