@@ -46,6 +46,7 @@ static bool s_last_loading = true;   // reader-load in progress at the last redr
 static int  s_elem = 0;
 static bool s_in_bar = false;
 static char s_msg[24];
+static void draw_speed(void);   // fwd: CV7 speed indicator, defined near draw_waveform
 
 // x pixel of slice boundary s (slices are non-uniform in transient mode)
 static int slice_x(int s){
@@ -151,6 +152,7 @@ static void live_update_highlights(void){
     s_last_cur = cur;
     s_last_sel = sel;
     draw_slice_count();                 // keep the slice number current
+    draw_speed();                       // repaint over any slice redraw
 }
 
 static void draw_slice_region(int s, color_t c, bool fill){
@@ -163,6 +165,25 @@ static void draw_slice_region(int s, color_t c, bool fill){
         TFT_fillRect(x0 + 1, WY, x1 - x0 - 2, WH, _bg);
     }
     TFT_drawRect(x0, WY, x1 - x0, WH, c);
+}
+
+// CV7 playback-speed indicator (transport top-left): "1:1" green when locked at
+// unity, else the base varispeed ratio (e.g. "1.42x"); v/oct is separate
+static void draw_speed(void){
+    float base;
+    if (sl.pitch_cv >= 1843 && sl.pitch_cv <= 2253) base = 1.0f;
+    else if (sl.pitch_cv > 2253) base = 1.0f + (float)(sl.pitch_cv - 2253) / 1842.0f;
+    else                         base = 0.5f + (float)sl.pitch_cv / 1843.0f * 0.5f;
+    bool lock = (base > 0.99f && base < 1.01f);
+    char s[10];
+    if (lock) snprintf(s, sizeof(s), "1:1");
+    else      snprintf(s, sizeof(s), "%.2fx", base);
+    Font f = cfont; TFT_setFont(DEFAULT_FONT, NULL);
+    int fh = TFT_getfontheight();
+    _bg = BG; TFT_fillRect(WX + 1, WY + 1, 54, fh + 2, _bg);
+    _fg = lock ? (color_t){60, 220, 90} : (color_t){150, 160, 200};
+    TFT_print(s, WX + 3, WY + 1);
+    cfont = f;
 }
 
 static void draw_waveform(void){
@@ -186,6 +207,7 @@ static void draw_waveform(void){
     // selected slice outline (bright) + current playing outline
     draw_slice_region(sl.sel, SEL_COL, false);
     if (sl.playing) draw_slice_region(sl.cur, CUR_COL, false);
+    draw_speed();
 }
 
 static void live_full_redraw(void){
@@ -228,6 +250,10 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
                                + (unsigned)sl.fx_rv.mode * 131u
                                + (unsigned)(sl.fx_rvmix * 1000.0f) * 17u;
                 if (fxsig != s_fxsig){ draw_fx_box(); s_fxsig = fxsig; }
+            }
+            {   // speed indicator follows knob7 (CV7 varispeed)
+                static int s_pcv = -1;
+                if (sl.pitch_cv != s_pcv){ draw_speed(); s_pcv = sl.pitch_cv; }
             }
             if (event == EV_TIMER_REPEATING_SLOW){
                 // streaming internals through /status v1 (remote debugging)
