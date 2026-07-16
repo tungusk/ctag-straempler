@@ -380,6 +380,13 @@ static esp_err_t slicer_start(void)
     sl.level = 255;
     sl.pitch_cv = 2048;
     sl.inc = 1.0f;
+    // FX: filter + reverb (reverb slab is ~170 KB PSRAM; fails soft to bypass)
+    sl.fx_cut = 8000.0f; sl.fx_res = 0.2f; sl.fx_rvmix = 0.25f;
+    svf_reset(&sl.fx_flt_l); svf_reset(&sl.fx_flt_r);
+    if (reverb_init(&sl.fx_rv) == ESP_OK) {
+        reverb_set_mode(&sl.fx_rv, RV_ROOM);
+        reverb_set_mix(&sl.fx_rv, sl.fx_rvmix);
+    }
     s_run = true;
     // unpinned: file readers pinned to core 0 cause WiFi audio clicks
     xTaskCreate(reader_task, "sl_reader", 4096, NULL, 6, NULL);
@@ -401,6 +408,7 @@ static void slicer_stop(void)
     free(sl.heads); sl.heads = NULL;
     free(sl.ring);  sl.ring = NULL;
     free(sl.env);   sl.env = NULL;
+    reverb_free(&sl.fx_rv);
 }
 
 // ---- audio ---------------------------------------------------------------
@@ -430,12 +438,16 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     if (pressed & 1) sl.cmd_fire = 1;
     if (pressed & 2) sl.cmd_advance = 1;
 
-    // knob 6 (CV6) selects the slice — update on movement (encoder co-writes)
+    // CONTEXTUAL knobs 6/7: FX box selected -> filter cutoff/res; else the usual
+    // slice-select (CV6) + pitch (CV7). ui_ctx is set by the Live UI.
     static uint16_t last_cv6 = 0xFFFF;
     uint16_t cv6 = cvm[5];
     if (last_cv6 == 0xFFFF) last_cv6 = cv6;
-    if (cv6 > last_cv6 + 40 || cv6 + 40 < last_cv6) {
-        int s = (int)((uint32_t)cv6 * sl.n_slices / 4096);
+    if (sl.ui_ctx == 1) {                            // FX context
+        sl.fx_cut = 40.0f * powf(300.0f, (float)cvm[5] / 4095.0f);   // 40 Hz .. ~12 kHz (log)
+        sl.fx_res = (float)cvm[6] / 4095.0f;
+    } else if (cv6 > last_cv6 + 40 || cv6 + 40 < last_cv6) {
+        int s = (int)((uint32_t)cv6 * sl.n_slices / 4096);           // CV6 = slice select (on movement)
         sl.sel = (s >= sl.n_slices) ? sl.n_slices - 1 : s;
         last_cv6 = cv6;
     }
@@ -444,7 +456,9 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     uint16_t c2 = cvm[1] > 900 ? cvm[1] - 900 : 0;
     sl.level = c2 ? (uint16_t)((uint32_t)c2 * 255 / 3195) : 255;
 
-    // knob 7 (CV7) pitch: unity plateau, 0.5x..2.0x outside it
+    // knob 7 (CV7) pitch: unity plateau, 0.5x..2.0x outside it (skipped in FX
+    // context, where knob7 is the filter resonance — pitch freezes at its value)
+    if (sl.ui_ctx != 1) {
     sl.pitch_cv = cvm[6];
     if (sl.pitch_cv >= 1843 && sl.pitch_cv <= 2253) sl.inc = 1.0f;
     else if (sl.pitch_cv > 2253) sl.inc = 1.0f + (float)(sl.pitch_cv - 2253) / 1842.0f;
@@ -463,6 +477,7 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     // proven-clean knob7 limit); down-pitch is unbounded (slower = no starve).
     if (sl.inc > 2.0f) sl.inc = 2.0f;
     else if (sl.inc < 0.125f) sl.inc = 0.125f;   // 3 octaves down
+    }   // end !FX-context pitch
 
     if (sl.cmd_fire)    { sl.cmd_fire = 0;    fire_slice(sl.sel); }
     if (sl.cmd_advance) { sl.cmd_advance = 0; fire_slice(sl.sel); sl.sel = (sl.sel + 1) % sl.n_slices; }
@@ -470,6 +485,17 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
 
     int frames = MACHINE_BLOCK / 2;
     bool starved = false;
+    // FX filter (block-rate coeffs) — resonant low-pass per sample, reverb after
+    bool fx = sl.fx_on;
+    float fcoef = 0.0f, fq = 0.0f;
+    if (fx) {
+        float fc = sl.fx_cut < 30.0f ? 30.0f : sl.fx_cut;
+        fcoef = svf_coef(fc, SL_RATE, 1.0f);
+        fq = svf_damp(sl.fx_res, 0.4f, 2.0f);
+        if (!(fabsf(sl.fx_flt_l.lp) < 1e9f) || !(fabsf(sl.fx_flt_r.lp) < 1e9f)) {
+            svf_reset(&sl.fx_flt_l); svf_reset(&sl.fx_flt_r);   // NaN self-heal
+        }
+    }
     for (int f = 0; f < frames; f++) {
         int32_t l = 0, r = 0;
         if (sl.playing) {
@@ -502,9 +528,19 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
                 }
             }
         }
+        if (fx) {   // resonant low-pass
+            float lo, ro;
+            svf_step(&sl.fx_flt_l, (float)l, fcoef, fq, &lo, NULL, NULL);
+            svf_step(&sl.fx_flt_r, (float)r, fcoef, fq, &ro, NULL, NULL);
+            l = lo > 32767.0f ? 32767 : lo < -32768.0f ? -32768 : (int32_t)lo;
+            r = ro > 32767.0f ? 32767 : ro < -32768.0f ? -32768 : (int32_t)ro;
+        }
         out[f * 2]     = l << 16;
         out[f * 2 + 1] = r << 16;
     }
+    // reverb after the filter (in place on the output block)
+    if (fx && sl.fx_rv.slab && sl.fx_rv.mode != RV_OFF)
+        reverb_block_i32(&sl.fx_rv, out, frames);
     if (starved) sl.dbg_starve++;
 }
 

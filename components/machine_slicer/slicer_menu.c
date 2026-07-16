@@ -32,6 +32,25 @@ static const color_t CUR_COL = {40, 200, 90};    // playing slice
 
 static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1, s_last_peaks = -1;
 static bool s_last_loading = true;   // reader-load in progress at the last redraw
+// two-level encoder: level 1 picks an element (0=Bar 1=File 2=FX); pressing Bar
+// enters level 2 (s_in_bar) where turns hand-select slices and press fires.
+static int  s_elem = 0;
+static bool s_in_bar = false;
+
+// bottom selector: [Bar] [File] [FX:on/off], the active element in cyan
+static void draw_elements(void){
+    int fh = TFT_getfontheight();
+    int y = _height - fh - 2;
+    _bg = TFT_BLACK; TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
+    char fxl[12]; snprintf(fxl, sizeof(fxl), "FX:%s", sl.fx_on ? "on" : "off");
+    const char *labs[3] = { s_in_bar ? "[Bar]" : "Bar", "File", fxl };
+    int x = 6;
+    for (int i = 0; i < 3; i++){
+        _fg = (i == s_elem) ? TFT_CYAN : (color_t){120, 120, 130};
+        TFT_print((char*)labs[i], x, y);
+        x += TFT_getStringWidth((char*)labs[i]) + 18;
+    }
+}
 static char s_msg[24];
 
 // x pixel of slice boundary s (slices are non-uniform in transient mode)
@@ -139,10 +158,7 @@ static void live_full_redraw(void){
         draw_waveform();
     }
     draw_info_line();
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("turn:select  press:fire  hold:exit", 6, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
+    draw_elements();
     s_last_cur = sl.cur; s_last_sel = sl.sel; s_last_slices = sl.n_slices; s_last_peaks = sl.peak_n;
     s_last_loading = sl.loading;
 }
@@ -150,6 +166,7 @@ static void live_full_redraw(void){
 static int slicer_live_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU:
+            s_elem = 0; s_in_bar = false; sl.ui_ctx = 0;
             live_full_redraw();
             break;
         case EV_TIMER_REPEATING_SLOW:
@@ -173,26 +190,31 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
             }
             break;
         case EV_FWD:
-            sl.sel = (sl.sel + 1) % sl.n_slices;
-            live_update_highlights();
+            if (s_in_bar){ sl.sel = (sl.sel + 1) % sl.n_slices; live_update_highlights(); }
+            else { s_elem = (s_elem + 1) % 3; sl.ui_ctx = (s_elem == 2) ? 1 : 0; draw_elements(); }
             break;
         case EV_BWD:
-            sl.sel = (sl.sel + sl.n_slices - 1) % sl.n_slices;
-            live_update_highlights();
+            if (s_in_bar){ sl.sel = (sl.sel + sl.n_slices - 1) % sl.n_slices; live_update_highlights(); }
+            else { s_elem = (s_elem + 2) % 3; sl.ui_ctx = (s_elem == 2) ? 1 : 0; draw_elements(); }
             break;
         case EV_SHORT_PRESS:
-            sl.cmd_fire = 1;            // audition the selected slice
+            if (s_in_bar) sl.cmd_fire = 1;              // play the selected slice
+            else if (s_elem == 0){ s_in_bar = true; draw_elements(); }   // enter the bar
+            else if (s_elem == 1) return M_SLICER_LOAD;                  // File -> browser (SLICES)
+            else { sl.fx_on = !sl.fx_on; draw_elements(); }             // FX toggle
             break;
         case EV_LONG_PRESS:
-            return M_SLICER_SETUP;   // toggle Live -> Setup (no hub)
+            if (s_in_bar){ s_in_bar = false; draw_elements(); break; }  // pop out of the bar
+            sl.ui_ctx = 0;
+            return M_SLICER_SETUP;   // element level: Live -> Setup (no hub)
         default: break;
     }
     return 0;
 }
 
 // ---- Setup page -----------------------------------------------------------
-static const char *setup_labels[] = {"Mode", "Slices", "Sensitivity", "Sample", "Auto", "Reverse"};
-#define SL_SETUP_N 6
+static const char *setup_labels[] = {"Mode", "Slices", "Sensitivity", "Sample", "Auto", "Reverse", "Reverb", "Rev Mix"};
+#define SL_SETUP_N 8
 
 
 static void setup_redraw(int pos, int sel){
@@ -220,6 +242,8 @@ static void setup_redraw(int pos, int sel){
             case 3: snprintf(v, sizeof(v), "%s", sl.sample[0] ? sl.sample : "(none)"); break;
             case 4: snprintf(v, sizeof(v), "%s", sl.auto_on ? "ON" : "OFF"); break;
             case 5: snprintf(v, sizeof(v), "%s", sl.reverse ? "ON" : "OFF"); break;
+            case 6: snprintf(v, sizeof(v), "%s", reverb_mode_name(sl.fx_rv.mode)); break;
+            case 7: snprintf(v, sizeof(v), "%.0f%%", sl.fx_rvmix * 100.0f); break;
         }
         TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
     }
@@ -258,6 +282,8 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
                 else if(pos==1) cycle_target(+1);
                 else if(pos==4) sl.auto_on = !sl.auto_on;
                 else if(pos==5) sl.reverse = !sl.reverse;   // reader rebuilds heads
+                else if(pos==6){ int m=sl.fx_rv.mode+1; if(m>=RV_N_MODES)m=RV_OFF; reverb_set_mode(&sl.fx_rv,m); }
+                else if(pos==7){ sl.fx_rvmix+=0.05f; if(sl.fx_rvmix>1)sl.fx_rvmix=1; reverb_set_mix(&sl.fx_rv,sl.fx_rvmix); }
             } else { pos++; if(pos >= SL_SETUP_N) pos = -1; }
             setup_redraw(pos, sel);
             break;
@@ -267,6 +293,8 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
                 else if(pos==1) cycle_target(-1);
                 else if(pos==4) sl.auto_on = !sl.auto_on;
                 else if(pos==5) sl.reverse = !sl.reverse;   // reader rebuilds heads
+                else if(pos==6){ int m=sl.fx_rv.mode-1; if(m<0)m=RV_N_MODES-1; reverb_set_mode(&sl.fx_rv,m); }
+                else if(pos==7){ sl.fx_rvmix-=0.05f; if(sl.fx_rvmix<0)sl.fx_rvmix=0; reverb_set_mix(&sl.fx_rv,sl.fx_rvmix); }
             } else { pos--; if(pos < -1) pos = SL_SETUP_N - 1; }
             setup_redraw(pos, sel);
             break;
@@ -284,7 +312,7 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
 
 // ---- Load browser: the shared two-level widget (folders -> big-name list) --
 static int slicer_load_handler(int it_id, int event, void *ev_data){
-    if (event == EV_ENTERED_MENU){ sample_browser_enter(false, "Load Sample", sl.sample); return 0; }
+    if (event == EV_ENTERED_MENU){ sample_browser_enter_dir(false, "Load Sample", sl.sample, SAMPLE_DIR_SLICES); return 0; }
     int r = sample_browser_event(event);
     if (r == 1){ slicer_load((char*)sample_browser_selected()); return M_SLICER_SETUP; }
     if (r == 2) return M_SLICER_SETUP;
