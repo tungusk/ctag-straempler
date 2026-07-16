@@ -68,3 +68,12 @@ the tonal instrument sampler — see [[instrument-sampler-design]].)
 **Verdict: high feasibility via Daisy-SOM + firmware-first.** Genuinely the next
 project. Arlo's module ideas are the fuel. No decision needed today; must not stall
 the current marathon (which is harvesting real value from this device as a voice).
+
+## Selectable bootloader — OTA shipped, boot MENU shelved (2026-07-15)
+OTA + rollback are DONE (two 3 MB slots, `tools/ota.sh`, auto-revert; the
+churn-killer). The **boot menu** (hold TR1+TR2 → Normal / pick-slot / Safe-mode /
+Factory-reset) is **shelved on purpose**: with only one firmware it's clutter — keep
+the bootloader invisible until a SECOND bootable image exists to select between.
+Revisit when an 8 MB-adapted TBD (or other firmware) is ready to load into ota_1.
+TBD itself is shelved (16 MB design vs this 8 MB unit + no CV-out; working fork
+build archived at `~/ctag-straempler-backups/tbd-strampler-cloud-16mb/`).
