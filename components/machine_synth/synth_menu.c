@@ -328,15 +328,21 @@ static void mtx_redraw(int pos, int field)   // field: 0 nav / 1 edit src / 2 ed
         TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
         _fg = TFT_WHITE;
         TFT_print((char *)mtx_labels[i], 8, y);
-        char src[8];
+        char src[8], amt[10];
         if (sy.mtx_src[i] < 0) snprintf(src, sizeof(src), "off");
         else                   snprintf(src, sizeof(src), "CV%d", sy.mtx_src[i] + 1);
-        char amt[10]; snprintf(amt, sizeof(amt), "%+d%%", (int)(sy.mtx_amt[i] * 100.0f));
+        snprintf(amt, sizeof(amt), "%+d%%", (int)(sy.mtx_amt[i] * 100.0f));
+        // the field being edited wears [ ] (house convention) — only one at a time
+        char srcb[16], amtb[16];
+        if (i == pos && field == 1) snprintf(srcb, sizeof(srcb), "[ %s ]", src);
+        else                        snprintf(srcb, sizeof(srcb), "%s", src);
+        if (i == pos && field == 2) snprintf(amtb, sizeof(amtb), "[ %s ]", amt);
+        else                        snprintf(amtb, sizeof(amtb), "%s", amt);
         _fg = (i == pos && field == 1) ? TFT_CYAN : (color_t){170,170,180};
-        TFT_print(src, _width - 128, y);
+        TFT_print(srcb, _width - 145, y);
         _fg = (sy.mtx_src[i] < 0) ? (color_t){80,80,80}
             : (i == pos && field == 2) ? TFT_CYAN : TFT_WHITE;
-        TFT_print(amt, _width - TFT_getStringWidth(amt) - 10, y);
+        TFT_print(amtb, _width - TFT_getStringWidth(amtb) - 10, y);
     }
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
