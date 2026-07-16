@@ -334,9 +334,9 @@ static void mtx_redraw(int pos, int field)   // field: 0 nav / 1 edit src / 2 ed
         snprintf(amt, sizeof(amt), "%+d%%", (int)(sy.mtx_amt[i] * 100.0f));
         // the field being edited wears [ ] (house convention) — only one at a time
         char srcb[16], amtb[16];
-        if (i == pos && field == 1) snprintf(srcb, sizeof(srcb), "[ %s ]", src);
+        if (i == pos && field == 1) snprintf(srcb, sizeof(srcb), "[%s]", src);
         else                        snprintf(srcb, sizeof(srcb), "%s", src);
-        if (i == pos && field == 2) snprintf(amtb, sizeof(amtb), "[ %s ]", amt);
+        if (i == pos && field == 2) snprintf(amtb, sizeof(amtb), "[%s]", amt);
         else                        snprintf(amtb, sizeof(amtb), "%s", amt);
         _fg = (i == pos && field == 1) ? TFT_CYAN : (color_t){170,170,180};
         TFT_print(srcb, _width - 145, y);
