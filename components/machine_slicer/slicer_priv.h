@@ -1,6 +1,8 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "svf.h"
+#include "reverb.h"
 
 // M3 slicer — STREAMING edition (2026-07-13, "the real fix, deck-sized").
 // The whole-sample PSRAM buffer is gone and with it the length ceiling: any
@@ -79,6 +81,15 @@ typedef struct {
     float   last_l, last_r;       // last output frame (declick / starve decay)
     float   xf_l, xf_r;           // crossfade-FROM (last output at the last fire)
     int     xfade;                // frames left in the fire crossfade (0 = none)
+
+    // FX (output stage): a resonant filter then reverb, both bypassable
+    bool     fx_on;               // master FX enable (the fx box toggles this)
+    int      ui_ctx;              // 0 = bar (CV6/7 = select/pitch), 1 = fx (knob6/7 = cutoff/res)
+    svf_t    fx_flt_l, fx_flt_r;  // stereo low-pass
+    float    fx_cut;              // filter cutoff Hz
+    float    fx_res;              // filter resonance 0..1
+    reverb_t fx_rv;               // Dattorro reverb (lazy PSRAM slab)
+    float    fx_rvmix;            // reverb wet 0..1
 
     // Octatrack .ot sidecar
     uint32_t ot_pt[SL_OT_SLICES + 1];
