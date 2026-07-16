@@ -1,6 +1,6 @@
 [submodule "ESP32_TFT_library"]
 	path = components/tft/ESP32_TFT_library
-	url = https://github.com/ctag-fh-kiel/ESP32_TFT_library.git
+	url = https://github.com/tungusk/ESP32_TFT_library.git
 [submodule "hardware/ctag/esp32-eurorack-audio"]
 	path = hardware/ctag/esp32-eurorack-audio
 	url = https://github.com/ctag-fh-kiel/esp32-eurorack-audio.git
