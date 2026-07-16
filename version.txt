@@ -1,1 +1,1 @@
-web-remote-v4a-20260716 (input strip top-aligned)
+web-remote-v5-20260716 (CLK replaces the pct readout, bare hold checkboxes)
