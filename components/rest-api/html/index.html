@@ -178,8 +178,13 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
       <a class="btn" id="bclinkmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
       <a class="btn" id="bclink" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
     </div>
+    <div class="row tight" style="align-items:center;margin-top:4px">
+      <span style="flex:1;color:#888">line input</span>
+      <a class="btn" id="bclinkinmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
+      <a class="btn" id="bclinkin" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
+    </div>
     <audio id="bcaudio" controls preload="none" style="width:100%;margin-top:6px"></audio>
-    <div class="msg" style="margin-top:4px">Live stream of the module OUTPUT (port 8000, one listener). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses MP3.</div>
+    <div class="msg" style="margin-top:4px">Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.</div>
   </div>
   <label>Inputs</label>
   <div class="rmon" id="rmon"></div>
@@ -1076,6 +1081,8 @@ function bcastInit(){
   var base=location.protocol+'//'+location.hostname+':8000/';
   var l=document.getElementById('bclink'); if(l)l.href=base;
   var m=document.getElementById('bclinkmp3'); if(m)m.href=base+'live.mp3';
+  var il=document.getElementById('bclinkin'); if(il)il.href=base+'in';
+  var im=document.getElementById('bclinkinmp3'); if(im)im.href=base+'in.mp3';
   var a=document.getElementById('bcaudio'); if(a&&!a.getAttribute('src'))a.setAttribute('src',base+'live.mp3');
 }
 function bcastPoll(){

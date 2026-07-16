@@ -83,9 +83,10 @@ until initWifi. A task that calls `socket()` (assert: "Invalid mbox") or
 `isWiFiConnected()` (assert: "xEventGroup") before then crash-LOOPS the boot. The
 output-broadcast server is created by `audio_broadcast_init()`, called from ui.c
 right after `initWifi()`, not from initAudio — do the same for any new socket
-task. There is a raw lwip socket server on **port 8000** streaming the live
-output bus (`http://<ip>:8000/` = stereo WAV, `http://<ip>:8000/live.mp3` =
-shine 96 kbps mono MP3, icecast-style) — deliberately NOT on the shared httpd,
+task. There is a raw lwip socket server on **port 8000** streaming live audio
+(`http://<ip>:8000/` = output bus as stereo WAV, `/live.mp3` = output as
+shine 96 kbps mono MP3 icecast-style, `/in` + `/in.mp3` = the same two taps
+on the LINE INPUT — streaming-bridge mode) — deliberately NOT on the shared httpd,
 whose single request task a forever-streaming handler would freeze. The MP3
 encoder (vendored `components/shine`, LGPL, state in PSRAM) is realtime next
 to every machine EXCEPT a playing Radio (helix+shine thrash the PSRAM cache:
