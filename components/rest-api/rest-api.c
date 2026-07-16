@@ -5,6 +5,8 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
+#include "esp_ota_ops.h"
+#include "esp_system.h"
 #include "ff.h"
 #include <esp_http_server.h>
 #include "ui_events.h"
@@ -1552,8 +1554,70 @@ static esp_err_t bcast_state_handler(httpd_req_t *req)
 
 // ─── server lifecycle ────────────────────────────────────────────────────────
 
+// ─── POST /ota — stream a new firmware image into the inactive OTA slot ──────
+// (esptool-free updates over WiFi; reboots into the new image on success)
+//   curl -X POST --data-binary @build/ctag-straempler.bin http://<ip>/ota
+static esp_err_t ota_post_handler(httpd_req_t *req)
+{
+    const esp_partition_t *upd = esp_ota_get_next_update_partition(NULL);
+    if (!upd) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no OTA slot"); return ESP_FAIL; }
+    if (req->content_len < 0x10000) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "image too small"); return ESP_FAIL; }
+    esp_ota_handle_t h = 0;
+    if (esp_ota_begin(upd, OTA_SIZE_UNKNOWN, &h) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_begin failed"); return ESP_FAIL;
+    }
+    char *buf = malloc(4096);
+    if (!buf) { esp_ota_abort(h); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
+    int remaining = req->content_len, total = 0;
+    while (remaining > 0) {
+        int r = httpd_req_recv(req, buf, remaining > 4096 ? 4096 : remaining);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            free(buf); esp_ota_abort(h);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"); return ESP_FAIL;
+        }
+        if (esp_ota_write(h, buf, r) != ESP_OK) {
+            free(buf); esp_ota_abort(h);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_write failed"); return ESP_FAIL;
+        }
+        total += r; remaining -= r;
+    }
+    free(buf);
+    esp_err_t err = esp_ota_end(h);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            err == ESP_ERR_OTA_VALIDATE_FAILED ? "image validation failed" : "ota_end failed");
+        return ESP_FAIL;
+    }
+    if (esp_ota_set_boot_partition(upd) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set_boot failed"); return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "OTA: %d bytes -> %s, rebooting", total, upd->label);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"ok\":true,\"rebooting\":true}");
+    vTaskDelay(pdMS_TO_TICKS(600));   // let the response flush before the reboot
+    esp_restart();
+    return ESP_OK;
+}
+
+// GET /ota/state — running partition + which slot the next update lands in
+static esp_err_t ota_state_handler(httpd_req_t *req)
+{
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    const esp_partition_t *nxt = esp_ota_get_next_update_partition(NULL);
+    const esp_app_desc_t *desc = esp_ota_get_app_description();
+    char s[192];
+    snprintf(s, sizeof(s), "{\"running\":\"%s\",\"next\":\"%s\",\"ver\":\"%s\"}",
+             run ? run->label : "?", nxt ? nxt->label : "?", desc ? desc->version : "?");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_sendstr(req, s);
+}
+
 static httpd_uri_t uris[] = {
     { .uri = "/",           .method = HTTP_GET,    .handler = landing_handler },
+    { .uri = "/ota",        .method = HTTP_POST,   .handler = ota_post_handler },
+    { .uri = "/ota/state",  .method = HTTP_GET,    .handler = ota_state_handler },
     { .uri = "/sysinfo",    .method = HTTP_GET,    .handler = sysinfo_get_handler },
     { .uri = "/files",      .method = HTTP_GET,    .handler = files_get_handler },
     { .uri = "/files",      .method = HTTP_DELETE, .handler = files_delete_handler },

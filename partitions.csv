@@ -1,5 +1,11 @@
 # Name,   Type, SubType, Offset,  Size, Flags
-# Note: if you change the phy_init or app partition offset, make sure to change the offset in Kconfig.projbuild
+# OTA layout (2026-07-15): two app slots so firmware can update over WiFi.
+# 8 MB flash. App image is ~1.85 MB and growing -> 3 MB slots give headroom.
+# No factory partition: the serial-flashable bin/synth-v1 archive is the
+# ultimate recovery image. otadata picks the active slot; nvs kept first so
+# existing contents survive the migration (WiFi creds live on the SD card).
 nvs,      data, nvs,     ,        0x6000,
+otadata,  data, ota,     ,        0x2000,
 phy_init, data, phy,     ,        0x1000,
-factory,  app,  factory, ,        2M,
+ota_0,    app,  ota_0,   ,        0x300000,
+ota_1,    app,  ota_1,   ,        0x300000,
