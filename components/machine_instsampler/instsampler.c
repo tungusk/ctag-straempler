@@ -11,6 +11,7 @@
 #include "cvsmooth.h"
 #include "svf.h"
 #include "sample_ram.h"
+#include "preset_store.h"
 #include "instsampler_priv.h"
 
 is_state_t inst;
@@ -365,6 +366,30 @@ static void keys_preset_load(const cJSON *node)
         }
     }
     inst.knob_ctx = -1;   // re-arm knob takeover against the loaded values
+}
+
+// ---- named patch files: usr/keys/PAT_NNN.jsn (shared preset_store) ---------
+// The autosave (de)serializers above do the state work; keys_preset_load
+// already re-arms knob takeover (knob_ctx = -1) and reloads the sample.
+static const preset_store_t KS_PS = { "/sdcard/usr/keys", "PAT_" };
+
+int keys_patch_save(char *id_out, size_t n)
+{
+    return preset_store_save(&KS_PS, keys_preset_save(), id_out, n);
+}
+
+int keys_patch_load(const char *id)
+{
+    cJSON *root = preset_store_load(&KS_PS, id);
+    if (!root) return -1;
+    keys_preset_load(root);
+    cJSON_Delete(root);
+    return 0;
+}
+
+int keys_patch_list(char ids[][12], int max)
+{
+    return preset_store_list(&KS_PS, ids, max);
 }
 
 extern const machine_ui_t keys_menu_ui;

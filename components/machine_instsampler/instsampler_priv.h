@@ -96,3 +96,9 @@ int keys_load_zone(const char *name);
 // snap a frame index to the nearest RISING zero crossing in zone[0]'s buffer
 // (declick for loop points). Offline scan — call from the UI/adjust path only.
 uint32_t keys_snap_zero(uint32_t frame);
+
+// named patches — usr/keys/PAT_NNN.jsn via the shared preset_store (the #23
+// pattern). UI/menu context only.
+int keys_patch_save(char *id_out, size_t n);    // mint next id + save; id_out = the id
+int keys_patch_load(const char *id);            // load a patch by id (0 ok)
+int keys_patch_list(char ids[][12], int max);   // ids newest-first; returns count
