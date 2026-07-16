@@ -20,7 +20,7 @@
 static const color_t BG      = {0, 0, 0};        // black canvas (deck grammar)
 static const color_t WAVE    = {70, 110, 180};
 static const color_t GRID    = {40, 60, 110};
-static const color_t SEL_COL = {40, 200, 230};   // selected slice
+static const color_t SEL_COL = {70, 235, 90};    // selected slice (green)
 static const color_t CUR_COL = {40, 200, 90};    // playing slice
 
 // waveform box — near the top now; sample/grid info sits below it
@@ -30,10 +30,10 @@ static const color_t CUR_COL = {40, 200, 90};    // playing slice
 #define EB_W (_width - 12)
 #define TB_Y 6                     // transport box top
 #define WH   80                    // waveform height (inside the box)
-#define TB_H (WH + 6)              // transport box height
-#define WX  (EB_X + 3)             // waveform inside the transport box
-#define WY  (TB_Y + 3)
-#define WW  (EB_W - 6)
+#define TB_H (WH + 12)             // transport box height (6 px margin for a thick border)
+#define WX  (EB_X + 6)             // waveform inside the transport box
+#define WY  (TB_Y + 6)
+#define WW  (EB_W - 12)
 #define FB_Y (TB_Y + TB_H + 5)     // file-name box
 #define FB_H 42
 #define XB_Y (FB_Y + FB_H + 5)     // FX box
@@ -74,6 +74,7 @@ static void repaint_slice(int s, int cur, int sel){
         if (h < 1 && sl.peaks[c] > 0) h = 1;
         TFT_drawLine(x, cy - h, x, cy + h, WAVE);
     }
+    TFT_drawLine(x0, cy, x1, cy, TFT_WHITE);        // white center line (this column)
     TFT_drawLine(x0, WY, x0, WY + WH, GRID);
     TFT_drawLine(x1, WY, x1, WY + WH, GRID);
     if (s == sel) TFT_drawRect(x0, WY, x1 - x0, WH, SEL_COL);
@@ -120,20 +121,23 @@ static void draw_fx_box(void){
 // a box border: 3 px THICK when selected, thin when not (inner 2 px cleared to
 // black on deselect so a previous thick border leaves no ghost — box interiors
 // are black / the waveform starts 3 px in)
-static void box_border(int x, int y, int w, int h, bool selu, color_t selc){
+static void box_border(int x, int y, int w, int h, bool selu, color_t selc, int thick){
     color_t dim = {46, 46, 60};
-    color_t inner = selu ? selc : (color_t){0, 0, 0};
-    TFT_drawRect(x + 2, y + 2, w - 4, h - 4, inner);
-    TFT_drawRect(x + 1, y + 1, w - 2, h - 2, inner);
-    TFT_drawRect(x,     y,     w,     h,     selu ? selc : dim);
+    // draw `thick` concentric rects when selected; on deselect clear the same
+    // depth to black so a previous thick border leaves no ghost (border sits in
+    // each box's margin, clear of content)
+    for (int i = thick - 1; i >= 1; i--)
+        TFT_drawRect(x + i, y + i, w - 2 * i, h - 2 * i, selu ? selc : (color_t){0, 0, 0});
+    TFT_drawRect(x, y, w, h, selu ? selc : dim);
 }
 
-// color-coded selection borders on the three element boxes (deck grammar)
+// color-coded selection borders on the three element boxes (deck grammar);
+// the transport reads THICK when selected (a colour change alone was too subtle)
 static void draw_highlights(void){
     color_t sel = TFT_CYAN, act = {60, 200, 120};
-    box_border(EB_X, TB_Y, EB_W, TB_H, s_elem == 0, s_in_bar ? act : sel);   // transport
-    box_border(EB_X, FB_Y, EB_W, FB_H, s_elem == 1, sel);                    // file
-    box_border(EB_X, XB_Y, EB_W, XB_H, s_elem == 2, sel);                    // fx
+    box_border(EB_X, TB_Y, EB_W, TB_H, s_elem == 0, s_in_bar ? act : sel, 5);   // transport (thick)
+    box_border(EB_X, FB_Y, EB_W, FB_H, s_elem == 1, sel, 3);                    // file
+    box_border(EB_X, XB_Y, EB_W, XB_H, s_elem == 2, sel, 3);                    // fx
 }
 
 // move highlights by repainting only the vacated + newly-marked slices
@@ -172,6 +176,7 @@ static void draw_waveform(void){
         if (h < 1 && sl.peaks[c] > 0) h = 1;
         TFT_drawLine(x, cy - h, x, cy + h, WAVE);
     }
+    TFT_drawLine(WX, cy, WX + WW - 1, cy, TFT_WHITE);   // white center line
     // slice division grid (boundaries may be non-uniform in transient mode)
     for (int s = 0; s <= sl.n_slices; s++){
         int x = slice_x(s);
