@@ -94,8 +94,10 @@ bool audio_bounce_active(void) { return s_bounce; }
 // A raw TCP server on BC_PORT (NOT the shared httpd — a forever-streaming handler
 // there would freeze the whole web UI). One client: point a browser / VLC at
 // http://<ip>:8000/ (endless stereo WAV, LAN) or http://<ip>:8000/live.mp3
-// (Shine 96 kbps MONO, icecast-style — #17, internet-friendly at 12 KB/s). The
-// audio task pushes int16 stereo output into a PSRAM ring; the server drains it,
+// (Shine 96 kbps MONO, icecast-style — #17, internet-friendly at 12 KB/s).
+// "/in" and "/in.mp3" are the same two streams tapping the line INPUT instead
+// of the output bus (module as a streaming bridge: mixer -> internet). The
+// audio task pushes int16 stereo frames into a PSRAM ring; the server drains it,
 // dropping the OLDEST audio if the client lags (a live stream stays current).
 // The MP3 encoder exists only while a .mp3 client is connected (CPU is paid
 // per-listen, not always-on); shine's ~100 KB state lives in PSRAM. Measured
@@ -108,6 +110,7 @@ bool audio_bounce_active(void) { return s_bounce; }
 static int16_t *s_bc_ring = NULL;
 static volatile uint32_t s_bc_w = 0, s_bc_r = 0;
 static volatile bool s_bc_on = false;      // a client is connected
+static volatile int  s_bc_src = 0;         // 0 = output bus, 1 = line INPUT ("/in" URLs)
 static const char *s_bc_err = "ok";        // last MP3-path failure, for /bcast/state
 static volatile uint32_t s_bc_enc_us = 0;  // smoothed encode cost per 26.1ms pass
 
@@ -170,9 +173,10 @@ static void broadcast_server_task(void *pv)
         int cl = accept(srv, NULL, NULL);
         if (cl < 0) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
 
-        // read the request line just far enough to route: ".mp3" -> encoder,
-        // anything else (including a failed read) -> the original WAV stream
-        bool want_mp3 = false;
+        // read the request line just far enough to route: ".mp3" -> encoder
+        // (else the original WAV stream), "/in" -> tap the line INPUT instead
+        // of the output bus (module as a streaming bridge: mixer -> internet)
+        bool want_mp3 = false, want_in = false;
         {
             struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };
             setsockopt(cl, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -183,9 +187,11 @@ static void broadcast_server_task(void *pv)
                 char *eol = strpbrk(req, "\r\n");
                 if (eol) *eol = 0;
                 want_mp3 = strstr(req, ".mp3") != NULL;
+                want_in  = strstr(req, "/in") != NULL;
             }
         }
 
+        s_bc_src = want_in ? 1 : 0;
         s_bc_w = s_bc_r = 0;
         s_bc_on = true;
 
@@ -387,7 +393,7 @@ static void audio_task(void *pvParams)
             portEXIT_CRITICAL(&_status_mux);
         }
 
-        broadcast_push(out, BUF_SZ / 2);   // live WAV stream tap (the final output)
+        broadcast_push(s_bc_src ? in : out, BUF_SZ / 2);   // live stream tap: output bus or line-in
         i2s_write(I2S_NUM_0, out, BUF_SZ * 4, &nb, portMAX_DELAY);
     }
 }
