@@ -332,17 +332,19 @@ static void mtx_redraw(int pos, int field)   // field: 0 nav / 1 edit src / 2 ed
         if (sy.mtx_src[i] < 0) snprintf(src, sizeof(src), "off");
         else                   snprintf(src, sizeof(src), "CV%d", sy.mtx_src[i] + 1);
         snprintf(amt, sizeof(amt), "%+d%%", (int)(sy.mtx_amt[i] * 100.0f));
-        // the field being edited wears [ ] (house convention) — only one at a time
-        char srcb[16], amtb[16];
-        if (i == pos && field == 1) snprintf(srcb, sizeof(srcb), "[%s]", src);
-        else                        snprintf(srcb, sizeof(srcb), "%s", src);
-        if (i == pos && field == 2) snprintf(amtb, sizeof(amtb), "[%s]", amt);
-        else                        snprintf(amtb, sizeof(amtb), "%s", amt);
-        _fg = (i == pos && field == 1) ? TFT_CYAN : (color_t){170,170,180};
-        TFT_print(srcb, _width - 145, y);
-        _fg = (sy.mtx_src[i] < 0) ? (color_t){80,80,80}
+        // fixed positions + brackets that hug the value -> nothing shifts on select
+        int cw = TFT_getStringWidth("]");
+        // middle column (src): value at a fixed x
+        int src_x = _width - 150, src_w = TFT_getStringWidth(src);
+        _fg = (i == pos && field == 1) ? TFT_CYAN : (color_t){170, 170, 180};
+        TFT_print(src, src_x, y);
+        if (i == pos && field == 1) { TFT_print("[", src_x - cw, y); TFT_print("]", src_x + src_w, y); }
+        // right column (amt): right-aligned, indented one char from the edge
+        int amt_w = TFT_getStringWidth(amt), amt_x = _width - 10 - cw - amt_w;
+        _fg = (sy.mtx_src[i] < 0) ? (color_t){80, 80, 90}
             : (i == pos && field == 2) ? TFT_CYAN : TFT_WHITE;
-        TFT_print(amtb, _width - TFT_getStringWidth(amtb) - 10, y);
+        TFT_print(amt, amt_x, y);
+        if (i == pos && field == 2) { TFT_print("[", amt_x - cw, y); TFT_print("]", amt_x + amt_w, y); }
     }
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
