@@ -34,13 +34,17 @@ static void draw(setup_menu_t *m)
 
         char v[28]; v[0] = 0;
         if (m->render) m->render(i, v, sizeof(v));
-        // RANGE items in edit mode wear the [ value ] bracket (house style)
-        char out[36];
-        if (i == m->pos && m->sel && m->items[i].kind == ST_RANGE)
-            snprintf(out, sizeof(out), "[ %s ]", v);
-        else
-            snprintf(out, sizeof(out), "%s", v);
-        TFT_print(out, _width - TFT_getStringWidth(out) - 10, y);
+        // value fixed at a right position padded by ONE char, so it never shifts
+        // when selected; in RANGE edit mode brackets hug it directly (no spaces)
+        bool editing = (i == m->pos && m->sel && m->items[i].kind == ST_RANGE);
+        int cw = TFT_getStringWidth("]");
+        int vw = TFT_getStringWidth(v);
+        int vx = _width - 10 - cw - vw;
+        TFT_print(v, vx, y);
+        if (editing) {
+            TFT_print("[", vx - cw, y);
+            TFT_print("]", vx + vw, y);
+        }
     }
 }
 
