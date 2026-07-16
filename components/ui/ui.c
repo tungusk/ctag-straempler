@@ -19,6 +19,7 @@
 #include "freesound.h"
 #include "mp3.h"
 #include "wifi.h"
+#include "esp_ota_ops.h"
 #include "c_timeutils.h"
 #include "timer_utils.h"
 #include "audio.h"
@@ -196,6 +197,28 @@ static void timerRepeatFast(){
     vTaskDelete(NULL);
 }
 
+// OTA rollback: a freshly-pushed image boots PENDING_VERIFY. Mark it valid only
+// once WiFi (the OTA lifeline) is up + a few seconds of stable runtime — so a
+// bad image that crashes early or can't reach the network auto-reverts to the
+// last good slot on the next reset instead of stranding the device with no OTA
+// path. Requires CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE (bootloader-side).
+static void otaValidateTask(void *arg){
+    (void)arg;
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    esp_ota_img_states_t st;
+    if (esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY){
+        for (int i = 0; i < 60 && !isWiFiConnected(); i++) vTaskDelay(pdMS_TO_TICKS(500));   // wait up to 30s
+        if (isWiFiConnected()){
+            vTaskDelay(pdMS_TO_TICKS(4000));                    // prove a few seconds of stable runtime
+            if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK)
+                ESP_LOGI("OTA", "image marked VALID (rollback cancelled)");
+        } else {
+            ESP_LOGW("OTA", "WiFi never came up -> image left unverified (rolls back on reset)");
+        }
+    }
+    vTaskDelete(NULL);
+}
+
 void initUI(){
     ui_ev_queue = xQueueCreate(64, sizeof(ui_ev_ts_t));
     ui_handler_param_t *params = calloc(1, sizeof(ui_handler_param_t));
@@ -218,6 +241,7 @@ void initUI(){
     xTaskCreatePinnedToCore(timerRepeatFast, "timerRepeatFast", 2048, NULL, 10, NULL, 0);
     
     initWifi();
+    xTaskCreate(otaValidateTask, "ota_validate", 3072, NULL, 3, NULL);   // commit or roll back this OTA image
     audio_broadcast_init();   // output-broadcast socket server — AFTER initWifi (needs tcpip + the wifi event group)
     freesoundInit(ui_ev_queue);
     initMP3Engine(ui_ev_queue);
