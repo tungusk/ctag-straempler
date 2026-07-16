@@ -189,10 +189,11 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
 static const char *setup_labels[] = {
     "Engine", "Base Note", "Quantize", "Shape", "FM Ratio", "FM Index",
     "Attack", "Decay", "Sustain", "Release", "Env>Cut", "Glide",
-    "LFO Rate", "LFO Depth", "LFO Dest", "Level", "Reverb", "Rev Mix", "Load Wave"
+    "LFO Rate", "LFO Depth", "LFO Dest", "Level", "Reverb", "Rev Mix", "Load Wave", "CV Matrix"
 };
-#define SY_SETUP_N 19
+#define SY_SETUP_N 20
 #define SY_LOAD_ITEM 18          // the "Load Wave" action row
+#define SY_MATRIX_ITEM 19        // the "CV Matrix" action row -> M_SYNTH_MATRIX
 
 static void setup_val(int i, char *v, size_t n)
 {
@@ -217,6 +218,8 @@ static void setup_val(int i, char *v, size_t n)
         case 16: snprintf(v, n, "%s", reverb_mode_name(sy.rv.mode)); break;
         case 17: snprintf(v, n, "%.0f%%", sy.rv.wet * 100.0f); break;
         case 18: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
+        case 19: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx_src[d] >= 0) on++;
+                   if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
     }
 }
 
@@ -306,7 +309,8 @@ static int synth_setup_handler(int it_id, int event, void *ev_data)
             break;
         case EV_SHORT_PRESS:
             if (pos == -1) return M_MORE;
-            if (pos == SY_LOAD_ITEM) return M_SYNTH_LOAD;   // -> wave browser
+            if (pos == SY_LOAD_ITEM) return M_SYNTH_LOAD;      // -> wave browser
+            if (pos == SY_MATRIX_ITEM) return M_SYNTH_MATRIX;  // -> CV matrix page
             sel = !sel; setup_redraw(pos, sel);
             break;
         case EV_LONG_PRESS: return M_SYNTH_LIVE;
