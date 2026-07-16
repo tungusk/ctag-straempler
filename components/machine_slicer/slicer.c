@@ -456,28 +456,27 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     uint16_t c2 = cvm[1] > 900 ? cvm[1] - 900 : 0;
     sl.level = c2 ? (uint16_t)((uint32_t)c2 * 255 / 3195) : 255;
 
-    // knob 7 (CV7) pitch: unity plateau, 0.5x..2.0x outside it (skipped in FX
-    // context, where knob7 is the filter resonance — pitch freezes at its value)
-    if (sl.ui_ctx != 1) {
-    sl.pitch_cv = cvm[6];
-    if (sl.pitch_cv >= 1843 && sl.pitch_cv <= 2253) sl.inc = 1.0f;
-    else if (sl.pitch_cv > 2253) sl.inc = 1.0f + (float)(sl.pitch_cv - 2253) / 1842.0f;
-    else                         sl.inc = 0.5f + (float)sl.pitch_cv / 1843.0f * 0.5f;
+    // knob 7 (CV7) varispeed base: unity plateau, 0.5x..2.0x. CV7 is only READ
+    // when not in FX context (there it's the filter resonance) — the base then
+    // freezes at its last value, but v/oct below still tracks.
+    if (sl.ui_ctx != 1) sl.pitch_cv = cvm[6];
+    float base;
+    if (sl.pitch_cv >= 1843 && sl.pitch_cv <= 2253) base = 1.0f;
+    else if (sl.pitch_cv > 2253) base = 1.0f + (float)(sl.pitch_cv - 2253) / 1842.0f;
+    else                         base = 0.5f + (float)sl.pitch_cv / 1843.0f * 0.5f;
 
-    // CV1 = quantized 1V/oct pitch in (the module's primary 1V/oct jack, matches
-    // the synth), multiplies the knob7 varispeed. Idle ~877 -> 0 semitones (no
-    // transpose when unpatched); ~49 ADC counts/semitone (the sampler2/synth
-    // scale). Quantized so idle drift snaps to 0.
+    // CV1 = quantized 1V/oct pitch in — the module's primary 1V/oct JACK (not a
+    // repurposed knob), so it ALWAYS pitches the slice, even on the FX box.
+    // Idle ~877 -> 0 semitones; ~49 ADC counts/semitone (sampler2/synth scale).
     int voct = (int)lroundf(((float)cvm[0] - 877.0f) / 49.0f);
     if (voct < -24) voct = -24;
     if (voct >  24) voct =  24;
+    sl.inc = base;
     if (voct != 0) sl.inc *= exp2f((float)voct / 12.0f);
-    // the tail STREAM only feeds ~2x real-time (the 80 ms head + ring budget);
-    // past that the read outruns delivery and stutters. Cap up-pitch at 2x (the
-    // proven-clean knob7 limit); down-pitch is unbounded (slower = no starve).
+    // the tail STREAM feeds ~2x real-time; past that it stutters. Cap up-pitch at
+    // 2x; down-pitch unbounded (slower = no starve).
     if (sl.inc > 2.0f) sl.inc = 2.0f;
     else if (sl.inc < 0.125f) sl.inc = 0.125f;   // 3 octaves down
-    }   // end !FX-context pitch
 
     if (sl.cmd_fire)    { sl.cmd_fire = 0;    fire_slice(sl.sel); }
     if (sl.cmd_advance) { sl.cmd_advance = 0; fire_slice(sl.sel); sl.sel = (sl.sel + 1) % sl.n_slices; }
