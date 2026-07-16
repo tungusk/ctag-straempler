@@ -1,1 +1,1 @@
-web-remote-v2-20260716 (Remote tab: vertical CV faders, bounce+broadcast at bottom)
+web-remote-v3-20260716 (faders in meter columns, small thumbs, collapsible screen card)
