@@ -58,9 +58,18 @@ typedef struct {
     float level;                 // master 0..1
 
     // live (from knobs, per block)
-    float cutoff_base;           // Hz from knob6
-    float res01;                 // 0..1 from knob7
+    float cutoff_base;           // Hz from knob6 (all engines)
+    float res01;                 // 0..1 resonance (knob7 in VA)
+    float fold;                  // 0..1 wavefold (knob7 in WT)
     int   cv1_disp;              // last CV1 read (UI)
+
+    // FOUR macro knobs (ch5..8 = K5..K8): K5 timbre (engine-aware), K6 cutoff,
+    // K7 resonance, K8 env->cut. Built units have all four; this dev unit's K5/K8
+    // are weak, so each uses drums-style TAKEOVER: the current value (Setup or
+    // default) holds until the knob is actually moved, then the knob drives it.
+    float knob_capt[4];          // captured position per knob at the last (re)capture
+    bool  knob_live[4];          // knob has moved past threshold -> it drives its param
+    int   knob_engine;           // engine the captures are valid for (-1 = recapture)
 } sy_state_t;
 
 extern sy_state_t sy;
