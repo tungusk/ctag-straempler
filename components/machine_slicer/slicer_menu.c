@@ -117,15 +117,23 @@ static void draw_fx_box(void){
     TFT_print(t, EB_X + 10, XB_Y + 7 + fh + 5);
 }
 
+// a box border: 3 px THICK when selected, thin when not (inner 2 px cleared to
+// black on deselect so a previous thick border leaves no ghost — box interiors
+// are black / the waveform starts 3 px in)
+static void box_border(int x, int y, int w, int h, bool selu, color_t selc){
+    color_t dim = {46, 46, 60};
+    color_t inner = selu ? selc : (color_t){0, 0, 0};
+    TFT_drawRect(x + 2, y + 2, w - 4, h - 4, inner);
+    TFT_drawRect(x + 1, y + 1, w - 2, h - 2, inner);
+    TFT_drawRect(x,     y,     w,     h,     selu ? selc : dim);
+}
+
 // color-coded selection borders on the three element boxes (deck grammar)
 static void draw_highlights(void){
-    color_t sel = TFT_CYAN, dim = {46, 46, 60}, act = {60, 200, 120};
-    color_t c = (s_elem == 0) ? (s_in_bar ? act : sel) : dim;   // transport
-    TFT_drawRect(EB_X, TB_Y, EB_W, TB_H, c);
-    c = (s_elem == 1) ? sel : dim;                              // file
-    TFT_drawRect(EB_X, FB_Y, EB_W, FB_H, c);
-    c = (s_elem == 2) ? sel : dim;                              // fx
-    TFT_drawRect(EB_X, XB_Y, EB_W, XB_H, c);
+    color_t sel = TFT_CYAN, act = {60, 200, 120};
+    box_border(EB_X, TB_Y, EB_W, TB_H, s_elem == 0, s_in_bar ? act : sel);   // transport
+    box_border(EB_X, FB_Y, EB_W, FB_H, s_elem == 1, sel);                    // file
+    box_border(EB_X, XB_Y, EB_W, XB_H, s_elem == 2, sel);                    // fx
 }
 
 // move highlights by repainting only the vacated + newly-marked slices
