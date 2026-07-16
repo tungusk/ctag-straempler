@@ -127,6 +127,13 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
     if (dt > 0.5f) dt = 0.5f;                          // Nyquist guard
     float q = svf_damp(sy.res01, 0.6f, 2.0f);         // 0..1 knob -> damping (2 = clean)
 
+    // a NaN/Inf latched in the SVF is PERMANENT silence (NaN fails the output
+    // clamp below, so every sample reads 0) — it looked like "FM killed the
+    // audio". Recover the filter if a prior block blew it up. The real
+    // prevention is the lower coefficient ceiling in svf_coef() below.
+    if (!(fabsf(sy.flt_l.lp) < 1e9f) || !(fabsf(sy.flt_l.bp) < 1e9f))
+        svf_reset(&sy.flt_l);
+
     int frames = MACHINE_BLOCK / 2;
     for (int f = 0; f < frames; f++) {
         // envelope
@@ -170,7 +177,10 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
         // filter: cutoff opened by the envelope + LFO wobble; SVF low-pass tap
         float fc = (sy.cutoff_base + sy.env * sy.env_to_cut * 5000.0f) * lfo_cut;
         if (fc < 20.0f) fc = 20.0f;
-        float coef = svf_coef(fc, SY_RATE, 1.5f);
+        // 1.0 = Chamberlin stability ceiling (fc ~ SR/6); 1.5 let a bright,
+        // high-energy FM tone drive the low-damping filter into self-oscillation
+        // and blow up to NaN. Matches Drums' DR_FLT_FMAX.
+        float coef = svf_coef(fc, SY_RATE, 1.0f);
         float lp;
         svf_step(&sy.flt_l, osc, coef, q, &lp, NULL, NULL);
 

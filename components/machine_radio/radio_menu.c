@@ -58,12 +58,13 @@ static void info_block(void)
 
     // the station line: while stopped, show the SELECTED station (turn to pick);
     // while active, show what's playing
-    const char *nm = (rd.state == RADIO_STOPPED)
+    bool browsing = (rd.state == RADIO_STOPPED || rd.state == RADIO_ERROR);
+    const char *nm = browsing
                      ? rd_stations[rd.sel % rd_n_stations].name
                      : (rd.station[0] ? rd.station : "—");
     char s[48];
-    if (rd.state == RADIO_STOPPED) snprintf(s, sizeof(s), "< %s >", nm);
-    else                          snprintf(s, sizeof(s), "%s", nm);
+    if (browsing) snprintf(s, sizeof(s), "< %s >", nm);
+    else          snprintf(s, sizeof(s), "%s", nm);
     _fg = TFT_WHITE;
     TFT_print(s, _width / 2 - TFT_getStringWidth(s) / 2, y);
 
@@ -103,11 +104,13 @@ static int radio_live_handler(int it_id, int event, void *ev_data)
             if (rd.state != s_last_state) state_block();
             info_block();
             break;
+        // browse in STOPPED *and* ERROR — a failed connect must not freeze the
+        // picker (press then retries the newly-selected station)
         case EV_FWD:
-            if (rd.state == RADIO_STOPPED) { rd.sel = (rd.sel + 1) % rd_n_stations; info_block(); }
+            if (rd.state == RADIO_STOPPED || rd.state == RADIO_ERROR) { rd.sel = (rd.sel + 1) % rd_n_stations; info_block(); }
             break;
         case EV_BWD:
-            if (rd.state == RADIO_STOPPED) { rd.sel = (rd.sel + rd_n_stations - 1) % rd_n_stations; info_block(); }
+            if (rd.state == RADIO_STOPPED || rd.state == RADIO_ERROR) { rd.sel = (rd.sel + rd_n_stations - 1) % rd_n_stations; info_block(); }
             break;
         case EV_SHORT_PRESS:
             radio_play_station(rd.sel);
