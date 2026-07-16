@@ -1549,7 +1549,11 @@ static esp_err_t bounce_state_handler(httpd_req_t *req)
 
 static esp_err_t bcast_state_handler(httpd_req_t *req)
 {
-    return send_json(req, audio_broadcast_active() ? "{\"live\":true}" : "{\"live\":false}");
+    char buf[112];
+    snprintf(buf, sizeof(buf), "{\"live\":%s,\"diag\":\"%s\",\"enc_us\":%u}",
+             audio_broadcast_active() ? "true" : "false", audio_broadcast_diag(),
+             (unsigned)audio_broadcast_enc_us());
+    return send_json(req, buf);
 }
 
 // ─── server lifecycle ────────────────────────────────────────────────────────

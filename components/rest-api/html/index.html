@@ -175,10 +175,11 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
     <div class="row tight" style="align-items:center">
       <b style="flex:1;color:#0af">BROADCAST</b>
       <span id="bcstate" style="color:#888;margin-right:8px">idle</span>
-      <a class="btn" id="bclink" href="#" target="_blank" style="flex:0 0 74px;text-align:center;text-decoration:none">Listen</a>
+      <a class="btn" id="bclinkmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
+      <a class="btn" id="bclink" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
     </div>
     <audio id="bcaudio" controls preload="none" style="width:100%;margin-top:6px"></audio>
-    <div class="msg" style="margin-top:4px">Live stream of the module OUTPUT as WAV (port 8000). Open the Listen link or this player in any browser/VLC on the network.</div>
+    <div class="msg" style="margin-top:4px">Live stream of the module OUTPUT (port 8000, one listener). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses MP3.</div>
   </div>
   <label>Inputs</label>
   <div class="rmon" id="rmon"></div>
@@ -1069,11 +1070,13 @@ function bncToggle(){
   var stop=bncOn;
   fetch(stop?'/bounce/stop':'/bounce/start',{method:'POST'}).then(function(){setTimeout(bncPoll,200);if(stop)setTimeout(loadFiles,700);}).catch(function(){});
 }
-// Broadcast — a live WAV stream of the output on port 8000 (separate socket server)
+// Broadcast — live output stream on port 8000 (separate socket server):
+// "/" = endless WAV, "/live.mp3" = shine 128k MP3 (icecast-style)
 function bcastInit(){
-  var url=location.protocol+'//'+location.hostname+':8000/';
-  var l=document.getElementById('bclink'); if(l)l.href=url;
-  var a=document.getElementById('bcaudio'); if(a&&!a.getAttribute('src'))a.setAttribute('src',url);
+  var base=location.protocol+'//'+location.hostname+':8000/';
+  var l=document.getElementById('bclink'); if(l)l.href=base;
+  var m=document.getElementById('bclinkmp3'); if(m)m.href=base+'live.mp3';
+  var a=document.getElementById('bcaudio'); if(a&&!a.getAttribute('src'))a.setAttribute('src',base+'live.mp3');
 }
 function bcastPoll(){
   fetch('/bcast/state').then(function(r){return r.json();}).then(function(d){
