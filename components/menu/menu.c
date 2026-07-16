@@ -148,13 +148,49 @@ static const char *s_sys_names[16];
 static const machine_t *s_sys_machines[16];
 static int s_sys_n = 0;
 static int s_sys_pos = 0;   // -1 = Settings affordance
+static int s_sys_top = 0;   // first visible row (scroll offset; the roster now overflows the screen)
 #define SYS_RH 21           // fixed row height (fits DEJAVU18 for the selected)
+#define SYS_Y0 26           // first row's top (clear of the title/affordance row)
+
+// how many machine rows fit under the title, with a little bottom margin for
+// the scroll hint
+static int sys_vis(void){
+    int v = (_height - SYS_Y0 - 6) / SYS_RH;
+    return v < 1 ? 1 : v;
+}
+
+// keep the cursor inside the visible window; clamp the window to the list
+static void sys_clamp_top(void){
+    int vis = sys_vis();
+    if(s_sys_pos >= 0){
+        if(s_sys_pos < s_sys_top) s_sys_top = s_sys_pos;
+        else if(s_sys_pos >= s_sys_top + vis) s_sys_top = s_sys_pos - vis + 1;
+    }
+    int maxtop = s_sys_n - vis; if(maxtop < 0) maxtop = 0;
+    if(s_sys_top > maxtop) s_sys_top = maxtop;
+    if(s_sys_top < 0) s_sys_top = 0;
+}
+
+// small grey ▲/▼ at the right edge when there's more list off-screen
+static void sys_scroll_hint(void){
+    int vis = sys_vis();
+    int x = _width - 12;
+    color_t g = {90, 90, 100};
+    if(s_sys_top > 0)
+        TFT_fillTriangle(x, SYS_Y0 + 5, x + 8, SYS_Y0 + 5, x + 4, SYS_Y0 - 1, g);  // ▲ (clear of title)
+    if(s_sys_top + vis < s_sys_n){
+        int yb = SYS_Y0 + vis * SYS_RH;
+        TFT_fillTriangle(x, yb - 1, x + 8, yb - 1, x + 4, yb + 5, g);
+    }
+}
 
 // paint a single machine row at its current selection state (fixed height so
 // the bigger selected font causes no layout shift, and incremental repaints
 // don't flicker)
 static void sys_row(int i){
-    int y0 = 26 + i * SYS_RH;   // clear of the title/affordance row
+    int r = i - s_sys_top;                 // position within the visible window
+    if(r < 0 || r >= sys_vis()) return;    // scrolled off-screen — nothing to paint
+    int y0 = SYS_Y0 + r * SYS_RH;
     bool active = (s_sys_machines[i] == machine_active());
     bool sel = (i == s_sys_pos);
     _bg = sel ? (color_t){10, 18, 56} : TFT_BLACK;
@@ -173,13 +209,19 @@ static void system_full_redraw(void){
     _fg = TFT_WHITE;
     TFT_print("Machine", 6, 3);
     menuTFTPrintAffordance("Settings", s_sys_pos == -1);
-    for(int i = 0; i < s_sys_n; i++) sys_row(i);
+    sys_clamp_top();
+    int vis = sys_vis();
+    for(int r = 0; r < vis; r++){ int i = s_sys_top + r; if(i >= s_sys_n) break; sys_row(i); }
+    sys_scroll_hint();
 }
 
 // incremental: repaint only the rows that changed -> no flash. Only touch the
 // affordance when the selection actually crosses into/out of it (else it
 // flickers fg/bg on every detent).
 static void system_nav(int old){
+    int prev_top = s_sys_top;
+    sys_clamp_top();
+    if(s_sys_top != prev_top){ system_full_redraw(); return; }  // window scrolled -> repaint all
     if(old >= 0 && old < s_sys_n) sys_row(old);
     if(s_sys_pos >= 0 && s_sys_pos < s_sys_n) sys_row(s_sys_pos);
     if(old == -1 || s_sys_pos == -1)
@@ -198,8 +240,9 @@ static int more_def_handler(int it_id, int event, void* event_data){
                 s_sys_n++;
             }
             s_sys_pos = 0;
+            s_sys_top = 0;
             for(int i = 0; i < s_sys_n; i++) if(s_sys_machines[i] == machine_active()){ s_sys_pos = i; break; }
-            system_full_redraw();
+            system_full_redraw();   // clamps the scroll window to show the active machine
             break;
         case EV_FWD: {
             int old = s_sys_pos; s_sys_pos++; if(s_sys_pos >= s_sys_n) s_sys_pos = -1; system_nav(old);
