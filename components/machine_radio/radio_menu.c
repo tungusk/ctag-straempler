@@ -67,7 +67,7 @@ static void info_block(void)
                      ? rd_stations[rd.sel % rd_n_stations].name
                      : (rd.station[0] ? rd.station : "—");
     char s[48];
-    if (browsing) snprintf(s, sizeof(s), "< %s >", nm);
+    if (browsing) snprintf(s, sizeof(s), "[ %s ]", nm);   // house style: [ ] marks a selection
     else          snprintf(s, sizeof(s), "%s", nm);
 
     char t[84];
@@ -84,11 +84,16 @@ static void info_block(void)
     strlcpy(s_info_s, s, sizeof(s_info_s));
     strlcpy(s_info_t, t, sizeof(s_info_t));
 
-    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, (fh + 6) * 2, _bg);
+    // station name in a bigger font; detail line stays default
+    Font f0 = cfont;
+    TFT_setFont(DEJAVU18_FONT, NULL);
+    int nh = TFT_getfontheight();
+    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, nh + fh + 12, _bg);
     _fg = TFT_WHITE;
     TFT_print(s, _width / 2 - TFT_getStringWidth(s) / 2, y);
+    cfont = f0;
     _fg = (rd.state == RADIO_ERROR) ? COL_ERR : TFT_LIGHTGREY;
-    TFT_print(t, _width / 2 - TFT_getStringWidth(t) / 2, y + fh + 4);
+    TFT_print(t, _width / 2 - TFT_getStringWidth(t) / 2, y + nh + 4);
 }
 
 static void live_full_redraw(void)
