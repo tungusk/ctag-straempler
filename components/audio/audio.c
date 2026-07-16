@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "lwip/sockets.h"
+#include "layer3.h"                      // shine MP3 encoder (broadcast /live.mp3)
 #include "wifi.h"
 #include "audio.h"
 #include "recording.h"
@@ -89,19 +90,30 @@ void audio_bounce_stop(void) {
 }
 bool audio_bounce_active(void) { return s_bounce; }
 
-// ---- broadcast: stream the OUTPUT bus live as WAV over a dedicated socket ----
+// ---- broadcast: stream the OUTPUT bus live over a dedicated socket ----------
 // A raw TCP server on BC_PORT (NOT the shared httpd — a forever-streaming handler
 // there would freeze the whole web UI). One client: point a browser / VLC at
-// http://<ip>:8000/ to hear the live output of whatever machine is running. The
+// http://<ip>:8000/ (endless stereo WAV, LAN) or http://<ip>:8000/live.mp3
+// (Shine 96 kbps MONO, icecast-style — #17, internet-friendly at 12 KB/s). The
 // audio task pushes int16 stereo output into a PSRAM ring; the server drains it,
 // dropping the OLDEST audio if the client lags (a live stream stays current).
+// The MP3 encoder exists only while a .mp3 client is connected (CPU is paid
+// per-listen, not always-on); shine's ~100 KB state lives in PSRAM. Measured
+// 2026-07-16 (see /bcast/state enc_us, budget 26.1 ms/pass): idle/synth ~18 ms,
+// deck playing ~13 ms = realtime; RADIO playing ~39 ms = NOT realtime (helix
+// and shine thrash the PSRAM cache) — re-broadcasting Radio drops audio, use
+// the LAN WAV stream or bounce for that.
 #define BC_PORT   8000
 #define BC_FRAMES 44100                    // ~1 s stereo ring
 static int16_t *s_bc_ring = NULL;
 static volatile uint32_t s_bc_w = 0, s_bc_r = 0;
 static volatile bool s_bc_on = false;      // a client is connected
+static const char *s_bc_err = "ok";        // last MP3-path failure, for /bcast/state
+static volatile uint32_t s_bc_enc_us = 0;  // smoothed encode cost per 26.1ms pass
 
 bool audio_broadcast_active(void) { return s_bc_on; }
+const char *audio_broadcast_diag(void) { return s_bc_err; }
+uint32_t audio_broadcast_enc_us(void) { return s_bc_enc_us; }
 
 static void broadcast_push(const int32_t *out, int frames)
 {
@@ -140,6 +152,9 @@ static void broadcast_server_task(void *pv)
 
     static const char HDR[] = "HTTP/1.0 200 OK\r\nContent-Type: audio/wav\r\n"
                               "Connection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
+    static const char HDR_MP3[] = "HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\n"
+                                  "icy-name: strampler live\r\nicy-br: 96\r\n"
+                                  "Connection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
 
     int srv = socket(AF_INET, SOCK_STREAM, 0);
     if (srv < 0) { ESP_LOGE("BCAST", "socket failed"); vTaskDelete(NULL); return; }
@@ -154,18 +169,79 @@ static void broadcast_server_task(void *pv)
     for (;;) {
         int cl = accept(srv, NULL, NULL);
         if (cl < 0) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
+
+        // read the request line just far enough to route: ".mp3" -> encoder,
+        // anything else (including a failed read) -> the original WAV stream
+        bool want_mp3 = false;
+        {
+            struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };
+            setsockopt(cl, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            char req[160];
+            int rn = recv(cl, req, sizeof(req) - 1, 0);
+            if (rn > 0) {
+                req[rn] = 0;
+                char *eol = strpbrk(req, "\r\n");
+                if (eol) *eol = 0;
+                want_mp3 = strstr(req, ".mp3") != NULL;
+            }
+        }
+
         s_bc_w = s_bc_r = 0;
         s_bc_on = true;
-        bool ok = send(cl, HDR, strlen(HDR), 0) > 0 && send(cl, wav, 44, 0) > 0;
-        while (ok) {
-            int fr = 0;
-            while (fr < 1024 && s_bc_r < s_bc_w) {
-                uint32_t idx = (s_bc_r % BC_FRAMES) * 2;
-                sbuf[fr * 2] = s_bc_ring[idx]; sbuf[fr * 2 + 1] = s_bc_ring[idx + 1];
-                s_bc_r++; fr++;
+
+        if (want_mp3) {
+            // MONO 96k: measured 2026-07-16, stereo\'s subband+MDCT is PSRAM-
+            // cache-bound at ~34 ms per 26.1 ms pass (-O3 bought 3%) — mono
+            // halves the DSP AND the hot working set; 96k also iterates the
+            // quantizer less than 64k. The LAN WAV stream stays stereo.
+            shine_config_t cfg;
+            cfg.wave.channels = PCM_MONO;
+            cfg.wave.samplerate = 44100;
+            shine_set_config_mpeg_defaults(&cfg.mpeg);
+            cfg.mpeg.mode = MONO;
+            cfg.mpeg.bitr = 96;
+            shine_t enc = shine_initialise(&cfg);
+            if (!enc) {
+                ESP_LOGE("BCAST", "shine init failed");
+                s_bc_err = "shine-init";
+                s_bc_on = false; close(cl); continue;
             }
-            if (fr > 0) { if (send(cl, sbuf, fr * 4, 0) < 0) ok = false; }
-            else vTaskDelay(pdMS_TO_TICKS(8));
+            int pass = shine_samples_per_pass(enc);          // 1152 @ MPEG-1
+            // PSRAM: internal RAM is NOT reliably available while radio's
+            // helix path is live (bench-caught: pcm-alloc failed on 4.6 KB)
+            int16_t *pcm = heap_caps_malloc((size_t)pass * sizeof(int16_t),
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!pcm) { ESP_LOGE("BCAST", "pcm alloc failed"); s_bc_err = "pcm-alloc"; }
+            bool ok = pcm && send(cl, HDR_MP3, strlen(HDR_MP3), 0) > 0;
+            if (pcm) s_bc_err = "ok";
+            while (ok) {
+                if (s_bc_w - s_bc_r < (uint32_t)pass) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
+                for (int f = 0; f < pass; f++) {             // stereo bus -> mono mid
+                    uint32_t idx = (s_bc_r % BC_FRAMES) * 2;
+                    pcm[f] = (int16_t)(((int32_t)s_bc_ring[idx] + s_bc_ring[idx + 1]) >> 1);
+                    s_bc_r++;
+                }
+                int written = 0;
+                int64_t t0 = esp_timer_get_time();
+                uint8_t *frame = shine_encode_buffer_interleaved(enc, pcm, &written);
+                uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
+                s_bc_enc_us = s_bc_enc_us ? (s_bc_enc_us * 7 + us) / 8 : us;
+                if (written > 0 && send(cl, frame, written, 0) < 0) ok = false;
+            }
+            free(pcm);
+            shine_close(enc);
+        } else {
+            bool ok = send(cl, HDR, strlen(HDR), 0) > 0 && send(cl, wav, 44, 0) > 0;
+            while (ok) {
+                int fr = 0;
+                while (fr < 1024 && s_bc_r < s_bc_w) {
+                    uint32_t idx = (s_bc_r % BC_FRAMES) * 2;
+                    sbuf[fr * 2] = s_bc_ring[idx]; sbuf[fr * 2 + 1] = s_bc_ring[idx + 1];
+                    s_bc_r++; fr++;
+                }
+                if (fr > 0) { if (send(cl, sbuf, fr * 4, 0) < 0) ok = false; }
+                else vTaskDelay(pdMS_TO_TICKS(8));
+            }
         }
         s_bc_on = false;
         close(cl);
@@ -340,5 +416,5 @@ void initAudio(void)
 // calling either earlier asserts (Invalid mbox / xEventGroup). Unpinned.
 void audio_broadcast_init(void)
 {
-    xTaskCreate(broadcast_server_task, "bc_srv", 4096, NULL, 5, NULL);
+    xTaskCreate(broadcast_server_task, "bc_srv", 12288, NULL, 5, NULL);   // stack: shine encode runs here
 }
