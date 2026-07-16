@@ -242,17 +242,17 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
             break;
         case EV_FWD:
             if (s_in_bar){ sl.sel = (sl.sel + 1) % sl.n_slices; live_update_highlights(); }
-            else { s_elem = (s_elem + 1) % 3; sl.ui_ctx = (s_elem == 2) ? 1 : 0; draw_highlights(); }
+            else { s_elem = (s_elem + 1) % 3; sl.ui_ctx = (s_elem == 2 && sl.fx_on) ? 1 : 0; draw_highlights(); }
             break;
         case EV_BWD:
             if (s_in_bar){ sl.sel = (sl.sel + sl.n_slices - 1) % sl.n_slices; live_update_highlights(); }
-            else { s_elem = (s_elem + 2) % 3; sl.ui_ctx = (s_elem == 2) ? 1 : 0; draw_highlights(); }
+            else { s_elem = (s_elem + 2) % 3; sl.ui_ctx = (s_elem == 2 && sl.fx_on) ? 1 : 0; draw_highlights(); }
             break;
         case EV_SHORT_PRESS:
             if (s_in_bar) sl.cmd_fire = 1;                                    // play the selected slice
             else if (s_elem == 0){ s_in_bar = true; draw_highlights(); }      // enter the bar
             else if (s_elem == 1) return M_SLICER_LOAD;                       // File -> browser (SLICES)
-            else { sl.fx_on = !sl.fx_on; draw_fx_box(); draw_highlights(); }  // FX toggle
+            else { sl.fx_on = !sl.fx_on; sl.ui_ctx = sl.fx_on ? 1 : 0; draw_fx_box(); draw_highlights(); }  // FX toggle (only hijacks knobs when ON)
             break;
         case EV_LONG_PRESS:
             if (s_in_bar){ s_in_bar = false; draw_highlights(); break; }      // pop out of the bar

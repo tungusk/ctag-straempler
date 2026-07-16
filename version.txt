@@ -1,1 +1,1 @@
-synth-v1-20260715 (Synth: 4-macro-knob dashboard + engine-aware K5 + CV matrix)
+slicer-fx-v1-20260716 (OTA+rollback, slicer FX filter+reverb, boxed 2-level encoder)
