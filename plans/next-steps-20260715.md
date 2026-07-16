@@ -154,3 +154,27 @@ same audio_bounce_start/stop. Also web perform sliders now tag CV6/CV7 as "knob"
 Arlo had more ideas last night that were lost to the clear; add them here as they
 resurface. Separate/older backlogs: `ideas-round2-20260713.md`,
 `plans/roadmap-speculation-20260714.md` (B1–B9).
+
+---
+
+## LIVE QUEUE SNAPSHOT (2026-07-15 marathon eve-test) — durable copy of the task list
+Arlo is running a marathon eye-test/build session (build→flash→verify→commit, one
+feature at a time). Verified this session: Synth (4-dial dashboard, engine-aware
+K5, closing cutoff, takeover knobs), Slicer, menu scroll. Fixed & flashed:
+Editor idle-flash, Radio error-freeze + station-change WEDGE (two-task race, gen
+guard), Radio press=play/stop + throttle + SPAZ preset + [ ] markers + big name.
+
+OPEN QUEUE (harness task ids):
+- #22 Synth CV matrix — assign any CV to any synth param (model on sampler3). Arlo: "needs a cv matrix."
+- #23 Synth patch save/load — name/save/recall full state to SD. (later ok)
+- #21 Global Setup-menu framework — press-cycle small option sets, [] for ranges/lists; migrate 7 machines, pilot on Synth. (deliberate, not mid-eye-test)
+- #15 Slicer 1V/oct CV pitch in (quantized ok)
+- #16 Radio import stations from uploaded .m3u (Files-upload route preferred)
+- #17 Vendor Shine MP3 encoder -> MP3-over-HTTP broadcast OUT (encoder only; playback already possible via helix)
+- #14 Looper Live black background like decks (+ verify deck-grammar redesign renders w/ a recorded loop)
+- #13 Boot-logo hold until first machine loads (can wait)
+- #12 On-device Editor UI (can wait)
+- Web CV vertical faders (paused mid-build — integrate with the meters)
+- MP3 player machine (helix decode from SD; NOT a deck — no varispeed/tempo on raw MP3, convert-on-import handles that)
+
+NOTE: MP3-as-deck is impractical (frame-imprecise seek + analysis needs PCM) -> convert-on-import is the answer. Shine is ENCODE-only.
