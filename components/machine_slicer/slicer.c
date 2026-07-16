@@ -327,6 +327,11 @@ static void fire_slice(int s)
     sl.vpos_i = 0;
     sl.gen_slice = s;
     sl.gen++;                      // reader restarts the tail for this firing
+    // short crossfade FROM the last output INTO the new slice — kills the pop
+    // when a fire interrupts a still-sounding note (also a clean fade-in from
+    // silence). SL_XFADE frames of ramp.
+    sl.xf_l = sl.last_l; sl.xf_r = sl.last_r;
+    sl.xfade = SL_XFADE;
     sl.playing = true;
 }
 
@@ -453,15 +458,17 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     if (voct < -24) voct = -24;
     if (voct >  24) voct =  24;
     if (voct != 0) sl.inc *= exp2f((float)voct / 12.0f);
-    if (sl.inc > 4.0f) sl.inc = 4.0f;          // 80 ms head budgets ~2x; cap + self-heal cover brief starves
-    else if (sl.inc < 0.25f) sl.inc = 0.25f;
+    // the tail STREAM only feeds ~2x real-time (the 80 ms head + ring budget);
+    // past that the read outruns delivery and stutters. Cap up-pitch at 2x (the
+    // proven-clean knob7 limit); down-pitch is unbounded (slower = no starve).
+    if (sl.inc > 2.0f) sl.inc = 2.0f;
+    else if (sl.inc < 0.125f) sl.inc = 0.125f;   // 3 octaves down
 
     if (sl.cmd_fire)    { sl.cmd_fire = 0;    fire_slice(sl.sel); }
     if (sl.cmd_advance) { sl.cmd_advance = 0; fire_slice(sl.sel); sl.sel = (sl.sel + 1) % sl.n_slices; }
     if (sl.auto_on && !sl.playing && sl.heads_valid) fire_slice(sl.cur);
 
     int frames = MACHINE_BLOCK / 2;
-    static float last_l = 0, last_r = 0;
     bool starved = false;
     for (int f = 0; f < frames; f++) {
         int32_t l = 0, r = 0;
@@ -476,15 +483,22 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
                     float frac = (float)(sl.pos - (double)p0);
                     l = (l0 + (int)((l1 - l0) * frac)) * sl.level >> 8;
                     r = (r0 + (int)((r1 - r0) * frac)) * sl.level >> 8;
-                    last_l = l; last_r = r;
+                    // fire crossfade: ramp from the pre-fire tail into the slice
+                    if (sl.xfade > 0) {
+                        float t = 1.0f - (float)sl.xfade / (float)SL_XFADE;   // 0 -> 1
+                        l = (int32_t)(sl.xf_l * (1.0f - t) + (float)l * t);
+                        r = (int32_t)(sl.xf_r * (1.0f - t) + (float)r * t);
+                        sl.xfade--;
+                    }
+                    sl.last_l = (float)l; sl.last_r = (float)r;
                     sl.pos += sl.inc;
                     sl.vpos_i = (uint32_t)sl.pos;
                 } else {
                     // tail not delivered yet: hold position, decay the last
                     // sample out (no click), count the starve
                     starved = true;
-                    last_l *= 0.94f; last_r *= 0.94f;
-                    l = (int32_t)last_l; r = (int32_t)last_r;
+                    sl.last_l *= 0.94f; sl.last_r *= 0.94f;
+                    l = (int32_t)sl.last_l; r = (int32_t)sl.last_r;
                 }
             }
         }

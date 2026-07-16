@@ -17,7 +17,7 @@
 #include "sample_browser.h"
 #include "slicer_priv.h"
 
-static const color_t BG      = {5, 9, 28};
+static const color_t BG      = {0, 0, 0};        // black canvas (deck grammar)
 static const color_t WAVE    = {70, 110, 180};
 static const color_t GRID    = {40, 60, 110};
 static const color_t SEL_COL = {40, 200, 230};   // selected slice
@@ -27,10 +27,10 @@ static const color_t CUR_COL = {40, 200, 90};    // playing slice
 #define WX 8
 #define WY 8
 #define WW (_width - 16)
-#define WH 150
+#define WH 75
 #define INFO_Y (WY + WH + 6)
 
-static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1;
+static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1, s_last_peaks = -1;
 static char s_msg[24];
 
 // x pixel of slice boundary s (slices are non-uniform in transient mode)
@@ -140,7 +140,7 @@ static void live_full_redraw(void){
     TFT_setFont(DEF_SMALL_FONT, NULL);
     TFT_print("turn:select  press:fire  hold:exit", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
-    s_last_cur = sl.cur; s_last_sel = sl.sel; s_last_slices = sl.n_slices;
+    s_last_cur = sl.cur; s_last_sel = sl.sel; s_last_slices = sl.n_slices; s_last_peaks = sl.peak_n;
 }
 
 static int slicer_live_handler(int it_id, int event, void *ev_data){
@@ -150,7 +150,7 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
             break;
         case EV_TIMER_REPEATING_SLOW:
         case EV_TIMER_REPEATING_FAST:
-            if (sl.n_slices != s_last_slices) live_full_redraw();   // grid changed
+            if (sl.n_slices != s_last_slices || sl.peak_n != s_last_peaks) live_full_redraw();   // grid or async peaks arrived
             else if (sl.cur != s_last_cur || sl.sel != s_last_sel)
                 live_update_highlights();                           // just move highlights
             if (event == EV_TIMER_REPEATING_SLOW){
