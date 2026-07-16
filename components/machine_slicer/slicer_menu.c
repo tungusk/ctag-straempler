@@ -25,10 +25,10 @@ static const color_t CUR_COL = {40, 200, 90};    // playing slice
 
 // waveform box — near the top now; sample/grid info sits below it
 #define WX 8
-#define WY 8
+#define WY 82                 // vertically centered (bar is half-height now)
 #define WW (_width - 16)
 #define WH 75
-#define INFO_Y (WY + WH + 6)
+#define INFO_Y 18             // info line above the bar, bigger font
 
 static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1, s_last_peaks = -1;
 static char s_msg[24];
@@ -68,14 +68,16 @@ static void repaint_slice(int s, int cur, int sel){
 
 // sample name + grid size + live slice number, below the waveform
 static void draw_info_line(void){
+    Font f = cfont; TFT_setFont(DEJAVU18_FONT, NULL);
     int fh = TFT_getfontheight();
     _bg = TFT_BLACK; TFT_fillRect(0, INFO_Y, _width, fh + 4, _bg);
     _fg = TFT_WHITE;
     char s[64];
-    snprintf(s, sizeof(s), "%s   x%d   slice %d/%d   %s%s",
+    snprintf(s, sizeof(s), "%s  x%d  %d/%d %s%s",
              sl.sample[0] ? sl.sample : "(none)", sl.n_slices, sl.sel + 1, sl.n_slices,
-             sl.auto_on ? "AUTO " : "", sl.reverse ? "REV" : "");
+             sl.auto_on ? "A" : "", sl.reverse ? "R" : "");
     TFT_print(s, 6, INFO_Y + 2);
+    cfont = f;
 }
 
 // move highlights by repainting only the vacated + newly-marked slices
