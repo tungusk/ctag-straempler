@@ -50,11 +50,11 @@ progress{width:100%;height:6px;margin-top:6px;display:none}
 .vl{color:#555;font-size:11px}
 .sep{color:#333}
 .rmon{display:flex;gap:8px;align-items:flex-end;margin:4px 0 8px}
-input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:vertical-lr;direction:rtl;width:22px;height:140px;padding:0;margin:2px 0;background:transparent;border:none}
+input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:vertical-lr;direction:rtl;width:16px;height:70px;padding:0;margin:0;background:transparent;border:none}
 .vsl::-webkit-slider-runnable-track{background:#222;border-radius:3px}
-.vsl::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:18px;height:9px;background:#0af;border:none;border-radius:2px;cursor:pointer}
+.vsl::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:8px;background:#0af;border:none;border-radius:2px;cursor:pointer}
 .vsl::-moz-range-track{background:#222;border-radius:3px}
-.vsl::-moz-range-thumb{width:16px;height:9px;background:#0af;border:none;border-radius:2px;cursor:pointer}
+.vsl::-moz-range-thumb{width:12px;height:8px;background:#0af;border:none;border-radius:2px;cursor:pointer}
 .rcol{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;color:#666}
 .rbar{width:22px;height:70px;background:#1e1e1e;border:1px solid #2a2a2a;border-radius:2px;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden}
 .rfill{background:#0af;width:100%;transition:height .12s}
@@ -171,9 +171,9 @@ input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:verti
   <div class="card" id="scrcard">
     <div class="row tight" style="align-items:center">
       <b style="flex:1;color:#0af">SCREEN</b>
-      <label style="color:#888;margin-right:8px"><input type="checkbox" id="scrauto"> auto</label>
       <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
-      <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:6px;display:none" onclick="scrClose()">&#10005;</button>
+      <label style="color:#888;margin-left:8px"><input type="checkbox" id="scrauto"> auto</label>
+      <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
     </div>
     <img id="scrimg" style="width:100%;max-width:480px;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
   </div>
@@ -819,8 +819,12 @@ function loadRemote(){
     // bar / CV# / value / fader / CLK tag / hold (Arlo: mixer layout)
     var mh='';
     for(var i=0;i<8;i++)
-      mh+='<div class="rcol"><div class="rbar"><div class="rfill" id="rf'+i+'" style="height:0%"></div></div><span id="rl'+i+'">CV'+(i+1)+'</span><span id="rv'+i+'">-</span>'
+      mh+='<div class="rcol">'
+        +'<div style="display:flex;gap:3px;align-items:flex-end">'
+        +'<div class="rbar"><div class="rfill" id="rf'+i+'" style="height:0%"></div></div>'
         +'<input type="range" class="vsl" orient="vertical" min="0" max="4095" value="2048" id="cvs'+(i+1)+'" oninput="cvSlide('+(i+1)+',this.value)" onchange="cvEnd('+(i+1)+')">'
+        +'</div>'
+        +'<span id="rl'+i+'">CV'+(i+1)+'</span><span id="rv'+i+'">-</span>'
         +'<span id="cvclk'+(i+1)+'" style="color:#0af;font-size:9px;min-height:11px">&nbsp;</span>'
         +'<label style="color:#666;font-size:9px;display:flex;flex-direction:column;align-items:center;gap:1px"><input type="checkbox" id="cvh'+(i+1)+'" style="width:auto" onchange="cvHold('+(i+1)+')">hold</label>'
         +'</div>';

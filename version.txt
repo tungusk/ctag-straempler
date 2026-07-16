@@ -1,1 +1,1 @@
-web-remote-v3-20260716 (faders in meter columns, small thumbs, collapsible screen card)
+web-remote-v4-20260716 (fader beside meter at meter height, auto right of refresh)
