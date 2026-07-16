@@ -1,1 +1,1 @@
-web-remote-v4-20260716 (fader beside meter at meter height, auto right of refresh)
+web-remote-v4a-20260716 (input strip top-aligned)
