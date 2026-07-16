@@ -29,64 +29,125 @@ static void note_name(float freq, char *buf, size_t n)
 }
 
 static bool s_last_gate;
+static int  s_last_note = -9999;
+static unsigned s_sig_dials = 0, s_sig_adsr = 0;
 
-static void live_gate_block(void)
+static int cur_midi(void)
 {
-    color_t c = sy.gate ? GATE_ON : GATE_OFF;
+    return (sy.freq < 1.0f) ? -1 : (int)lroundf(69.0f + 12.0f * log2f(sy.freq / 440.0f));
+}
+
+// ---- compact header: title + engine tag + note name (colour = gate) --------
+static void draw_header(void)
+{
     int fh = TFT_getfontheight();
-    int by = fh + 18, bh = 62;
-    _bg = (color_t){ (uint8_t)(c.r / 6), (uint8_t)(c.g / 6), (uint8_t)(c.b / 6) };
-    TFT_fillRect(10, by, _width - 20, bh, _bg);
-    _fg = c; TFT_drawRect(10, by, _width - 20, bh, _fg);
+    color_t c = sy.gate ? GATE_ON : GATE_OFF;
+    _bg = TFT_BLACK; TFT_fillRect(0, 0, _width, fh + 12, _bg);
+    _fg = TFT_WHITE; TFT_print("Synth", 6, 4);
+    const char *eng = sy.engine == ENG_FM ? "FM" : sy.engine == ENG_WT ? "WT" : "VA";
+    _fg = (sy.engine == ENG_WT && !sy.wave_name[0]) ? (color_t){220,80,60} : (color_t){130,130,140};
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    TFT_print((char*)eng, 62, 6);
+    TFT_setFont(DEFAULT_FONT, NULL);
     char nm[12]; note_name(sy.freq, nm, sizeof(nm));
-    Font f = cfont; TFT_setFont(DEJAVU24_FONT, NULL);
-    _fg = TFT_WHITE;
-    TFT_print(nm, _width / 2 - TFT_getStringWidth(nm) / 2, by + bh / 2 - TFT_getfontheight() / 2);
+    Font f = cfont; TFT_setFont(DEJAVU18_FONT, NULL);
+    _fg = c; TFT_print(nm, _width - 10 - TFT_getStringWidth(nm), 2);
     cfont = f;
     s_last_gate = sy.gate;
 }
 
-static void live_info(void)
+// ---- a knob dial: ring + pointer, label + value below ----------------------
+static void dial(int cx, int cy, int r, float v01, const char *lab, const char *val, bool live)
 {
     int fh = TFT_getfontheight();
-    int y = fh + 90;
-    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, (fh + 6) * 2, _bg);
-    char s[48];
-    snprintf(s, sizeof(s), "%.0f Hz   cut %.0f   res %.0f%%",
-             sy.freq, sy.cutoff_base, sy.res01 * 100.0f);
-    _fg = TFT_LIGHTGREY;
-    TFT_print(s, _width / 2 - TFT_getStringWidth(s) / 2, y);
-    char t[56];
-    if (sy.engine == ENG_FM)
-        snprintf(t, sizeof(t), "FM  ratio %.2f  idx %.1f  %s", sy.fm_ratio, sy.fm_index, sy.quantize ? "quant" : "free");
-    else if (sy.engine == ENG_WT)
-        snprintf(t, sizeof(t), "WT  %s  %s", sy.wave_name[0] ? sy.wave_name : "(no wave)", sy.quantize ? "quant" : "free");
-    else
-        snprintf(t, sizeof(t), "VA  shape %.0f%%  %s", sy.shape * 100.0f, sy.quantize ? "quant" : "free");
-    // no-wave cue: WT engine with nothing loaded reads RED, not grey
-    if (sy.engine == ENG_WT && !sy.wave_name[0]) _fg = (color_t){220, 80, 60};
-    else _fg = TFT_LIGHTGREY;
-    TFT_print(t, _width / 2 - TFT_getStringWidth(t) / 2, y + fh + 4);
+    if (v01 < 0) v01 = 0;
+    if (v01 > 1) v01 = 1;
+    _bg = TFT_BLACK;
+    TFT_fillRect(cx - r - 5, cy - r - 2, (r + 5) * 2, r * 2 + 2 * fh + 8, _bg);
+    // a knob that hasn't taken over yet (dev unit / untouched) reads dim
+    color_t ring = live ? (color_t){0,150,220} : (color_t){70,70,80};
+    TFT_drawCircle(cx, cy, r, ring);
+    float ang = (-135.0f + v01 * 270.0f) * 0.01745329f;   // deg->rad, 0 = 12 o'clock
+    int px = cx + (int)(sinf(ang) * (float)(r - 4));
+    int py = cy - (int)(cosf(ang) * (float)(r - 4));
+    TFT_drawLine(cx, cy, px, py, live ? (color_t){255,255,255} : (color_t){150,150,160});
+    TFT_fillCircle(cx, cy, 3, ring);
+    _fg = (color_t){130,130,140};
+    TFT_print((char*)lab, cx - TFT_getStringWidth((char*)lab)/2, cy + r + 3);
+    _fg = TFT_WHITE;
+    TFT_print((char*)val, cx - TFT_getStringWidth((char*)val)/2, cy + r + 3 + fh + 1);
 }
 
-// live envelope meter — a moving bar so you SEE the voice breathing
-static int s_last_env = -1;
-static void live_meters(bool full)
+// K5 is engine-specific — report its label / value / normalized position
+static void k5_desc(const char **lab, char *val, size_t vn, float *v01)
+{
+    if (sy.engine == ENG_FM)      { *lab = "fm idx"; *v01 = sy.fm_index / 8.0f; snprintf(val, vn, "%.1f", sy.fm_index); }
+    else if (sy.engine == ENG_WT) { *lab = "fold";   *v01 = sy.fold;            snprintf(val, vn, "%.0f%%", sy.fold * 100.0f); }
+    else                          { *lab = "shape";  *v01 = sy.shape;           snprintf(val, vn, "%.0f%%", sy.shape * 100.0f); }
+}
+
+// four macro dials: K5 timbre / K6 cutoff / K7 resonance / K8 env>cut
+static void draw_dials(void)
 {
     int fh = TFT_getfontheight();
-    int x = 20, w = _width - 40, h = 12, y = fh + 122;
-    if (full) {
-        TFT_drawRect(x, y, w, h, (color_t){40, 60, 110});
-        _fg = (color_t){90, 90, 90}; _bg = TFT_BLACK;
-        TFT_print("env", x, y - fh - 2);
-        s_last_env = -1;
-    }
-    int fill = (int)(sy.env * (float)(w - 2));
-    if (fill != s_last_env) {
-        s_last_env = fill;
-        if (fill > 0)     TFT_fillRect(x + 1, y + 1, fill, h - 2, (color_t){40, 200, 90});
-        if (fill < w - 2) TFT_fillRect(x + 1 + fill, y + 1, (w - 2) - fill, h - 2, (color_t){18, 18, 24});
-    }
+    int cy = fh + 16 + 26, r = 24;
+    int cx[4] = { 44, 128, 212, 292 };
+    // K5 timbre (engine-aware)
+    const char *l0; char v0[16]; float n0;
+    k5_desc(&l0, v0, sizeof(v0), &n0);
+    dial(cx[0], cy, r, n0, l0, v0, sy.knob_live[0]);
+    // K6 cutoff (invert the log map -> 0..1)
+    float cv = logf(sy.cutoff_base / 10.0f) / logf(600.0f);
+    char cval[16];
+    if (sy.cutoff_base >= 1000.0f) snprintf(cval, sizeof(cval), "%.1fk", sy.cutoff_base / 1000.0f);
+    else                           snprintf(cval, sizeof(cval), "%.0f", sy.cutoff_base);
+    dial(cx[1], cy, r, cv, "cut", cval, sy.knob_live[1]);
+    // K7 resonance
+    char rval[16]; snprintf(rval, sizeof(rval), "%.0f%%", sy.res01 * 100.0f);
+    dial(cx[2], cy, r, sy.res01, "res", rval, sy.knob_live[2]);
+    // K8 env>cut
+    char eval[16]; snprintf(eval, sizeof(eval), "%.0f%%", sy.env_to_cut * 100.0f);
+    dial(cx[3], cy, r, sy.env_to_cut, "env>f", eval, sy.knob_live[3]);
+}
+
+// ---- ADSR envelope shape (a polyline you can read at a glance) --------------
+static void draw_adsr(void)
+{
+    int fh = TFT_getfontheight();
+    int x = 8, y = fh + 16 + 78, w = _width - 16, h = 44;
+    _bg = TFT_BLACK; TFT_fillRect(x, y - fh - 2, w, h + fh + 4, _bg);
+    _fg = (color_t){110,110,120}; TFT_print("ENV", x, y - fh - 2);
+    TFT_drawRect(x, y, w, h, (color_t){40, 60, 90});
+    float ta = sy.atk, td = sy.dec, tr = sy.rel, tsum = ta + td + tr;
+    if (tsum < 1e-4f) tsum = 1e-4f;
+    float body = (float)(w - 4) * 0.72f;                  // A+D+R share 72%, sustain plateau the rest
+    int aw = (int)(body * ta / tsum), dw = (int)(body * td / tsum), rw = (int)(body * tr / tsum);
+    int sw = (w - 4) - aw - dw - rw;
+    int xb = x + 2, yb = y + h - 2, yt = y + 2;
+    int ys = yb - (int)(sy.sus * (float)(h - 4));
+    color_t col = {60, 200, 120};
+    int x1 = xb + aw, x2 = x1 + dw, x3 = x2 + sw, x4 = x3 + rw;
+    TFT_drawLine(xb, yb, x1, yt, col);
+    TFT_drawLine(x1, yt, x2, ys, col);
+    TFT_drawLine(x2, ys, x3, ys, col);
+    TFT_drawLine(x3, ys, x4, yb, col);
+}
+
+static unsigned dials_sig(void)
+{
+    float k5 = sy.engine == ENG_FM ? sy.fm_index : sy.engine == ENG_WT ? sy.fold : sy.shape;
+    return (unsigned)(sy.cutoff_base) * 131u
+         + (unsigned)(k5 * 1000.0f) * 17u
+         + (unsigned)(sy.res01 * 1000.0f) * 29u
+         + (unsigned)(sy.env_to_cut * 1000.0f) * 41u
+         + (unsigned)sy.engine * 7u
+         + (sy.knob_live[0]?1u:0u) + (sy.knob_live[1]?2u:0u)
+         + (sy.knob_live[2]?4u:0u) + (sy.knob_live[3]?8u:0u);
+}
+static unsigned adsr_sig(void)
+{
+    return (unsigned)(sy.atk*1000)*7u + (unsigned)(sy.dec*1000)*13u
+         + (unsigned)(sy.sus*1000)*17u + (unsigned)(sy.rel*1000)*19u;
 }
 
 static void live_full_redraw(void)
@@ -94,13 +155,12 @@ static void live_full_redraw(void)
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
-    TFT_print("Synth", 6, 4);
-    live_gate_block();
-    live_info();
-    live_meters(true);
+    draw_header();      s_last_note = cur_midi();
+    draw_dials();       s_sig_dials = dials_sig();
+    draw_adsr();        s_sig_adsr  = adsr_sig();
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("CV1:pitch(1V/oct)  TR1:gate  knob6:cutoff  knob7:res", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("CV1:pitch  TR1:gate   K5:timbre K6:cut K7:res K8:env>f", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
@@ -110,11 +170,16 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
     switch (event) {
         case EV_ENTERED_MENU: live_full_redraw(); break;
         case EV_TIMER_REPEATING_SLOW:
-        case EV_TIMER_REPEATING_FAST:
-            if (sy.gate != s_last_gate) live_gate_block();
-            live_info();
-            live_meters(false);
+        case EV_TIMER_REPEATING_FAST: {
+            // each block redraws only when its own values change (no free-running meter)
+            int midi = cur_midi();
+            if (sy.gate != s_last_gate || midi != s_last_note) { draw_header(); s_last_note = midi; }
+            unsigned ds = dials_sig();
+            if (ds != s_sig_dials) { draw_dials(); s_sig_dials = ds; }
+            unsigned as = adsr_sig();
+            if (as != s_sig_adsr) { draw_adsr(); s_sig_adsr = as; }
             break;
+        }
         case EV_LONG_PRESS: return M_SYNTH_SETUP;
         default: break;
     }

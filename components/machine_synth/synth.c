@@ -65,6 +65,7 @@ static esp_err_t synth_start(void)
     sy.cutoff_base = 1200.0f;
     sy.res01 = 0.2f;
     sy.freq = 261.6f;           // C4-ish until CV read
+    sy.knob_engine = -1;        // force a knob recapture on the first block
     svf_reset(&sy.flt_l);
     return ESP_OK;
 }
@@ -85,10 +86,29 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
     int cvm[8];
     for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&med[k], io->cv[k]);
 
-    // knobs 6/7 = cutoff / resonance (the two fully-good channels)
-    float tc = (float)cvm[5] / 4095.0f;
-    sy.cutoff_base = 30.0f * powf(200.0f, tc);        // 30 Hz .. 6 kHz (log)
-    sy.res01 = (float)cvm[6] / 4095.0f;
+    // FOUR macro knobs, K5..K8 = ch5..8 (cvm[4..7]). Each uses takeover: the
+    // current value (Setup / default) holds until the knob is moved past a small
+    // threshold, then the knob owns its param. This keeps the dev unit (weak
+    // K5/K8) sounding right on defaults while built units get four live macros.
+    float kn[4] = { (float)cvm[4]/4095.0f, (float)cvm[5]/4095.0f,
+                    (float)cvm[6]/4095.0f, (float)cvm[7]/4095.0f };
+    if (sy.knob_engine != sy.engine) {                // re-arm capture on an engine change
+        sy.knob_engine = sy.engine;
+        for (int i = 0; i < 4; i++) { sy.knob_capt[i] = kn[i]; sy.knob_live[i] = false; }
+    }
+    for (int i = 0; i < 4; i++)
+        if (!sy.knob_live[i] && fabsf(kn[i] - sy.knob_capt[i]) > 0.03f) sy.knob_live[i] = true;
+
+    // K6 = cutoff (full range, closes right down), K7 = resonance, K8 = env->cut
+    if (sy.knob_live[1]) sy.cutoff_base = 10.0f * powf(600.0f, kn[1]);   // 10 Hz .. 6 kHz (log)
+    if (sy.knob_live[2]) sy.res01 = kn[2];
+    if (sy.knob_live[3]) sy.env_to_cut = kn[3];
+    // K5 = engine-aware timbre: VA shape / FM index / WT fold
+    if (sy.knob_live[0]) {
+        if (sy.engine == ENG_FM)      sy.fm_index = kn[0] * 8.0f;
+        else if (sy.engine == ENG_WT) sy.fold     = kn[0];
+        else                          sy.shape    = kn[0];
+    }
     sy.cv1_disp = cvm[0];
     note_from_cv(cvm[0]);                             // CV1 = 1V/oct pitch
 
@@ -164,6 +184,11 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
             if (i0 >= sy.wave_len) i0 = sy.wave_len - 1;
             int i1 = i0 + 1; if (i1 >= sy.wave_len) i1 = 0;
             osc = ((float)sy.wave[i0] + ((float)sy.wave[i1] - (float)sy.wave[i0]) * fr) / 32768.0f;
+            if (sy.fold > 0.001f) {                   // knob7 wavefold: drive + reflect for a WT timbre sweep
+                osc *= 1.0f + sy.fold * 4.0f;
+                while (osc >  1.0f) osc =  2.0f - osc;
+                while (osc < -1.0f) osc = -2.0f - osc;
+            }
         } else {
             // polyBLEP saw <-> square morph
             float saw = 2.0f * sy.phase - 1.0f - polyblep(sy.phase, dt);
@@ -176,7 +201,7 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
 
         // filter: cutoff opened by the envelope + LFO wobble; SVF low-pass tap
         float fc = (sy.cutoff_base + sy.env * sy.env_to_cut * 5000.0f) * lfo_cut;
-        if (fc < 20.0f) fc = 20.0f;
+        if (fc < 8.0f) fc = 8.0f;   // let the cutoff close nearly all the way down
         // 1.0 = Chamberlin stability ceiling (fc ~ SR/6); 1.5 let a bright,
         // high-energy FM tone drive the low-damping filter into self-oscillation
         // and blow up to NaN. Matches Drums' DR_FLT_FMAX.
