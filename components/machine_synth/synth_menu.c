@@ -13,8 +13,7 @@
 #include "sample_browser.h"
 #include "synth_priv.h"
 
-static const color_t GATE_ON  = {40, 200, 90};
-static const color_t GATE_OFF = {90, 90, 100};
+static const color_t GATE_ON  = {40, 200, 90};   // note stays this green (gate flips too fast to read)
 
 static const char *const NOTE_NAMES[12] =
     { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
@@ -41,7 +40,6 @@ static int cur_midi(void)
 static void draw_header(void)
 {
     int fh = TFT_getfontheight();
-    color_t c = sy.gate ? GATE_ON : GATE_OFF;
     _bg = TFT_BLACK; TFT_fillRect(0, 0, _width, fh + 12, _bg);
     _fg = TFT_WHITE; TFT_print("Synth", 6, 4);
     const char *eng = sy.engine == ENG_FM ? "FM" : sy.engine == ENG_WT ? "WT" : "VA";
@@ -49,9 +47,10 @@ static void draw_header(void)
     TFT_setFont(DEF_SMALL_FONT, NULL);
     TFT_print((char*)eng, 62, 6);
     TFT_setFont(DEFAULT_FONT, NULL);
+    // note name stays green — the gate flips too fast to read as a colour change
     char nm[12]; note_name(sy.freq, nm, sizeof(nm));
     Font f = cfont; TFT_setFont(DEJAVU18_FONT, NULL);
-    _fg = c; TFT_print(nm, _width - 10 - TFT_getStringWidth(nm), 2);
+    _fg = GATE_ON; TFT_print(nm, _width - 10 - TFT_getStringWidth(nm), 2);
     cfont = f;
     s_last_gate = sy.gate;
 }
@@ -114,7 +113,7 @@ static void draw_dials(void)
 static void draw_adsr(void)
 {
     int fh = TFT_getfontheight();
-    int x = 8, y = fh + 16 + 78, w = _width - 16, h = 44;
+    int x = 8, y = fh + 16 + 104, w = _width - 16, h = 44;   // extra gap below the dials
     _bg = TFT_BLACK; TFT_fillRect(x, y - fh - 2, w, h + fh + 4, _bg);
     _fg = (color_t){110,110,120}; TFT_print("ENV", x, y - fh - 2);
     TFT_drawRect(x, y, w, h, (color_t){40, 60, 90});
@@ -173,7 +172,7 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
         case EV_TIMER_REPEATING_FAST: {
             // each block redraws only when its own values change (no free-running meter)
             int midi = cur_midi();
-            if (sy.gate != s_last_gate || midi != s_last_note) { draw_header(); s_last_note = midi; }
+            if (midi != s_last_note) { draw_header(); s_last_note = midi; }   // gate no longer recolors
             unsigned ds = dials_sig();
             if (ds != s_sig_dials) { draw_dials(); s_sig_dials = ds; }
             unsigned as = adsr_sig();
