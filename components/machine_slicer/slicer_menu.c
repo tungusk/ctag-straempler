@@ -15,6 +15,7 @@
 #include "machine.h"
 #include "sample_ram.h"
 #include "sample_browser.h"
+#include "setup_menu.h"
 #include "slicer_priv.h"
 
 static const color_t BG      = {0, 0, 0};        // black canvas (deck grammar)
@@ -45,7 +46,6 @@ static bool s_last_loading = true;   // reader-load in progress at the last redr
 // enters level 2 (s_in_bar) where turns hand-select slices and press fires.
 static int  s_elem = 0;
 static bool s_in_bar = false;
-static char s_msg[24];
 static void draw_speed(void);   // fwd: CV7 speed indicator, defined near draw_waveform
 
 // x pixel of slice boundary s (slices are non-uniform in transient mode)
@@ -289,43 +289,17 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
-// ---- Setup page -----------------------------------------------------------
-static const char *setup_labels[] = {"Mode", "Slices", "Sensitivity", "Sample", "Auto", "Reverse", "Reverb", "Rev Mix"};
-#define SL_SETUP_N 8
-
-
-static void setup_redraw(int pos, int sel){
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
-    _fg = TFT_WHITE;
-    TFT_print("Slicer Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);
-    for (int i = 0; i < SL_SETUP_N; i++){
-        int y = fh + 14 + i * (fh + 8);
-        _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-        _fg = (i == pos && sel) ? TFT_CYAN : TFT_WHITE;
-        TFT_fillRect(0, y - 2, _width, fh + 6, _bg);
-        TFT_print((char*)setup_labels[i], 8, y);
-        char v[24];
-        switch(i){
-            case 0: snprintf(v, sizeof(v), "%s", sl.ot_active ? "OT"
-                                : (sl.transient_mode ? "Transient" : "Grid")); break;
-            case 1:
-                if(sl.slice_target == 0) snprintf(v, sizeof(v), "Auto");
-                else { snprintf(v, sizeof(v), "%d", sl.slice_target); }
-                break;
-            case 2: snprintf(v, sizeof(v), "%d", sl.sensitivity); break;
-            case 3: snprintf(v, sizeof(v), "%s", sl.sample[0] ? sl.sample : "(none)"); break;
-            case 4: snprintf(v, sizeof(v), "%s", sl.auto_on ? "ON" : "OFF"); break;
-            case 5: snprintf(v, sizeof(v), "%s", sl.reverse ? "ON" : "OFF"); break;
-            case 6: snprintf(v, sizeof(v), "%s", reverb_mode_name(sl.fx_rv.mode)); break;
-            case 7: snprintf(v, sizeof(v), "%.0f%%", sl.fx_rvmix * 100.0f); break;
-        }
-        TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
-    }
-    if (s_msg[0]){ _fg = TFT_LIGHTGREY; TFT_print(s_msg, 8, _height - fh - 2); }
-}
+// ---- Setup page (shared setup-menu framework) -----------------------------
+static const setup_item_t sl_setup_items[] = {
+    {"Mode",        ST_TOGGLE},   // Grid / Transient / OT
+    {"Slices",      ST_TOGGLE},   // Auto / 8 / 16 / 32 / 64 / 128
+    {"Sensitivity", ST_ACTION},   // -> M_SLICER_SENS dial-in
+    {"Sample",      ST_ACTION},   // -> M_SLICER_LOAD browser
+    {"Auto",        ST_TOGGLE},
+    {"Reverse",     ST_TOGGLE},
+    {"Reverb",      ST_TOGGLE},   // reverb mode cycle
+    {"Rev Mix",     ST_RANGE},    // 0..100%
+};
 
 static void cycle_target(int dir){
     int n = sl.slice_target;   // Auto(0) -> 8 -> 16 -> 32 -> 64 -> 128 -> Auto
@@ -346,45 +320,70 @@ static void cycle_mode(int dir){
     slicer_reslice();
 }
 
-static int slicer_setup_handler(int it_id, int event, void *ev_data){
-    static int pos = 0, sel = 0;
-    switch(event){
-        case EV_ENTERED_MENU:
-            pos = 0; sel = 0; s_msg[0] = 0;
-            setup_redraw(pos, sel);
+// value string for setup item i (extracted from the old setup_redraw switch)
+static void sl_setup_val(int i, char *v, size_t n){
+    switch(i){
+        case 0: snprintf(v, n, "%s", sl.ot_active ? "OT"
+                            : (sl.transient_mode ? "Transient" : "Grid")); break;
+        case 1:
+            if(sl.slice_target == 0) snprintf(v, n, "Auto");
+            else                     snprintf(v, n, "%d", sl.slice_target);
             break;
-        case EV_FWD:
-            if(sel){
-                if(pos==0)      cycle_mode(+1);
-                else if(pos==1) cycle_target(+1);
-                else if(pos==4) sl.auto_on = !sl.auto_on;
-                else if(pos==5) sl.reverse = !sl.reverse;   // reader rebuilds heads
-                else if(pos==6){ int m=sl.fx_rv.mode+1; if(m>=RV_N_MODES)m=RV_OFF; reverb_set_mode(&sl.fx_rv,m); }
-                else if(pos==7){ sl.fx_rvmix+=0.05f; if(sl.fx_rvmix>1)sl.fx_rvmix=1; reverb_set_mix(&sl.fx_rv,sl.fx_rvmix); }
-            } else { pos++; if(pos >= SL_SETUP_N) pos = -1; }
-            setup_redraw(pos, sel);
+        case 2: snprintf(v, n, "%d", sl.sensitivity); break;
+        case 3: snprintf(v, n, "%s", sl.sample[0] ? sl.sample : "(none)"); break;
+        case 4: snprintf(v, n, "%s", sl.auto_on ? "ON" : "OFF"); break;
+        case 5: snprintf(v, n, "%s", sl.reverse ? "ON" : "OFF"); break;
+        case 6: snprintf(v, n, "%s", reverb_mode_name(sl.fx_rv.mode)); break;
+        case 7: snprintf(v, n, "%.0f%%", sl.fx_rvmix * 100.0f); break;
+        default: v[0] = 0; break;
+    }
+}
+
+// TOGGLE items cycle; RANGE items step +/- ; ACTION items (2,3) do nothing here
+static void sl_setup_adj(int i, int dir){
+    switch(i){
+        case 0: cycle_mode(dir); break;
+        case 1: cycle_target(dir); break;
+        case 4: sl.auto_on = !sl.auto_on; break;
+        case 5: sl.reverse = !sl.reverse; break;   // reader rebuilds heads
+        case 6: {
+            int m = sl.fx_rv.mode + (dir > 0 ? 1 : -1);
+            if(m >= RV_N_MODES) m = RV_OFF;
+            if(m < 0)           m = RV_N_MODES - 1;
+            reverb_set_mode(&sl.fx_rv, m);
             break;
-        case EV_BWD:
-            if(sel){
-                if(pos==0)      cycle_mode(-1);
-                else if(pos==1) cycle_target(-1);
-                else if(pos==4) sl.auto_on = !sl.auto_on;
-                else if(pos==5) sl.reverse = !sl.reverse;   // reader rebuilds heads
-                else if(pos==6){ int m=sl.fx_rv.mode-1; if(m<0)m=RV_N_MODES-1; reverb_set_mode(&sl.fx_rv,m); }
-                else if(pos==7){ sl.fx_rvmix-=0.05f; if(sl.fx_rvmix<0)sl.fx_rvmix=0; reverb_set_mix(&sl.fx_rv,sl.fx_rvmix); }
-            } else { pos--; if(pos < -1) pos = SL_SETUP_N - 1; }
-            setup_redraw(pos, sel);
+        }
+        case 7:
+            sl.fx_rvmix += (dir > 0 ? 0.05f : -0.05f);
+            if(sl.fx_rvmix > 1) sl.fx_rvmix = 1;
+            if(sl.fx_rvmix < 0) sl.fx_rvmix = 0;
+            reverb_set_mix(&sl.fx_rv, sl.fx_rvmix);
             break;
-        case EV_SHORT_PRESS:
-            if(pos == -1) return M_MORE;          // System affordance
-            if(pos == 2) return M_SLICER_SENS;   // open the dial-in screen
-            if(pos == 3) return M_SLICER_LOAD;   // open the sample browser
-            sel = !sel; s_msg[0] = 0; setup_redraw(pos, sel);
-            break;
-        case EV_LONG_PRESS: return M_SLICER_LIVE;   // toggle Setup -> Live
         default: break;
     }
+}
+
+static int sl_setup_action(int i){
+    if(i == 2) return M_SLICER_SENS;   // open the dial-in screen
+    if(i == 3) return M_SLICER_LOAD;   // open the sample browser
     return 0;
+}
+
+static setup_menu_t sl_setup = {
+    .items       = sl_setup_items,
+    .n           = 8,
+    .title       = "Slicer Setup",
+    .aff_label   = "Machine",
+    .aff_target  = M_MORE,
+    .live_target = M_SLICER_LIVE,
+    .render      = sl_setup_val,
+    .adjust      = sl_setup_adj,
+    .action      = sl_setup_action,
+};
+
+static int slicer_setup_handler(int it_id, int event, void *ev_data){
+    (void)it_id; (void)ev_data;
+    return setup_menu_event(&sl_setup, event);
 }
 
 // ---- Load browser: the shared two-level widget (folders -> big-name list) --

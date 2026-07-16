@@ -16,6 +16,7 @@
 #include "machine.h"
 #include "sample_ram.h"
 #include "sample_browser.h"
+#include "setup_menu.h"
 #include "drum_priv.h"
 
 // the sampler's colour scheme, exactly: BLACK screen, and the pads carry the
@@ -799,31 +800,50 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
-// ---- Setup page ---------------------------------------------------------------
+// ---- Setup page (shared framework: TOGGLE press-cycles, RANGE [ ] edits, ------
+// ACTION opens a sub-page) ------------------------------------------------------
 // Row PADEDIT opens the per-pad editor (Arlo: Pads belongs under Setup, not in
 // a hub). The two selector-CV rows exist ONLY in CV-select mode — in Direct
 // mode the selectors do nothing, so the page doesn't mention them at all and
-// the encoder walks straight past.
+// the encoder walks straight past. The visible list (and thus the framework's
+// items/n) is rebuilt whenever the trigger mode changes; s_rows[] maps a visible
+// index back to its R_* id for the render/adjust/action callbacks.
 enum { R_PADEDIT = 0, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL,
        R_KNOB, R_FILTER, R_REVERB, R_RVMIX, R_RVTAP, R_COUNT };
 
-static const char *setup_labels[R_COUNT] = {"Pad Setup", "Trigger",
-                                            "Sensi", "Sel CV TR1", "Sel CV TR2",
-                                            "Velocity", "Knob 6/7", "Filter",
-                                            "Reverb", "Rev Return", "Send Tap"};
-// everything is a small option set except the two selector CVs (none + 8
-// channels), which stay click-to-edit
-#define SETUP_IS_TOGGLE(id) ((id) != R_PADEDIT && (id) != R_SEL1 && (id) != R_SEL2 && (id) != R_RVMIX)
+// the full kind table: Pad Setup opens a page (ACTION), the two selector CVs are
+// wide (none + 8 channels) so they keep click-to-edit (RANGE) as does Rev Return
+// (a %); everything else is a small option set (TOGGLE)
+static const setup_item_t dr_all_items[R_COUNT] = {
+    [R_PADEDIT] = {"Pad Setup",  ST_ACTION},
+    [R_TRIG]    = {"Trigger",    ST_TOGGLE},
+    [R_SENS]    = {"Sensi",      ST_TOGGLE},
+    [R_SEL1]    = {"Sel CV TR1", ST_RANGE},
+    [R_SEL2]    = {"Sel CV TR2", ST_RANGE},
+    [R_VEL]     = {"Velocity",   ST_TOGGLE},
+    [R_KNOB]    = {"Knob 6/7",   ST_TOGGLE},
+    [R_FILTER]  = {"Filter",     ST_TOGGLE},
+    [R_REVERB]  = {"Reverb",     ST_TOGGLE},
+    [R_RVMIX]   = {"Rev Return", ST_RANGE},
+    [R_RVTAP]   = {"Send Tap",   ST_TOGGLE},
+};
 
-// visible rows, rebuilt whenever the trigger mode changes; `pos` indexes THIS
+// visible rows, rebuilt whenever the trigger mode changes; s_rows[k] = the R_* id
+// shown at visible index k, and dr_vis_items[] is the framework's items array
 static int s_rows[R_COUNT], s_nrows;
+static setup_item_t dr_vis_items[R_COUNT];
+static setup_menu_t dr_setup;
 
 static void setup_build_rows(void){
     s_nrows = 0;
     for (int id = 0; id < R_COUNT; id++){
         if ((id == R_SEL1 || id == R_SEL2) && !dr.cv_select) continue;
-        s_rows[s_nrows++] = id;
+        s_rows[s_nrows] = id;
+        dr_vis_items[s_nrows] = dr_all_items[id];
+        s_nrows++;
     }
+    dr_setup.items = dr_vis_items;
+    dr_setup.n = s_nrows;
 }
 
 static void sel_src_str(int src, char *v, size_t n){
@@ -849,30 +869,6 @@ static void setup_value_str(int id, char *v, size_t n){
         case R_RVTAP: snprintf(v, n, "%s", dr.rv_post ? "post-filter" : "pre-filter"); break;
         default: v[0] = 0;
     }
-}
-
-static void setup_row_redraw(int idx, int pos, int sel){
-    char raw[24];
-    int id = s_rows[idx];
-    setup_value_str(id, raw, sizeof(raw));
-    row_draw(idx, pos, sel, setup_labels[id], raw);
-}
-
-static void setup_redraw(int pos, int sel){
-    TFT_resetclipwin();
-    _bg = SCREEN_BG; TFT_fillScreen(SCREEN_BG);
-    _fg = TFT_WHITE;
-    TFT_print("Drum Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);   // top-right; pos -1 = System
-    for (int i = 0; i < s_nrows; i++) setup_row_redraw(i, pos, sel);
-    _bg = SCREEN_BG;
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    const char *hint = dr.cv_select
-        ? "gate on TR1/TR2 fires the pad its sel CV picks (TR2 = its B layer)"
-        : "each CV input fires its own pad (75% edge)";
-    TFT_print((char*)hint, 8, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
 }
 
 // selector CV cycles through none -> CV1..CV8 -> none: a trig with no selector
@@ -908,46 +904,35 @@ static void setup_adj(int id, int dir){
     }
 }
 
-static int drum_setup_handler(int it_id, int event, void *ev_data){
-    static int pos = 0, sel = 0;
-    switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; setup_build_rows(); setup_redraw(pos, sel); break;
-        case EV_FWD:
-        case EV_BWD: {
-            int dir = (event == EV_FWD) ? +1 : -1;
-            if(sel){
-                setup_adj(s_rows[pos], dir);
-                setup_row_redraw(pos, pos, sel);              // value edit: one row only
-            } else {
-                pos += dir;
-                if(pos >= s_nrows) pos = -1;                  // past bottom -> System
-                if(pos < -1) pos = s_nrows - 1;               // past System -> bottom
-                setup_redraw(pos, sel);
-            }
-            break;
-        }
-        case EV_SHORT_PRESS: {
-            if(pos == -1) return M_MORE;                       // System affordance
-            int id = s_rows[pos];
-            if(id == R_PADEDIT) return M_DRUM_PADS;            // per-pad editor
-            if(SETUP_IS_TOGGLE(id)){
-                setup_adj(id, +1);                             // small option set: flip here
-                if (id == R_TRIG){
-                    // the mode adds/removes the selector rows and rewrites the
-                    // hint line: rebuild the page around the row we're still on
-                    setup_build_rows();
-                    if (pos >= s_nrows) pos = s_nrows - 1;
-                    setup_redraw(pos, sel);
-                } else setup_row_redraw(pos, pos, 0);
-            } else {
-                sel = !sel; setup_row_redraw(pos, pos, sel);
-            }
-            break;
-        }
-        case EV_LONG_PRESS: return M_DRUM_LIVE;   // toggle Setup -> Live (no hub)
-        default: break;
-    }
+// framework callbacks — all index the VISIBLE row; s_rows maps it to the R_* id
+static void dr_setup_render(int i, char *v, size_t n){ setup_value_str(s_rows[i], v, n); }
+
+static void dr_setup_adj(int i, int dir){
+    int id = s_rows[i];
+    setup_adj(id, dir);
+    // Trigger mode adds/removes the two selector rows: rebuild the visible list
+    // so the framework's next draw reflects it (Trigger sits above them, so pos
+    // stays valid).
+    if (id == R_TRIG) setup_build_rows();
+}
+
+static int dr_setup_action(int i){
+    if (s_rows[i] == R_PADEDIT) return M_DRUM_PADS;   // per-pad editor
     return 0;
+}
+
+static setup_menu_t dr_setup = {
+    .title = "Drum Setup",
+    .aff_label = "Machine", .aff_target = M_MORE,
+    .live_target = M_DRUM_LIVE,
+    .render = dr_setup_render, .adjust = dr_setup_adj, .action = dr_setup_action,
+    // .items / .n are set by setup_build_rows() on entry (mode-dependent)
+};
+
+static int drum_setup_handler(int it_id, int event, void *ev_data){
+    (void)it_id; (void)ev_data;
+    if (event == EV_ENTERED_MENU) setup_build_rows();   // list depends on cv_select
+    return setup_menu_event(&dr_setup, event);
 }
 
 // ---- registration ---------------------------------------------------------

@@ -13,6 +13,7 @@
 #include "clock.h"
 #include "beatlisten.h"
 #include "menu_config.h"
+#include "setup_menu.h"
 #include "glitch_priv.h"
 
 static const color_t LIVE_COL   = {40, 160, 90};
@@ -88,37 +89,20 @@ static int glitch_live_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
-// ---- Setup ----------------------------------------------------------------
-static const char *setup_labels[] = {"Window ms", "Reverse", "Sync", "Division", "Clock Src"};
-#define GL_SETUP_N 5
+// ---- Setup (shared framework: press cycles TOGGLEs, [ ] edits RANGEs) -------
+static const setup_item_t gl_setup_items[] = {
+    {"Window ms", ST_RANGE},  {"Reverse", ST_TOGGLE}, {"Sync", ST_TOGGLE},
+    {"Division",  ST_TOGGLE}, {"Clock Src", ST_TOGGLE},
+};
 
-static void setup_redraw(int pos, int sel){
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
-    _fg = TFT_WHITE;
-    TFT_print("Glitch Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);
-    for (int i = 0; i < GL_SETUP_N; i++){
-        int y = fh + 16 + i * (fh + 8);
-        _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-        _fg = (i == pos && sel) ? TFT_CYAN : TFT_WHITE;
-        TFT_fillRect(0, y - 2, _width, fh + 6, _bg);
-        TFT_print((char*)setup_labels[i], 8, y);
-        char v[24];
-        switch(i){
-            case 0: snprintf(v, sizeof(v), "%d", gl.win_ms); break;
-            case 1: snprintf(v, sizeof(v), "%s", gl.reverse ? "ON" : "OFF"); break;
-            case 2: snprintf(v, sizeof(v), "%s", gl.sync ? "ON" : "OFF"); break;
-            case 3: snprintf(v, sizeof(v), "%s", div_name(gl.division)); break;
-            case 4: snprintf(v, sizeof(v), "%s", clock_source_name(gl.clk_src)); break;
-        }
-        TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
+static void gl_setup_val(int i, char *v, size_t n){
+    switch(i){
+        case 0: snprintf(v, n, "%d", gl.win_ms); break;
+        case 1: snprintf(v, n, "%s", gl.reverse ? "ON" : "OFF"); break;
+        case 2: snprintf(v, n, "%s", gl.sync ? "ON" : "OFF"); break;
+        case 3: snprintf(v, n, "%s", div_name(gl.division)); break;
+        case 4: snprintf(v, n, "%s", clock_source_name(gl.clk_src)); break;
     }
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("window on knob6 (free) or clock division (sync)", 8, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
 }
 
 static void gl_adj(int i, int dir){
@@ -126,7 +110,7 @@ static void gl_adj(int i, int dir){
         case 0: gl.win_ms += dir * 10; if(gl.win_ms < 20) gl.win_ms = 20; if(gl.win_ms > 500) gl.win_ms = 500; break;
         case 1: gl.reverse = !gl.reverse; break;
         case 2: gl.sync = !gl.sync; break;
-        case 3: gl.division += dir; if(gl.division < 0) gl.division = 0; if(gl.division > 3) gl.division = 3; break;
+        case 3: gl.division += dir; if(gl.division < 0) gl.division = 3; if(gl.division > 3) gl.division = 0; break;
         case 4:
             // CV1..8 + AUDIO (both trigs are stutter controls); AUDIO wakes the ear
             gl.clk_src = clock_source_cycle_cv_audio(gl.clk_src, dir);
@@ -138,27 +122,18 @@ static void gl_adj(int i, int dir){
     }
 }
 
+static setup_menu_t gl_setup = {
+    .items = gl_setup_items,
+    .n = 5,
+    .title = "Glitch Setup",
+    .aff_label = "Machine", .aff_target = M_MORE,
+    .live_target = M_GLITCH_LIVE,
+    .render = gl_setup_val, .adjust = gl_adj, .action = NULL,
+};
+
 static int glitch_setup_handler(int it_id, int event, void *ev_data){
-    static int pos = 0, sel = 0;
-    switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
-        case EV_FWD:
-            if(sel) gl_adj(pos, +1);
-            else { pos++; if(pos >= GL_SETUP_N) pos = -1; }
-            setup_redraw(pos, sel);
-            break;
-        case EV_BWD:
-            if(sel) gl_adj(pos, -1);
-            else { pos--; if(pos < -1) pos = GL_SETUP_N - 1; }
-            setup_redraw(pos, sel);
-            break;
-        case EV_SHORT_PRESS:
-            if(pos == -1) return M_MORE;   // System affordance
-            sel = !sel; setup_redraw(pos, sel); break;
-        case EV_LONG_PRESS: return M_GLITCH_LIVE;   // toggle Setup -> Live
-        default: break;
-    }
-    return 0;
+    (void)it_id; (void)ev_data;
+    return setup_menu_event(&gl_setup, event);
 }
 
 // ---- registration ---------------------------------------------------------

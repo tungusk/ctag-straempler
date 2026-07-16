@@ -19,6 +19,7 @@
 #include "beatlisten.h"
 #include "menu_config.h"
 #include "audio.h"
+#include "setup_menu.h"
 #include "tracker_priv.h"
 
 static char (*s_mods)[TRK_NAME_LEN] = NULL;
@@ -356,43 +357,35 @@ static int tracker_live_handler(int it_id, int event, void *ev_data){
     return 0;
 }
 
-// ---- Setup ------------------------------------------------------------------
-static const char *setup_labels[] = {"Module", "Loop", "Sound", "Sync", "Clock Src", "Clock", "Info Text", "Loop Freeze"};
-#define TRK_SETUP_N 8
+// ---- Setup (shared setup-menu framework) ------------------------------------
+// Module = ACTION (opens the module browser); Loop/Sound/Sync/Clock Src/Info
+// Text/Loop Freeze = TOGGLE cycles; Clock (ppb ladder) = RANGE (bidirectional
+// turn through trk_ppb_names, clamped 0..4).
+static const setup_item_t trk_setup_items[] = {
+    {"Module",      ST_ACTION},
+    {"Loop",        ST_TOGGLE},
+    {"Sound",       ST_TOGGLE},
+    {"Sync",        ST_TOGGLE},
+    {"Clock Src",   ST_TOGGLE},
+    {"Clock",       ST_RANGE},
+    {"Info Text",   ST_TOGGLE},
+    {"Loop Freeze", ST_TOGGLE},
+};
 
-static void setup_redraw(int pos, int sel){
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
-    _fg = TFT_WHITE;
-    TFT_print("Tracker Setup", 6, 4);
-    menuTFTPrintAffordance("Machine", pos == -1);
-    for (int i = 0; i < TRK_SETUP_N; i++){
-        int y = fh + 16 + i * (fh + 8);
-        _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-        _fg = (i == pos && sel) ? TFT_CYAN : TFT_WHITE;
-        TFT_fillRect(0, y - 2, _width, fh + 6, _bg);
-        TFT_print((char*)setup_labels[i], 8, y);
-        char v[28];
-        switch(i){
-            case 0: snprintf(v, sizeof(v), "%s", trk.file[0] ? trk.file : "(none)"); break;
-            case 1: snprintf(v, sizeof(v), "%s", trk.loop ? "ON" : "OFF"); break;
-            case 2: snprintf(v, sizeof(v), "%s", trk.amiga ? "Amiga" : "Clean"); break;
-            case 3: snprintf(v, sizeof(v), "%s", trk.sync ? "ON" : "OFF"); break;
-            case 4: snprintf(v, sizeof(v), "%s", clock_source_name(trk.clk_src)); break;
-            case 5: snprintf(v, sizeof(v), "%s", trk_ppb_names[trk.ppb_idx]); break;
-            case 6: snprintf(v, sizeof(v), "%s", trk.show_text ? "ON" : "OFF"); break;
-            case 7: snprintf(v, sizeof(v), "%s", trk.loop_freeze ? "ON" : "OFF"); break;
-        }
-        TFT_print(v, _width - TFT_getStringWidth(v) - 10, y);
+static void trk_setup_render(int i, char *v, size_t n){
+    switch(i){
+        case 0: snprintf(v, n, "%s", trk.file[0] ? trk.file : "(none)"); break;
+        case 1: snprintf(v, n, "%s", trk.loop ? "ON" : "OFF"); break;
+        case 2: snprintf(v, n, "%s", trk.amiga ? "Amiga" : "Clean"); break;
+        case 3: snprintf(v, n, "%s", trk.sync ? "ON" : "OFF"); break;
+        case 4: snprintf(v, n, "%s", clock_source_name(trk.clk_src)); break;
+        case 5: snprintf(v, n, "%s", trk_ppb_names[trk.ppb_idx]); break;
+        case 6: snprintf(v, n, "%s", trk.show_text ? "ON" : "OFF"); break;
+        case 7: snprintf(v, n, "%s", trk.loop_freeze ? "ON" : "OFF"); break;
     }
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("libxmp — plays MOD/XM/IT/S3M/669 and more", 8, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
 }
 
-static void setup_adj(int i, int dir){
+static void trk_setup_adj(int i, int dir){
     switch(i){
         case 1: trk.loop = !trk.loop; break;
         case 2: trk.amiga = !trk.amiga; trk.sound_dirty = true; break;
@@ -411,24 +404,20 @@ static void setup_adj(int i, int dir){
     }
 }
 
-static int tracker_setup_handler(int it_id, int event, void *ev_data){
-    static int pos = 0, sel = 0;
-    switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; setup_redraw(pos, sel); break;
-        case EV_FWD:
-            if (sel) setup_adj(pos, +1); else { pos++; if (pos >= TRK_SETUP_N) pos = -1; }
-            setup_redraw(pos, sel); break;
-        case EV_BWD:
-            if (sel) setup_adj(pos, -1); else { pos--; if (pos < -1) pos = TRK_SETUP_N - 1; }
-            setup_redraw(pos, sel); break;
-        case EV_SHORT_PRESS:
-            if (pos == -1) return M_MORE;   // System affordance
-            if (pos == 0){ refresh_mods(); s_load_ret = M_TRACKER_SETUP; return M_TRACKER_LOAD; }
-            sel = !sel; setup_redraw(pos, sel); break;
-        case EV_LONG_PRESS: return M_TRACKER_LIVE;   // toggle Setup -> Live
-        default: break;
-    }
+static int trk_setup_action(int i){
+    if (i == 0){ refresh_mods(); s_load_ret = M_TRACKER_SETUP; return M_TRACKER_LOAD; }
     return 0;
+}
+
+static setup_menu_t trk_setup = {
+    .items = trk_setup_items, .n = 8, .title = "Tracker Setup",
+    .aff_label = "Machine", .aff_target = M_MORE, .live_target = M_TRACKER_LIVE,
+    .render = trk_setup_render, .adjust = trk_setup_adj, .action = trk_setup_action,
+};
+
+static int tracker_setup_handler(int it_id, int event, void *ev_data){
+    (void)it_id; (void)ev_data;
+    return setup_menu_event(&trk_setup, event);
 }
 
 // ---- Load browser -----------------------------------------------------------

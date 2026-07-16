@@ -1,1 +1,1 @@
-slicer-fx-v1-20260716 (OTA+rollback, slicer FX filter+reverb, boxed 2-level encoder)
+menu-unify-v1-20260716 (shared Setup framework across all machines, press-cycle toggles + bracket ranges)
