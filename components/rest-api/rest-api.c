@@ -548,14 +548,12 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
 }
 
 // ─── /screenshot — the live TFT display as a 24-bit BMP ─────────────────────
-// There is no RAM framebuffer (the driver draws straight to the panel), so the
-// only capture route is reading the panel's GRAM back over SPI — the same
-// TFT_RAMRD path find_rd_speed() exercises at boot, so it works on this unit.
-// Held under disp_lock PER ROW so a UI draw can't interleave SPI transactions,
-// released between rows so a slow client can't freeze the UI (at the cost of
-// possible tearing on a fast-changing screen — fine for a screenshot).
-// read_data yields len*3+1 bytes: a dummy byte, then R,G,B per pixel (packed
-// color_t). BMP wants B,G,R and is stored bottom-up.
+// The panel's GRAM readback is DEAD on this unit (MISO idles high — the first
+// /screenshot attempt came back solid white), so this reads the PSRAM SHADOW
+// FRAMEBUFFER instead: tftspi.c write-through hooks keep tft_shadow an exact
+// copy of every draw. disp_lock is taken PER ROW purely against tearing (the
+// UI task holds it around menuProcessEvent), released between rows so a slow
+// client can't freeze the UI. BMP wants B,G,R bottom-up.
 static void put_le32(uint8_t *p, uint32_t v){ p[0]=v; p[1]=v>>8; p[2]=v>>16; p[3]=v>>24; }
 static void put_le16(uint8_t *p, uint16_t v){ p[0]=v; p[1]=v>>8; }
 
@@ -585,10 +583,12 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
     put_le32(hdr + 38, 2835);     // ~72 dpi
     put_le32(hdr + 42, 2835);
 
-    uint8_t *raw = malloc(row_bytes + 1);            // read_data: len*3 + 1 dummy
-    uint8_t *out = malloc(row_bytes + pad);
-    if (!raw || !out) {
-        free(raw); free(out);
+    if (!tft_shadow) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no shadow fb");
+        return ESP_FAIL;
+    }
+    uint8_t *out = heap_caps_malloc(row_bytes + pad, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!out) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
     }
@@ -603,21 +603,19 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
     esp_err_t rc = httpd_resp_send_chunk(req, (const char *)hdr, sizeof(hdr));
     for (int y = h - 1; y >= 0 && rc == ESP_OK; y--) {   // bottom-up
         disp_lock_take();
-        int r = read_data(0, y, w - 1, y, w, raw, 1);
-        disp_lock_give();
-        if (r < 0) memset(raw, 0, row_bytes + 1);        // read failed -> black row, stream stays valid
+        const color_t *row = tft_shadow + (size_t)y * w;
         for (int x = 0; x < w; x++) {
-            uint8_t *px = raw + 1 + x * 3;               // R,G,B
-            uint8_t *o  = out + x * 3;
-            o[0] = px[2];                                // B
-            o[1] = px[1];                                // G
-            o[2] = px[0];                                // R
+            uint8_t *o = out + x * 3;
+            o[0] = row[x].b;
+            o[1] = row[x].g;
+            o[2] = row[x].r;
         }
+        disp_lock_give();
         rc = httpd_resp_send_chunk(req, (const char *)out, row_bytes + pad);
         vTaskDelay(1);
     }
     httpd_resp_send_chunk(req, NULL, 0);
-    free(raw); free(out);
+    free(out);
     return ESP_OK;
 }
 

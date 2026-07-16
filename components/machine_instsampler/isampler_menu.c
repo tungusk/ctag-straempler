@@ -168,7 +168,9 @@ static void draw_dials(void)
 static void draw_adsr(void)
 {
     int fh = TFT_getfontheight();
-    int x = 8, y = dial_cy() + 20 + 2 * fh + 14, w = _width - 16, h = 38;
+    // +21 not +14: at +14 the ENV label/box top overdraws the dials' value row
+    // (seen on the first shadow-FB screenshot — "53%" clipped, label cut to "El")
+    int x = 8, y = dial_cy() + 20 + 2 * fh + 21, w = _width - 16, h = 38;
     _bg = TFT_BLACK; TFT_fillRect(x, y - fh - 2, w, h + fh + 4, _bg);
     _fg = (color_t){110, 110, 120}; TFT_print("ENV", x, y - fh - 2);
     TFT_drawRect(x, y, w, h, (color_t){40, 60, 90});
