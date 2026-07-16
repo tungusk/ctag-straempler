@@ -44,11 +44,17 @@ static void live_body(void)
     TFT_print(s, _width/2 - TFT_getStringWidth(s)/2, y);
 }
 
+// idle repaint guard — live_body() clears+reprints a big region, so calling it
+// every timer tick flashes the screen; only repaint when something changed
+static int s_last_state = -1;
+static int s_last_prog = -1;
+
 static void live_full_redraw(void)
 {
     TFT_resetclipwin(); TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE; TFT_print("Editor", 6, 4);
     live_body();
+    s_last_state = ed.state; s_last_prog = ed.progress;
     _fg = (color_t){90,90,90}; TFT_setFont(DEF_SMALL_FONT, NULL);
     TFT_print("non-destructive: normalize / reverse / fade / trim -> new take", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
@@ -60,7 +66,12 @@ static int editor_live_handler(int it_id, int event, void *ev_data)
     switch (event) {
         case EV_ENTERED_MENU: live_full_redraw(); break;
         case EV_TIMER_REPEATING_SLOW:
-        case EV_TIMER_REPEATING_FAST: live_body(); break;
+        case EV_TIMER_REPEATING_FAST:
+            if (ed.state != s_last_state || (ed.state == ED_RUNNING && ed.progress != s_last_prog)) {
+                live_body();
+                s_last_state = ed.state; s_last_prog = ed.progress;
+            }
+            break;
         case EV_LONG_PRESS: return M_EDITOR_SETUP;
         default: break;
     }
