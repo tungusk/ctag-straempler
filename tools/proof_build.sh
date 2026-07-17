@@ -18,6 +18,6 @@ sed -i '' 's/REQUIRES ui machine audio machine_[a-z0-9_ ]* menu)/REQUIRES ui mac
 export PATH="$HOME/.espressif/tools/xtensa-esp32-elf/esp-2021r2-patch3-8.4.0/xtensa-esp32-elf/bin:$HOME/.espressif/tools/esp32ulp-elf/2.28.51-esp-20191205/esp32ulp-elf-binutils/bin:$PATH"
 export IDF_PATH="$HOME/esp/esp-idf-v4.3"
 ~/.espressif/python_env/idf4.3_py3.9_env/bin/python "$IDF_PATH/tools/idf.py" -B build_proof build \
-  -DEXCLUDE_COMPONENTS="machine_sampler2;machine_sampler3;machine_looper;machine_slicer;machine_granular;machine_glitch;machine_drumsampler;machine_freesound;machine_deck;machine_dualdeck;machine_tracker;machine_radio;machine_synth;machine_instsampler;machine_editor;libxmp" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DEXCLUDE_COMPONENTS="machine_sampler2;machine_sampler3;machine_looper;machine_slicer;machine_granular;machine_glitch;machine_drumsampler;machine_freesound;machine_deck;machine_dualdeck;machine_tracker;machine_radio;machine_synth;machine_instsampler;machine_tape;machine_editor;libxmp" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   && echo "PROOF PASSED: sampler-less build links"
 rm -rf build_proof
