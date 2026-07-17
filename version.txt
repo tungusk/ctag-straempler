@@ -1,1 +1,1 @@
-midi-v1-20260717 (web MIDI bridge - musical typing, WebMIDI, WS to Synth/Keys)
+midi-v1a-20260717 (typing: Space=release-all, Esc=panic)
