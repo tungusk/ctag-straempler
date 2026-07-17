@@ -4,8 +4,8 @@
 (virtual-analog, 2-op FM, wavetable), ADSR, envelope-driven filter, glide,
 LFO and reverb. Patch a keyboard/sequencer's 1V/oct + gate and play it.
 
+![Synth live](img/synth-live.png)
 ![Synth setup](img/synth-setup.png)
-*Live-dashboard screenshot pending (`synth-live.png` captured on the hub page).*
 
 ## Features
 

@@ -5,8 +5,8 @@ clock, then loops a crop window of it — start/length performable at CV rate
 without glitches. The synced-record workflow runs from an external clock or
 the built-in internal clock.
 
+![Sampler live](img/sampler-live.png)
 ![Sampler setup](img/sampler-setup.png)
-*Live-page screenshot pending — run `tools/capture_docs.sh` with a take loaded.*
 
 ## Features
 

@@ -3,8 +3,8 @@
 **4-track clock-synced RAM looper.** Record layered loops against a shared
 clock, save any track to the pool, shape each track with a band-pass filter.
 
+![Looper live](img/looper-live.png)
 ![Looper setup](img/looper-setup.png)
-*Live-page screenshot pending — run `tools/capture_docs.sh`.*
 
 ## Features
 
