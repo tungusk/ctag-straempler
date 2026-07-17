@@ -1,161 +1,77 @@
 # **CTAG Strämpler** — multi-machine fork
 
-This is a fork of [ctag-fh-kiel/ctag-straempler](https://github.com/ctag-fh-kiel/ctag-straempler)
-that turns the Strämpler into a **multi-machine instrument**: the core owns
-the hardware (audio transport, CV, SD, display, WiFi) and hosts swappable
-"machines" selected at runtime via System → Machine. Active development is
-on the [`v09-machines`](../../tree/v09-machines) branch (July 2026).
+A fork of [ctag-fh-kiel/ctag-straempler](https://github.com/ctag-fh-kiel/ctag-straempler)
+that turns the Strämpler eurorack module into a **multi-machine instrument**:
+one core owns the hardware (audio transport, 8 CV in, 2 gates, SD sample pool,
+display, WiFi/REST) and hosts swappable "machines" selected at runtime.
+Active development is on the [`v09-machines`](../../tree/v09-machines) branch.
 
-**The machines** (one active at a time, per-machine autosave):
+## 📖 Machine documentation
 
-| Machine | What it does |
+**[docs/machines](docs/machines/README.md)** — one page per machine with live
+screenshots, feature breakdowns, and control tables, plus the
+[common concepts](docs/machines/common.md) (clock/grid system, sample pool,
+encoder grammar, web interface, broadcast/bounce).
+
+| Machine | One-liner |
 |---|---|
-| **Sampler** | Two-voice clock-time LOOP RECORDER: gate-triggered takes recorded in sync with the clock, phase-exact gapless looping, crop windows (OFF/FREE/QUANT/QUANTx2, snapping to the take's own beats), a CV matrix (speed/start/length x CV1-8), through-zero varispeed |
-| **Looper** | 4-track clock-synced RAM looper with save-to-library and per-track filter |
-| **Slicer** | Grid or transient slicing of a sample, CV-addressable slices |
-| **Granular** | 16-grain cloud over a mono sample |
-| **Glitch** | Live-input stutter/beat-repeat with clock sync |
-| **Drums** | Four-pad CV-triggered drum machine. Each pad can hold a second CHOKE LAYER (its own sample + trigger, sharing one voice — the open/closed hi-hat), so 4 pads carry 8 sounds. knob6/knob7 perform whatever the encoder points at (level with soft-clipped overdrive; decay choke, and a retrig loop that tightens into a buzz), plus a master DJ filter with resonance |
-| **Deck** | Tempo-syncing track player: streams a long SD sample varispeed, phase-locked to an external CV clock (pulse-level PLL, clock mult/div). On-device BPM + beat-grid analysis is exact (reference click tracks detect to ±0.0005 BPM) and fast (~1 min per track), and the lock is instrument-verified: beats land +2 ms from the clock pulse with ~1 ms spread (100% within ±7 ms), ~1 ms/min residual slip. Encoder scrubs by the bar; TR1 restarts at the downbeat, TR2 stops. |
-| **Tracker** | Module player for ~50 classic tracker formats (MOD/XM/IT/S3M/…) via libxmp, with a KO-II-style performance sequence loop (TR2 toggles, CV sets length/position), bar-quantized pattern scrub, and web upload of module files |
-| **Freesound** | Web-driven freesound.org search + preview download straight into the sample library; direct MP3-URL import |
+| [Sampler](docs/machines/sampler.md) | Two-voice clock-synced loop recorder — CV matrix, quantized crop windows |
+| [Looper](docs/machines/looper.md) | 4-track clock-synced RAM looper |
+| [Slicer](docs/machines/slicer.md) | Any-length slicer (grid / transient / `.ot`), streamed tails |
+| [Granular](docs/machines/granular.md) | 16-grain cloud |
+| [Glitch](docs/machines/glitch.md) | Live-input stutter / beat-repeat |
+| [Drums](docs/machines/drums.md) | 4 pads × 2 choke layers, master DJ filter, per-pad reverb sends |
+| [Deck](docs/machines/deck.md) | Tempo-syncing track player — PLL-locked varispeed, exact BPM analysis |
+| [DoubleDecker](docs/machines/dualdeck.md) | Two synced decks + crossfader + per-deck DJ filters |
+| [Tracker](docs/machines/tracker.md) | MOD/XM/IT module player (libxmp) with performance loop + scrub |
+| [Freesound](docs/machines/freesound.md) | freesound.org search / preview / import from the browser |
+| [Radio](docs/machines/radio.md) | Internet radio (icecast MP3, any rate, live-resampled) |
+| [Synth](docs/machines/synth.md) | Mono VA/FM/wavetable voice — 1V/oct, ADSR, filter, LFO, patches |
+| [Keys](docs/machines/keys.md) | Tonal instrument sampler — pitched playback with sustain loop |
+| [Tape](docs/machines/tape.md) | Single-track tape recorder/editor — big-waveform crop UI, FX printed to tape |
+| [Editor](docs/machines/editor.md) | Web-driven batch file editor (normalize / reverse / fade / trim) |
 
-**Web features** (the module serves its own page):
-- **Teleremote**: live CV/gate monitor, encoder control, soft trigger pulses,
-  machine switching, and a machine-settings editor — all from the browser
-  (on-device kill switch in System → Settings). 
-- **Universal upload**: drop any audio file (wav/mp3/flac/ogg) — converted
-  in-browser to the native RAW format.
-- File manager with download/delete, streaming-safe SD access.
+## Web + network features
 
-Plus core fixes along the way: SD-bus serialization (`sd_lock`), low-memory
-web fixes, HTTPS cert-bundle repair (freesound access had been silently
-broken since IDF 4.3), a decades-old display-corrupting stack smash
-(upstreamed as [PR #29](https://github.com/ctag-fh-kiel/ctag-straempler/pull/29)),
-and declick/trigger-detection work throughout. Build docs live in
-[CLAUDE.md](CLAUDE.md); flashable snapshots of each milestone are in
-[`bin/`](bin/) (latest: `tracker-sync-v1` @ v1.1).
+The module serves its own web page: file manager, universal upload with
+convert-on-import (MP3 / any rate / any depth → native), a **teleremote**
+(live meters, CV fader console, soft triggers, encoder, machine switching,
+settings editor, live TFT **screen mirror**), and per-machine tabs
+(Radio, Editor, Freesound).
 
-**Building the hardware?** See the companion
+- **Broadcast** (port 8000): the live output — or the line *input* — as
+  endless WAV or 96k MP3, straight into a browser or VLC.
+- **Icecast push**: the module can act as a source client, streaming its
+  output to an icecast mountpoint.
+- **Bounce**: record any machine's output to a new pool take from the browser.
+- **OTA updates**: `tools/ota.sh` flashes over WiFi in ~14 s, with rollback.
+
+Build and hardware notes live in [CLAUDE.md](CLAUDE.md); flashable snapshots
+of every milestone are in [`bin/`](bin/).
+
+## Hardware
+
+**Building the module?** See the companion
 [strampler-build-pack](https://github.com/tungusk/strampler-build-pack):
 Eagle + KiCad board files for the Antumbra 18 HP redesign, BOMs with 2026
 EOL substitutions, and fab/assembly + DIY-kit ordering guides.
 
----
+Unit-specific corrections in this firmware (CV channel mapping, antenna power)
+are documented in [CLAUDE.md](CLAUDE.md).
 
-*Original upstream README follows.*
+## Upstream, licenses & credits
 
-This repository contains the firmware and the hardwaredesigns (CTAG and [Antumbra](http://www.antumbra.eu/)) of Strämpler.
+This project stands on the original CTAG Strämpler by the
+[CTAG team at Kiel University of Applied Sciences](https://www.creative-technologies.de)
+(Robert Manzke, Phillip Lamp, Niklas Wantrupp, with panel design support by
+David Knop / instruments of things) and [Antumbra](http://www.antumbra.eu/).
+The original project README is preserved in
+[README.upstream.md](README.upstream.md). A generic display fix from this fork
+was upstreamed as [PR #29](https://github.com/ctag-fh-kiel/ctag-straempler/pull/29).
 
-!!**NEW**!! Strämpler firmware can now be built in the cloud using Github actions
-!!**NEW**!! Strämpler can now run [CTAG TBD](https://github.com/ctag-fh-kiel/ctag-tbd) as alternative firmware! Enclosed in /bin folder!
-
-![Strämpler harware UI](https://raw.githubusercontent.com/wiki/ctag-fh-kiel/ctag-straempler/img/straempler-boot.jpg)
-
-
-
-## What it is:
-- Half streamer, half sampler, therefore called Strämpler (close to German word of Strampler meaning romper suit).
-- Allows streaming of large audio files from SD card (limit 2GB file size due to FAT32 used).
-- A eurorack modular synth module with 22 HP width and an internet connection.
-- A bridge to connect to [freesound.org](https://freesound.org), to play with samples within your modular synth setup.
-- Allows tweaking of your sound just like you'd do with a sampler + *a modular synth*.
-- Allows to parameter tweak and modulate sounds by control voltage (CV), employing a complex modulation matrix.
-
-## Why it is:
-- A group of audio enthusiasts enjoying coding and hardware making.
-- The sexiness of sampling for sound design and synthesis.
-- The (subjective) need to have more sampling modules in the eurorack modular synth domain.
-- The (subjective) need to make eurorack more compatible with internet of things.
-- Build a platform to learn, build and practise skills, and engage students.
-- To allow anyone to understand technology by offering open access.
-- To benchmark the capabilities of the WiFi/BLE enabled [Espressif ESP32](https://docs.espressif.com/projects/esp-idf/en/latest/#) platform and get a deep understanding of it.
-- To squeeze and optimize code so that it can work on a small embedded system.
-- Because we can.
-- Because of some inspiration of the [Elektron Octatrack](https://www.elektron.se/products/octatrack-mkii/).
-
-## Features: 
-- 2 voice eurorack sample streaming module.
-- Streaming of large sound files from SD-card (limited by FAT32 2GB).
-- Internet connection to [freesound.org](https://freesound.org), allows to download files through freesound.org api onto SD-card of module.
-- One ADSR per voice to control sample amplitude.
-- One band pass filter per voice with controllable base, width and Q. Can be used as low / high pass (biquad implmentation).
-- Arbitrary playback speed adjustment (+/- 100%). 
-- Pitching +/- 12 halftones, samples can be played e.g. using external gate / CV keyboard.
-- Distortion per voice (tanh() saturation).
-- Delay as send effect (stereo, ping pong, max delay time 1.5s).
-- External stereo input, with delay send, mix with voices.
-- Modulation matrix, where many parameters can be modulated using external CV.
-- Gate and latch modes for sample playback.
-- REST-API for user file upload (service discovery by MDNS / bonjour).
-- 44.1kHz, 32 bit float internal resolution, 24 bit codec resolution, 12 bit CV input resolution sampled at 2KHz (yes, modulation in the audio range is possible to a certain extend), approx. 1ms DSP buffer latency  (32 words per channel).
-- Approx. 100mA +12V / 10mA -12V power draw.
-
-## Potential new features / current limitations / work to be done:
-- Sampling of external input. 
-- Upload to freesound.org.
-- Improved sound browser, browse by tag, browse by search.
-- More testing of modulation.
-- More effects.
-- More performance optimization.
-- Automatic voice alternation.
-- Bug identification and fixing.
-- Code refactoring to make things more beautiful.
-- More user friendly interaction.
-- Documentation / tutorials.
-- Your ideas?
-
-## How to engage yourself:
-- Join the [enthusiastic developer](https://codewithoutrules.com/2018/11/12/enthusiasts-vs-pragmatists/) team on Github.
-- Help build and spread the hardware module (and the word).
-- Use Strämpler to create cool sounds and music and share them (with a link to us).
-- More ideas?
-
-## Words of caution: 
-- CTAG Strämpler does contain bugs, it comes without warranty of any kind, none of the authors are liable to damages arising by the use of it.
-- CTAG Strämpler is an intermediate to advanced project, both in terms of hardware and software design:
-    - In order to build the hardware you need intermediate to advanced SMD soldering skills and respective tools. I.e. the PCB contains many 0604 SMD components as well as TSSOP packages and a QFN. However, with a bit of practise you will be able to DIY build your own module. Dare and be rewarded, tackle the frustration on the path, it's worth it. The idea of the platform is also to boost your soldering skills, it *CAN* all be done by hand.
-    - The software is built using [Espressif IDF](https://esp-idf.readthedocs.io) using the C programming language. Intermediate knowledge of C is required to understand the code. Furthermore, some basic DSP algorithms are applied. A DSP newbie, however, could take the project to really get rolling and build up on DSP capabilities. CTAG Strämpler is ideal to try out and play with your own DSP algorithms.
-- The [Espressif ESP32](https://en.wikipedia.org/wiki/ESP32) platform used for CTAG Strämpler is, with regard to its computational power and I/O capabilities, hard at its limit. We're squeezing the platform here and are already surprised, what one can get out of $5 chip in the year 2019. Surely, other DSPs / microcontrollers could do a better job, but do they allow for internet of things as easily?
-
-## How to get started / user manual:
-See the [Wiki pages](https://github.com/ctag-fh-kiel/ctag-straempler/wiki) of this project.
-
-## Build instructions
-The easiest way is to create a fork on Github from this repository. Then make sure GitHub Actions are activated for your fork by going to the corresponding tab at your fork and clicking on the green button.
-Every time you push new commits into your fork (master or dev branch) the action will build a new draft release, which will upon successful run of the action be available at your fork's release tab.
-
-If you want to build on your own system, you can use a virtual development environment image with Docker (see here for [ESP IDF Docker instructions](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/tools/idf-docker-image.html)). 
-Here are some steps:
-- Install [Docker](https://www.docker.com/)
-- Install [Git](https://git-scm.com/)
-- Open a command line shell
-- Clone the Strämpler repository with ```git clone https://github.com/ctag-fh-kiel/ctag-straempler.git``` and change into it with ```cd ctag-straempler```
-- Build the firmware with ```docker run --rm -v $PWD:/project -w /project rma31/idf:v4.1-strampler idf.py build```
-
-You can edit the source files using any IDE / text editor you like.
-## Flash instructions
-- Either download the firmware from the Github release tab or use your own
-- Install [ESP Tool](https://github.com/espressif/esptool)
-- Adapt the [Firmware flash script](https://github.com/ctag-fh-kiel/ctag-straempler/blob/master/bin/flash.sh) to your system needs and flash the firmware
-
-## Hardware
-All hardware design can be found [https://github.com/ctag-fh-kiel/esp32-eurorack-audio](https://github.com/ctag-fh-kiel/esp32-eurorack-audio).
-
-## Links
-- [Demonstration videos on YouTube](https://youtu.be/zmj8tKPHV8g).
-
-## Licenses:
-- Hardware is licensed under [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)](https://creativecommons.org/licenses/by-nc-sa/4.0/).
-- Software licenses, see [license](LICENSE) file.
-- Freesound license: [Freesound.org API terms](https://freesound.org/docs/api/terms_of_use.html) and [here](https://freesound.org/help/tos_api/) as well as the [freesound website terms of use](https://freesound.org/help/tos_web/).
-- Don't forget to obey the license of the respective sound files used in your music. License details are shown for the individual sound file in your CTAG Strämpler sound browser, including the sound file authors name.
-
-## Who made this happen:
-- The team of [CTAG (Creative Technologies Arbeitsgruppe) at Kiel University of Applied Science](https://www.creative-technologies.de), including:
-    - Robert Manzke
-    - Phillip Lamp
-    - Niklas Wantrupp
-    - With kind support for the front panel design by David Knop from [instruments of things](http://www.instrumentsofthings.com/).
-- [Antumbra](http://www.antumbra.eu/)
-- More people like you :)
+**Licenses** (inherited from upstream, unchanged):
+- Hardware: [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+- Software: see the [LICENSE](LICENSE) file; vendored components keep their
+  own licenses ([shine](components/shine/COPYING) is LGPL, libxmp is MIT)
+- Freesound: [API terms](https://freesound.org/docs/api/terms_of_use.html) —
+  and mind the license of each sound you use (shown in the sound browser)
