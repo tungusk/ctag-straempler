@@ -168,7 +168,16 @@ input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:verti
 </div>
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
-  <div class="card" id="midicard">
+  <div class="card" id="scrcard">
+    <div class="row tight" style="align-items:center">
+      <b style="flex:1;color:#0af">SCREEN</b>
+      <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
+      <label style="color:#888;margin-left:8px"><input type="checkbox" id="scrauto"> auto</label>
+      <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
+    </div>
+    <img id="scrimg" style="width:100%;max-width:480px;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
+  </div>
+  <div class="card" id="midicard" style="display:none">
     <div class="row tight" style="align-items:center">
       <b style="flex:1;color:#0af">PLAY &#8212; MIDI</b>
       <span id="midist" style="color:#888;margin-right:8px">off</span>
@@ -182,15 +191,6 @@ input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:verti
       <span style="color:#555;margin-left:12px;font-size:11px">A-; keys &#183; Z/X octave &#183; Space release &#183; Esc panic</span>
     </div>
     <div class="msg" style="margin-top:4px">Plays <b>Synth</b> / <b>Keys</b> (MIDI wins over CV while a note is held). Type on this page, click the keys, or pick a MIDI device (Chrome).</div>
-  </div>
-  <div class="card" id="scrcard">
-    <div class="row tight" style="align-items:center">
-      <b style="flex:1;color:#0af">SCREEN</b>
-      <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
-      <label style="color:#888;margin-left:8px"><input type="checkbox" id="scrauto"> auto</label>
-      <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
-    </div>
-    <img id="scrimg" style="width:100%;max-width:480px;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
   </div>
   <label>Inputs + Perform</label>
   <div class="rmon" id="rmon"></div>
@@ -855,7 +855,7 @@ function loadRemote(){
         +'<input type="range" class="vsl" orient="vertical" min="0" max="4095" value="2048" id="cvs'+(i+1)+'" oninput="cvSlide('+(i+1)+',this.value)" onchange="cvEnd('+(i+1)+')">'
         +'</div>'
         +'<span id="rl'+i+'">CV'+(i+1)+'</span>'
-        +'<span id="cvclk'+(i+1)+'" style="color:#0af;font-size:9px;min-height:11px">&nbsp;</span>'
+        +'<span id="rv'+i+'">-</span>'
         +'<input type="checkbox" id="cvh'+(i+1)+'" title="hold" style="width:auto;margin:0" onchange="cvHold('+(i+1)+')">'
         +'</div>';
     // TR dots stack vertically in one column (Arlo) — less width, same read
@@ -890,10 +890,8 @@ function updateClkTag(){
     var l=document.getElementById('rl'+i);
     if(!l)continue;
     l.style.color=cs===i?'#0af':'';
-    // the tag rides in its own slot under the fader (replaced the old % readout)
-    var t=document.getElementById('cvclk'+(i+1));
-    if(t)t.innerHTML=cs===i?'CLK':'&nbsp;';
   }
+  window.mclkCh=cs;   // updateRemote paints CLK (transient) over that channel's %
   // 8/9 = TR1/TR2; 10 = AUDIO (the beat listener) — then the ear IS the clock,
   // so the IN meter wears the tag
   [['rlt0',8,'TR1'],['rlt1',9,'TR2'],['rlvin',10,'IN']].forEach(function(p){
@@ -1330,10 +1328,16 @@ function remMach(n){
 
 function updateRemote(d){
   if(!document.getElementById('p3').className.match(/on/))return;
+  var mc=document.getElementById('midicard');
+  if(mc)mc.style.display=(d.machine=='Synth'||d.machine=='Keys')?'':'none';
   var cv=d.cv||[];
   for(var i=0;i<cv.length;i++){
-    var f=document.getElementById('rf'+i);
+    var f=document.getElementById('rf'+i),v=document.getElementById('rv'+i);
     if(f)f.style.height=Math.round(cv[i]/4095*100)+'%';
+    if(v){
+      if(window.mclkCh===i){v.textContent='CLK';v.style.color='#0af';}
+      else{v.textContent=Math.round(cv[i]/4095*100)+'%';v.style.color='';}
+    }
   }
   // active low: bit clear = gate asserted
   var tr=(typeof d.trig==='number')?d.trig:3;
