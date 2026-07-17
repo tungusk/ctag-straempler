@@ -55,3 +55,14 @@ void audio_broadcast_init(void);       // start the server task (post-WiFi only)
 bool audio_broadcast_active(void);     // a client is currently connected
 const char *audio_broadcast_diag(void); // last MP3-path error ("ok" if none)
 uint32_t audio_broadcast_enc_us(void);  // smoothed shine cost per 26.1ms pass
+
+// icecast push — the module as a SOURCE client (mono 96k MP3 to a mountpoint).
+// One push at a time, mutually exclusive with a :8000 listener. start returns
+// 0 ok / -1 already running / -2 bad args / -3 task create failed.
+int  audio_icepush_start(const char *host, int port, const char *mount,
+                         const char *pass, const char *name);
+void audio_icepush_stop(void);
+bool audio_icepush_running(void);      // user intent (start..stop)
+bool audio_icepush_connected(void);    // handshake accepted, streaming now
+const char *audio_icepush_err(void);   // last error ("" if none)
+uint32_t audio_icepush_retries(void);

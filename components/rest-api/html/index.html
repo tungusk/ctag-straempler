@@ -222,6 +222,21 @@ input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:verti
     </div>
     <audio id="bcaudio" controls preload="none" style="width:100%;margin-top:6px"></audio>
     <div class="msg" style="margin-top:4px">Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.</div>
+    <div class="row tight" style="align-items:center;margin-top:10px">
+      <b style="flex:1;color:#0af">PUSH &#8594; ICECAST</b>
+      <span id="icestate" style="color:#888;margin-right:8px">off</span>
+      <button class="btn" id="icebtn" style="flex:0 0 84px" onclick="iceToggle()">Start</button>
+    </div>
+    <div class="row tight" style="margin-top:4px;gap:6px">
+      <input id="icehost" placeholder="server host" style="flex:2">
+      <input id="iceport" placeholder="8000" style="flex:0 0 64px">
+      <input id="icemount" placeholder="/mount" style="flex:1">
+    </div>
+    <div class="row tight" style="margin-top:4px;gap:6px">
+      <input id="icepass" placeholder="source password" type="password" style="flex:1">
+      <input id="icename" placeholder="stream name" style="flex:1">
+    </div>
+    <div class="msg" style="margin-top:4px">Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.</div>
   </div>
 </div>
 <div class="pane" id="p4">
@@ -1100,6 +1115,38 @@ function bcastInit(){
 function bcastPoll(){
   fetch('/bcast/state').then(function(r){return r.json();}).then(function(d){
     var s=document.getElementById('bcstate'); if(s)s.textContent=d.live?'listener connected':'idle';
+  }).catch(function(){});
+  icePoll();
+}
+// icecast push — /ice/* (module as a SOURCE client)
+var iceRun=false,icePrefilled=false;
+function icePoll(){
+  fetch('/ice/state').then(function(r){return r.json();}).then(function(d){
+    iceRun=!!d.run;
+    var s=document.getElementById('icestate');
+    if(s)s.textContent=d.run?(d.up?'streaming':(d.err||'connecting')+(d.retries?' ('+d.retries+')':'')):'off';
+    if(s)s.style.color=d.up?'#3a7':(d.run?'#fa0':'#888');
+    var b=document.getElementById('icebtn'); if(b)b.textContent=d.run?'Stop':'Start';
+    if(!icePrefilled&&d.cfg){
+      icePrefilled=true;
+      if(d.cfg.host)document.getElementById('icehost').value=d.cfg.host;
+      if(d.cfg.port)document.getElementById('iceport').value=d.cfg.port;
+      if(d.cfg.mount)document.getElementById('icemount').value=d.cfg.mount;
+      if(d.cfg.pass)document.getElementById('icepass').value=d.cfg.pass;
+      if(d.cfg.name)document.getElementById('icename').value=d.cfg.name;
+    }
+  }).catch(function(){});
+}
+function iceToggle(){
+  if(iceRun){fetch('/ice/stop',{method:'POST'}).then(function(){setTimeout(icePoll,300);});return;}
+  var q='host='+encodeURIComponent(document.getElementById('icehost').value)
+       +'&port='+encodeURIComponent(document.getElementById('iceport').value||'8000')
+       +'&mount='+encodeURIComponent(document.getElementById('icemount').value)
+       +'&pass='+encodeURIComponent(document.getElementById('icepass').value)
+       +'&name='+encodeURIComponent(document.getElementById('icename').value);
+  fetch('/ice/start?'+q,{method:'POST'}).then(function(r){return r.json();}).then(function(d){
+    if(!d.ok)document.getElementById('icestate').textContent=d.why||'failed';
+    setTimeout(icePoll,300);
   }).catch(function(){});
 }
 // Screen — live TFT screenshot from the PSRAM shadow framebuffer
