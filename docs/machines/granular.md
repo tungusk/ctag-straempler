@@ -17,9 +17,11 @@ around a position cursor — from clean time-stretch textures to smeared clouds.
 
 | Control | Function |
 |---|---|
-| Encoder | Position cursor / parameter adjust |
+| Knob 6 | Position cursor |
+| Knob 7 | Pitch |
+| TR1 | Freeze (hold the cloud) |
+| Encoder | Parameter adjust |
 | Encoder long | Live ↔ Setup |
-| CV | Position and parameter modulation |
 
 ## Setup
 

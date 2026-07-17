@@ -19,7 +19,10 @@ patched.
 
 | Control | Function |
 |---|---|
-| TR1 | Stutter gate (hold to repeat) |
+| TR1 | Hold-glitch (stutter while held) |
+| TR2 | Latch (toggle the stutter) |
+| Knob 6 | Window size |
+| Knob 7 | Pitch |
 | Encoder | Window / parameters |
 | Encoder long | Live ↔ Setup |
 
