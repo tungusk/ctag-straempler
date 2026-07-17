@@ -12,6 +12,7 @@
 #include "machine_radio.h"
 #include "machine_synth.h"
 #include "machine_instsampler.h"
+#include "machine_tape.h"
 #include "machine_editor.h"
 
 // declared bare: machine_sampler2.h drags the legacy fork's whole type
@@ -39,6 +40,7 @@ const machine_t *const machine_registry[] = {
     &machine_radio,        // "Radio" — icecast/shoutcast MP3 streamer
     &machine_synth,        // "Synth" — no-sample subtractive voice
     &machine_instsampler,  // "Keys" — tonal instrument sampler (pitched + sustain loop)
+    &machine_tape,         // "Tape" — single-track tape recorder/editor (big-wave UI, FX-in-path)
     &machine_editor,       // "Editor" — offline file->file sample ops
     &machine_stub,
     NULL,
