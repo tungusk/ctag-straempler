@@ -1,1 +1,1 @@
-midi-v1a-20260717 (typing: Space=release-all, Esc=panic)
+midi-v1b-20260717 (play-midi below screen, machine-gated, CV percents restored)
