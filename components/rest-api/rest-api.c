@@ -1567,6 +1567,41 @@ static esp_err_t bcast_state_handler(httpd_req_t *req)
     return send_json(req, buf);
 }
 
+// ─── /ws/midi + /midi/* — the web MIDI bridge (musical typing / WebMIDI) ────
+// WS frames are tiny text: "n <note> [vel]" on, "f <note>" off, "x" all off,
+// "h" heartbeat (liveness while notes are held). POST fallback mirrors them.
+// Gated by the same Remote switch as the teleremote.
+
+static void midi_msg(const char *m)
+{
+    if (m[0] == 'n')      audio_midi_note_on(atoi(m + 1), 100);
+    else if (m[0] == 'f') audio_midi_note_off(atoi(m + 1));
+    else if (m[0] == 'x') audio_midi_all_off();
+    else                  audio_midi_touch();          // heartbeat
+}
+
+static esp_err_t midi_ws_handler(httpd_req_t *req)
+{
+    if (req->method == HTTP_GET) return ESP_OK;        // WS handshake done
+    if (!s_remote_on) return ESP_OK;                   // remote disabled: ignore
+    uint8_t buf[24] = {0};
+    httpd_ws_frame_t f = { .type = HTTPD_WS_TYPE_TEXT, .payload = buf };
+    if (httpd_ws_recv_frame(req, &f, sizeof(buf) - 1) != ESP_OK) return ESP_FAIL;
+    midi_msg((const char *)buf);
+    return ESP_OK;
+}
+
+static esp_err_t midi_post_handler(httpd_req_t *req)
+{
+    if (!s_remote_on) { httpd_resp_sendstr(req, "{\"ok\":false}"); return ESP_OK; }
+    char note[8] = "";
+    get_query_param(req, "note", note, sizeof(note));
+    if (strstr(req->uri, "/midi/on"))          { char m[12]; snprintf(m, sizeof(m), "n%s", note); midi_msg(m); }
+    else if (strstr(req->uri, "/midi/off"))    { char m[12]; snprintf(m, sizeof(m), "f%s", note); midi_msg(m); }
+    else if (strstr(req->uri, "/midi/alloff")) midi_msg("x");
+    return send_json(req, "{\"ok\":true}");
+}
+
 // ─── /ice/* — icecast push (module as a SOURCE client) ──────────────────────
 // Config lives in usr/ICECAST.JSN so the web form prefills; /ice/start with
 // any param overrides + re-saves. Always-on core endpoints (like /bounce).
@@ -1749,6 +1784,10 @@ static httpd_uri_t uris[] = {
     { .uri = "/bounce/stop",   .method = HTTP_POST, .handler = bounce_stop_handler },
     { .uri = "/bounce/state",  .method = HTTP_GET,  .handler = bounce_state_handler },
     { .uri = "/bcast/state",   .method = HTTP_GET,  .handler = bcast_state_handler },
+    { .uri = "/ws/midi",       .method = HTTP_GET,  .handler = midi_ws_handler, .is_websocket = true },
+    { .uri = "/midi/on",       .method = HTTP_POST, .handler = midi_post_handler },
+    { .uri = "/midi/off",      .method = HTTP_POST, .handler = midi_post_handler },
+    { .uri = "/midi/alloff",   .method = HTTP_POST, .handler = midi_post_handler },
     { .uri = "/ice/start",     .method = HTTP_POST, .handler = ice_start_handler },
     { .uri = "/ice/stop",      .method = HTTP_POST, .handler = ice_stop_handler },
     { .uri = "/ice/state",     .method = HTTP_GET,  .handler = ice_state_handler },

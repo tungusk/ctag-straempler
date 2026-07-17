@@ -56,6 +56,15 @@ bool audio_broadcast_active(void);     // a client is currently connected
 const char *audio_broadcast_diag(void); // last MP3-path error ("ok" if none)
 uint32_t audio_broadcast_enc_us(void);  // smoothed shine cost per 26.1ms pass
 
+// soft MIDI (web bridge: musical typing / WebMIDI). Machines with pitch read
+// gate()/note() next to their CV1/TR1 inputs; MIDI wins while notes are held.
+void audio_midi_note_on(int note, int vel);
+void audio_midi_note_off(int note);
+void audio_midi_all_off(void);
+void audio_midi_touch(void);           // heartbeat (liveness stamp)
+bool audio_midi_gate(void);            // any note held + bridge alive
+int  audio_midi_note(void);            // current note (last priority), -1 none
+
 // icecast push — the module as a SOURCE client (mono 96k MP3 to a mountpoint).
 // One push at a time, mutually exclusive with a :8000 listener. start returns
 // 0 ok / -1 already running / -2 bad args / -3 task create failed.
