@@ -168,6 +168,21 @@ input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:verti
 </div>
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
+  <div class="card" id="midicard">
+    <div class="row tight" style="align-items:center">
+      <b style="flex:1;color:#0af">PLAY &#8212; MIDI</b>
+      <span id="midist" style="color:#888;margin-right:8px">off</span>
+      <select id="mididev" style="flex:0 0 130px;display:none"></select>
+      <button class="btn" style="flex:0 0 64px;margin-left:6px" onclick="midiSend('x');midiHeldClear()">All off</button>
+    </div>
+    <div id="midikbd" style="margin-top:6px"></div>
+    <div class="row tight" style="margin-top:4px;align-items:center">
+      <label style="color:#888"><input type="checkbox" id="midityping" checked> musical typing</label>
+      <span id="midioct" style="color:#888;margin-left:12px">oct C4</span>
+      <span style="color:#555;margin-left:12px;font-size:11px">A-; = keys &#183; Z/X = octave</span>
+    </div>
+    <div class="msg" style="margin-top:4px">Plays <b>Synth</b> / <b>Keys</b> (MIDI wins over CV while a note is held). Type on this page, click the keys, or pick a MIDI device (Chrome).</div>
+  </div>
   <div class="card" id="scrcard">
     <div class="row tight" style="align-items:center">
       <b style="flex:1;color:#0af">SCREEN</b>
@@ -1174,6 +1189,101 @@ function scrPoll(){
   if(now-scrLast<3000)return;
   scrLast=now; scrShot();
 }
+// ---- MIDI bridge: WS (fallback POST) -> the module's soft-MIDI note stack ----
+var mws=null,mwsOk=false,midiHeld={},midiBase=60; // C4
+function midiConnect(){
+  try{
+    mws=new WebSocket('ws://'+location.host+'/ws/midi');
+    mws.onopen=function(){mwsOk=true;midiStat();};
+    mws.onclose=function(){mwsOk=false;midiStat();setTimeout(midiConnect,3000);};
+    mws.onerror=function(){mwsOk=false;};
+  }catch(e){mwsOk=false;midiStat();}
+}
+function midiStat(){
+  var s=document.getElementById('midist');
+  if(s)s.textContent=mwsOk?'ws':'http';
+  if(s)s.style.color=mwsOk?'#3a7':'#fa0';
+}
+function midiSend(m){
+  if(mwsOk){try{mws.send(m);return;}catch(e){mwsOk=false;}}
+  var u=m[0]=='n'?'/midi/on?note='+parseInt(m.slice(1)):m[0]=='f'?'/midi/off?note='+parseInt(m.slice(1)):m[0]=='x'?'/midi/alloff':null;
+  if(u)fetch(u,{method:'POST'}).catch(function(){});
+}
+function midiOn(n){if(midiHeld[n])return;midiHeld[n]=1;midiSend('n'+n);midiDraw();}
+function midiOff(n){if(!midiHeld[n])return;delete midiHeld[n];midiSend('f'+n);midiDraw();}
+function midiHeldClear(){midiHeld={};midiDraw();}
+setInterval(function(){if(Object.keys(midiHeld).length)midiSend('h');},2000);
+window.addEventListener('pagehide',function(){midiSend('x');});
+// musical typing: the GarageBand layout (A-row = white keys, W-row = black)
+var MT_KEYS={a:0,w:1,s:2,e:3,d:4,f:5,t:6,g:7,y:8,h:9,u:10,j:11,k:12,o:13,l:14,p:15,';':16,"'":17};
+document.addEventListener('keydown',function(ev){
+  if(ev.repeat)return;
+  var t=ev.target.tagName;
+  if(t=='INPUT'||t=='TEXTAREA'||t=='SELECT')return;
+  if(!document.getElementById('midityping').checked)return;
+  var k=ev.key.toLowerCase();
+  if(k=='z'){midiBase=Math.max(24,midiBase-12);midiOctShow();return;}
+  if(k=='x'){midiBase=Math.min(96,midiBase+12);midiOctShow();return;}
+  if(k in MT_KEYS){ev.preventDefault();midiOn(midiBase+MT_KEYS[k]);}
+});
+document.addEventListener('keyup',function(ev){
+  var k=ev.key.toLowerCase();
+  if(k in MT_KEYS)midiOff(midiBase+MT_KEYS[k]);
+});
+function midiOctShow(){
+  var o=document.getElementById('midioct');
+  if(o)o.textContent='oct C'+(midiBase/12-1);
+  midiDraw();
+}
+// on-screen keyboard: 18 semitones from midiBase, QWERTY labels, click/touch
+var MT_LBL=['A','W','S','E','D','F','T','G','Y','H','U','J','K','O','L','P',';',"'"];
+function midiDraw(){
+  var el=document.getElementById('midikbd');if(!el)return;
+  var h='<div style="display:flex;gap:2px">';
+  for(var i=0;i<18;i++){
+    var n=midiBase+i,black=[1,3,6,8,10].indexOf(n%12)>=0,held=!!midiHeld[n];
+    h+='<div data-n="'+n+'" class="mkey" style="flex:1;height:'+(black?'34px':'52px')+';border-radius:0 0 3px 3px;'
+      +'background:'+(held?'#0af':black?'#222':'#ddd')+';color:'+(black?'#999':'#333')+';'
+      +'display:flex;align-items:flex-end;justify-content:center;font-size:10px;cursor:pointer;'
+      +'align-self:flex-start;user-select:none;-webkit-user-select:none">'+MT_LBL[i]+'</div>';
+  }
+  el.innerHTML=h+'</div>';
+  el.querySelectorAll('.mkey').forEach(function(k){
+    var n=parseInt(k.getAttribute('data-n'));
+    k.addEventListener('mousedown',function(e){e.preventDefault();midiOn(n);});
+    k.addEventListener('mouseup',function(){midiOff(n);});
+    k.addEventListener('mouseleave',function(){midiOff(n);});
+    k.addEventListener('touchstart',function(e){e.preventDefault();midiOn(n);});
+    k.addEventListener('touchend',function(e){e.preventDefault();midiOff(n);});
+  });
+}
+// WebMIDI (Chrome): forward a hardware keyboard
+function midiDevices(){
+  if(!navigator.requestMIDIAccess)return;
+  navigator.requestMIDIAccess().then(function(acc){
+    var sel=document.getElementById('mididev');if(!sel)return;
+    function fill(){
+      sel.innerHTML='<option value="">(no device)</option>';
+      acc.inputs.forEach(function(inp){
+        var o=document.createElement('option');o.value=inp.id;o.textContent=inp.name;sel.appendChild(o);
+      });
+      sel.style.display=acc.inputs.size?'block':'none';
+    }
+    fill();acc.onstatechange=fill;
+    sel.onchange=function(){
+      acc.inputs.forEach(function(inp){inp.onmidimessage=null;});
+      acc.inputs.forEach(function(inp){
+        if(inp.id!==sel.value)return;
+        inp.onmidimessage=function(m){
+          var st=m.data[0]&0xF0,n=m.data[1],v=m.data[2];
+          if(st==0x90&&v>0)midiOn(n);
+          else if(st==0x80||(st==0x90&&v==0))midiOff(n);
+        };
+      });
+    };
+  }).catch(function(){});
+}
+midiConnect();midiDraw();midiOctShow();midiDevices();
 // Editor tab — /edit/* served only while the Editor machine is active
 var edTimer=null,edLast='';
 function edLoad(){

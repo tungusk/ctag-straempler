@@ -71,6 +71,79 @@ void audio_remote_cv(int ch, int v, int ms) {
     s_remote_cv_until[ch] = xTaskGetTickCount() + pdMS_TO_TICKS(ms > 0 ? ms : 250);
 }
 
+// ---- soft MIDI (browser bridge: musical typing / WebMIDI -> Synth/Keys) -----
+// A held-note stack with LAST-note priority, fed by /ws/midi (or the /midi/*
+// POST fallback) and read by pitch machines next to their CV1/TR1 inputs.
+// Liveness guard: a vanished browser can't stick a gate — any note/heartbeat
+// stamps s_midi_seen, and the audio-side gate() self-clears after 5 s silence
+// (the web page heartbeats every 2 s while notes are held).
+#define MIDI_MAX_HELD 10
+static volatile uint8_t s_midi_held[MIDI_MAX_HELD];
+static volatile int     s_midi_nheld = 0;
+static volatile int     s_midi_cur = -1;
+static volatile TickType_t s_midi_seen = 0;
+static portMUX_TYPE s_midi_mux = portMUX_INITIALIZER_UNLOCKED;
+
+void audio_midi_touch(void) { s_midi_seen = xTaskGetTickCount(); }
+
+void audio_midi_note_on(int note, int vel)
+{
+    (void)vel;                                  // v1: machines have no velocity path
+    if (note < 0 || note > 127) return;
+    portENTER_CRITICAL(&s_midi_mux);
+    int n = s_midi_nheld;
+    for (int i = 0; i < n; i++)
+        if (s_midi_held[i] == note) {           // re-press: move to top
+            for (int j = i; j < n - 1; j++) s_midi_held[j] = s_midi_held[j + 1];
+            n--; break;
+        }
+    if (n >= MIDI_MAX_HELD) {                   // overflow: drop the oldest
+        for (int j = 0; j < n - 1; j++) s_midi_held[j] = s_midi_held[j + 1];
+        n--;
+    }
+    s_midi_held[n++] = (uint8_t)note;
+    s_midi_nheld = n;
+    s_midi_cur = note;
+    portEXIT_CRITICAL(&s_midi_mux);
+    audio_midi_touch();
+}
+
+void audio_midi_note_off(int note)
+{
+    portENTER_CRITICAL(&s_midi_mux);
+    int n = s_midi_nheld;
+    for (int i = 0; i < n; i++)
+        if (s_midi_held[i] == note) {
+            for (int j = i; j < n - 1; j++) s_midi_held[j] = s_midi_held[j + 1];
+            n--; break;
+        }
+    s_midi_nheld = n;
+    s_midi_cur = n ? s_midi_held[n - 1] : -1;   // fall back to the previous held
+    portEXIT_CRITICAL(&s_midi_mux);
+    audio_midi_touch();
+}
+
+void audio_midi_all_off(void)
+{
+    portENTER_CRITICAL(&s_midi_mux);
+    s_midi_nheld = 0;
+    s_midi_cur = -1;
+    portEXIT_CRITICAL(&s_midi_mux);
+    audio_midi_touch();
+}
+
+bool audio_midi_gate(void)
+{
+    if (s_midi_nheld == 0) return false;
+    if (xTaskGetTickCount() - s_midi_seen > pdMS_TO_TICKS(5000)) {
+        audio_midi_all_off();                   // browser died with a note held
+        return false;
+    }
+    return true;
+}
+
+int audio_midi_note(void) { return s_midi_cur; }
+
 // ---- output bounce: record the machine's OUTPUT bus to a pool take ----------
 // Core service — works for ANY active machine (radio/synth/deck blend). While
 // active, the audio task feeds the recorder `out` (post-process, pre clock-out)

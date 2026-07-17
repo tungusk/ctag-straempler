@@ -1,1 +1,1 @@
-tracker-fix-20260717 (tracker loads again - task ladder + 4K stage + lazy shadow)
+midi-v1-20260717 (web MIDI bridge - musical typing, WebMIDI, WS to Synth/Keys)

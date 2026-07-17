@@ -6,6 +6,7 @@
 #include "esp_heap_caps.h"
 #include "cJSON.h"
 #include "machine.h"
+#include "audio.h"
 #include "cvsmooth.h"
 #include "svf.h"
 #include "sample_ram.h"
@@ -129,7 +130,11 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
         else                          sy.shape    = kn[0];
     }
     sy.cv1_disp = cvm[0];
-    note_from_cv(cvm[0]);                             // CV1 = 1V/oct pitch
+    if (audio_midi_gate()) {                          // web MIDI wins while held
+        float n = (float)audio_midi_note();
+        sy.freq = 440.0f * powf(2.0f, (n - 69.0f) / 12.0f);
+    } else
+        note_from_cv(cvm[0]);                         // CV1 = 1V/oct pitch
 
     // ---- CV matrix: assigned CVs modulate params ON TOP of the knob/Setup base
     // (block-rate; median-conditioned; ch1/2 rescaled from their idle floor) ----
@@ -169,7 +174,7 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
     float fold_eff  = sy.fold + m_tmb;       if (fold_eff < 0) fold_eff = 0; else if (fold_eff > 1) fold_eff = 1;
 
     // gate on TR1 (active low); soft trigs from teleremote are already merged in
-    bool g = !(io->trig_level & 1);
+    bool g = !(io->trig_level & 1) || audio_midi_gate();
     if (g && !sy.gate)      sy.env_stage = ENV_ATK;   // note on (retrigger)
     else if (!g && sy.gate) sy.env_stage = ENV_REL;   // note off
     sy.gate = g;

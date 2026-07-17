@@ -8,6 +8,7 @@
 #include "esp_heap_caps.h"
 #include "cJSON.h"
 #include "machine.h"
+#include "audio.h"
 #include "cvsmooth.h"
 #include "svf.h"
 #include "sample_ram.h"
@@ -152,8 +153,13 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     if (inst.knob_live[3]) inst.env_to_cut  = kn[3];                       // K8 = env>cut
 
     inst.cv1_disp = cvm[0];
-    float semis = (float)(cvm[0] - IS_CV1_ZERO) / IS_CTS_PER_ST;
-    float note = (float)inst.base_note + semis;
+    float note;
+    if (audio_midi_gate()) {                          // web MIDI wins while held
+        note = (float)audio_midi_note();
+    } else {
+        float semis = (float)(cvm[0] - IS_CV1_ZERO) / IS_CTS_PER_ST;
+        note = (float)inst.base_note + semis;
+    }
     if (inst.quantize) note = roundf(note);
     note = clampf(note, 0.0f, 127.0f);
     inst.note_disp = note;
@@ -203,7 +209,7 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     }
 
     // gate on TR1 (active low; teleremote soft trigs already merged)
-    bool g = !(io->trig_level & 1);
+    bool g = !(io->trig_level & 1) || audio_midi_gate();
     if (g && !v->gate) {                              // note on (retrigger)
         v->env_stage = ENV_ATK;
         v->active = true;
