@@ -22,13 +22,37 @@
 #define TP_FADE_MS   15               // "Fade Edges" ramp
 #define TP_LEN_OPTS  3                // 15 / 30 / 60 s
 
+// The tape is a BLOCK LIST, not one slab: single PSRAM allocs > ~2.1 MB are
+// refused on this board (slicer lesson — and exactly how tape-v1's first
+// boot failed: the 30 s tape is a 2.65 MB alloc). 1 MiB banks (2^19 frames);
+// the clipboard uses the same shape.
+#define TP_BLK_SHIFT  19
+#define TP_BLK_FRAMES (1u << TP_BLK_SHIFT)
+#define TP_BLK_MASK   (TP_BLK_FRAMES - 1u)
+#define TP_MAX_BLK    6               // 60 s = 2.646 M frames -> 6 banks
+
+typedef struct {
+    int16_t *blk[TP_MAX_BLK];
+    int      nblk;
+    uint32_t cap;                     // frames
+} tp_bank_t;
+
+static inline int16_t bank_rd(const tp_bank_t *b, uint32_t i)
+{
+    return b->blk[i >> TP_BLK_SHIFT][i & TP_BLK_MASK];
+}
+static inline void bank_wr(tp_bank_t *b, uint32_t i, int16_t v)
+{
+    b->blk[i >> TP_BLK_SHIFT][i & TP_BLK_MASK] = v;
+}
+
 enum { TPF_OFF = 0, TPF_LP, TPF_BP, TPF_HP, TPF_N };
 enum { TPS_INPUT = 0, TPS_TAPE };     // record source
 
 typedef struct {
     // tape
-    int16_t *buf;                     // PSRAM, cap frames, mono
-    uint32_t cap;                     // allocated frames
+    tp_bank_t tape;                   // PSRAM banks, mono
+    uint32_t cap;                     // usable frames (== tape.cap)
     uint32_t len;                     // used extent (record/load high-water)
     int      len_sel;                 // 0/1/2 -> 15/30/60 s (realloc on change)
     // crop window (frames; out exclusive; in < out <= len when len > 0)
@@ -57,7 +81,7 @@ typedef struct {
     int      knob_ctx;
     float    win_move;                // K5: -1..1 window shift (0 at noon)
     // clipboard
-    int16_t *clip;                    // PSRAM, lazy
+    tp_bank_t clip;                   // PSRAM banks, lazy
     uint32_t clip_len;
     // overview peaks (rebuilt by the UI task; dirty range for live record)
     uint8_t  peaks[TP_PEAKS];
@@ -65,6 +89,8 @@ typedef struct {
     // save-crop job
     volatile bool save_busy;
     char     save_id[12];             // last minted take id ("" = none)
+    // load progress ("" = idle) for the menu
+    char     load_note[24];
     // ui hints
     float    disp_bpm;                // effective grid bpm for the header
     bool     disp_clk;                // true = grid comes from the clock
@@ -74,6 +100,8 @@ extern tape_state_t tp;
 
 static inline float tp_clampf(float x, float lo, float hi){ return x < lo ? lo : x > hi ? hi : x; }
 static inline int   tp_clampi(int x, int lo, int hi){ return x < lo ? lo : x > hi ? hi : x; }
+static inline int16_t tp_rd(uint32_t i){ return bank_rd(&tp.tape, i); }
+static inline void    tp_wr(uint32_t i, int16_t v){ bank_wr(&tp.tape, i, v); }
 
 // effective crop window after the K5 window-move performance offset
 void tape_eff_window(uint32_t *in, uint32_t *out);
