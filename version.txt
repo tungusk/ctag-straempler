@@ -1,1 +1,1 @@
-tape-v1-20260717 (Tape machine - single-track recorder/editor, big-wave UI, FX-in-path)
+tracker-fix-20260717 (tracker loads again - task ladder + 4K stage + lazy shadow)
