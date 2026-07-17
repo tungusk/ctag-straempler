@@ -162,7 +162,9 @@ void configDisplay(){
     printf("SPI: Changed speed to %u\r\n", spi_lobo_get_speed(spi));
     TFT_setGammaCurve(DEFAULT_GAMMA_CURVE);
 	TFT_setRotation(LANDSCAPE_FLIP);
-	tft_shadow_init();                 // shadow FB after orientation is final (/screenshot)
+	// NOTE: tft_shadow_init() is NOT called at boot anymore — its 230 KB PSRAM
+	// claim starved libxmp (tracker "FAIL: no memory"). The /screenshot handler
+	// allocates it lazily on first use and kicks a redraw to fill it.
 	TFT_setFont(DEFAULT_FONT, NULL);
     TFT_resetclipwin();
     _fg = TFT_CYAN;

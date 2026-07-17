@@ -584,8 +584,21 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
     put_le32(hdr + 42, 2835);
 
     if (!tft_shadow) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no shadow fb");
-        return ESP_FAIL;
+        // LAZY shadow FB: allocating 230 KB PSRAM at boot starved libxmp
+        // (tracker "no memory"), so the first /screenshot pays instead. The
+        // shadow only mirrors draws made AFTER allocation — kick a redraw of
+        // the current page and tell the caller to retry for a full frame.
+        tft_shadow_init();
+        if (!tft_shadow) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "shadow fb alloc failed");
+            return ESP_FAIL;
+        }
+        ui_ev_ts_t ev = { .event = EV_ENTERED_MENU, .event_data = NULL };
+        if (ui_ev_queue) xQueueSend(ui_ev_queue, &ev, 0);
+        httpd_resp_set_status(req, "503 Warming");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "shadow fb allocated - redrawing, retry in ~1s\n");
+        return ESP_OK;
     }
     uint8_t *out = heap_caps_malloc(row_bytes + pad, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!out) {
