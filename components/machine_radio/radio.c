@@ -129,6 +129,71 @@ static void ring_write(const short *pcm, int outputSamps, int nch)
         rd.state = RADIO_PLAYING;
 }
 
+// ---- streaming resampler: non-44.1k stations -> the 44.1k ring --------------
+// Catmull-Rom cubic over the decoded frames (the sampimport pattern, live):
+// 3 frames of history carry the interpolation window across decode blocks, so
+// block boundaries are seamless. 48k (very common on icecast), 32k, and the
+// MPEG-2/2.5 rates (24/22.05/16k...) all land on the ring at 44.1k. Scratch is
+// PSRAM (~4.8 KB, allocated with the ring; internal heap is razor-thin here).
+#define RS_MAX_IN 1200                 // >= helix max 1152 frames per decode
+static struct {
+    float   pos;                       // next output sample's source index in ext[]
+    int16_t hist[3][2];                // last 3 source frames (stereo)
+    int16_t *ext;                      // scratch: [3 + RS_MAX_IN] stereo frames
+} s_rs;
+
+static void rs_reset(void)
+{
+    memset(s_rs.hist, 0, sizeof(s_rs.hist));
+    s_rs.pos = 3.0f;
+}
+
+static void resample_write(const short *pcm, int outputSamps, int nch)
+{
+    if (rd.samprate == RADIO_RATE || rd.samprate == 0) { ring_write(pcm, outputSamps, nch); return; }
+    if (!s_rs.ext) return;
+    int n = (nch > 0) ? outputSamps / nch : 0;
+    if (n <= 0) return;
+    if (n > RS_MAX_IN) n = RS_MAX_IN;
+
+    int16_t *ext = s_rs.ext;
+    memcpy(ext, s_rs.hist, sizeof(s_rs.hist));
+    for (int i = 0; i < n; i++) {
+        ext[(3 + i) * 2]     = (nch == 2) ? pcm[2 * i]     : pcm[i];
+        ext[(3 + i) * 2 + 1] = (nch == 2) ? pcm[2 * i + 1] : pcm[i];
+    }
+
+    float ratio = (float)rd.samprate / (float)RADIO_RATE;
+    int total = n + 3;
+    int16_t outb[128 * 2];
+    int on = 0;
+    for (;;) {
+        int i0 = (int)s_rs.pos;
+        if (i0 + 2 >= total) break;                     // need i0-1..i0+2 inside ext
+        float t = s_rs.pos - (float)i0;
+        for (int c = 0; c < 2; c++) {
+            float y0 = ext[(i0 - 1) * 2 + c], y1 = ext[i0 * 2 + c];
+            float y2 = ext[(i0 + 1) * 2 + c], y3 = ext[(i0 + 2) * 2 + c];
+            float a0 = -0.5f * y0 + 1.5f * y1 - 1.5f * y2 + 0.5f * y3;
+            float a1 =         y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+            float a2 = -0.5f * y0             + 0.5f * y2;
+            float y  = ((a0 * t + a1) * t + a2) * t + y1;
+            if (y > 32767.0f) y = 32767.0f; else if (y < -32768.0f) y = -32768.0f;
+            outb[on * 2 + c] = (int16_t)y;
+        }
+        on++;
+        s_rs.pos += ratio;
+        if (on == 128) {
+            ring_write(outb, on * 2, 2);
+            if (s_stop) return;
+            on = 0;
+        }
+    }
+    if (on) ring_write(outb, on * 2, 2);
+    memcpy(s_rs.hist, &ext[n * 2], sizeof(s_rs.hist));  // last 3 source frames
+    s_rs.pos -= (float)n;
+}
+
 // ---- ICY metadata (now-playing) --------------------------------------------
 static int s_audio_left;              // audio bytes until the next metadata block
 static volatile int s_meta_int_hdr;   // icy-metaint from the RESPONSE header callback
@@ -256,10 +321,11 @@ static void stream_task(void *pv)
                         rd.bitrate = fi.bitrate / 1000;
                         rd.samprate = fi.samprate;
                         rd.nchans = fi.nChans;
-                        if (fi.samprate != RADIO_RATE) { set_err("unsupported rate (v1: 44.1k)"); s_stop = true; break; }
-                        ESP_LOGI(TAG, "stream: %d kbps, %d Hz, %d ch, meta_int %d", rd.bitrate, fi.samprate, fi.nChans, meta_int);
+                        if (fi.samprate < 8000 || fi.samprate > 48000) { set_err("bad sample rate"); s_stop = true; break; }
+                        ESP_LOGI(TAG, "stream: %d kbps, %d Hz, %d ch, meta_int %d%s", rd.bitrate, fi.samprate,
+                                 fi.nChans, meta_int, fi.samprate != RADIO_RATE ? " (resampling -> 44.1k)" : "");
                     }
-                    if (fi.outputSamps > 0 && gen == s_gen) ring_write(pcm, fi.outputSamps, fi.nChans);
+                    if (fi.outputSamps > 0 && gen == s_gen) resample_write(pcm, fi.outputSamps, fi.nChans);
                     cur += used;
                 } else {
                     cur += (used > 0 ? used : 1);
@@ -319,6 +385,7 @@ void radio_play_url(const char *url, const char *name)
     rd.underruns = 0;
     rd.reconnects = 0;
     rd.bitrate = rd.samprate = rd.nchans = 0;
+    rs_reset();
     rd.title[0] = 0;
     rd.err[0] = 0;
     rd.state = RADIO_BUFFERING;
@@ -341,6 +408,9 @@ static esp_err_t radio_start(void)
     radio_stations_load();       // defaults + SD-saved favourites
     rd.ring = heap_caps_malloc((size_t)RADIO_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     if (!rd.ring) { ESP_LOGE(TAG, "PSRAM ring alloc failed"); return ESP_ERR_NO_MEM; }
+    s_rs.ext = heap_caps_malloc((size_t)(RS_MAX_IN + 3) * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    if (!s_rs.ext) { ESP_LOGE(TAG, "resampler scratch alloc failed"); free(rd.ring); rd.ring = NULL; return ESP_ERR_NO_MEM; }
+    rs_reset();
     rd.state = RADIO_STOPPED;
     s_stop = false;
     s_ntasks = 0;
@@ -352,6 +422,8 @@ static void radio_stop(void)
     radio_stop_stream();
     free(rd.ring);
     rd.ring = NULL;
+    free(s_rs.ext);
+    s_rs.ext = NULL;
 }
 
 static void radio_process(int32_t out[MACHINE_BLOCK],

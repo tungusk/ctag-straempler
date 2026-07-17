@@ -1,1 +1,1 @@
-web-remote-v5-20260716 (CLK replaces the pct readout, bare hold checkboxes)
+radio-resample-v1-20260716 (radio accepts 48k/32k/MPEG-2 stations - cubic to 44.1k)
