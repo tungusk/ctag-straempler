@@ -179,7 +179,7 @@ input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:verti
     <div class="row tight" style="margin-top:4px;align-items:center">
       <label style="color:#888"><input type="checkbox" id="midityping" checked> musical typing</label>
       <span id="midioct" style="color:#888;margin-left:12px">oct C4</span>
-      <span style="color:#555;margin-left:12px;font-size:11px">A-; = keys &#183; Z/X = octave</span>
+      <span style="color:#555;margin-left:12px;font-size:11px">A-; keys &#183; Z/X octave &#183; Space release &#183; Esc panic</span>
     </div>
     <div class="msg" style="margin-top:4px">Plays <b>Synth</b> / <b>Keys</b> (MIDI wins over CV while a note is held). Type on this page, click the keys, or pick a MIDI device (Chrome).</div>
   </div>
@@ -1221,6 +1221,8 @@ document.addEventListener('keydown',function(ev){
   var t=ev.target.tagName;
   if(t=='INPUT'||t=='TEXTAREA'||t=='SELECT')return;
   if(!document.getElementById('midityping').checked)return;
+  if(ev.key==' '){ev.preventDefault();Object.keys(midiHeld).forEach(function(n){midiOff(parseInt(n));});return;}
+  if(ev.key=='Escape'){midiSend('x');midiHeldClear();return;}
   var k=ev.key.toLowerCase();
   if(k=='z'){midiBase=Math.max(24,midiBase-12);midiOctShow();return;}
   if(k=='x'){midiBase=Math.min(96,midiBase+12);midiOctShow();return;}
