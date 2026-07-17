@@ -11,6 +11,8 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "lwip/sockets.h"
+#include "lwip/netdb.h"                  // getaddrinfo (icecast push)
+#include "mbedtls/base64.h"              // Basic auth (icecast push)
 #include "layer3.h"                      // shine MP3 encoder (broadcast /live.mp3)
 #include "wifi.h"
 #include "audio.h"
@@ -110,6 +112,7 @@ bool audio_bounce_active(void) { return s_bounce; }
 static int16_t *s_bc_ring = NULL;
 static volatile uint32_t s_bc_w = 0, s_bc_r = 0;
 static volatile bool s_bc_on = false;      // a client is connected
+static volatile bool s_ice_run;            // icecast push enabled (defined with its block below)
 static volatile int  s_bc_src = 0;         // 0 = output bus, 1 = line INPUT ("/in" URLs)
 static const char *s_bc_err = "ok";        // last MP3-path failure, for /bcast/state
 static volatile uint32_t s_bc_enc_us = 0;  // smoothed encode cost per 26.1ms pass
@@ -132,6 +135,49 @@ static void broadcast_push(const int32_t *out, int frames)
 
 static void bc_put_le32(uint8_t *p, uint32_t v){ p[0]=v; p[1]=v>>8; p[2]=v>>16; p[3]=v>>24; }
 static void bc_put_le16(uint8_t *p, uint16_t v){ p[0]=v; p[1]=v>>8; }
+
+// Encode the broadcast ring as MONO 96k MP3 into `sock` until the socket
+// errors or `run` (optional) goes false. Caller owns/claims the ring
+// (s_bc_on) and closes the socket. MONO 96k: measured 2026-07-16 — stereo's
+// subband+MDCT is PSRAM-cache-bound at ~34 ms per 26.1 ms pass (-O3 bought
+// 3%); mono halves the DSP AND the hot working set, and 96k iterates the
+// quantizer less than 64k. Shared by the port-8000 listener stream AND the
+// icecast push client.
+static void bc_stream_mp3(int sock, volatile bool *run)
+{
+    shine_config_t cfg;
+    cfg.wave.channels = PCM_MONO;
+    cfg.wave.samplerate = 44100;
+    shine_set_config_mpeg_defaults(&cfg.mpeg);
+    cfg.mpeg.mode = MONO;
+    cfg.mpeg.bitr = 96;
+    shine_t enc = shine_initialise(&cfg);
+    if (!enc) { ESP_LOGE("BCAST", "shine init failed"); s_bc_err = "shine-init"; return; }
+    int pass = shine_samples_per_pass(enc);              // 1152 @ MPEG-1
+    // PSRAM: internal RAM is NOT reliably available while radio's helix path
+    // is live (bench-caught: pcm-alloc failed on 4.6 KB)
+    int16_t *pcm = heap_caps_malloc((size_t)pass * sizeof(int16_t),
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!pcm) { ESP_LOGE("BCAST", "pcm alloc failed"); s_bc_err = "pcm-alloc"; shine_close(enc); return; }
+    s_bc_err = "ok";
+    bool ok = true;
+    while (ok && (!run || *run)) {
+        if (s_bc_w - s_bc_r < (uint32_t)pass) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
+        for (int f = 0; f < pass; f++) {                 // stereo bus -> mono mid
+            uint32_t idx = (s_bc_r % BC_FRAMES) * 2;
+            pcm[f] = (int16_t)(((int32_t)s_bc_ring[idx] + s_bc_ring[idx + 1]) >> 1);
+            s_bc_r++;
+        }
+        int written = 0;
+        int64_t t0 = esp_timer_get_time();
+        uint8_t *frame = shine_encode_buffer_interleaved(enc, pcm, &written);
+        uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
+        s_bc_enc_us = s_bc_enc_us ? (s_bc_enc_us * 7 + us) / 8 : us;
+        if (written > 0 && send(sock, frame, written, 0) < 0) ok = false;
+    }
+    free(pcm);
+    shine_close(enc);
+}
 
 static void broadcast_server_task(void *pv)
 {
@@ -172,6 +218,12 @@ static void broadcast_server_task(void *pv)
     for (;;) {
         int cl = accept(srv, NULL, NULL);
         if (cl < 0) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
+        if (s_ice_run) {   // the icecast push owns the ring — refuse listeners
+            static const char BUSY[] = "HTTP/1.0 503 Busy\r\n\r\nicecast push active\n";
+            send(cl, BUSY, strlen(BUSY), 0);
+            close(cl);
+            continue;
+        }
 
         // read the request line just far enough to route: ".mp3" -> encoder
         // (else the original WAV stream), "/in" -> tap the line INPUT instead
@@ -196,46 +248,8 @@ static void broadcast_server_task(void *pv)
         s_bc_on = true;
 
         if (want_mp3) {
-            // MONO 96k: measured 2026-07-16, stereo\'s subband+MDCT is PSRAM-
-            // cache-bound at ~34 ms per 26.1 ms pass (-O3 bought 3%) — mono
-            // halves the DSP AND the hot working set; 96k also iterates the
-            // quantizer less than 64k. The LAN WAV stream stays stereo.
-            shine_config_t cfg;
-            cfg.wave.channels = PCM_MONO;
-            cfg.wave.samplerate = 44100;
-            shine_set_config_mpeg_defaults(&cfg.mpeg);
-            cfg.mpeg.mode = MONO;
-            cfg.mpeg.bitr = 96;
-            shine_t enc = shine_initialise(&cfg);
-            if (!enc) {
-                ESP_LOGE("BCAST", "shine init failed");
-                s_bc_err = "shine-init";
-                s_bc_on = false; close(cl); continue;
-            }
-            int pass = shine_samples_per_pass(enc);          // 1152 @ MPEG-1
-            // PSRAM: internal RAM is NOT reliably available while radio's
-            // helix path is live (bench-caught: pcm-alloc failed on 4.6 KB)
-            int16_t *pcm = heap_caps_malloc((size_t)pass * sizeof(int16_t),
-                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (!pcm) { ESP_LOGE("BCAST", "pcm alloc failed"); s_bc_err = "pcm-alloc"; }
-            bool ok = pcm && send(cl, HDR_MP3, strlen(HDR_MP3), 0) > 0;
-            if (pcm) s_bc_err = "ok";
-            while (ok) {
-                if (s_bc_w - s_bc_r < (uint32_t)pass) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
-                for (int f = 0; f < pass; f++) {             // stereo bus -> mono mid
-                    uint32_t idx = (s_bc_r % BC_FRAMES) * 2;
-                    pcm[f] = (int16_t)(((int32_t)s_bc_ring[idx] + s_bc_ring[idx + 1]) >> 1);
-                    s_bc_r++;
-                }
-                int written = 0;
-                int64_t t0 = esp_timer_get_time();
-                uint8_t *frame = shine_encode_buffer_interleaved(enc, pcm, &written);
-                uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
-                s_bc_enc_us = s_bc_enc_us ? (s_bc_enc_us * 7 + us) / 8 : us;
-                if (written > 0 && send(cl, frame, written, 0) < 0) ok = false;
-            }
-            free(pcm);
-            shine_close(enc);
+            if (send(cl, HDR_MP3, strlen(HDR_MP3), 0) > 0)
+                bc_stream_mp3(cl, NULL);
         } else {
             bool ok = send(cl, HDR, strlen(HDR), 0) > 0 && send(cl, wav, 44, 0) > 0;
             while (ok) {
@@ -424,3 +438,119 @@ void audio_broadcast_init(void)
 {
     xTaskCreate(broadcast_server_task, "bc_srv", 12288, NULL, 5, NULL);   // stack: shine encode runs here
 }
+
+// ---- icecast PUSH: the module as a SOURCE CLIENT (broadcast v2) --------------
+// Streams the same shine MONO 96k MP3 to an icecast mountpoint via the legacy
+// SOURCE handshake (icecast2 + compatibles). One push at a time, mutually
+// exclusive with a port-8000 listener (one ring, one consumer). Reconnects
+// with backoff while enabled; stop is user intent (s_ice_run). Task exists
+// only while enabled — created by audio_icepush_start (httpd context, so the
+// network is up; the post-initWifi rule is satisfied by construction).
+// s_ice_run (user intent) is declared with the broadcast globals above —
+// the accept loop reads it to refuse listeners while a push owns the ring.
+static volatile bool s_ice_up = false;     // handshake accepted, streaming
+static volatile bool s_ice_alive = false;  // task exists
+static char s_ice_host[64], s_ice_mount[48], s_ice_pass[48], s_ice_name[48];
+static int  s_ice_port = 8000;
+static char s_ice_err[64] = "";
+static volatile uint32_t s_ice_retries = 0;
+
+bool audio_icepush_running(void)   { return s_ice_run; }
+bool audio_icepush_connected(void) { return s_ice_up; }
+const char *audio_icepush_err(void){ return s_ice_err; }
+uint32_t audio_icepush_retries(void){ return s_ice_retries; }
+
+static void icepush_task(void *pv)
+{
+    (void)pv;
+    while (s_ice_run) {
+        struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM };
+        struct addrinfo *res = NULL;
+        char ports[8]; snprintf(ports, sizeof(ports), "%d", s_ice_port);
+        if (getaddrinfo(s_ice_host, ports, &hints, &res) != 0 || !res) {
+            snprintf(s_ice_err, sizeof(s_ice_err), "dns fail: %.40s", s_ice_host);
+            s_ice_retries++; vTaskDelay(pdMS_TO_TICKS(3000)); continue;
+        }
+        int sk = socket(res->ai_family, res->ai_socktype, 0);
+        if (sk < 0) { freeaddrinfo(res); snprintf(s_ice_err, sizeof(s_ice_err), "socket fail"); vTaskDelay(pdMS_TO_TICKS(3000)); continue; }
+        struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+        setsockopt(sk, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        int rc = connect(sk, res->ai_addr, res->ai_addrlen);
+        freeaddrinfo(res);
+        if (rc < 0) {
+            close(sk); snprintf(s_ice_err, sizeof(s_ice_err), "connect refused");
+            s_ice_retries++; vTaskDelay(pdMS_TO_TICKS(3000)); continue;
+        }
+
+        // SOURCE handshake with Basic auth (user is always "source")
+        char up[64], b64[96]; size_t b64n = 0;
+        snprintf(up, sizeof(up), "source:%s", s_ice_pass);
+        mbedtls_base64_encode((unsigned char *)b64, sizeof(b64) - 1, &b64n,
+                              (const unsigned char *)up, strlen(up));
+        b64[b64n] = 0;
+        char req[384];
+        snprintf(req, sizeof(req),
+                 "SOURCE %s HTTP/1.0\r\n"
+                 "Authorization: Basic %s\r\n"
+                 "Content-Type: audio/mpeg\r\n"
+                 "Ice-Name: %s\r\n"
+                 "Ice-Public: 0\r\n"
+                 "Ice-Audio-Info: bitrate=96;channels=1;samplerate=44100\r\n\r\n",
+                 s_ice_mount, b64, s_ice_name[0] ? s_ice_name : "strampler");
+        char resp[128] = {0};
+        bool shook = send(sk, req, strlen(req), 0) > 0 &&
+                     recv(sk, resp, sizeof(resp) - 1, 0) > 0 &&
+                     strstr(resp, " 200 ") != NULL;
+        if (!shook) {
+            close(sk); snprintf(s_ice_err, sizeof(s_ice_err), "handshake refused (auth/mount?)");
+            s_ice_retries++; vTaskDelay(pdMS_TO_TICKS(3000)); continue;
+        }
+        if (s_bc_on) {   // a :8000 listener owns the ring — wait, don't fight
+            close(sk); snprintf(s_ice_err, sizeof(s_ice_err), "listener active on :8000");
+            vTaskDelay(pdMS_TO_TICKS(2000)); continue;
+        }
+        s_bc_src = 0;
+        s_bc_w = s_bc_r = 0;
+        s_bc_on = true;
+        s_ice_up = true;
+        s_ice_err[0] = 0;
+        bc_stream_mp3(sk, &s_ice_run);
+        s_ice_up = false;
+        s_bc_on = false;
+        close(sk);
+        if (s_ice_run) {   // dropped by the server/network — back off + retry
+            snprintf(s_ice_err, sizeof(s_ice_err), "reconnecting");
+            s_ice_retries++;
+            vTaskDelay(pdMS_TO_TICKS(2000));
+        }
+    }
+    s_ice_err[0] = 0;
+    s_ice_alive = false;
+    vTaskDelete(NULL);
+}
+
+int audio_icepush_start(const char *host, int port, const char *mount,
+                        const char *pass, const char *name)
+{
+    if (s_ice_run || s_ice_alive) return -1;           // already pushing
+    if (!host || !host[0] || !mount || !mount[0]) return -2;
+    strlcpy(s_ice_host, host, sizeof(s_ice_host));
+    s_ice_port = (port > 0 && port < 65536) ? port : 8000;
+    if (mount[0] != '/') snprintf(s_ice_mount, sizeof(s_ice_mount), "/%s", mount);
+    else                 strlcpy(s_ice_mount, mount, sizeof(s_ice_mount));
+    strlcpy(s_ice_pass, pass ? pass : "", sizeof(s_ice_pass));
+    strlcpy(s_ice_name, name ? name : "", sizeof(s_ice_name));
+    s_ice_retries = 0;
+    s_ice_err[0] = 0;
+    s_ice_run = true;
+    s_ice_alive = true;
+    if (xTaskCreate(icepush_task, "icepush", 12288, NULL, 5, NULL) != pdPASS) {
+        s_ice_run = false; s_ice_alive = false;
+        snprintf(s_ice_err, sizeof(s_ice_err), "task create failed (heap?)");
+        return -3;
+    }
+    return 0;
+}
+
+void audio_icepush_stop(void) { s_ice_run = false; }

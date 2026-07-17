@@ -1554,6 +1554,96 @@ static esp_err_t bcast_state_handler(httpd_req_t *req)
     return send_json(req, buf);
 }
 
+// ─── /ice/* — icecast push (module as a SOURCE client) ──────────────────────
+// Config lives in usr/ICECAST.JSN so the web form prefills; /ice/start with
+// any param overrides + re-saves. Always-on core endpoints (like /bounce).
+#define ICE_CFG_PATH "/sdcard/usr/ICECAST.JSN"
+
+// httpd_query_key_value does NOT url-decode — %20 etc. arrive literal
+static void urldecode_inplace(char *s)
+{
+    char *o = s;
+    while (*s) {
+        if (*s == '+') { *o++ = ' '; s++; }
+        else if (*s == '%' && isxdigit((unsigned char)s[1]) && isxdigit((unsigned char)s[2])) {
+            char h[3] = { s[1], s[2], 0 };
+            *o++ = (char)strtol(h, NULL, 16);
+            s += 3;
+        } else *o++ = *s++;
+    }
+    *o = 0;
+}
+
+static esp_err_t ice_start_handler(httpd_req_t *req)
+{
+    char host[64] = "", ports[8] = "", mount[48] = "", pass[48] = "", name[48] = "";
+    cJSON *saved = readJSONFileAsCJSON(ICE_CFG_PATH);
+    if (saved) {
+        cJSON *j;
+        if ((j = cJSON_GetObjectItemCaseSensitive(saved, "host"))  && cJSON_IsString(j)) strlcpy(host,  j->valuestring, sizeof(host));
+        if ((j = cJSON_GetObjectItemCaseSensitive(saved, "port"))  && cJSON_IsNumber(j)) snprintf(ports, sizeof(ports), "%d", j->valueint);
+        if ((j = cJSON_GetObjectItemCaseSensitive(saved, "mount")) && cJSON_IsString(j)) strlcpy(mount, j->valuestring, sizeof(mount));
+        if ((j = cJSON_GetObjectItemCaseSensitive(saved, "pass"))  && cJSON_IsString(j)) strlcpy(pass,  j->valuestring, sizeof(pass));
+        if ((j = cJSON_GetObjectItemCaseSensitive(saved, "name"))  && cJSON_IsString(j)) strlcpy(name,  j->valuestring, sizeof(name));
+        cJSON_Delete(saved);
+    }
+    if (get_query_param(req, "host",  host,  sizeof(host)))  urldecode_inplace(host);
+    if (get_query_param(req, "port",  ports, sizeof(ports))) urldecode_inplace(ports);
+    if (get_query_param(req, "mount", mount, sizeof(mount))) urldecode_inplace(mount);
+    if (get_query_param(req, "pass",  pass,  sizeof(pass)))  urldecode_inplace(pass);
+    if (get_query_param(req, "name",  name,  sizeof(name)))  urldecode_inplace(name);
+    int port = atoi(ports);
+
+    int rc = audio_icepush_start(host, port, mount, pass, name);
+    if (rc == 0) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "host", host);
+        cJSON_AddNumberToObject(o, "port", port > 0 ? port : 8000);
+        cJSON_AddStringToObject(o, "mount", mount);
+        cJSON_AddStringToObject(o, "pass", pass);
+        cJSON_AddStringToObject(o, "name", name);
+        char *txt = cJSON_Print(o);
+        cJSON_Delete(o);
+        if (txt) { writeJSONFile(ICE_CFG_PATH, txt); free(txt); }
+        return send_json(req, "{\"ok\":true}");
+    }
+    char buf[80];
+    snprintf(buf, sizeof(buf), "{\"ok\":false,\"why\":\"%s\"}",
+             rc == -1 ? "already running" : rc == -2 ? "need host+mount" : "task create failed");
+    return send_json(req, buf);
+}
+
+static esp_err_t ice_stop_handler(httpd_req_t *req)
+{
+    audio_icepush_stop();
+    return send_json(req, "{\"ok\":true}");
+}
+
+static esp_err_t ice_state_handler(httpd_req_t *req)
+{
+    char host[64] = "", mount[48] = "", pass[48] = "", name[48] = "";
+    int port = 8000;
+    cJSON *saved = readJSONFileAsCJSON(ICE_CFG_PATH);
+    if (saved) {
+        cJSON *j;
+        if ((j = cJSON_GetObjectItemCaseSensitive(saved, "host"))  && cJSON_IsString(j)) strlcpy(host,  j->valuestring, sizeof(host));
+        if ((j = cJSON_GetObjectItemCaseSensitive(saved, "port"))  && cJSON_IsNumber(j)) port = j->valueint;
+        if ((j = cJSON_GetObjectItemCaseSensitive(saved, "mount")) && cJSON_IsString(j)) strlcpy(mount, j->valuestring, sizeof(mount));
+        if ((j = cJSON_GetObjectItemCaseSensitive(saved, "pass"))  && cJSON_IsString(j)) strlcpy(pass,  j->valuestring, sizeof(pass));
+        if ((j = cJSON_GetObjectItemCaseSensitive(saved, "name"))  && cJSON_IsString(j)) strlcpy(name,  j->valuestring, sizeof(name));
+        cJSON_Delete(saved);
+    }
+    char buf[384];
+    snprintf(buf, sizeof(buf),
+             "{\"run\":%s,\"up\":%s,\"err\":\"%s\",\"retries\":%u,"
+             "\"cfg\":{\"host\":\"%s\",\"port\":%d,\"mount\":\"%s\",\"pass\":\"%s\",\"name\":\"%s\"}}",
+             audio_icepush_running() ? "true" : "false",
+             audio_icepush_connected() ? "true" : "false",
+             audio_icepush_err(), (unsigned)audio_icepush_retries(),
+             host, port, mount, pass, name);
+    return send_json(req, buf);
+}
+
 // ─── server lifecycle ────────────────────────────────────────────────────────
 
 // ─── POST /ota — stream a new firmware image into the inactive OTA slot ──────
@@ -1646,6 +1736,9 @@ static httpd_uri_t uris[] = {
     { .uri = "/bounce/stop",   .method = HTTP_POST, .handler = bounce_stop_handler },
     { .uri = "/bounce/state",  .method = HTTP_GET,  .handler = bounce_state_handler },
     { .uri = "/bcast/state",   .method = HTTP_GET,  .handler = bcast_state_handler },
+    { .uri = "/ice/start",     .method = HTTP_POST, .handler = ice_start_handler },
+    { .uri = "/ice/stop",      .method = HTTP_POST, .handler = ice_stop_handler },
+    { .uri = "/ice/state",     .method = HTTP_GET,  .handler = ice_state_handler },
     { .uri = "/blisten",       .method = HTTP_POST, .handler = blisten_post_handler },
     { .uri = "/remote/machine",.method = HTTP_POST, .handler = remote_machine_handler },
     { .uri = "/remote/params", .method = HTTP_GET,  .handler = remote_params_get_handler },
