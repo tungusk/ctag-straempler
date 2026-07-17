@@ -21,6 +21,31 @@ tape_state_t tp;
 
 static const uint32_t TP_LEN_SECS[TP_LEN_OPTS] = { 15, 30, 60 };
 
+// ---- bank alloc (1 MiB blocks, fail-soft) ---------------------------------------
+static void bank_free(tp_bank_t *b)
+{
+    for (int i = 0; i < b->nblk; i++)
+        if (b->blk[i]) { heap_caps_free(b->blk[i]); b->blk[i] = NULL; }
+    b->nblk = 0; b->cap = 0;
+}
+
+// allocate banks to cover `frames`; trims to what the heap gives (fail-soft).
+static int bank_alloc(tp_bank_t *b, uint32_t frames)
+{
+    bank_free(b);
+    int want = (int)((frames + TP_BLK_FRAMES - 1) / TP_BLK_FRAMES);
+    if (want > TP_MAX_BLK) want = TP_MAX_BLK;
+    for (int i = 0; i < want; i++) {
+        b->blk[i] = heap_caps_malloc(TP_BLK_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+        if (!b->blk[i]) break;
+        b->nblk = i + 1;
+    }
+    if (b->nblk == 0) return -1;
+    uint32_t got = (uint32_t)b->nblk * TP_BLK_FRAMES;
+    b->cap = got < frames ? got : frames;
+    return b->cap == frames ? 0 : 1;      // 1 = trimmed
+}
+
 // ---- helpers -----------------------------------------------------------------
 uint32_t tape_beat_frames(void)
 {
@@ -66,7 +91,7 @@ uint32_t tape_snap(uint32_t frame)
         for (int s = -1; s <= 1; s += 2) {
             long i = (long)frame + (long)s * r;
             if (i < 1 || i >= (long)tp.len) continue;
-            if (tp.buf[i - 1] <= 0 && tp.buf[i] > 0) return (uint32_t)i;
+            if (tp_rd((uint32_t)i - 1) <= 0 && tp_rd((uint32_t)i) > 0) return (uint32_t)i;
         }
     return frame;
 }
@@ -104,7 +129,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     for (int i = 0; i < 4; i++)
         if (!tp.knob_live[i] && fabsf(kn[i] - tp.knob_capt[i]) > 0.03f) tp.knob_live[i] = true;
     if (tp.knob_live[0]) tp.win_move = (kn[0] - 0.5f) * 2.0f;              // K5 noon = home
-    if (tp.knob_live[1]) tp.cutoff   = 30.0f * powf(200.0f, kn[1]);       // 30 Hz .. 6 kHz
+    if (tp.knob_live[1]) tp.cutoff   = 30.0f * powf(200.0f, kn[1]);        // 30 Hz .. 6 kHz
     if (tp.knob_live[2]) tp.res01    = kn[2];
     if (tp.knob_live[3]) tp.drive    = kn[3];
 
@@ -141,16 +166,17 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
         if (!(fabsf(tp.flt.lp) < 1e9f) || !(fabsf(tp.flt.bp) < 1e9f)) svf_reset(&tp.flt);
     }
 
+    bool have_tape = tp.tape.nblk > 0;
     int frames = MACHINE_BLOCK / 2;
     for (int f = 0; f < frames; f++) {
         // source: input while recording-from-input or monitoring; else tape
         float src = 0.0f;
         uint32_t p = (uint32_t)tp.pos;
-        bool on_tape = tp.playing && tp.buf && tp.len && p < tp.len;
+        bool on_tape = tp.playing && have_tape && tp.len && p < tp.len;
         float in_mid = (float)(((int32_t)(int16_t)(in[f*2] >> 16) +
                                 (int32_t)(int16_t)(in[f*2+1] >> 16)) >> 1) / 32768.0f;
         if (tp.recording && tp.rec_src == TPS_INPUT)      src = in_mid;
-        else if (on_tape)                                 src = (float)tp.buf[p] / 32768.0f;
+        else if (on_tape)                                 src = (float)tp_rd(p) / 32768.0f;
         else if (!tp.playing && tp.monitor)               src = in_mid;
 
         // fx chain: filter -> drive (reverb runs on the block below)
@@ -163,16 +189,16 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
         if (tp.drive > 0.005f) y = tp_softclip(y, tp.drive);
 
         // record head taps POST-FX (print the chain); recording extends len
-        if (tp.recording && tp.buf) {
+        if (tp.recording && have_tape) {
             uint32_t w = (uint32_t)tp.pos;
             if (empty_rec && w < tp.cap) {
                 float v = y * 32767.0f;
-                tp.buf[w] = (int16_t)tp_clampf(v, -32768.0f, 32767.0f);
+                tp_wr(w, (int16_t)tp_clampf(v, -32768.0f, 32767.0f));
                 if (w + 1 > tp.len) tp.len = w + 1;
                 if (w + 1 >= tp.cap) { tp.recording = false; tp.playing = false; }
             } else if (!empty_rec && w < tp.len) {
                 float v = y * 32767.0f;
-                tp.buf[w] = (int16_t)tp_clampf(v, -32768.0f, 32767.0f);
+                tp_wr(w, (int16_t)tp_clampf(v, -32768.0f, 32767.0f));
             }
         }
 
@@ -211,12 +237,9 @@ int tape_set_len_sel(int sel)
 {
     if (!tp_stopped()) return -1;
     sel = tp_clampi(sel, 0, TP_LEN_OPTS - 1);
-    uint32_t cap = TP_LEN_SECS[sel] * TP_RATE;
-    int16_t *nb = heap_caps_malloc((size_t)cap * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    if (!nb) return -2;                        // fail soft, keep the old tape
-    if (tp.buf) heap_caps_free(tp.buf);
-    tp.buf = nb;
-    tp.cap = cap;
+    uint32_t want = TP_LEN_SECS[sel] * TP_RATE;
+    if (bank_alloc(&tp.tape, want) < 0) { tp.cap = 0; return -2; }
+    tp.cap = tp.tape.cap;                       // may be trimmed (fail-soft)
     tp.len_sel = sel;
     tp.len = 0; tp.in_pt = tp.out_pt = 0; tp.pos = 0;
     memset(tp.peaks, 0, sizeof(tp.peaks));
@@ -226,11 +249,47 @@ int tape_set_len_sel(int sel)
 
 int tape_load(const char *name)
 {
-    if (!tp_stopped() || !tp.buf || !name || !name[0]) return -1;
-    uint32_t n = sample_load(name, tp.buf, tp.cap, true);
-    if (n < 2) return -2;
-    tp.len = n;
-    tp.in_pt = 0; tp.out_pt = n; tp.pos = 0;
+    if (!tp_stopped() || tp.tape.nblk == 0 || !name || !name[0]) return -1;
+    char path[64];
+    if (sample_resolve(name, path, sizeof(path)) != 0) return -2;
+
+    // stream through sampfile in bursts; staging is INTERNAL DMA RAM (FatFS
+    // can hand the buffer straight to SDMMC, which cannot target PSRAM)
+    const int BURST = 1024;
+    int16_t *stage = heap_caps_malloc((size_t)BURST * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    if (!stage) return -3;
+
+    sd_lock_take();
+    FILE *f = fopen(path, "rb");
+    sampfile_t sf;
+    bool ok = f && sampfile_probe(f, &sf) == 0;
+    sd_lock_give();
+    if (!ok) { if (f) { sd_lock_take(); fclose(f); sd_lock_give(); } heap_caps_free(stage); return -4; }
+
+    uint32_t total = sf.frames;
+    if (total > tp.cap) total = tp.cap;
+    uint32_t done = 0;
+    while (done < total) {
+        int n = (int)(total - done > (uint32_t)BURST ? (uint32_t)BURST : total - done);
+        sd_lock_take();
+        size_t got = sampfile_read(f, &sf, stage, (size_t)n);
+        sd_lock_give();
+        if (got == 0) break;
+        for (size_t i = 0; i < got; i++) {
+            int32_t mid = ((int32_t)stage[i*2] + (int32_t)stage[i*2+1]) >> 1;
+            tp_wr(done + (uint32_t)i, (int16_t)mid);
+        }
+        done += (uint32_t)got;
+        if ((done & 0x3FFFF) == 0) vTaskDelay(1);      // breathe every ~256k frames
+    }
+    sd_lock_take();
+    fclose(f);
+    sd_lock_give();
+    heap_caps_free(stage);
+    if (done < 2) return -5;
+
+    tp.len = done;
+    tp.in_pt = 0; tp.out_pt = done; tp.pos = 0;
     tape_rebuild_peaks(true);
     return 0;
 }
@@ -248,12 +307,12 @@ void tape_norm(void)
     if (!tp_stopped() || tp.len == 0) return;
     crop_clamp();
     int pk = 1;
-    for (uint32_t i = tp.in_pt; i < tp.out_pt; i++) { int v = tp.buf[i]; if (v < 0) v = -v; if (v > pk) pk = v; }
+    for (uint32_t i = tp.in_pt; i < tp.out_pt; i++) { int v = tp_rd(i); if (v < 0) v = -v; if (v > pk) pk = v; }
     float g = 31000.0f / (float)pk;
     if (g <= 1.001f && g >= 0.999f) return;
     for (uint32_t i = tp.in_pt; i < tp.out_pt; i++) {
-        float v = (float)tp.buf[i] * g;
-        tp.buf[i] = (int16_t)tp_clampf(v, -32768.0f, 32767.0f);
+        float v = (float)tp_rd(i) * g;
+        tp_wr(i, (int16_t)tp_clampf(v, -32768.0f, 32767.0f));
     }
     tape_rebuild_peaks(true);
 }
@@ -263,7 +322,7 @@ void tape_reverse(void)
     if (!tp_stopped() || tp.len == 0) return;
     crop_clamp();
     uint32_t a = tp.in_pt, b = tp.out_pt - 1;
-    while (a < b) { int16_t t = tp.buf[a]; tp.buf[a] = tp.buf[b]; tp.buf[b] = t; a++; b--; }
+    while (a < b) { int16_t t = tp_rd(a); tp_wr(a, tp_rd(b)); tp_wr(b, t); a++; b--; }
     tape_rebuild_peaks(true);
 }
 
@@ -276,8 +335,8 @@ void tape_fade(void)
     if (F * 2 > n) F = n / 2;
     for (uint32_t i = 0; i < F; i++) {
         float g = (float)i / (float)F;
-        tp.buf[tp.in_pt + i] = (int16_t)((float)tp.buf[tp.in_pt + i] * g);
-        tp.buf[tp.out_pt - 1 - i] = (int16_t)((float)tp.buf[tp.out_pt - 1 - i] * g);
+        tp_wr(tp.in_pt + i, (int16_t)((float)tp_rd(tp.in_pt + i) * g));
+        tp_wr(tp.out_pt - 1 - i, (int16_t)((float)tp_rd(tp.out_pt - 1 - i) * g));
     }
     tape_rebuild_peaks(true);
 }
@@ -287,10 +346,9 @@ int tape_copy(void)
     if (!tp_stopped() || tp.len == 0) return -1;
     crop_clamp();
     uint32_t n = tp.out_pt - tp.in_pt;
-    if (tp.clip) { heap_caps_free(tp.clip); tp.clip = NULL; tp.clip_len = 0; }
-    tp.clip = heap_caps_malloc((size_t)n * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    if (!tp.clip) return -2;
-    memcpy(tp.clip, tp.buf + tp.in_pt, (size_t)n * sizeof(int16_t));
+    if (bank_alloc(&tp.clip, n) < 0) { tp.clip_len = 0; return -2; }
+    if (tp.clip.cap < n) n = tp.clip.cap;             // trimmed (fail-soft)
+    for (uint32_t i = 0; i < n; i++) bank_wr(&tp.clip, i, tp_rd(tp.in_pt + i));
     tp.clip_len = n;
     return 0;
 }
@@ -299,12 +357,12 @@ int tape_cut(void)
 {
     if (tape_copy() != 0) return -1;
     uint32_t n = tp.out_pt - tp.in_pt;
-    memmove(tp.buf + tp.in_pt, tp.buf + tp.out_pt,
-            (size_t)(tp.len - tp.out_pt) * sizeof(int16_t));
+    for (uint32_t i = tp.out_pt; i < tp.len; i++)     // close the gap (forward)
+        tp_wr(i - n, tp_rd(i));
     tp.len -= n;
-    tp.out_pt = tp.in_pt;                      // collapse: paste-ready splice point
+    tp.out_pt = tp.in_pt;                             // collapse: splice point
     if (tp.len) {
-        if (tp.out_pt >= tp.len) { tp.out_pt = tp.len; }
+        if (tp.out_pt >= tp.len) tp.out_pt = tp.len;
         if (tp.out_pt == tp.in_pt) tp.out_pt = tp.in_pt + 64 <= tp.len ? tp.in_pt + 64 : tp.len;
         crop_clamp();
     } else tp.in_pt = tp.out_pt = 0;
@@ -315,16 +373,18 @@ int tape_cut(void)
 
 int tape_paste(void)
 {
-    if (!tp_stopped() || !tp.clip || tp.clip_len == 0 || !tp.buf) return -1;
+    if (!tp_stopped() || tp.clip_len == 0 || tp.tape.nblk == 0) return -1;
     uint32_t n = tp.clip_len;
-    if (tp.len + n > tp.cap) n = tp.cap - tp.len;      // clamp: paste what fits
+    if (tp.len + n > tp.cap) n = tp.cap - tp.len;     // clamp: paste what fits
     if (n == 0) return -2;
     uint32_t at = tp.len ? tp.in_pt : 0;
-    memmove(tp.buf + at + n, tp.buf + at, (size_t)(tp.len - at) * sizeof(int16_t));
-    memcpy(tp.buf + at, tp.clip, (size_t)n * sizeof(int16_t));
+    for (uint32_t i = tp.len; i > at; i--)            // shift right (backward)
+        tp_wr(i - 1 + n, tp_rd(i - 1));
+    for (uint32_t i = 0; i < n; i++)
+        tp_wr(at + i, bank_rd(&tp.clip, i));
     tp.len += n;
     tp.in_pt = at;
-    tp.out_pt = at + n;                        // crop = the pasted material
+    tp.out_pt = at + n;                               // crop = the pasted material
     tape_rebuild_peaks(true);
     return 0;
 }
@@ -355,7 +415,7 @@ static void save_task(void *pv)
     int16_t chunk[512 * 2];
     for (uint32_t i = a; i < b; ) {
         int n = 0;
-        while (n < 512 && i < b) { chunk[n*2] = tp.buf[i]; chunk[n*2+1] = tp.buf[i]; n++; i++; }
+        while (n < 512 && i < b) { int16_t v = tp_rd(i); chunk[n*2] = v; chunk[n*2+1] = v; n++; i++; }
         sd_lock_take();
         fwrite(chunk, sizeof(int16_t) * 2, n, f);
         sd_lock_give();
@@ -388,7 +448,7 @@ int tape_save_crop(void)
 // ---- peaks (UI task) ------------------------------------------------------------
 void tape_rebuild_peaks(bool full)
 {
-    if (!tp.buf || tp.cap == 0) return;
+    if (tp.tape.nblk == 0 || tp.cap == 0) return;
     uint32_t upto = tp.len;
     uint32_t from = full ? 0 : tp.peaks_done;
     if (full) memset(tp.peaks, 0, sizeof(tp.peaks));
@@ -403,7 +463,7 @@ void tape_rebuild_peaks(bool full)
         if (a >= b) continue;
         uint32_t step = (b - a) / 64 + 1;
         int pk = 0;
-        for (uint32_t s = a; s < b; s += step) { int v = tp.buf[s]; if (v < 0) v = -v; if (v > pk) pk = v; }
+        for (uint32_t s = a; s < b; s += step) { int v = tp_rd(s); if (v < 0) v = -v; if (v > pk) pk = v; }
         pk >>= 7;
         tp.peaks[c] = (uint8_t)(pk > 255 ? 255 : pk);
     }
@@ -425,19 +485,22 @@ static esp_err_t tape_start(void)
     tp.knob_ctx = -1;
     clockin_reset(&tp.ci, 1.0f);
     svf_reset(&tp.flt);
-    tp.buf = heap_caps_malloc((size_t)TP_LEN_SECS[tp.len_sel] * TP_RATE * sizeof(int16_t),
-                              MALLOC_CAP_SPIRAM);
-    if (!tp.buf) { ESP_LOGE(TAG, "tape alloc failed"); return ESP_ERR_NO_MEM; }
-    tp.cap = TP_LEN_SECS[tp.len_sel] * TP_RATE;
+    if (bank_alloc(&tp.tape, TP_LEN_SECS[tp.len_sel] * TP_RATE) < 0) {
+        ESP_LOGE(TAG, "tape bank alloc failed");
+        return ESP_ERR_NO_MEM;
+    }
+    tp.cap = tp.tape.cap;
     return ESP_OK;
 }
 
 static void tape_stop(void)
 {
     tp.playing = false; tp.recording = false;
-    while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));   // job reads tp.buf
-    if (tp.buf)  { heap_caps_free(tp.buf);  tp.buf = NULL; }
-    if (tp.clip) { heap_caps_free(tp.clip); tp.clip = NULL; tp.clip_len = 0; }
+    while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));   // job reads the tape
+    bank_free(&tp.tape);
+    bank_free(&tp.clip);
+    tp.clip_len = 0;
+    tp.cap = 0; tp.len = 0;
     reverb_free(&tp.rv);
 }
 
