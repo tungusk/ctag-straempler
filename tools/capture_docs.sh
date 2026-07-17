@@ -21,7 +21,8 @@ curl -s -m 5 "http://$IP/status" >/dev/null || { echo "device not answering"; ex
 for M in Sampler Looper Slicer Granular Glitch Drums Deck DoubleDecker \
          Tracker Freesound Synth Keys Tape Editor; do
   echo "$M..."
-  sw "$M"; sleep 4
+  sw "$M"
+  case "$M" in Slicer|Tracker|Deck|DoubleDecker) sleep 25 ;; *) sleep 4 ;; esac  # scans/loads
   case "$M" in
     DoubleDecker) shot dualdeck-live ;;
     *)            shot "$(echo "$M" | tr '[:upper:]' '[:lower:]')-live" ;;
