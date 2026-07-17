@@ -135,16 +135,24 @@ static void *load_file_psram(const char *name, long *out_size)
         return NULL;
     }
     uint8_t *buf = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
-    uint8_t *stage = malloc(16384);            // SDMMC DMA can't target PSRAM
+    // stage is INTERNAL (SDMMC DMA can't target PSRAM) — 4 KB, not 16 KB:
+    // internal RAM tightened (bc_srv +8 KB for shine) and with the 32 KB
+    // render stack just claimed, a 16 KB contiguous internal alloc failed on
+    // a FRESH boot ("no memory" with a clean heap, bench 2026-07-17)
+    uint8_t *stage = heap_caps_malloc(4096, MALLOC_CAP_DMA);
     if (!buf || !stage) {
         sd_lock_take(); fclose(f); sd_lock_give();
-        free(stage); if (buf) heap_caps_free(buf);
-        strlcpy(trk.fail_why, "no memory", sizeof(trk.fail_why));
+        if (stage) heap_caps_free(stage);
+        if (buf) heap_caps_free(buf);
+        snprintf(trk.fail_why, sizeof(trk.fail_why), "no mem (%s %ldK)",
+                 buf ? "stage" : "file", sz / 1024);
+        ESP_LOGE(TAG, "load '%s': %s alloc failed (%ld bytes)",
+                 name, buf ? "stage" : "module", buf ? 4096L : sz);
         return NULL;
     }
     long off = 0;
     while (off < sz) {
-        long want = sz - off; if (want > 16384) want = 16384;
+        long want = sz - off; if (want > 4096) want = 4096;
         sd_lock_take();
         size_t got = fread(stage, 1, want, f);
         sd_lock_give();
@@ -153,7 +161,7 @@ static void *load_file_psram(const char *name, long *out_size)
         off += got;
         vTaskDelay(1);                          // load-bearing SD-courtesy gap
     }
-    free(stage);
+    heap_caps_free(stage);
     sd_lock_take(); fclose(f); sd_lock_give();
     if (off < sz) { heap_caps_free(buf); strlcpy(trk.fail_why, "read error", sizeof(trk.fail_why)); return NULL; }
     *out_size = sz;
@@ -618,8 +626,24 @@ static esp_err_t tracker_start(void)
     // 32 KB stack: libxmp's loaders overrun the old 8 KB (FreeRTOS
     // stack-overflow / TCB-clobber crashes). Measured peak ~18.7 KB on a plain
     // 4ch MOD (load is the deep path); 32 KB leaves headroom for heavier IT/XM.
-    xTaskCreate(render_task, "trk_render", 32768, NULL, 5, NULL);   // unpinned
+    // BUT task stacks are INTERNAL RAM, which has tightened (bc_srv grew for
+    // shine) — and an unchecked create failure left the machine WEDGED in
+    // LOADING with nothing consuming load_req (bench-caught 2026-07-17, serial
+    // showed "starting Tracker" then silence). Descend fail-soft and say so.
+    static const uint32_t trk_stacks[] = { 32768, 26624, 22528 };
+    bool task_ok = false;
+    for (int i = 0; i < 3 && !task_ok; i++) {
+        task_ok = xTaskCreate(render_task, "trk_render", trk_stacks[i], NULL, 5, NULL) == pdPASS;
+        if (task_ok && i > 0)
+            ESP_LOGW(TAG, "render task on a TRIMMED %u B stack (internal RAM tight) — heavy IT/XM may be risky", trk_stacks[i]);
+    }
     audio_status_set_voices("tracker", "");
+    if (!task_ok) {
+        ESP_LOGE(TAG, "render task create FAILED at every stack size — no internal RAM");
+        strlcpy(trk.fail_why, "no RAM for render", sizeof(trk.fail_why));
+        trk.state = TRK_FAIL;
+        return ESP_OK;                 // machine switches in; screen says WHY
+    }
 
     if (trk.file[0]) tracker_request_load(trk.file);   // restore last module
     return ESP_OK;
