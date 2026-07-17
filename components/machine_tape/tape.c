@@ -405,26 +405,40 @@ static void save_task(void *pv)
     uint32_t a = tp.in_pt, b = tp.out_pt;
     char path[48];
     snprintf(path, sizeof(path), "/sdcard/usr/%s.WAV", tp.save_id);
+    // chunk on the HEAP, not the task stack (first hw run wedged in
+    // "saving...": 2 KB stack buffer + FatFS frames overflowed 4 KB)
+    int16_t *chunk = heap_caps_malloc(512 * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
     FILE *f = NULL;
     sd_lock_take();
     f = fopen(path, "wb");
     if (f) sampwav_start(f);
     sd_lock_give();
-    if (!f) { tp.save_id[0] = 0; tp.save_busy = false; vTaskDelete(NULL); return; }
+    if (!f || !chunk) {
+        if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
+        if (chunk) heap_caps_free(chunk);
+        ESP_LOGE(TAG, "save: %s failed", f ? "alloc" : "fopen");
+        tp.save_id[0] = 0; tp.save_busy = false;
+        vTaskDelete(NULL); return;
+    }
 
-    int16_t chunk[512 * 2];
     for (uint32_t i = a; i < b; ) {
         int n = 0;
         while (n < 512 && i < b) { int16_t v = tp_rd(i); chunk[n*2] = v; chunk[n*2+1] = v; n++; i++; }
         sd_lock_take();
         fwrite(chunk, sizeof(int16_t) * 2, n, f);
         sd_lock_give();
-        vTaskDelay(1);
+        if ((i & 0xFFFF) < 1024) vTaskDelay(1);   // yield ~every 64k frames, not every chunk
     }
     sd_lock_take();
     sampwav_finish(f);
     fclose(f);
+    // minimal sidecar: /files lists ONLY ids with a .JSN ("complete sample")
+    char jp[48];
+    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", tp.save_id);
+    FILE *jf = fopen(jp, "w");
+    if (jf) { fputs("{\"src\":\"tape\"}", jf); fclose(jf); }
     sd_lock_give();
+    heap_caps_free(chunk);
     ESP_LOGI(TAG, "saved crop -> %s", tp.save_id);
     tp.save_busy = false;
     vTaskDelete(NULL);
@@ -439,7 +453,7 @@ int tape_save_crop(void)
     if (idx > 9999) idx = 9999;                // 8.3: id stays exactly 8 chars
     snprintf(tp.save_id, sizeof(tp.save_id), "TAP_%04d", idx % 10000);
     tp.save_busy = true;
-    if (xTaskCreate(save_task, "tape_sv", 4096, NULL, 4, NULL) != pdPASS) {
+    if (xTaskCreate(save_task, "tape_sv", 8192, NULL, 4, NULL) != pdPASS) {
         tp.save_busy = false; tp.save_id[0] = 0; return -2;
     }
     return 0;
