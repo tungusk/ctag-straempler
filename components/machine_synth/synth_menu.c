@@ -187,19 +187,28 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
 }
 
 // ---- Setup (shared framework: press cycles TOGGLEs, [ ] edits RANGEs) -------
+// Instrument params live here; all five effects moved to a dedicated FX
+// sub-page (the "FX" action row) so this list stays readable.
 static const setup_item_t sy_setup_items[] = {
     {"Engine",    ST_TOGGLE}, {"Base Note", ST_RANGE},  {"Quantize",  ST_TOGGLE},
     {"Shape",     ST_RANGE},  {"FM Ratio",  ST_RANGE},  {"FM Index",  ST_RANGE},
     {"Attack",    ST_RANGE},  {"Decay",     ST_RANGE},  {"Sustain",   ST_RANGE},
     {"Release",   ST_RANGE},  {"Env>Cut",   ST_RANGE},  {"Glide",     ST_RANGE},
     {"LFO Rate",  ST_RANGE},  {"LFO Depth", ST_RANGE},  {"LFO Dest",  ST_TOGGLE},
-    {"Level",     ST_RANGE},  {"Reverb",    ST_TOGGLE}, {"Rev Mix",   ST_RANGE},
-    {"Load Wave", ST_ACTION}, {"CV Matrix", ST_ACTION},
+    {"Level",     ST_RANGE},
+    {"Load Wave", ST_ACTION}, {"CV Matrix", ST_ACTION}, {"FX",        ST_ACTION},
     {"Save Patch", ST_ACTION}, {"Load Patch", ST_ACTION},
 };
 
 // last saved patch id, shown inline on the Save Patch row as confirmation
 static char s_last_saved[12];
+
+// count of engaged effects, for the "FX" row affordance
+static int sy_fx_count(void)
+{
+    return (sy.rv.mode != RV_OFF) + (sy.dly_on ? 1 : 0) + (sy.od_on ? 1 : 0)
+         + (sy.flg_on ? 1 : 0) + (sy.trem_on ? 1 : 0);
+}
 
 static void setup_val(int i, char *v, size_t n)
 {
@@ -221,13 +230,12 @@ static void setup_val(int i, char *v, size_t n)
         case 13: snprintf(v, n, "%.0f%%", sy.lfo_depth * 100.0f); break;
         case 14: snprintf(v, n, "%s", sy.lfo_dest == LFO_CUT ? "cutoff" : sy.lfo_dest == LFO_PITCH ? "pitch" : "off"); break;
         case 15: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
-        case 16: snprintf(v, n, "%s", reverb_mode_name(sy.rv.mode)); break;
-        case 17: snprintf(v, n, "%.0f%%", sy.rv.wet * 100.0f); break;
-        case 18: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
-        case 19: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx_src[d] >= 0) on++;
+        case 16: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
+        case 17: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx_src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
-        case 20: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
-        case 21: snprintf(v, n, "load >"); break;
+        case 18: { int on = sy_fx_count(); if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "off >"); break; }
+        case 19: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
+        case 20: snprintf(v, n, "load >"); break;
     }
 }
 
@@ -251,40 +259,26 @@ static void sy_adj(int i, int dir)
         case 13: sy.lfo_depth += d * 0.05f; if (sy.lfo_depth < 0) sy.lfo_depth = 0; if (sy.lfo_depth > 1) sy.lfo_depth = 1; break;
         case 14: sy.lfo_dest += dir; if (sy.lfo_dest < 0) sy.lfo_dest = 2; if (sy.lfo_dest > 2) sy.lfo_dest = 0; break;
         case 15: sy.level += d * 0.05f; if (sy.level < 0) sy.level = 0; if (sy.level > 1) sy.level = 1; break;
-        case 16: {   // reverb mode (lazy-init the tank on first non-off)
-            int m = sy.rv.mode + dir;
-            if (m < 0) m = RV_N_MODES - 1;
-            if (m >= RV_N_MODES) m = RV_OFF;
-            if (m != RV_OFF && !sy.rv.slab && reverb_init(&sy.rv) != ESP_OK) m = RV_OFF;
-            reverb_set_mode(&sy.rv, m);
-            break;
-        }
-        case 17: {
-            float w = sy.rv.wet + d * 0.05f;
-            if (w < 0) w = 0;
-            if (w > 1) w = 1;
-            reverb_set_mix(&sy.rv, w);
-            break;
-        }
     }
 }
 
 static int sy_setup_action(int i)
 {
-    if (i == 18) return M_SYNTH_LOAD;      // Load Wave -> browser
-    if (i == 19) return M_SYNTH_MATRIX;    // CV Matrix -> matrix page
-    if (i == 20) {                         // Save Patch: mint + write, stay on Setup
+    if (i == 16) return M_SYNTH_LOAD;      // Load Wave -> browser
+    if (i == 17) return M_SYNTH_MATRIX;    // CV Matrix -> matrix page
+    if (i == 18) return M_SYNTH_FX;        // FX -> FX sub-page
+    if (i == 19) {                         // Save Patch: mint + write, stay on Setup
         if (synth_patch_save(s_last_saved, sizeof(s_last_saved)) != 0)
             snprintf(s_last_saved, sizeof(s_last_saved), "err");
         return 0;                          // framework redraws -> row shows the id
     }
-    if (i == 21) return M_SYNTH_PATCH;     // Load Patch -> patch browser
+    if (i == 20) return M_SYNTH_PATCH;     // Load Patch -> patch browser
     return 0;
 }
 
 static setup_menu_t sy_setup = {
     .items = sy_setup_items,
-    .n = 22,
+    .n = 21,
     .title = "Synth Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_SYNTH_LIVE,
@@ -295,6 +289,121 @@ static int synth_setup_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
     return setup_menu_event(&sy_setup, event);
+}
+
+// ---- FX sub-page: all five effects, reached from the Setup "FX" row --------
+static const setup_item_t sy_fx_items[] = {
+    {"Reverb",    ST_TOGGLE}, {"Rev Mix",   ST_RANGE},
+    {"Delay",     ST_TOGGLE}, {"Dly Time",  ST_RANGE},  {"Dly Fdbk",  ST_RANGE},
+    {"Dly Mix",   ST_RANGE},  {"Dly Tone",  ST_RANGE},  {"Dly Ping",  ST_TOGGLE},
+    {"Overdrive", ST_TOGGLE}, {"OD Drive",  ST_RANGE},  {"OD Tone",   ST_RANGE},
+    {"OD Bias",   ST_RANGE},  {"OD Level",  ST_RANGE},
+    {"Flanger",   ST_TOGGLE}, {"Flg Rate",  ST_RANGE},  {"Flg Depth", ST_RANGE},
+    {"Flg Fdbk",  ST_RANGE},  {"Flg Mix",   ST_RANGE},
+    {"Tremolo",   ST_TOGGLE}, {"Trm Rate",  ST_RANGE},  {"Trm Depth", ST_RANGE},
+    {"Trm Shape", ST_TOGGLE}, {"Trm Stereo", ST_TOGGLE},
+};
+
+static void sy_fx_val(int i, char *v, size_t n)
+{
+    switch (i) {
+        case 0: snprintf(v, n, "%s", reverb_mode_name(sy.rv.mode)); break;
+        case 1: snprintf(v, n, "%.0f%%", sy.rv.wet * 100.0f); break;
+        case 2: snprintf(v, n, "%s", sy.dly_on ? "ON" : "OFF"); break;
+        case 3: snprintf(v, n, "%d ms", (int)(fxdelay_time_ms(&sy.dly) + 0.5f)); break;
+        case 4: snprintf(v, n, "%.0f%%", sy.dly.fb * 100.0f); break;
+        case 5: snprintf(v, n, "%.0f%%", sy.dly.wet * 100.0f); break;
+        case 6: snprintf(v, n, "%.0f%%", sy.dly.damp * 100.0f); break;
+        case 7: snprintf(v, n, "%s", sy.dly.pingpong ? "Ping-Pong" : "Stereo"); break;
+        case 8: snprintf(v, n, "%s", sy.od_on ? "ON" : "OFF"); break;
+        case 9: snprintf(v, n, "%.0f%%", sy.od.drive * 100.0f); break;
+        case 10: snprintf(v, n, "%.0f%%", sy.od.tone * 100.0f); break;
+        case 11: snprintf(v, n, "%+.0f%%", sy.od.bias * 100.0f); break;
+        case 12: snprintf(v, n, "%.0f%%", sy.od.level * 100.0f); break;
+        case 13: snprintf(v, n, "%s", sy.flg_on ? "ON" : "OFF"); break;
+        case 14: snprintf(v, n, "%.2f Hz", sy.flg.rate); break;
+        case 15: snprintf(v, n, "%.0f%%", sy.flg.depth * 100.0f); break;
+        case 16: snprintf(v, n, "%+.0f%%", sy.flg.fb * 100.0f); break;
+        case 17: snprintf(v, n, "%.0f%%", sy.flg.wet * 100.0f); break;
+        case 18: snprintf(v, n, "%s", sy.trem_on ? "ON" : "OFF"); break;
+        case 19: snprintf(v, n, "%.2f Hz", sy.trem.rate); break;
+        case 20: snprintf(v, n, "%.0f%%", sy.trem.depth * 100.0f); break;
+        case 21: snprintf(v, n, "%s", sy.trem.shape == TREM_SINE ? "Sine" : sy.trem.shape == TREM_TRI ? "Tri" : "Sqr"); break;
+        case 22: snprintf(v, n, "%s", sy.trem.stereo ? "ON" : "OFF"); break;
+    }
+}
+
+static void sy_fx_adj(int i, int dir)
+{
+    float d = (float)dir;
+    switch (i) {
+        case 0: {   // reverb mode (lazy-init the tank on first non-off)
+            int m = sy.rv.mode + dir;
+            if (m < 0) m = RV_N_MODES - 1;
+            if (m >= RV_N_MODES) m = RV_OFF;
+            if (m != RV_OFF && !sy.rv.slab && reverb_init(&sy.rv) != ESP_OK) m = RV_OFF;
+            reverb_set_mode(&sy.rv, m);
+            break;
+        }
+        case 1: {
+            float w = sy.rv.wet + d * 0.05f;
+            if (w < 0) w = 0;
+            if (w > 1) w = 1;
+            reverb_set_mix(&sy.rv, w);
+            break;
+        }
+        case 2: { bool on = !sy.dly_on;               // Delay on/off (lazy slab)
+                   if (on && !sy.dly.bufL && fxdelay_init(&sy.dly) != ESP_OK) on = false;
+                   if (on && sy.dly.wet < 0.01f) fxdelay_set_mix(&sy.dly, 0.30f);  // audible default
+                   sy.dly_on = on;
+                   if (!on) fxdelay_clear(&sy.dly); } break;   // drop the tail
+        case 3: if (sy.dly.bufL) fxdelay_set_time_ms(&sy.dly, fxdelay_time_ms(&sy.dly) + d * 10.0f); break;
+        case 4: if (sy.dly.bufL) fxdelay_set_feedback(&sy.dly, sy.dly.fb + d * 0.05f); break;
+        case 5: if (sy.dly.bufL) fxdelay_set_mix(&sy.dly, sy.dly.wet + d * 0.05f); break;
+        case 6: if (sy.dly.bufL) fxdelay_set_damp(&sy.dly, sy.dly.damp + d * 0.05f); break;
+        case 7: if (sy.dly.bufL) fxdelay_set_pingpong(&sy.dly, !sy.dly.pingpong); break;
+        case 8: { bool on = !sy.od_on;                // Overdrive on/off (no slab)
+                   if (on) {
+                       if (sy.od.level < 0.01f) { sy.od.drive = 0.4f; sy.od.tone = 0.5f; sy.od.level = 0.8f; }
+                       overdrive_reset(&sy.od);
+                   }
+                   sy.od_on = on; } break;
+        case 9: sy.od.drive += d * 0.05f; if (sy.od.drive < 0) sy.od.drive = 0; if (sy.od.drive > 1) sy.od.drive = 1; break;
+        case 10: sy.od.tone  += d * 0.05f; if (sy.od.tone < 0) sy.od.tone = 0; if (sy.od.tone > 1) sy.od.tone = 1; break;
+        case 11: sy.od.bias  += d * 0.05f; if (sy.od.bias < -1) sy.od.bias = -1; if (sy.od.bias > 1) sy.od.bias = 1; break;
+        case 12: sy.od.level += d * 0.05f; if (sy.od.level < 0) sy.od.level = 0; if (sy.od.level > 1) sy.od.level = 1; break;
+        case 13: { bool on = !sy.flg_on;               // Flanger on/off (lazy slab)
+                   if (on && !sy.flg.bufL && flanger_init(&sy.flg) != ESP_OK) on = false;
+                   if (on && sy.flg.wet < 0.01f) sy.flg.wet = 0.5f;   // audible default
+                   sy.flg_on = on;
+                   if (!on) flanger_clear(&sy.flg); } break;   // drop the tail
+        case 14: if (sy.flg.bufL) { sy.flg.rate  += d * 0.05f; if (sy.flg.rate < 0.01f) sy.flg.rate = 0.01f; if (sy.flg.rate > 10) sy.flg.rate = 10; } break;
+        case 15: if (sy.flg.bufL) { sy.flg.depth += d * 0.05f; if (sy.flg.depth < 0) sy.flg.depth = 0; if (sy.flg.depth > 1) sy.flg.depth = 1; } break;
+        case 16: if (sy.flg.bufL) { sy.flg.fb    += d * 0.05f; if (sy.flg.fb < -0.95f) sy.flg.fb = -0.95f; if (sy.flg.fb > 0.95f) sy.flg.fb = 0.95f; } break;
+        case 17: if (sy.flg.bufL) { sy.flg.wet   += d * 0.05f; if (sy.flg.wet < 0) sy.flg.wet = 0; if (sy.flg.wet > 1) sy.flg.wet = 1; } break;
+        case 18: { bool on = !sy.trem_on;              // Tremolo on/off (no slab)
+                   if (on && sy.trem.depth < 0.01f) { sy.trem.depth = 0.5f; sy.trem.rate = 5.0f; }
+                   sy.trem_on = on; } break;
+        case 19: sy.trem.rate  += d * 0.25f; if (sy.trem.rate < 0.05f) sy.trem.rate = 0.05f; if (sy.trem.rate > 20) sy.trem.rate = 20; break;
+        case 20: sy.trem.depth += d * 0.05f; if (sy.trem.depth < 0) sy.trem.depth = 0; if (sy.trem.depth > 1) sy.trem.depth = 1; break;
+        case 21: sy.trem.shape = (sy.trem.shape + 1) % 3; break;
+        case 22: sy.trem.stereo = !sy.trem.stereo; break;
+    }
+}
+
+static setup_menu_t sy_fx = {
+    .items = sy_fx_items,
+    .n = 23,
+    .title = "Synth FX",
+    .aff_label = "Setup", .aff_target = M_SYNTH_SETUP,
+    .live_target = M_SYNTH_LIVE,
+    .render = sy_fx_val, .adjust = sy_fx_adj, .action = NULL,
+};
+
+static int synth_fx_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return setup_menu_event(&sy_fx, event);
 }
 
 // ---- Load Wave: the shared sample browser -> wavetable ----------------------
@@ -463,6 +572,7 @@ static void synth_register_pages(void *menusys)
     menusys_new_item(_ms, M_SYNTH_LOAD);   menusys_item_set_default_cb(_ms, M_SYNTH_LOAD, synth_load_handler);
     menusys_new_item(_ms, M_SYNTH_MATRIX); menusys_item_set_default_cb(_ms, M_SYNTH_MATRIX, synth_matrix_handler);
     menusys_new_item(_ms, M_SYNTH_PATCH);  menusys_item_set_default_cb(_ms, M_SYNTH_PATCH, synth_patch_handler);
+    menusys_new_item(_ms, M_SYNTH_FX);     menusys_item_set_default_cb(_ms, M_SYNTH_FX, synth_fx_handler);
 }
 
 static int synth_main_event(int event, void *ev_data)

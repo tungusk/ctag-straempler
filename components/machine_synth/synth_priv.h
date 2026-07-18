@@ -4,6 +4,10 @@
 #include <stddef.h>
 #include "svf.h"
 #include "reverb.h"
+#include "fxdelay.h"
+#include "overdrive.h"
+#include "flanger.h"
+#include "tremolo.h"
 
 // Synth voice — a no-sample sound source. v1 is a monophonic subtractive voice:
 // polyBLEP saw<->square oscillator, 1V/oct pitch on CV1, TR1 gate -> linear ADSR
@@ -47,6 +51,14 @@ typedef struct {
     char     wave_name[24];      // loaded wave id (for the preset + UI)
 
     reverb_t rv;                 // output reverb (lazy PSRAM slab; RV_OFF = bypass)
+    fxdelay_t dly;               // output delay (lazy PSRAM slab; runs delay->reverb)
+    bool  dly_on;                // delay engaged (slab stays allocated once inited)
+    overdrive_t od;              // output overdrive (no slab; part of zero-init sy)
+    bool  od_on;                 // overdrive engaged
+    flanger_t flg;               // output flanger (lazy PSRAM slab; like dly)
+    bool  flg_on;                // flanger engaged (slab stays allocated once inited)
+    tremolo_t trem;              // output tremolo (no slab; part of zero-init sy)
+    bool  trem_on;               // tremolo engaged
 
     // params (Setup + knobs)
     int   engine;                // ENG_VA / ENG_FM

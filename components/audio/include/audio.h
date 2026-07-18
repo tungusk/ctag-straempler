@@ -54,6 +54,7 @@ bool audio_bounce_active(void);
 void audio_broadcast_init(void);       // start the server task (post-WiFi only)
 bool audio_broadcast_active(void);     // a client is currently connected
 const char *audio_broadcast_diag(void); // last MP3-path error ("ok" if none)
+uint32_t audio_proc_us(void);           // smoothed machine process() cost, us (1450 = 100%)
 uint32_t audio_broadcast_enc_us(void);  // smoothed shine cost per 26.1ms pass
 
 // soft MIDI (web bridge: musical typing / WebMIDI). Machines with pitch read

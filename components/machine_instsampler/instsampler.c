@@ -124,6 +124,8 @@ static void keys_stop(void)
     if (inst.zone[0].buf) { heap_caps_free(inst.zone[0].buf); inst.zone[0].buf = NULL; }
     inst.zone[0].frames = 0;
     reverb_free(&inst.rv);
+    fxdelay_free(&inst.dly);
+    flanger_free(&inst.flg);
 }
 
 static void keys_process(int32_t out[MACHINE_BLOCK],
@@ -230,6 +232,9 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
 
     // glide: slew the sounding note toward the target
     if (v->cur_note <= 0.0f) v->cur_note = note;
+    // freeze pitch while ungated: a released note's tail rings at its own pitch,
+    // not the CV/base-note fallback (else every MIDI note-off blips to C3)
+    if (!g) note = v->cur_note;
     if (inst.glide > 0.0005f) {
         float blockdur = (float)(MACHINE_BLOCK / 2) / IS_RATE;
         float coef = 1.0f - expf(-blockdur / inst.glide);
@@ -292,6 +297,15 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
         out[f * 2 + 1] = s;
     }
 
+    // FX chain: overdrive -> flanger -> tremolo -> delay -> reverb
+    if (inst.od_on)
+        overdrive_block_i32(&inst.od, out, frames);
+    if (inst.flg_on && inst.flg.bufL)
+        flanger_block_i32(&inst.flg, out, frames);
+    if (inst.trem_on)
+        tremolo_block_i32(&inst.trem, out, frames);
+    if (inst.dly_on && inst.dly.bufL)
+        fxdelay_block_i32(&inst.dly, out, frames);
     if (inst.rv.mode != RV_OFF && inst.rv.slab)
         reverb_block_i32(&inst.rv, out, frames);
 }
@@ -314,6 +328,27 @@ static cJSON *keys_preset_save(void)
     cJSON_AddNumberToObject(o, "lvl", inst.level);
     cJSON_AddNumberToObject(o, "rv", inst.rv.mode);
     cJSON_AddNumberToObject(o, "rvmx", (int)(inst.rv.wet * 100 + 0.5f));
+    cJSON_AddBoolToObject(o, "dly", inst.dly_on);
+    cJSON_AddNumberToObject(o, "dlyt", (int)(fxdelay_time_ms(&inst.dly) + 0.5f));
+    cJSON_AddNumberToObject(o, "dlyfb", (int)(inst.dly.fb * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "dlymx", (int)(inst.dly.wet * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "dlytn", (int)(inst.dly.damp * 100 + 0.5f));
+    cJSON_AddBoolToObject(o, "dlypp", inst.dly.pingpong);
+    cJSON_AddBoolToObject(o, "od", inst.od_on);
+    cJSON_AddNumberToObject(o, "oddr", (int)(inst.od.drive * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "odtn", (int)(inst.od.tone * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "odbs", (int)(inst.od.bias * 100 + (inst.od.bias < 0 ? -0.5f : 0.5f)));
+    cJSON_AddNumberToObject(o, "odlv", (int)(inst.od.level * 100 + 0.5f));
+    cJSON_AddBoolToObject(o, "flg", inst.flg_on);
+    cJSON_AddNumberToObject(o, "flgrt", (int)(inst.flg.rate * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "flgdp", (int)(inst.flg.depth * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "flgfb", (int)(inst.flg.fb * 100 + (inst.flg.fb < 0 ? -0.5f : 0.5f)));
+    cJSON_AddNumberToObject(o, "flgmx", (int)(inst.flg.wet * 100 + 0.5f));
+    cJSON_AddBoolToObject(o, "trem", inst.trem_on);
+    cJSON_AddNumberToObject(o, "trmrt", (int)(inst.trem.rate * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "trmdp", (int)(inst.trem.depth * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "trmsh", inst.trem.shape);
+    cJSON_AddBoolToObject(o, "trmst", inst.trem.stereo);
     cJSON_AddStringToObject(o, "smp", z->sample);
     cJSON_AddNumberToObject(o, "root", z->root);
     cJSON_AddNumberToObject(o, "lm", z->loop_mode);
@@ -351,6 +386,39 @@ static void keys_preset_load(const cJSON *node)
         reverb_set_mode(&inst.rv, m);
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx"))  && cJSON_IsNumber(j)) reverb_set_mix(&inst.rv, (float)j->valueint / 100.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dly"))   && cJSON_IsBool(j)) {
+        bool on = cJSON_IsTrue(j);
+        if (on && !inst.dly.bufL && fxdelay_init(&inst.dly) != ESP_OK) on = false;
+        inst.dly_on = on;
+    }
+    if (inst.dly.bufL) {   // params apply once the slab exists (order-independent)
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyt"))  && cJSON_IsNumber(j)) fxdelay_set_time_ms(&inst.dly, (float)j->valueint);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyfb")) && cJSON_IsNumber(j)) fxdelay_set_feedback(&inst.dly, (float)j->valueint / 100.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlymx")) && cJSON_IsNumber(j)) fxdelay_set_mix(&inst.dly, (float)j->valueint / 100.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlytn")) && cJSON_IsNumber(j)) fxdelay_set_damp(&inst.dly, (float)j->valueint / 100.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlypp")) && cJSON_IsBool(j))   fxdelay_set_pingpong(&inst.dly, cJSON_IsTrue(j));
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "od"))    && cJSON_IsBool(j)) inst.od_on = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "oddr"))  && cJSON_IsNumber(j)) inst.od.drive = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odtn"))  && cJSON_IsNumber(j)) inst.od.tone = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odbs"))  && cJSON_IsNumber(j)) inst.od.bias = clampf((float)j->valueint / 100.0f, -1.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odlv"))  && cJSON_IsNumber(j)) inst.od.level = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flg"))   && cJSON_IsBool(j)) {
+        bool on = cJSON_IsTrue(j);
+        if (on && !inst.flg.bufL && flanger_init(&inst.flg) != ESP_OK) on = false;
+        inst.flg_on = on;
+    }
+    if (inst.flg.bufL) {   // params apply once the slab exists (order-independent)
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgrt")) && cJSON_IsNumber(j)) inst.flg.rate = clampf((float)j->valueint / 100.0f, 0.01f, 10.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgdp")) && cJSON_IsNumber(j)) inst.flg.depth = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgfb")) && cJSON_IsNumber(j)) inst.flg.fb = clampf((float)j->valueint / 100.0f, -0.95f, 0.95f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgmx")) && cJSON_IsNumber(j)) inst.flg.wet = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trem"))  && cJSON_IsBool(j)) inst.trem_on = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmrt")) && cJSON_IsNumber(j)) inst.trem.rate = clampf((float)j->valueint / 100.0f, 0.05f, 20.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmdp")) && cJSON_IsNumber(j)) inst.trem.depth = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmsh")) && cJSON_IsNumber(j)) { int s = j->valueint; inst.trem.shape = (s < 0 || s >= TREM_NSHAPE) ? TREM_SINE : s; }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmst")) && cJSON_IsBool(j)) inst.trem.stereo = cJSON_IsTrue(j);
     // load the sample FIRST (it resets loop points), then restore them
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "smp"))   && cJSON_IsString(j) && j->valuestring[0]) keys_load_zone(j->valuestring);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "root"))  && cJSON_IsNumber(j)) z->root = (uint8_t)j->valueint;

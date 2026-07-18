@@ -4,6 +4,10 @@
 #include <stddef.h>
 #include "svf.h"
 #include "reverb.h"
+#include "fxdelay.h"
+#include "overdrive.h"
+#include "flanger.h"
+#include "tremolo.h"
 
 // Keys — tonal instrument sampler (see machine_instsampler.h). v1: one mono
 // PSRAM-resident sample, varispeed-pitched across the keyboard from CV1
@@ -65,6 +69,14 @@ typedef struct {
     float level;              // master 0..1
     float start_frac;         // K5 note-on start offset 0..1
     reverb_t rv;              // output reverb (lazy PSRAM slab; RV_OFF = bypass)
+    fxdelay_t dly;            // output delay (lazy PSRAM slab; runs delay->reverb)
+    bool  dly_on;             // delay engaged (slab stays allocated once inited)
+    overdrive_t od;           // output overdrive (no slab; zero-init)
+    bool  od_on;              // overdrive engaged
+    flanger_t flg;            // output flanger (lazy PSRAM slab; mirrors dly)
+    bool  flg_on;             // flanger engaged (slab stays allocated once inited)
+    tremolo_t trem;           // output tremolo (no slab; zero-init)
+    bool  trem_on;            // tremolo engaged
 
     // CV matrix (identical mechanics to Synth)
     int8_t mtx_src[ISM_N];    // -1 off / 0..7 = CV1..8

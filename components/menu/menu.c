@@ -633,7 +633,19 @@ static void autosave_now(void) {
     cJSON *node = m->preset_save();
     if (!node) return;
     cJSON *root = readJSONFileAsCJSON("/sdcard/AUTOSAVE.JSN");
-    if (!root) root = cJSON_CreateObject();
+    // A NULL read on an EXISTING non-empty file means the read failed (e.g. a
+    // DMA-capable alloc failed under memory pressure) — NOT that the file is
+    // absent. Starting a fresh object here would drop every OTHER machine's
+    // saved state, so skip this save instead of clobbering them. Only mint a new
+    // container when the file genuinely isn't there yet.
+    if (!root) {
+        if (getFileSize("/sdcard/AUTOSAVE.JSN") > 2) {
+            ESP_LOGW("AUTOSAVE", "read failed on existing file — skip (won't clobber)");
+            cJSON_Delete(node);
+            return;
+        }
+        root = cJSON_CreateObject();
+    }
     cJSON_DeleteItemFromObjectCaseSensitive(root, m->name);   // replace this machine's entry
     cJSON_AddItemToObject(root, m->name, node);               // root now owns node
     char *out = cJSON_PrintUnformatted(root);

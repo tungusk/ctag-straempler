@@ -131,6 +131,7 @@ static esp_err_t drum_start(void)
 static void drum_stop(void)
 {
     reverb_free(&dr.rv);
+    fxdelay_free(&dr.dly);
     for (int i = 0; i < DR_PADS; i++)
         for (int l = 0; l < DR_LAYERS; l++) {
             free(dr.pad[i].ly[l].buf);
@@ -443,9 +444,10 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
     // decaying, and returning early would chop the tail off.
     bool flt_live = dr.flt_box && dr.flt_on;
     bool rv_live = (dr.rv.mode != RV_OFF) && dr.rv.slab;
-    // the filter AND the reverb must keep running after the last pad dies:
+    bool dly_live = dr.dly_on && dr.dly.bufL;
+    // the filter, reverb AND delay must keep running after the last pad dies:
     // their rings/tails are still decaying
-    if (!any && !flt_live && !rv_live) return;
+    if (!any && !flt_live && !rv_live && !dly_live) return;
 
     // a NaN in an SVF is PERMANENT silence — it would read as dead hardware
     if (!(fabsf(dr.flt_l.lp) < 1e9f) || !(fabsf(dr.flt_r.lp) < 1e9f)) {
@@ -501,6 +503,9 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         }
         reverb_send_i32(&dr.rv, out, send, frames);
     }
+    // master delay on the full mix (post reverb) — insert, in place
+    if (dly_live)
+        fxdelay_block_i32(&dr.dly, out, frames);
 }
 
 // ---- sample I/O (UI task) ---------------------------------------------------
@@ -594,6 +599,12 @@ static cJSON *drum_preset_save(void)
     cJSON_AddNumberToObject(o, "rvmx", (int)(dr.rv.wet * 100 + 0.5f));   // RETURN level
     cJSON_AddBoolToObject(o, "rvpost", dr.rv_post);   // send tap pre/post filter
     cJSON_AddNumberToObject(o, "rvus", dr.rv.cost_us); // info only (cost meter)
+    cJSON_AddBoolToObject(o, "dly", dr.dly_on);       // master delay
+    cJSON_AddNumberToObject(o, "dlyt", (int)(fxdelay_time_ms(&dr.dly) + 0.5f));
+    cJSON_AddNumberToObject(o, "dlyfb", (int)(dr.dly.fb * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "dlymx", (int)(dr.dly.wet * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "dlytn", (int)(dr.dly.damp * 100 + 0.5f));
+    cJSON_AddBoolToObject(o, "dlypp", dr.dly.pingpong);
     cJSON_AddBoolToObject(o, "flt", dr.flt_box);      // master filter box exists
     cJSON_AddBoolToObject(o, "flton", dr.flt_on);     // ...and is engaged
     cJSON_AddNumberToObject(o, "fcv", dr.flt_cv);     // sweep + resonance knob
@@ -641,6 +652,18 @@ static void drum_preset_load(const cJSON *node)
         // lazy slab: only a non-OFF mode costs PSRAM; a failed alloc fails soft
         if (m != RV_OFF && !dr.rv.slab && reverb_init(&dr.rv) != ESP_OK) m = RV_OFF;
         reverb_set_mode(&dr.rv, m);
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dly")) && cJSON_IsBool(j)) {
+        bool on = cJSON_IsTrue(j);
+        if (on && !dr.dly.bufL && fxdelay_init(&dr.dly) != ESP_OK) on = false;
+        dr.dly_on = on;
+    }
+    if (dr.dly.bufL) {   // params apply once the slab exists (order-independent)
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyt"))  && cJSON_IsNumber(j)) fxdelay_set_time_ms(&dr.dly, (float)j->valueint);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyfb")) && cJSON_IsNumber(j)) fxdelay_set_feedback(&dr.dly, (float)j->valueint / 100.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlymx")) && cJSON_IsNumber(j)) fxdelay_set_mix(&dr.dly, (float)j->valueint / 100.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlytn")) && cJSON_IsNumber(j)) fxdelay_set_damp(&dr.dly, (float)j->valueint / 100.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlypp")) && cJSON_IsBool(j))   fxdelay_set_pingpong(&dr.dly, cJSON_IsTrue(j));
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx")) && cJSON_IsNumber(j))
         reverb_set_mix(&dr.rv, (float)j->valueint / 100.0f);

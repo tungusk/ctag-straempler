@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include "svf.h"
 #include "reverb.h"
+#include "fxdelay.h"
 
 // Drum sampler — four one-shot pads, each a mono PSRAM buffer, triggered from the
 // CV inputs. (A pad can carry a second, choking layer, which is what the old
@@ -194,6 +195,9 @@ typedef struct {
                                   // in the filter's shadow, channel-strip
                                   // style). Flip while playing; the tank state
                                   // is continuous either way.
+    fxdelay_t dly;                // master delay (insert on the final mix, post
+                                  // reverb; lazy PSRAM slab). Free-time (ms).
+    bool  dly_on;                 // delay engaged (slab stays allocated once inited)
 
     // knob take-over state for the PADS (was function-static in drum_process,
     // where it survived stop()/start() and let a machine re-entry inherit the

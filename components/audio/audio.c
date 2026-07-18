@@ -189,10 +189,12 @@ static volatile bool s_ice_run;            // icecast push enabled (defined with
 static volatile int  s_bc_src = 0;         // 0 = output bus, 1 = line INPUT ("/in" URLs)
 static const char *s_bc_err = "ok";        // last MP3-path failure, for /bcast/state
 static volatile uint32_t s_bc_enc_us = 0;  // smoothed encode cost per 26.1ms pass
+static volatile uint32_t s_proc_us = 0;    // smoothed machine process() cost (1450us = 100%)
 
 bool audio_broadcast_active(void) { return s_bc_on; }
 const char *audio_broadcast_diag(void) { return s_bc_err; }
 uint32_t audio_broadcast_enc_us(void) { return s_bc_enc_us; }
+uint32_t audio_proc_us(void) { return s_proc_us; }
 
 static void broadcast_push(const int32_t *out, int frames)
 {
@@ -440,9 +442,12 @@ static void audio_task(void *pvParams)
         beatlisten_push(in);
 
         const machine_t *m = machine_active();
-        if (m)
-            m->process(out, in, &io);
-        else
+        if (m) {
+            int64_t pt0 = esp_timer_get_time();
+            m->process(out, in, &io);                    // includes the machine's FX chain
+            uint32_t pus = (uint32_t)(esp_timer_get_time() - pt0);
+            s_proc_us = s_proc_us ? (s_proc_us * 7 + pus) / 8 : pus;   // EMA; 1450us = 100%
+        } else
             memset(out, 0, sizeof(out));
 
         // BOUNCE tap: capture the machine's output HERE (before clock-out
