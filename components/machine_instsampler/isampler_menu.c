@@ -17,6 +17,7 @@
 #include "machine.h"
 #include "sample_browser.h"
 #include "sample_ram.h"
+#include "audio.h"                 // audio_proc_us() for the FX cost-guard
 #include "instsampler_priv.h"
 
 static const color_t GATE_ON = {40, 200, 90};    // note stays green (gate flips too fast to read)
@@ -526,9 +527,11 @@ static void ks_fx_val(int i, char *v, size_t n)
     v[0] = 0;
     if (i < 0 || i >= s_kfx_n) return;
     int p = s_kfx_row[i].param;
-    if (p < 0) {                                   // effect-select row
-        if (s_cur_slot == 2) snprintf(v, n, "%s", reverb_mode_name(inst.rv.mode));
-        else snprintf(v, n, "%s", gen_desc[inst.fx_slot[s_cur_slot]].name);
+    if (p < 0) {                                   // effect-select row: name + live CPU
+        const char *nm = (s_cur_slot == 2) ? reverb_mode_name(inst.rv.mode)
+                                           : gen_desc[inst.fx_slot[s_cur_slot]].name;
+        int pct = (int)((audio_proc_us() * 100 + 725) / 1450);   // 1450us = 100%
+        snprintf(v, n, "%s  %d%%%s", nm, pct, pct >= 85 ? " !" : "");  // cost-guard flag
         return;
     }
     if (s_cur_slot == 2) rev_desc.p[p].fmt(v, n);
