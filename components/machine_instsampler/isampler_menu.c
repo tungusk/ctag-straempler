@@ -110,11 +110,13 @@ static void draw_wave(void)
         s_last_ph = -1;
         return;
     }
+    // waveform POPS brighter when the Sample/title element is selected
+    color_t wcol = (s_live_sel == 0) ? (color_t){205, 210, 230} : WF_GREY;
     for (int c = 0; c < L_WW; c++) {
         int pi = c * IS_PEAKS / L_WW;
         int h = inst.peaks[pi] * (L_WH / 2) / 255;
         if (h < 1) h = 1;
-        TFT_drawLine(L_WX + c, cy - h, L_WX + c, cy + h, WF_GREY);
+        TFT_drawLine(L_WX + c, cy - h, L_WX + c, cy + h, wcol);
     }
     if (inst.zone[0].loop_mode == LOOP_FWD) {
         int lsx = loop_x(inst.zone[0].loop_start), lex = loop_x(inst.zone[0].loop_end);
