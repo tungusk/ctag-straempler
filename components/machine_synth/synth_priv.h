@@ -60,7 +60,8 @@ typedef struct {
     bool  flg_on;                // flanger engaged (slab stays allocated once inited)
     tremolo_t trem;              // output tremolo (no slab; part of zero-init sy)
     bool  trem_on;               // tremolo engaged
-    fxfilter_t filt;             // FX rack filter brick (insert)
+    fxfilter_t filt;             // FX rack filter brick (LP/HP/BP)
+    fxfilter_t band;             // FX rack band filter brick (base/width)
     int8_t fx_slot[FX_NSLOT_GEN]; // FX rack: generic slot assignment (FX1,FX2)
 
     // params (Setup + knobs)

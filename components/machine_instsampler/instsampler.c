@@ -118,10 +118,11 @@ static esp_err_t keys_start(void)
     inst.zone[0].loop_mode = LOOP_FWD;
     inst.zone[0].loop_xfade = 220;
     svf_reset(&inst.voice[0].flt);
-    fxfilter_init(&inst.filt);     // FX rack filter brick
+    fxfilter_init(&inst.filt);     // FX rack filter bricks
+    fxfilter_init(&inst.band);
     inst.fx_slot[0] = inst.fx_slot[1] = FXK_OFF;   // rack empty until assigned
     inst_rk = (fxrack_t){ .od = &inst.od, .flg = &inst.flg, .trem = &inst.trem, .dly = &inst.dly,
-                          .filt = &inst.filt, .rv = &inst.rv, .slot = inst.fx_slot };
+                          .filt = &inst.filt, .band = &inst.band, .rv = &inst.rv, .slot = inst.fx_slot };
     return ESP_OK;
 }
 

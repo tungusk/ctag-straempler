@@ -78,7 +78,8 @@ typedef struct {
     bool  flg_on;             // flanger engaged (slab stays allocated once inited)
     tremolo_t trem;           // output tremolo (no slab; zero-init)
     bool  trem_on;            // tremolo engaged
-    fxfilter_t filt;          // FX rack filter brick (insert; not the voice svf)
+    fxfilter_t filt;          // FX rack filter brick (LP/HP/BP)
+    fxfilter_t band;          // FX rack band filter brick (base/width)
     bool  filt_on;            // filter engaged
     // FX rack: which generic effect (FXK_*) runs in slot 0 (FX1) and slot 1 (FX2).
     // Source of truth for on/order; the *_on bools are kept synced from this.

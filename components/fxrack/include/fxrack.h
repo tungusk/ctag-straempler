@@ -20,7 +20,7 @@
 // plus an int8_t slot[FX_NSLOT_GEN], and hands the rack pointers to them. No
 // struct re-layout needed in the machines.
 
-enum { FXK_OFF = 0, FXK_OD, FXK_FLG, FXK_TREM, FXK_DLY, FXK_FILT, FXK_NGEN };
+enum { FXK_OFF = 0, FXK_OD, FXK_FLG, FXK_TREM, FXK_DLY, FXK_FILT, FXK_BAND, FXK_NGEN };
 #define FX_NSLOT_GEN 2          // FX1, FX2 (generic); FX3 (reverb) is separate
 
 typedef struct {
@@ -28,7 +28,8 @@ typedef struct {
     flanger_t   *flg;
     tremolo_t   *trem;
     fxdelay_t   *dly;
-    fxfilter_t  *filt;
+    fxfilter_t  *filt;          // LP/HP/BP filter brick
+    fxfilter_t  *band;          // base/width band filter brick (own instance)
     reverb_t    *rv;
     int8_t      *slot;          // [FX_NSLOT_GEN] = FXK_* per generic slot
 } fxrack_t;
