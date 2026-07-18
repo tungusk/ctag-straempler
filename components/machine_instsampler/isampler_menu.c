@@ -53,6 +53,15 @@ static int s_last_note = -9999;
 static unsigned s_sig_dials = 0, s_sig_adsr = 0, s_sig_wave = 0;
 static int s_last_ph = -1;
 
+// two-level encoder nav (slicer idiom): browse on-screen elements, click in to
+// edit, long-press to escape. Elements: 0=Sample, 1..4 = the four dials
+// (start/cut/res/env>f), 5..8 = ADSR points (A/D/S/R).
+#define KLIVE_N 9
+static int  s_live_sel  = 1;      // focused element (start on the first dial)
+static bool s_live_edit = false;  // false = browsing, true = editing the focus
+// focus code for a drawn element: 0 none, 1 selected(browse), 2 editing
+static int klive_focus(int elem) { return s_live_sel != elem ? 0 : (s_live_edit ? 2 : 1); }
+
 // ---- header: title + sample tag + note name (green) ------------------------
 static void draw_header(void)
 {
@@ -111,6 +120,10 @@ static void draw_wave(void)
         TFT_drawLine(lsx, wy, lsx, wy + L_WH, LOOP_COL);
         TFT_drawLine(lex, wy, lex, wy + L_WH, LOOP_COL);
     }
+    if (s_live_sel == 0) {   // encoder-nav focus: box the waveform (press = Load)
+        color_t hc = s_live_edit ? (color_t){255, 210, 60} : (color_t){150, 150, 170};
+        TFT_drawRect(L_WX - 1, wy - 1, L_WW + 2, L_WH + 2, hc);
+    }
     s_last_ph = -1;
 }
 
@@ -128,12 +141,17 @@ static void draw_playhead(void)
 }
 
 // ---- a knob dial: ring + pointer, label + value (lifted from Synth) --------
-static void dial(int cx, int cy, int r, float v01, const char *lab, const char *val, bool live)
+static void dial(int cx, int cy, int r, float v01, const char *lab, const char *val, bool live, int hi)
 {
     int fh = TFT_getfontheight();
     v01 = clampf(v01, 0.0f, 1.0f);
     _bg = TFT_BLACK;
-    TFT_fillRect(cx - r - 5, cy - r - 2, (r + 5) * 2, r * 2 + 2 * fh + 8, _bg);
+    TFT_fillRect(cx - r - 5, cy - r - 5, (r + 5) * 2, r * 2 + 2 * fh + 11, _bg);
+    if (hi) {                                          // encoder-nav focus ring
+        color_t hc = hi == 2 ? (color_t){255, 210, 60} : (color_t){150, 150, 170};
+        TFT_drawCircle(cx, cy, r + 3, hc);
+        if (hi == 2) TFT_drawCircle(cx, cy, r + 4, hc);   // thicker while editing
+    }
     color_t ring = live ? (color_t){0, 150, 220} : (color_t){70, 70, 80};
     TFT_drawCircle(cx, cy, r, ring);
     float ang = (-135.0f + v01 * 270.0f) * 0.01745329f;
@@ -155,15 +173,15 @@ static void draw_dials(void)
     int cx[4] = { 44, 128, 212, 292 };
     char v[16];
     snprintf(v, sizeof(v), "%.0f%%", inst.start_frac * 100.0f);
-    dial(cx[0], cy, r, inst.start_frac, "start", v, inst.knob_live[0]);
+    dial(cx[0], cy, r, inst.start_frac, "start", v, inst.knob_live[0], klive_focus(1));
     float cv = logf(inst.cutoff_base / 10.0f) / logf(600.0f);
     if (inst.cutoff_base >= 1000.0f) snprintf(v, sizeof(v), "%.1fk", inst.cutoff_base / 1000.0f);
     else                             snprintf(v, sizeof(v), "%.0f", inst.cutoff_base);
-    dial(cx[1], cy, r, cv, "cut", v, inst.knob_live[1]);
+    dial(cx[1], cy, r, cv, "cut", v, inst.knob_live[1], klive_focus(2));
     snprintf(v, sizeof(v), "%.0f%%", inst.res01 * 100.0f);
-    dial(cx[2], cy, r, inst.res01, "res", v, inst.knob_live[2]);
+    dial(cx[2], cy, r, inst.res01, "res", v, inst.knob_live[2], klive_focus(3));
     snprintf(v, sizeof(v), "%.0f%%", inst.env_to_cut * 100.0f);
-    dial(cx[3], cy, r, inst.env_to_cut, "env>f", v, inst.knob_live[3]);
+    dial(cx[3], cy, r, inst.env_to_cut, "env>f", v, inst.knob_live[3], klive_focus(4));
 }
 
 // ---- ADSR curve (lifted from Synth) ----------------------------------------
@@ -189,6 +207,15 @@ static void draw_adsr(void)
     TFT_drawLine(x1, yt, x2, ys, col);
     TFT_drawLine(x2, ys, x3, ys, col);
     TFT_drawLine(x3, ys, x4, yb, col);
+    // encoder-nav focus marker on the selected point (5=A 6=D 7=S 8=R)
+    if (s_live_sel >= 5 && s_live_sel <= 8) {
+        int mx = x1, my = yt;
+        if (s_live_sel == 6) { mx = x2; my = ys; }
+        else if (s_live_sel == 7) { mx = x3; my = ys; }
+        else if (s_live_sel == 8) { mx = x4; my = yb; }
+        color_t hc = s_live_edit ? (color_t){255, 210, 60} : (color_t){200, 200, 220};
+        TFT_fillCircle(mx, my, s_live_edit ? 4 : 3, hc);
+    }
 }
 
 static unsigned dials_sig(void)
@@ -227,8 +254,35 @@ static void live_full_redraw(void)
     draw_adsr();    s_sig_adsr = adsr_sig();
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("CV1:pitch  TR1:gate   K5:start K6:cut K7:res K8:env>f", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:pick  press:edit  hold:back    CV1:pitch TR1:gate", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+// edit the focused element by a detent (dials re-arm knob takeover so the value
+// sticks until a physical knob is moved)
+static void klive_edit(int dir)
+{
+    float d = (float)dir;
+    switch (s_live_sel) {
+        case 1: inst.start_frac  = clampf(inst.start_frac + d * 0.02f, 0.0f, 0.99f); break;
+        case 2: inst.cutoff_base = clampf(inst.cutoff_base * (dir > 0 ? 1.06f : 0.94f), 30.0f, 12000.0f); break;
+        case 3: inst.res01       = clampf(inst.res01 + d * 0.05f, 0.0f, 1.0f); break;
+        case 4: inst.env_to_cut  = clampf(inst.env_to_cut + d * 0.05f, 0.0f, 1.0f); break;
+        case 5: inst.atk = clampf(inst.atk + d * 0.005f, 0.0005f, 2.0f); break;
+        case 6: inst.dec = clampf(inst.dec + d * 0.01f, 0.001f, 2.0f); break;
+        case 7: inst.sus = clampf(inst.sus + d * 0.05f, 0.0f, 1.0f); break;
+        case 8: inst.rel = clampf(inst.rel + d * 0.02f, 0.001f, 3.0f); break;
+    }
+    if (s_live_sel >= 1 && s_live_sel <= 4) inst.knob_ctx = -1;   // re-arm takeover
+}
+
+// redraw the interactive elements (focus rings + values), no full-screen clear
+static void klive_repaint(void)
+{
+    draw_wave();  s_sig_wave  = wave_sig();
+    draw_playhead();
+    draw_dials(); s_sig_dials = dials_sig();
+    draw_adsr();  s_sig_adsr  = adsr_sig();
 }
 
 static int keys_live_handler(int it_id, int event, void *ev_data)
@@ -249,7 +303,25 @@ static int keys_live_handler(int it_id, int event, void *ev_data)
             if (as != s_sig_adsr) { draw_adsr(); s_sig_adsr = as; }
             break;
         }
-        case EV_LONG_PRESS: return M_ISMP_SETUP;
+        case EV_FWD:
+            if (s_live_edit) klive_edit(+1);
+            else s_live_sel = (s_live_sel + 1) % KLIVE_N;
+            klive_repaint();
+            break;
+        case EV_BWD:
+            if (s_live_edit) klive_edit(-1);
+            else s_live_sel = (s_live_sel + KLIVE_N - 1) % KLIVE_N;
+            klive_repaint();
+            break;
+        case EV_SHORT_PRESS:
+            if (s_live_sel == 0) return M_ISMP_LOAD;   // Sample element -> browser
+            s_live_edit = !s_live_edit;                // click in / out of edit
+            klive_repaint();
+            break;
+        case EV_LONG_PRESS:
+            if (s_live_edit) { s_live_edit = false; klive_repaint(); }   // escape edit
+            else return M_ISMP_SETUP;                                    // leave Live
+            break;
         default: break;
     }
     return 0;
