@@ -8,13 +8,7 @@
 #include "overdrive.h"
 #include "flanger.h"
 #include "tremolo.h"
-#include "fxfilter.h"
-
-// FX rack (curated slots). FX1/FX2 each hold one GENERIC effect (or OFF) and run
-// in slot order; FX3 is the fixed reverb slot. Reordering FX1<->FX2 changes the
-// chain order. Spike lives in Keys; extract to components/fxrack for Synth/Tape.
-enum { FXK_OFF = 0, FXK_OD, FXK_FLG, FXK_TREM, FXK_DLY, FXK_FILT, FXK_NGEN };
-#define FX_NSLOT_GEN 2
+#include "fxrack.h"       // shared FX slot rack (FXK_*, FX_NSLOT_GEN, fxfilter)
 
 // Keys — tonal instrument sampler (see machine_instsampler.h). v1: one mono
 // PSRAM-resident sample, varispeed-pitched across the keyboard from CV1
@@ -111,6 +105,7 @@ static inline float clampf(float x, float lo, float hi) { return x < lo ? lo : x
 static inline int   clampi(int x, int lo, int hi)         { return x < lo ? lo : x > hi ? hi : x; }
 
 extern is_state_t inst;
+extern fxrack_t inst_rk;    // FX rack pointer-view over inst's effect instances
 
 // load a pool sample into zone[0] (mono, resident). 0 ok, <0 fail. Resets the
 // loop to the whole sample; caller/preset may then set loop points. Sets/clears
