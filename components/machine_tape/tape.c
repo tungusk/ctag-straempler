@@ -218,6 +218,24 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
         out[f * 2 + 1] = s;
     }
 
+    // FX chain: overdrive -> flanger -> tremolo -> delay -> reverb. The rated
+    // effects are clock-synced — the current grid BPM sets their rate/tap so
+    // they lock to tempo (bpm computed once and reused across the block).
+    float bpm = clockin_beat_bpm(&tp.ci);
+    if (bpm <= 0.0f) bpm = tp.manual_bpm;
+    if (tp.od_on) overdrive_block_i32(&tp.od, out, frames);
+    if (tp.flg_on && tp.flg.bufL) {
+        flanger_set_rate_beats(&tp.flg, tp_dly_beats[tp.flg_div], bpm);
+        flanger_block_i32(&tp.flg, out, frames);
+    }
+    if (tp.trem_on) {
+        tremolo_set_rate_beats(&tp.trem, tp_dly_beats[tp.trem_div], bpm);
+        tremolo_block_i32(&tp.trem, out, frames);
+    }
+    if (tp.dly_on && tp.dly.bufL) {
+        fxdelay_set_time_beats(&tp.dly, tp_dly_beats[tp.dly_div], bpm);
+        fxdelay_block_i32(&tp.dly, out, frames);
+    }
     if (tp.rv.mode != RV_OFF && tp.rv.slab) {
         reverb_block_i32(&tp.rv, out, frames);
         // reverb tail is output-only; the record head already wrote pre-reverb
@@ -485,11 +503,17 @@ void tape_rebuild_peaks(bool full)
 }
 
 // ---- lifecycle / preset ----------------------------------------------------------
+// clock-synced delay divisions — see tape_priv.h (beat = quarter note)
+const float       tp_dly_beats[TP_DLY_NDIV] = { 0.25f, 1.0f/3.0f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f };
+const char *const tp_dly_names[TP_DLY_NDIV] = { "1/16", "1/8T", "1/8", "1/8.", "1/4", "1/4.", "1/2" };
+
 static esp_err_t tape_start(void)
 {
     memset(&tp, 0, sizeof(tp));
     tp.len_sel = 1;                            // 30 s default
     tp.manual_bpm = 120.0f;
+    tp.dly_div = 2;                            // 1/8 note default when delay is enabled
+    tp.trem_div = 2; tp.flg_div = 4;           // musical-division defaults
     tp.clk_src = clock_source_clamp_cv_audio(7);
     tp.level = 0.9f;
     tp.cutoff = 2000.0f;
@@ -516,6 +540,8 @@ static void tape_stop(void)
     tp.clip_len = 0;
     tp.cap = 0; tp.len = 0;
     reverb_free(&tp.rv);
+    fxdelay_free(&tp.dly);
+    flanger_free(&tp.flg);
 }
 
 static cJSON *tape_preset_save(void)
@@ -530,6 +556,27 @@ static cJSON *tape_preset_save(void)
     cJSON_AddNumberToObject(o, "drv", tp.drive);
     cJSON_AddNumberToObject(o, "rv", tp.rv.mode);
     cJSON_AddNumberToObject(o, "rvmx", (int)(tp.rv.wet * 100 + 0.5f));
+    cJSON_AddBoolToObject(o, "dly", tp.dly_on);
+    cJSON_AddNumberToObject(o, "dlydv", tp.dly_div);
+    cJSON_AddNumberToObject(o, "dlyfb", (int)(tp.dly.fb * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "dlymx", (int)(tp.dly.wet * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "dlytn", (int)(tp.dly.damp * 100 + 0.5f));
+    cJSON_AddBoolToObject(o, "dlypp", tp.dly.pingpong);
+    cJSON_AddBoolToObject(o, "od", tp.od_on);
+    cJSON_AddNumberToObject(o, "oddr", (int)(tp.od.drive * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "odtn", (int)(tp.od.tone * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "odbs", (int)(tp.od.bias * 100 + (tp.od.bias < 0 ? -0.5f : 0.5f)));
+    cJSON_AddNumberToObject(o, "odlv", (int)(tp.od.level * 100 + 0.5f));
+    cJSON_AddBoolToObject(o, "flg", tp.flg_on);
+    cJSON_AddNumberToObject(o, "flgdv", tp.flg_div);
+    cJSON_AddNumberToObject(o, "flgdp", (int)(tp.flg.depth * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "flgfb", (int)(tp.flg.fb * 100 + (tp.flg.fb < 0 ? -0.5f : 0.5f)));
+    cJSON_AddNumberToObject(o, "flgmx", (int)(tp.flg.wet * 100 + 0.5f));
+    cJSON_AddBoolToObject(o, "trem", tp.trem_on);
+    cJSON_AddNumberToObject(o, "trmdv", tp.trem_div);
+    cJSON_AddNumberToObject(o, "trmdp", (int)(tp.trem.depth * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "trmsh", tp.trem.shape);
+    cJSON_AddBoolToObject(o, "trmst", tp.trem.stereo);
     cJSON_AddNumberToObject(o, "lvl", tp.level);
     cJSON_AddNumberToObject(o, "rsrc", tp.rec_src);
     cJSON_AddBoolToObject(o, "mon", tp.monitor);
@@ -555,6 +602,39 @@ static void tape_preset_load(const cJSON *node)
         if (m != RV_OFF && !tp.rv.slab && reverb_init(&tp.rv) != ESP_OK) m = RV_OFF;
         reverb_set_mode(&tp.rv, m);
     }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dly"))   && cJSON_IsBool(j)) {
+        bool on = cJSON_IsTrue(j);
+        if (on && !tp.dly.bufL && fxdelay_init(&tp.dly) != ESP_OK) on = false;
+        tp.dly_on = on;
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlydv")) && cJSON_IsNumber(j)) tp.dly_div = tp_clampi(j->valueint, 0, TP_DLY_NDIV - 1);
+    if (tp.dly.bufL) {   // params apply once the slab exists (order-independent)
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyfb")) && cJSON_IsNumber(j)) fxdelay_set_feedback(&tp.dly, (float)j->valueint / 100.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlymx")) && cJSON_IsNumber(j)) fxdelay_set_mix(&tp.dly, (float)j->valueint / 100.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlytn")) && cJSON_IsNumber(j)) fxdelay_set_damp(&tp.dly, (float)j->valueint / 100.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlypp")) && cJSON_IsBool(j))   fxdelay_set_pingpong(&tp.dly, cJSON_IsTrue(j));
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "od"))   && cJSON_IsBool(j))   tp.od_on = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "oddr")) && cJSON_IsNumber(j)) tp.od.drive = tp_clampf((float)j->valueint / 100.0f, 0, 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odtn")) && cJSON_IsNumber(j)) tp.od.tone  = tp_clampf((float)j->valueint / 100.0f, 0, 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odbs")) && cJSON_IsNumber(j)) tp.od.bias  = tp_clampf((float)j->valueint / 100.0f, -1, 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odlv")) && cJSON_IsNumber(j)) tp.od.level = tp_clampf((float)j->valueint / 100.0f, 0, 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flg"))  && cJSON_IsBool(j)) {
+        bool on = cJSON_IsTrue(j);
+        if (on && !tp.flg.bufL && flanger_init(&tp.flg) != ESP_OK) on = false;
+        tp.flg_on = on;
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgdv")) && cJSON_IsNumber(j)) tp.flg_div = tp_clampi(j->valueint, 0, TP_DLY_NDIV - 1);
+    if (tp.flg.bufL) {   // params apply once the slab exists (order-independent)
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgdp")) && cJSON_IsNumber(j)) tp.flg.depth = tp_clampf((float)j->valueint / 100.0f, 0, 1);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgfb")) && cJSON_IsNumber(j)) tp.flg.fb    = tp_clampf((float)j->valueint / 100.0f, -0.95f, 0.95f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgmx")) && cJSON_IsNumber(j)) tp.flg.wet   = tp_clampf((float)j->valueint / 100.0f, 0, 1);
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trem")) && cJSON_IsBool(j))   tp.trem_on = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmdv")) && cJSON_IsNumber(j)) tp.trem_div = tp_clampi(j->valueint, 0, TP_DLY_NDIV - 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmdp")) && cJSON_IsNumber(j)) tp.trem.depth = tp_clampf((float)j->valueint / 100.0f, 0, 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmsh")) && cJSON_IsNumber(j)) tp.trem.shape = tp_clampi(j->valueint, 0, TREM_NSHAPE - 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmst")) && cJSON_IsBool(j))   tp.trem.stereo = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx")) && cJSON_IsNumber(j)) reverb_set_mix(&tp.rv, (float)j->valueint / 100.0f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))  && cJSON_IsNumber(j)) tp.level = tp_clampf((float)j->valuedouble, 0, 1.2f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rsrc")) && cJSON_IsNumber(j)) tp.rec_src = j->valueint == TPS_TAPE ? TPS_TAPE : TPS_INPUT;

@@ -805,7 +805,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
         "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
         "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u,"
         "\"vu\":[%u,%u,%u,%u],"
-        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d}}",
+        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u}",
         m ? m->name : "",
         rec ? "true" : "false",
         st.v0, st.v1,
@@ -813,7 +813,8 @@ static esp_err_t status_get_handler(httpd_req_t *req)
         st.cv[4], st.cv[5], st.cv[6], st.cv[7],
         st.trig,
         st.vu[0], st.vu[1], st.vu[2], st.vu[3],
-        bl.mode, bl.state, (double)bl.bpm, (double)bl.conf, bl.cost_us);
+        bl.mode, bl.state, (double)bl.bpm, (double)bl.conf, bl.cost_us,
+        audio_proc_us());
     (void)n;
     send_json(req, buf);
     return ESP_OK;
@@ -1735,7 +1736,15 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "OTA: %d bytes -> %s, rebooting", total, upd->label);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_sendstr(req, "{\"ok\":true,\"rebooting\":true}");
-    vTaskDelay(pdMS_TO_TICKS(600));   // let the response flush before the reboot
+    // flush the active machine's live state to AUTOSAVE.JSN before the reboot:
+    // an OTA reboot is immediate, so any edits since the last debounced save
+    // (knob tweaks never arm autosave at all) would otherwise be lost across the
+    // flash — "drums lost settings between flashes". Runs on the UI task.
+    if (ui_ev_queue) {
+        ui_ev_ts_t ae = { .event = EV_AUTOSAVE, .event_data = NULL };
+        xQueueSend(ui_ev_queue, &ae, 0);
+    }
+    vTaskDelay(pdMS_TO_TICKS(800));   // let the response flush AND the autosave land
     esp_restart();
     return ESP_OK;
 }
@@ -1754,6 +1763,64 @@ static esp_err_t ota_state_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, s);
 }
 
+// GET /peaks?name=<id>[&n=<cols>] — a waveform THUMBNAIL: n peak columns
+// (0..255), one raw byte each. Stride-reads a small window at n evenly spaced
+// points, so the cost is independent of file size (a 24 MB take is as cheap as a
+// 100 KB one). Feeds the web file manager's inline waveforms. Bursts hold sd_lock
+// per-read (never across the whole scan) so audio SD reads aren't starved.
+static esp_err_t peaks_handler(httpd_req_t *req)
+{
+    char name[32];
+    if (!get_query_param(req, "name", name, sizeof(name))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name");
+        return ESP_FAIL;
+    }
+    char ns[8];
+    int n = 48;
+    if (get_query_param(req, "n", ns, sizeof(ns))) n = atoi(ns);
+    if (n < 8) n = 8; else if (n > 128) n = 128;
+
+    char path[72];
+    sample_resolve(name, path, sizeof(path));
+
+    sd_lock_take();
+    FILE *f = fopen(path, "rb");
+    sampfile_t sf;
+    int ok = (f && sampfile_probe(f, &sf) == 0 && sf.frames > 0);
+    sd_lock_give();
+    if (!ok) {
+        if (f) fclose(f);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+        return ESP_FAIL;
+    }
+
+    static uint8_t  peaks[128];        // handlers are serialized (single httpd task)
+    static int16_t  win[256 * 2];      // 256-frame stereo staging window
+    const uint32_t  wf = 256;
+    uint32_t frames = sf.frames;
+    for (int c = 0; c < n; c++) {
+        uint32_t start = (uint32_t)((uint64_t)c * frames / (uint32_t)n);
+        sd_lock_take();
+        fseek(f, sf_seek_pos(&sf, start), SEEK_SET);
+        size_t got = sampfile_read(f, &sf, win, wf);
+        sd_lock_give();
+        int peak = 0;
+        for (size_t i = 0; i < got; i++) {
+            int a = win[2 * i];     if (a < 0) a = -a; if (a > peak) peak = a;
+            int b = win[2 * i + 1]; if (b < 0) b = -b; if (b > peak) peak = b;
+        }
+        peaks[c] = (uint8_t)(((peak > 32767 ? 32767 : peak) * 255) / 32767);
+    }
+    sd_lock_take();
+    fclose(f);
+    sd_lock_give();
+
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, (const char *)peaks, n);
+    return ESP_OK;
+}
+
 static httpd_uri_t uris[] = {
     { .uri = "/",           .method = HTTP_GET,    .handler = landing_handler },
     { .uri = "/ota",        .method = HTTP_POST,   .handler = ota_post_handler },
@@ -1764,6 +1831,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/files/rename", .method = HTTP_POST, .handler = files_rename_handler },
     { .uri = "/files/move",   .method = HTTP_POST, .handler = files_move_handler },
     { .uri = "/files/raw",  .method = HTTP_GET,    .handler = files_raw_handler },
+    { .uri = "/peaks",      .method = HTTP_GET,    .handler = peaks_handler },
     { .uri = "/screenshot", .method = HTTP_GET,    .handler = screenshot_get_handler },
     { .uri = "/import",     .method = HTTP_POST,   .handler = import_post_handler },
     { .uri = "/import",     .method = HTTP_GET,    .handler = import_get_handler },

@@ -809,7 +809,8 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
 // items/n) is rebuilt whenever the trigger mode changes; s_rows[] maps a visible
 // index back to its R_* id for the render/adjust/action callbacks.
 enum { R_PADEDIT = 0, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL,
-       R_KNOB, R_FILTER, R_REVERB, R_RVMIX, R_RVTAP, R_COUNT };
+       R_KNOB, R_FILTER, R_REVERB, R_RVMIX, R_RVTAP,
+       R_DELAY, R_DLYTIME, R_DLYFB, R_DLYMIX, R_DLYTONE, R_DLYPING, R_COUNT };
 
 // the full kind table: Pad Setup opens a page (ACTION), the two selector CVs are
 // wide (none + 8 channels) so they keep click-to-edit (RANGE) as does Rev Return
@@ -826,6 +827,12 @@ static const setup_item_t dr_all_items[R_COUNT] = {
     [R_REVERB]  = {"Reverb",     ST_TOGGLE},
     [R_RVMIX]   = {"Rev Return", ST_RANGE},
     [R_RVTAP]   = {"Send Tap",   ST_TOGGLE},
+    [R_DELAY]   = {"Delay",      ST_TOGGLE},
+    [R_DLYTIME] = {"Dly Time",   ST_RANGE},
+    [R_DLYFB]   = {"Dly Fdbk",   ST_RANGE},
+    [R_DLYMIX]  = {"Dly Mix",    ST_RANGE},
+    [R_DLYTONE] = {"Dly Tone",   ST_RANGE},
+    [R_DLYPING] = {"Dly Ping",   ST_TOGGLE},
 };
 
 // visible rows, rebuilt whenever the trigger mode changes; s_rows[k] = the R_* id
@@ -867,6 +874,12 @@ static void setup_value_str(int id, char *v, size_t n){
             break;
         case R_RVMIX: snprintf(v, n, "%d%%", (int)(dr.rv.wet * 100 + 0.5f)); break;   // RETURN
         case R_RVTAP: snprintf(v, n, "%s", dr.rv_post ? "post-filter" : "pre-filter"); break;
+        case R_DELAY:  snprintf(v, n, "%s", dr.dly_on ? "ON" : "OFF"); break;
+        case R_DLYTIME: snprintf(v, n, "%d ms", (int)(fxdelay_time_ms(&dr.dly) + 0.5f)); break;
+        case R_DLYFB:  snprintf(v, n, "%d%%", (int)(dr.dly.fb * 100 + 0.5f)); break;
+        case R_DLYMIX: snprintf(v, n, "%d%%", (int)(dr.dly.wet * 100 + 0.5f)); break;
+        case R_DLYTONE: snprintf(v, n, "%d%%", (int)(dr.dly.damp * 100 + 0.5f)); break;
+        case R_DLYPING: snprintf(v, n, "%s", dr.dly.pingpong ? "Ping-Pong" : "Stereo"); break;
         default: v[0] = 0;
     }
 }
@@ -901,6 +914,19 @@ static void setup_adj(int id, int dir){
         }
         case R_RVMIX: reverb_set_mix(&dr.rv, dr.rv.wet + (float)dir * 0.05f); break;
         case R_RVTAP: dr.rv_post = !dr.rv_post; break;   // flip it while playing
+        case R_DELAY: {   // master delay on/off (lazy slab)
+            bool on = !dr.dly_on;
+            if (on && !dr.dly.bufL && fxdelay_init(&dr.dly) != ESP_OK) on = false;
+            if (on && dr.dly.wet < 0.01f) fxdelay_set_mix(&dr.dly, 0.30f);   // audible default
+            dr.dly_on = on;
+            if (!on) fxdelay_clear(&dr.dly);   // drop the tail
+            break;
+        }
+        case R_DLYTIME: if (dr.dly.bufL) fxdelay_set_time_ms(&dr.dly, fxdelay_time_ms(&dr.dly) + (float)dir * 10.0f); break;
+        case R_DLYFB:   if (dr.dly.bufL) fxdelay_set_feedback(&dr.dly, dr.dly.fb + (float)dir * 0.05f); break;
+        case R_DLYMIX:  if (dr.dly.bufL) fxdelay_set_mix(&dr.dly, dr.dly.wet + (float)dir * 0.05f); break;
+        case R_DLYTONE: if (dr.dly.bufL) fxdelay_set_damp(&dr.dly, dr.dly.damp + (float)dir * 0.05f); break;
+        case R_DLYPING: if (dr.dly.bufL) fxdelay_set_pingpong(&dr.dly, !dr.dly.pingpong); break;
     }
 }
 

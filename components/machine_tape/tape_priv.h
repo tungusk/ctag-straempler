@@ -16,6 +16,10 @@
 #include "clock.h"
 #include "svf.h"
 #include "reverb.h"
+#include "fxdelay.h"
+#include "overdrive.h"
+#include "flanger.h"
+#include "tremolo.h"
 
 #define TP_RATE      44100
 #define TP_PEAKS     300              // overview columns
@@ -73,6 +77,17 @@ typedef struct {
     float    res01;
     float    drive;                   // 0..1 cubic soft-clip amount
     reverb_t rv;
+    fxdelay_t dly;                    // clock-synced delay (runs delay->reverb)
+    bool     dly_on;                  // delay engaged (slab stays allocated once inited)
+    int      dly_div;                 // musical division index into tp_dly_beats[]
+    overdrive_t od;                   // tanh drive (no slab; memset-init)
+    bool     od_on;
+    flanger_t flg;                    // clock-synced flanger (lazy PSRAM slab, mirrors dly)
+    bool     flg_on;
+    int      flg_div;                 // musical division index into tp_dly_beats[]
+    tremolo_t trem;                   // clock-synced tremolo (no slab)
+    bool     trem_on;
+    int      trem_div;                // musical division index into tp_dly_beats[]
     svf_t    flt;
     float    level;                   // output volume (post-record-tap)
     // knobs 5..8 with takeover: win move / cutoff / res / drive
@@ -97,6 +112,12 @@ typedef struct {
 } tape_state_t;
 
 extern tape_state_t tp;
+
+// clock-synced delay divisions (beat = quarter note); engine + menu share one
+// table so display order and the beats the kernel uses can never disagree.
+#define TP_DLY_NDIV 7
+extern const float       tp_dly_beats[TP_DLY_NDIV];
+extern const char *const tp_dly_names[TP_DLY_NDIV];
 
 static inline float tp_clampf(float x, float lo, float hi){ return x < lo ? lo : x > hi ? hi : x; }
 static inline int   tp_clampi(int x, int lo, int hi){ return x < lo ? lo : x > hi ? hi : x; }

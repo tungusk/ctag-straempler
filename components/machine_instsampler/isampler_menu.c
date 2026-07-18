@@ -254,19 +254,28 @@ static int keys_live_handler(int it_id, int event, void *ev_data)
 }
 
 // ---- Setup (shared framework) ----------------------------------------------
+// Instrument params live here; all five effects moved to a dedicated FX
+// sub-page (the "FX" action row) so this list stays readable.
 static const setup_item_t ks_setup_items[] = {
     {"Load Sample", ST_ACTION}, {"Root Note", ST_RANGE},  {"Base Note", ST_RANGE},
     {"Quantize",    ST_TOGGLE}, {"Loop Mode", ST_TOGGLE}, {"Loop Start", ST_RANGE},
     {"Loop End",    ST_RANGE},  {"Loop Xfade", ST_RANGE},
     {"Attack",      ST_RANGE},  {"Decay",     ST_RANGE},  {"Sustain",   ST_RANGE},
     {"Release",     ST_RANGE},  {"Env>Cut",   ST_RANGE},  {"Glide",     ST_RANGE},
-    {"Level",       ST_RANGE},  {"Reverb",    ST_TOGGLE}, {"Rev Mix",   ST_RANGE},
-    {"CV Matrix",   ST_ACTION},
+    {"Level",       ST_RANGE},
+    {"CV Matrix",   ST_ACTION}, {"FX",        ST_ACTION},
     {"Save Patch",  ST_ACTION}, {"Load Patch", ST_ACTION},
 };
 
 // last saved patch id, shown inline on the Save Patch row as confirmation
 static char s_last_saved[12];
+
+// count of engaged effects, for the "FX" row affordance
+static int ks_fx_count(void)
+{
+    return (inst.rv.mode != RV_OFF) + (inst.dly_on ? 1 : 0) + (inst.od_on ? 1 : 0)
+         + (inst.flg_on ? 1 : 0) + (inst.trem_on ? 1 : 0);
+}
 
 static void ks_val(int i, char *v, size_t n)
 {
@@ -288,12 +297,11 @@ static void ks_val(int i, char *v, size_t n)
         case 12: snprintf(v, n, "%.0f%%", inst.env_to_cut * 100.0f); break;
         case 13: snprintf(v, n, "%d ms", (int)(inst.glide * 1000.0f)); break;
         case 14: snprintf(v, n, "%.0f%%", inst.level * 100.0f); break;
-        case 15: snprintf(v, n, "%s", reverb_mode_name(inst.rv.mode)); break;
-        case 16: snprintf(v, n, "%.0f%%", inst.rv.wet * 100.0f); break;
-        case 17: { int on = 0; for (int d = 0; d < ISM_N; d++) if (inst.mtx_src[d] >= 0) on++;
+        case 15: { int on = 0; for (int d = 0; d < ISM_N; d++) if (inst.mtx_src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
-        case 18: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
-        case 19: snprintf(v, n, "load >"); break;
+        case 16: { int on = ks_fx_count(); if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "off >"); break; }
+        case 17: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
+        case 18: snprintf(v, n, "load >"); break;
     }
 }
 
@@ -330,36 +338,137 @@ static void ks_adj(int i, int dir)
         case 12: inst.env_to_cut = clampf(inst.env_to_cut + d * 0.05f, 0.0f, 1.0f); break;
         case 13: inst.glide = clampf(inst.glide + d * 0.02f, 0.0f, 2.0f); break;
         case 14: inst.level = clampf(inst.level + d * 0.05f, 0.0f, 1.0f); break;
-        case 15: { int m = inst.rv.mode + dir;
-                   if (m < 0) m = RV_N_MODES - 1;
-                   if (m >= RV_N_MODES) m = RV_OFF;
-                   if (m != RV_OFF && !inst.rv.slab && reverb_init(&inst.rv) != ESP_OK) m = RV_OFF;
-                   reverb_set_mode(&inst.rv, m); } break;
-        case 16: reverb_set_mix(&inst.rv, clampf(inst.rv.wet + d * 0.05f, 0.0f, 1.0f)); break;
     }
 }
 
 static int ks_action(int i)
 {
-    if (i == 0) return M_ISMP_LOAD;      // Load Sample -> browser
-    if (i == 17) return M_ISMP_MATRIX;   // CV Matrix
-    if (i == 18) {                       // Save Patch: mint + write, stay on Setup
+    if (i == 0)  return M_ISMP_LOAD;     // Load Sample -> browser
+    if (i == 15) return M_ISMP_MATRIX;   // CV Matrix
+    if (i == 16) return M_ISMP_FX;       // FX -> FX sub-page
+    if (i == 17) {                       // Save Patch: mint + write, stay on Setup
         if (keys_patch_save(s_last_saved, sizeof(s_last_saved)) != 0)
             snprintf(s_last_saved, sizeof(s_last_saved), "err");
         return 0;                        // framework redraws -> row shows the id
     }
-    if (i == 19) return M_ISMP_PATCH;    // Load Patch -> patch browser
+    if (i == 18) return M_ISMP_PATCH;    // Load Patch -> patch browser
     return 0;
 }
 
 static setup_menu_t ks_setup = {
     .items = ks_setup_items,
-    .n = 20,
+    .n = 19,
     .title = "Keys Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_ISMP_LIVE,
     .render = ks_val, .adjust = ks_adj, .action = ks_action,
 };
+
+// ---- FX sub-page: all five effects, reached from the Setup "FX" row --------
+static const setup_item_t ks_fx_items[] = {
+    {"Reverb",    ST_TOGGLE}, {"Rev Mix",   ST_RANGE},
+    {"Delay",     ST_TOGGLE}, {"Dly Time",  ST_RANGE},  {"Dly Fdbk",  ST_RANGE},
+    {"Dly Mix",   ST_RANGE},  {"Dly Tone",  ST_RANGE},  {"Dly Ping",  ST_TOGGLE},
+    {"Overdrive", ST_TOGGLE}, {"OD Drive",  ST_RANGE},  {"OD Tone",   ST_RANGE},
+    {"OD Bias",   ST_RANGE},  {"OD Level",  ST_RANGE},
+    {"Flanger",   ST_TOGGLE}, {"Flg Rate",  ST_RANGE},  {"Flg Depth", ST_RANGE},
+    {"Flg Fdbk",  ST_RANGE},  {"Flg Mix",   ST_RANGE},
+    {"Tremolo",   ST_TOGGLE}, {"Trm Rate",  ST_RANGE},  {"Trm Depth", ST_RANGE},
+    {"Trm Shape", ST_TOGGLE}, {"Trm Stereo", ST_TOGGLE},
+};
+
+static void ks_fx_val(int i, char *v, size_t n)
+{
+    switch (i) {
+        case 0: snprintf(v, n, "%s", reverb_mode_name(inst.rv.mode)); break;
+        case 1: snprintf(v, n, "%.0f%%", inst.rv.wet * 100.0f); break;
+        case 2: snprintf(v, n, "%s", inst.dly_on ? "ON" : "OFF"); break;
+        case 3: snprintf(v, n, "%d ms", (int)(fxdelay_time_ms(&inst.dly) + 0.5f)); break;
+        case 4: snprintf(v, n, "%.0f%%", inst.dly.fb * 100.0f); break;
+        case 5: snprintf(v, n, "%.0f%%", inst.dly.wet * 100.0f); break;
+        case 6: snprintf(v, n, "%.0f%%", inst.dly.damp * 100.0f); break;
+        case 7: snprintf(v, n, "%s", inst.dly.pingpong ? "Ping-Pong" : "Stereo"); break;
+        case 8: snprintf(v, n, "%s", inst.od_on ? "ON" : "OFF"); break;
+        case 9: snprintf(v, n, "%.0f%%", inst.od.drive * 100.0f); break;
+        case 10: snprintf(v, n, "%.0f%%", inst.od.tone * 100.0f); break;
+        case 11: snprintf(v, n, "%+.0f%%", inst.od.bias * 100.0f); break;
+        case 12: snprintf(v, n, "%.0f%%", inst.od.level * 100.0f); break;
+        case 13: snprintf(v, n, "%s", inst.flg_on ? "ON" : "OFF"); break;
+        case 14: snprintf(v, n, "%.2f Hz", inst.flg.rate); break;
+        case 15: snprintf(v, n, "%.0f%%", inst.flg.depth * 100.0f); break;
+        case 16: snprintf(v, n, "%+.0f%%", inst.flg.fb * 100.0f); break;
+        case 17: snprintf(v, n, "%.0f%%", inst.flg.wet * 100.0f); break;
+        case 18: snprintf(v, n, "%s", inst.trem_on ? "ON" : "OFF"); break;
+        case 19: snprintf(v, n, "%.2f Hz", inst.trem.rate); break;
+        case 20: snprintf(v, n, "%.0f%%", inst.trem.depth * 100.0f); break;
+        case 21: snprintf(v, n, "%s", inst.trem.shape == TREM_TRI ? "Tri" : inst.trem.shape == TREM_SQR ? "Sqr" : "Sine"); break;
+        case 22: snprintf(v, n, "%s", inst.trem.stereo ? "ON" : "OFF"); break;
+    }
+}
+
+static void ks_fx_adj(int i, int dir)
+{
+    float d = (float)dir;
+    switch (i) {
+        case 0: { int m = inst.rv.mode + dir;
+                   if (m < 0) m = RV_N_MODES - 1;
+                   if (m >= RV_N_MODES) m = RV_OFF;
+                   if (m != RV_OFF && !inst.rv.slab && reverb_init(&inst.rv) != ESP_OK) m = RV_OFF;
+                   reverb_set_mode(&inst.rv, m); } break;
+        case 1: reverb_set_mix(&inst.rv, clampf(inst.rv.wet + d * 0.05f, 0.0f, 1.0f)); break;
+        case 2: { bool on = !inst.dly_on;              // Delay on/off (lazy slab)
+                   if (on && !inst.dly.bufL && fxdelay_init(&inst.dly) != ESP_OK) on = false;
+                   if (on && inst.dly.wet < 0.01f) fxdelay_set_mix(&inst.dly, 0.30f);  // audible default
+                   inst.dly_on = on;
+                   if (!on) fxdelay_clear(&inst.dly); } break;   // drop the tail
+        case 3: if (inst.dly.bufL) fxdelay_set_time_ms(&inst.dly, fxdelay_time_ms(&inst.dly) + d * 10.0f); break;
+        case 4: if (inst.dly.bufL) fxdelay_set_feedback(&inst.dly, inst.dly.fb + d * 0.05f); break;
+        case 5: if (inst.dly.bufL) fxdelay_set_mix(&inst.dly, inst.dly.wet + d * 0.05f); break;
+        case 6: if (inst.dly.bufL) fxdelay_set_damp(&inst.dly, inst.dly.damp + d * 0.05f); break;
+        case 7: if (inst.dly.bufL) fxdelay_set_pingpong(&inst.dly, !inst.dly.pingpong); break;
+        case 8: { bool on = !inst.od_on;               // Overdrive on/off (no slab)
+                   if (on) {
+                       if (inst.od.level < 0.01f) { inst.od.drive = 0.4f; inst.od.tone = 0.5f; inst.od.level = 0.8f; }
+                       overdrive_reset(&inst.od);
+                   }
+                   inst.od_on = on; } break;
+        case 9: inst.od.drive = clampf(inst.od.drive + d * 0.05f, 0.0f, 1.0f); break;
+        case 10: inst.od.tone  = clampf(inst.od.tone  + d * 0.05f, 0.0f, 1.0f); break;
+        case 11: inst.od.bias  = clampf(inst.od.bias  + d * 0.05f, -1.0f, 1.0f); break;
+        case 12: inst.od.level = clampf(inst.od.level + d * 0.05f, 0.0f, 1.0f); break;
+        case 13: { bool on = !inst.flg_on;             // Flanger on/off (lazy slab)
+                   if (on && !inst.flg.bufL && flanger_init(&inst.flg) != ESP_OK) on = false;
+                   if (on && inst.flg.wet < 0.01f) inst.flg.wet = 0.5f;   // audible default
+                   inst.flg_on = on;
+                   if (!on) flanger_clear(&inst.flg); } break;   // drop the tail
+        case 14: if (inst.flg.bufL) inst.flg.rate  = clampf(inst.flg.rate  + d * 0.05f, 0.01f, 10.0f); break;
+        case 15: if (inst.flg.bufL) inst.flg.depth = clampf(inst.flg.depth + d * 0.05f, 0.0f, 1.0f); break;
+        case 16: if (inst.flg.bufL) inst.flg.fb    = clampf(inst.flg.fb    + d * 0.05f, -0.95f, 0.95f); break;
+        case 17: if (inst.flg.bufL) inst.flg.wet   = clampf(inst.flg.wet   + d * 0.05f, 0.0f, 1.0f); break;
+        case 18: { bool on = !inst.trem_on;            // Tremolo on/off (no slab)
+                   if (on && inst.trem.depth < 0.01f) { inst.trem.depth = 0.5f; inst.trem.rate = 5.0f; }
+                   inst.trem_on = on; } break;
+        case 19: inst.trem.rate  = clampf(inst.trem.rate + d * 0.25f, 0.05f, 20.0f); break;
+        case 20: inst.trem.depth = clampf(inst.trem.depth + d * 0.05f, 0.0f, 1.0f); break;
+        case 21: inst.trem.shape = (inst.trem.shape + 1) % 3; break;
+        case 22: inst.trem.stereo = !inst.trem.stereo; break;
+    }
+}
+
+static setup_menu_t ks_fx = {
+    .items = ks_fx_items,
+    .n = 23,
+    .title = "Keys FX",
+    .aff_label = "Setup", .aff_target = M_ISMP_SETUP,
+    .live_target = M_ISMP_LIVE,
+    .render = ks_fx_val, .adjust = ks_fx_adj, .action = NULL,
+};
+
+static int keys_fx_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return setup_menu_event(&ks_fx, event);
+}
 
 static int keys_setup_handler(int it_id, int event, void *ev_data)
 {
@@ -530,6 +639,7 @@ static void keys_register_pages(void *menusys)
     menusys_new_item(_ms, M_ISMP_LOAD);   menusys_item_set_default_cb(_ms, M_ISMP_LOAD, keys_load_handler);
     menusys_new_item(_ms, M_ISMP_MATRIX); menusys_item_set_default_cb(_ms, M_ISMP_MATRIX, keys_matrix_handler);
     menusys_new_item(_ms, M_ISMP_PATCH);  menusys_item_set_default_cb(_ms, M_ISMP_PATCH, keys_patch_handler);
+    menusys_new_item(_ms, M_ISMP_FX);     menusys_item_set_default_cb(_ms, M_ISMP_FX, keys_fx_handler);
 }
 
 static int keys_main_event(int event, void *ev_data)
