@@ -65,6 +65,7 @@ typedef struct {
     double   pos;                     // playhead
     volatile bool playing;
     volatile bool recording;          // punch state (TR2 / UI)
+    volatile int  ui_rec_req;         // on-device punch: 1 = in, 2 = out (audio task consumes)
     int      rec_src;                 // TPS_INPUT | TPS_TAPE (re-print)
     bool     monitor;                 // hear input through FX while stopped
     // grid

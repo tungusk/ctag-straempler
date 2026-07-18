@@ -162,6 +162,11 @@ static void draw_readout(void)
     snprintf(c, sizeof(c), "%s%.1f beats%s", s_sel == 2 ? "[" : "", beats, s_sel == 2 ? "]" : "");
     _fg = s_sel == 2 ? TFT_CYAN : (color_t){110, 110, 120};
     TFT_print(c, x, y + 2);
+    x += TFT_getStringWidth(c) + 14;
+    // REC transport element: selected -> turn right punches IN, left punches OUT
+    char rseg[16]; snprintf(rseg, sizeof(rseg), "%sREC%s", s_sel == 3 ? "[" : "", s_sel == 3 ? "]" : "");
+    _fg = tp.recording ? (color_t){230, 60, 50} : s_sel == 3 ? TFT_CYAN : (color_t){110, 110, 120};
+    TFT_print(rseg, x, y + 2);
 }
 
 static void draw_footer(void)
@@ -170,7 +175,7 @@ static void draw_footer(void)
     TFT_setFont(DEF_SMALL_FONT, NULL);
     _bg = TFT_BLACK;
     TFT_fillRect(0, _height - TFT_getfontheight() - 2, _width, TFT_getfontheight() + 2, _bg);
-    TFT_print("turn:move press:in/out/win hold:setup  TR1:play TR2:rec", 6,
+    TFT_print("turn:move/punch press:in/out/win/REC hold:setup  TR1:play TR2:rec", 6,
               _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
@@ -183,7 +188,7 @@ static unsigned head_sig(void)
 static unsigned crop_sig(void)
 {
     uint32_t ein, eout; tape_eff_window(&ein, &eout);
-    return ein * 2654435761u ^ eout * 40503u ^ (unsigned)s_sel;
+    return ein * 2654435761u ^ eout * 40503u ^ (unsigned)s_sel ^ (tp.recording ? 0x5a5au : 0u);
 }
 
 static void main_full_redraw(void)
@@ -235,10 +240,16 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
     (void)it_id; (void)ev_data;
     switch (event) {
         case EV_ENTERED_MENU: main_full_redraw(); break;
-        case EV_FWD: nudge(+1); draw_wave(); draw_readout(); s_sig_crop = crop_sig(); break;
-        case EV_BWD: nudge(-1); draw_wave(); draw_readout(); s_sig_crop = crop_sig(); break;
+        case EV_FWD:
+            if (s_sel == 3) { tp.ui_rec_req = 1; draw_readout(); s_sig_crop = crop_sig(); }   // punch IN
+            else { nudge(+1); draw_wave(); draw_readout(); s_sig_crop = crop_sig(); }
+            break;
+        case EV_BWD:
+            if (s_sel == 3) { tp.ui_rec_req = 2; draw_readout(); s_sig_crop = crop_sig(); }   // punch OUT
+            else { nudge(-1); draw_wave(); draw_readout(); s_sig_crop = crop_sig(); }
+            break;
         case EV_SHORT_PRESS:
-            s_sel = (s_sel + 1) % 3;
+            s_sel = (s_sel + 1) % 4;   // IN / OUT / WIN / REC
             draw_readout(); s_sig_crop = crop_sig();
             break;
         case EV_LONG_PRESS: return M_TAPE_SETUP;
