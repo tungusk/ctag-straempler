@@ -50,9 +50,18 @@ static int bank_alloc(tp_bank_t *b, uint32_t frames)
 // ---- helpers -----------------------------------------------------------------
 uint32_t tape_beat_frames(void)
 {
-    float bpm = clockin_beat_bpm(&tp.ci);
-    bool clk = bpm > 0;
-    if (!clk) bpm = tp.manual_bpm;
+    if (tp.clk_src == CLK_SRC_OFF) {        // un-clocked: no beat grid at all
+        tp.disp_bpm = 0.0f; tp.disp_clk = false;
+        return 0;
+    }
+    float bpm; bool clk;
+    if (tp.clk_src == CLK_SRC_INT) {        // internal: manual BPM, no external in
+        bpm = tp.manual_bpm; clk = false;
+    } else {
+        bpm = clockin_beat_bpm(&tp.ci);
+        clk = bpm > 0;
+        if (!clk) bpm = tp.manual_bpm;
+    }
     tp.disp_bpm = bpm;
     tp.disp_clk = clk;
     if (bpm < 20.0f) bpm = 20.0f;

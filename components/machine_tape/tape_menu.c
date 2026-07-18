@@ -36,14 +36,19 @@ static int w_h(void) { return 150; }
 
 static int s_sel = 0;                 // 0 = IN, 1 = OUT, 2 = WIN
 static int s_last_ph = -1;
+static int s_last_state = -1;         // last transport state for the border
 static unsigned s_sig_head = 0, s_sig_crop = 0;
 static uint32_t s_wave_len = 0;       // len at last wave draw (record growth)
 
+// view spans the RECORDED length (zoom to content), not the full capacity — a
+// short take fills the bar instead of being a sliver on a 30 s tape.
+static uint32_t tape_view_span(void) { return tp.len ? tp.len : tp.cap; }
 static int frame_x(uint32_t fr)
 {
-    if (tp.cap == 0) return W_X;
-    if (fr > tp.cap) fr = tp.cap;
-    return W_X + (int)((uint64_t)fr * W_W / tp.cap);
+    uint32_t span = tape_view_span();
+    if (span == 0) return W_X;
+    if (fr > span) fr = span;
+    return W_X + (int)((uint64_t)fr * W_W / span);
 }
 
 static void fmt_secs(uint32_t fr, char *b, size_t n)
@@ -85,7 +90,7 @@ static void wave_col(int x)
     if (tp.len) {
         uint32_t b = tape_beat_frames();
         if (b > 4410 / 2) {                     // draw grid only when ticks >= ~4px apart
-            long fr = (long)((uint64_t)(x - W_X) * tp.cap / W_W);
+            long fr = (long)((uint64_t)(x - W_X) * tape_view_span() / W_W);
             long rel = fr - (long)tp.in_pt;
             long bi = rel >= 0 ? rel / (long)b : (rel - (long)b + 1) / (long)b;
             long tick = (long)tp.in_pt + bi * (long)b;
@@ -101,7 +106,7 @@ static void wave_col(int x)
     if (pi >= 0 && pi < TP_PEAKS && tp.peaks[pi]) {
         int ph = tp.peaks[pi] * (h / 2 - 2) / 255;
         if (ph < 1) ph = 1;
-        long fr = (long)((uint64_t)(x - W_X) * tp.cap / W_W);
+        long fr = (long)((uint64_t)(x - W_X) * tape_view_span() / W_W);
         bool inside = fr >= (long)ein && fr < (long)eout;
         TFT_drawLine(x, cy - ph, x, cy + ph, inside ? WF_LIT : WF_DIM);
     } else {
@@ -110,11 +115,28 @@ static void wave_col(int x)
     if (x == xi || x == xo) TFT_drawLine(x, y0, x, y0 + h, CROP_COL);
 }
 
+// transport-state border colour: REC red, PLAY green, STOP grey
+static color_t tape_state_col(void)
+{
+    if (tp.recording) return REC_COL;
+    if (tp.playing)   return (color_t){40, 200, 90};
+    return (color_t){70, 78, 98};
+}
+// bold state-coloured outline around the transport bar (cheap; redrawn on state
+// change without repainting the whole waveform)
+static void draw_state_border(void)
+{
+    int y0 = w_y(), h = w_h();
+    color_t bc = tape_state_col();
+    TFT_drawRect(W_X - 3, y0 - 2, W_W + 6, h + 4, bc);
+    TFT_drawRect(W_X - 2, y0 - 1, W_W + 4, h + 2, bc);
+}
+
 static void draw_wave(void)
 {
     int y0 = w_y(), h = w_h();
     _bg = TFT_BLACK; TFT_fillRect(W_X - 2, y0, W_W + 4, h, _bg);
-    TFT_drawRect(W_X - 2, y0 - 1, W_W + 4, h + 2, (color_t){36, 42, 56});
+    draw_state_border();
     if (tp.len == 0) {
         _fg = (color_t){90, 90, 100};
         TFT_print("empty tape - TR2/rec records line-in,", W_X + 16, y0 + h / 2 - TFT_getfontheight());
@@ -177,8 +199,9 @@ static void draw_footer(void)
 
 static unsigned head_sig(void)
 {
+    // position at 0.1 s resolution so the readout visibly counts while rolling
     return (tp.playing ? 1u : 0u) + (tp.recording ? 2u : 0u)
-         + (unsigned)tp.disp_bpm * 8u + ((unsigned)((float)tp.pos / TP_RATE) << 16);
+         + (unsigned)tp.disp_bpm * 8u + ((unsigned)((float)tp.pos * 10.0f / TP_RATE) << 8);
 }
 static unsigned crop_sig(void)
 {
@@ -249,7 +272,12 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
                 draw_wave();
             }
             unsigned hs = head_sig();
-            if (hs != s_sig_head) { draw_header(); s_sig_head = hs; }
+            if (hs != s_sig_head) {
+                draw_header();
+                int st = tp.recording ? 2 : tp.playing ? 1 : 0;
+                if (st != s_last_state) { draw_state_border(); s_last_state = st; }
+                s_sig_head = hs;
+            }
             unsigned cs = crop_sig();
             if (cs != s_sig_crop) { draw_wave(); draw_readout(); s_sig_crop = cs; }
             draw_playhead();

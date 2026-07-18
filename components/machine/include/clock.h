@@ -82,7 +82,9 @@ static inline float clockin_ppb_eff(const clockin_t *ci)
 #define CLK_SRC_TR1   8
 #define CLK_SRC_TR2   9
 #define CLK_SRC_AUDIO 10
-#define CLK_SRC_COUNT 11
+#define CLK_SRC_INT   11   // internal clock (machine's manual BPM, no external in)
+#define CLK_SRC_OFF   12   // no clock — free / un-clocked (no tempo grid)
+#define CLK_SRC_COUNT 13
 
 uint16_t clock_source_level(int src, const machine_io_t *io);
 const char *clock_source_name(int src);   // "CV1".."CV8","TR1","TR2","AUDIO"

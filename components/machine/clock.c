@@ -8,6 +8,7 @@ uint16_t clock_source_level(int src, const machine_io_t *io)
     if (src == CLK_SRC_TR1)   return (io->trig_level & 1) ? 0 : 4095;
     if (src == CLK_SRC_TR2)   return (io->trig_level & 2) ? 0 : 4095;
     if (src == CLK_SRC_AUDIO) return beatlisten_level();
+    if (src == CLK_SRC_INT || src == CLK_SRC_OFF) return 0;   // no external level
     return io->cv[src & 7];
 }
 
@@ -15,26 +16,27 @@ const char *clock_source_name(int src)
 {
     static const char *names[CLK_SRC_COUNT] = {
         "CV1", "CV2", "CV3", "CV4", "CV5", "CV6", "CV7", "CV8",
-        "TR1", "TR2", "AUDIO"
+        "TR1", "TR2", "AUDIO", "INT", "OFF"
     };
     return (src >= 0 && src < CLK_SRC_COUNT) ? names[src] : "?";
 }
 
+// cycle order: CV1..CV8 -> AUDIO -> INT -> OFF -> (wrap). TR1/TR2 excluded
+// (transport). INT = self-clock at manual BPM; OFF = free / un-clocked.
 int clock_source_cycle_cv_audio(int src, int dir)
 {
-    if (dir > 0) {
-        if (src == 7) return CLK_SRC_AUDIO;
-        if (src < 0 || src >= CLK_SRC_TR1) return 0;   // AUDIO/stray -> CV1
-        return src + 1;
-    }
-    if (src == CLK_SRC_AUDIO) return 7;
-    if (src <= 0 || src >= CLK_SRC_TR1) return CLK_SRC_AUDIO;
-    return src - 1;
+    static const int order[] = { 0, 1, 2, 3, 4, 5, 6, 7,
+                                 CLK_SRC_AUDIO, CLK_SRC_INT, CLK_SRC_OFF };
+    const int n = (int)(sizeof(order) / sizeof(order[0]));
+    int i = 0;
+    for (int k = 0; k < n; k++) if (order[k] == src) { i = k; break; }
+    i = (i + (dir > 0 ? 1 : -1) + n) % n;
+    return order[i];
 }
 
 int clock_source_clamp_cv_audio(int src)
 {
-    if (src == CLK_SRC_AUDIO) return src;
+    if (src == CLK_SRC_AUDIO || src == CLK_SRC_INT || src == CLK_SRC_OFF) return src;
     return (src >= 0 && src <= 7) ? src : 7;   // TR/garbage -> CV8 default
 }
 
