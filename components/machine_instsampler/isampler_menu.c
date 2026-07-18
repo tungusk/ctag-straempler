@@ -68,7 +68,8 @@ static void draw_header(void)
     int fh = TFT_getfontheight();
     _bg = TFT_BLACK; TFT_fillRect(0, 0, _width, fh + 12, _bg);
     _fg = TFT_WHITE; TFT_print("Keys", 6, 4);
-    _fg = (color_t){130, 130, 140};
+    int hf = klive_focus(0);   // Sample element focus highlights the file name
+    _fg = hf == 2 ? (color_t){255, 210, 60} : hf == 1 ? (color_t){210, 190, 120} : (color_t){130, 130, 140};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     char tag[26]; snprintf(tag, sizeof(tag), "%s", inst.zone[0].sample[0] ? inst.zone[0].sample : "(no sample)");
     TFT_print(tag, 54, 6);
@@ -119,10 +120,6 @@ static void draw_wave(void)
         int lsx = loop_x(inst.zone[0].loop_start), lex = loop_x(inst.zone[0].loop_end);
         TFT_drawLine(lsx, wy, lsx, wy + L_WH, LOOP_COL);
         TFT_drawLine(lex, wy, lex, wy + L_WH, LOOP_COL);
-    }
-    if (s_live_sel == 0) {   // encoder-nav focus: box the waveform (press = Load)
-        color_t hc = s_live_edit ? (color_t){255, 210, 60} : (color_t){150, 150, 170};
-        TFT_drawRect(L_WX - 1, wy - 1, L_WW + 2, L_WH + 2, hc);
     }
     s_last_ph = -1;
 }
@@ -193,7 +190,6 @@ static void draw_adsr(void)
     int x = 8, y = dial_cy() + 20 + 2 * fh + 21, w = _width - 16, h = 38;
     _bg = TFT_BLACK; TFT_fillRect(x, y - fh - 2, w, h + fh + 4, _bg);
     _fg = (color_t){110, 110, 120}; TFT_print("ENV", x, y - fh - 2);
-    TFT_drawRect(x, y, w, h, (color_t){40, 60, 90});
     float ta = inst.atk, td = inst.dec, tr = inst.rel, tsum = ta + td + tr;
     if (tsum < 1e-4f) tsum = 1e-4f;
     float body = (float)(w - 4) * 0.72f;
@@ -279,6 +275,7 @@ static void klive_edit(int dir)
 // redraw the interactive elements (focus rings + values), no full-screen clear
 static void klive_repaint(void)
 {
+    draw_header();                       // Sample-element focus = file-name colour
     draw_wave();  s_sig_wave  = wave_sig();
     draw_playhead();
     draw_dials(); s_sig_dials = dials_sig();
