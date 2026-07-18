@@ -32,6 +32,15 @@ static bool s_last_gate;
 static int  s_last_note = -9999;
 static unsigned s_sig_dials = 0, s_sig_adsr = 0;
 
+// two-level encoder nav (mirrors Keys Live): browse elements, click in to edit,
+// long-press to escape. Elements: 0=Wave (header tag), 1..4 = dials
+// (timbre/cut/res/env>f), 5..8 = ADSR points (A/D/S/R).
+#define SLIVE_N 9
+static int  s_live_sel  = 1;      // start on the first dial
+static bool s_live_edit = false;
+static int slive_focus(int e) { return s_live_sel != e ? 0 : (s_live_edit ? 2 : 1); }
+static inline float sclampf(float x, float lo, float hi){ return x < lo ? lo : x > hi ? hi : x; }
+
 static int cur_midi(void)
 {
     return (sy.freq < 1.0f) ? -1 : (int)lroundf(69.0f + 12.0f * log2f(sy.freq / 440.0f));
@@ -44,9 +53,15 @@ static void draw_header(void)
     _bg = TFT_BLACK; TFT_fillRect(0, 0, _width, fh + 12, _bg);
     _fg = TFT_WHITE; TFT_print("Synth", 6, 4);
     const char *eng = sy.engine == ENG_FM ? "FM" : sy.engine == ENG_WT ? "WT" : "VA";
-    _fg = (sy.engine == ENG_WT && !sy.wave_name[0]) ? (color_t){220,80,60} : (color_t){130,130,140};
+    int hf = slive_focus(0);   // Wave element focus tints the header tag
+    if (hf) _fg = hf == 2 ? (color_t){255,210,60} : (color_t){210,190,120};
+    else    _fg = (sy.engine == ENG_WT && !sy.wave_name[0]) ? (color_t){220,80,60} : (color_t){130,130,140};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print((char*)eng, 62, 6);
+    // show the wavetable name (WT) next to the engine tag, else just the engine
+    char htag[28];
+    if (sy.wave_name[0]) snprintf(htag, sizeof(htag), "%s %s", eng, sy.wave_name);
+    else                 snprintf(htag, sizeof(htag), "%s", eng);
+    TFT_print(htag, 62, 6);
     TFT_setFont(DEFAULT_FONT, NULL);
     // note name stays green — the gate flips too fast to read as a colour change
     char nm[12]; note_name(sy.freq, nm, sizeof(nm));
@@ -56,14 +71,51 @@ static void draw_header(void)
     s_last_gate = sy.gate;
 }
 
+// ---- oscillator preview: one+ cycle of the current voice shape --------------
+// VA: saw<->square morph by shape. FM: the ratio/index modulated sine. WT: sine
+// placeholder. Element 0 of the encoder nav (press -> Load Wave).
+static void draw_osc(void)
+{
+    int fh = TFT_getfontheight();
+    int x = 8, y0 = fh + 15, w = _width - 16, h = 26, cy = y0 + h / 2;
+    _bg = TFT_BLACK; TFT_fillRect(x - 1, y0 - 2, w + 2, h + 4, _bg);
+    if (s_live_sel == 0) {                       // encoder-nav focus box
+        color_t hc = s_live_edit ? (color_t){255, 210, 60} : (color_t){150, 150, 170};
+        TFT_drawRect(x - 1, y0 - 1, w + 2, h + 2, hc);
+    }
+    color_t wc = {120, 190, 235};
+    int prevy = cy, amp = h / 2 - 2, cycles = 2;
+    for (int i = 0; i <= w; i++) {
+        float ph = (float)i / (float)w * (float)cycles; ph -= (float)(int)ph;
+        float yv;
+        if (sy.engine == ENG_FM) {
+            float m = sinf(6.2831853f * sy.fm_ratio * ph);
+            yv = sinf(6.2831853f * ph + sy.fm_index * m);
+        } else if (sy.engine == ENG_WT) {
+            yv = sinf(6.2831853f * ph);
+        } else {                                 // VA saw<->square morph
+            float saw = 1.0f - 2.0f * ph, sq = ph < 0.5f ? 1.0f : -1.0f;
+            yv = (1.0f - sy.shape) * saw + sy.shape * sq;
+        }
+        int py = cy - (int)(yv * (float)amp);
+        if (i > 0) TFT_drawLine(x + i - 1, prevy, x + i, py, wc);
+        prevy = py;
+    }
+}
+
 // ---- a knob dial: ring + pointer, label + value below ----------------------
-static void dial(int cx, int cy, int r, float v01, const char *lab, const char *val, bool live)
+static void dial(int cx, int cy, int r, float v01, const char *lab, const char *val, bool live, int hi)
 {
     int fh = TFT_getfontheight();
     if (v01 < 0) v01 = 0;
     if (v01 > 1) v01 = 1;
     _bg = TFT_BLACK;
-    TFT_fillRect(cx - r - 5, cy - r - 2, (r + 5) * 2, r * 2 + 2 * fh + 8, _bg);
+    TFT_fillRect(cx - r - 5, cy - r - 5, (r + 5) * 2, r * 2 + 2 * fh + 11, _bg);
+    if (hi) {                                          // encoder-nav focus ring
+        color_t hc = hi == 2 ? (color_t){255, 210, 60} : (color_t){150, 150, 170};
+        TFT_drawCircle(cx, cy, r + 3, hc);
+        if (hi == 2) TFT_drawCircle(cx, cy, r + 4, hc);
+    }
     // a knob that hasn't taken over yet (dev unit / untouched) reads dim
     color_t ring = live ? (color_t){0,150,220} : (color_t){70,70,80};
     TFT_drawCircle(cx, cy, r, ring);
@@ -90,34 +142,33 @@ static void k5_desc(const char **lab, char *val, size_t vn, float *v01)
 static void draw_dials(void)
 {
     int fh = TFT_getfontheight();
-    int cy = fh + 16 + 26, r = 24;
+    int cy = fh + 16 + 26 + 32, r = 24;   // +32: below the oscillator preview strip
     int cx[4] = { 44, 128, 212, 292 };
     // K5 timbre (engine-aware)
     const char *l0; char v0[16]; float n0;
     k5_desc(&l0, v0, sizeof(v0), &n0);
-    dial(cx[0], cy, r, n0, l0, v0, sy.knob_live[0]);
+    dial(cx[0], cy, r, n0, l0, v0, sy.knob_live[0], slive_focus(1));
     // K6 cutoff (invert the log map -> 0..1)
     float cv = logf(sy.cutoff_base / 10.0f) / logf(600.0f);
     char cval[16];
     if (sy.cutoff_base >= 1000.0f) snprintf(cval, sizeof(cval), "%.1fk", sy.cutoff_base / 1000.0f);
     else                           snprintf(cval, sizeof(cval), "%.0f", sy.cutoff_base);
-    dial(cx[1], cy, r, cv, "cut", cval, sy.knob_live[1]);
+    dial(cx[1], cy, r, cv, "cut", cval, sy.knob_live[1], slive_focus(2));
     // K7 resonance
     char rval[16]; snprintf(rval, sizeof(rval), "%.0f%%", sy.res01 * 100.0f);
-    dial(cx[2], cy, r, sy.res01, "res", rval, sy.knob_live[2]);
+    dial(cx[2], cy, r, sy.res01, "res", rval, sy.knob_live[2], slive_focus(3));
     // K8 env>cut
     char eval[16]; snprintf(eval, sizeof(eval), "%.0f%%", sy.env_to_cut * 100.0f);
-    dial(cx[3], cy, r, sy.env_to_cut, "env>f", eval, sy.knob_live[3]);
+    dial(cx[3], cy, r, sy.env_to_cut, "env>f", eval, sy.knob_live[3], slive_focus(4));
 }
 
 // ---- ADSR envelope shape (a polyline you can read at a glance) --------------
 static void draw_adsr(void)
 {
     int fh = TFT_getfontheight();
-    int x = 8, y = fh + 16 + 104, w = _width - 16, h = 44;   // extra gap below the dials
+    int x = 8, y = fh + 16 + 104 + 32, w = _width - 16, h = 40;   // +32 for the osc strip
     _bg = TFT_BLACK; TFT_fillRect(x, y - fh - 2, w, h + fh + 4, _bg);
     _fg = (color_t){110,110,120}; TFT_print("ENV", x, y - fh - 2);
-    TFT_drawRect(x, y, w, h, (color_t){40, 60, 90});
     float ta = sy.atk, td = sy.dec, tr = sy.rel, tsum = ta + td + tr;
     if (tsum < 1e-4f) tsum = 1e-4f;
     float body = (float)(w - 4) * 0.72f;                  // A+D+R share 72%, sustain plateau the rest
@@ -131,6 +182,14 @@ static void draw_adsr(void)
     TFT_drawLine(x1, yt, x2, ys, col);
     TFT_drawLine(x2, ys, x3, ys, col);
     TFT_drawLine(x3, ys, x4, yb, col);
+    if (s_live_sel >= 5 && s_live_sel <= 8) {   // encoder-nav focus point (A/D/S/R)
+        int mx = x1, my = yt;
+        if (s_live_sel == 6) { mx = x2; my = ys; }
+        else if (s_live_sel == 7) { mx = x3; my = ys; }
+        else if (s_live_sel == 8) { mx = x4; my = yb; }
+        color_t hc = s_live_edit ? (color_t){255, 210, 60} : (color_t){200, 200, 220};
+        TFT_fillCircle(mx, my, s_live_edit ? 4 : 3, hc);
+    }
 }
 
 static unsigned dials_sig(void)
@@ -156,12 +215,42 @@ static void live_full_redraw(void)
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
     draw_header();      s_last_note = cur_midi();
+    draw_osc();
     draw_dials();       s_sig_dials = dials_sig();
     draw_adsr();        s_sig_adsr  = adsr_sig();
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("CV1:pitch  TR1:gate   K5:timbre K6:cut K7:res K8:env>f", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:pick  press:edit  hold:back    CV1:pitch TR1:gate", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+// edit the focused element by a detent (dials re-arm knob takeover)
+static void slive_edit(int dir)
+{
+    float d = (float)dir;
+    switch (s_live_sel) {
+        case 1:   // timbre — engine-aware
+            if (sy.engine == ENG_FM)      sy.fm_index = sclampf(sy.fm_index + d * 0.25f, 0.0f, 8.0f);
+            else if (sy.engine == ENG_WT) sy.fold     = sclampf(sy.fold + d * 0.05f, 0.0f, 1.0f);
+            else                          sy.shape    = sclampf(sy.shape + d * 0.05f, 0.0f, 1.0f);
+            break;
+        case 2: sy.cutoff_base = sclampf(sy.cutoff_base * (dir > 0 ? 1.06f : 0.94f), 30.0f, 12000.0f); break;
+        case 3: sy.res01       = sclampf(sy.res01 + d * 0.05f, 0.0f, 1.0f); break;
+        case 4: sy.env_to_cut  = sclampf(sy.env_to_cut + d * 0.05f, 0.0f, 1.0f); break;
+        case 5: sy.atk = sclampf(sy.atk + d * 0.005f, 0.0005f, 2.0f); break;
+        case 6: sy.dec = sclampf(sy.dec + d * 0.01f, 0.001f, 2.0f); break;
+        case 7: sy.sus = sclampf(sy.sus + d * 0.05f, 0.0f, 1.0f); break;
+        case 8: sy.rel = sclampf(sy.rel + d * 0.02f, 0.001f, 3.0f); break;
+    }
+    if (s_live_sel >= 1 && s_live_sel <= 4) sy.knob_engine = -1;   // re-arm takeover
+}
+
+static void slive_repaint(void)
+{
+    draw_header();
+    draw_osc();
+    draw_dials(); s_sig_dials = dials_sig();
+    draw_adsr();  s_sig_adsr  = adsr_sig();
 }
 
 static int synth_live_handler(int it_id, int event, void *ev_data)
@@ -175,12 +264,30 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
             int midi = cur_midi();
             if (midi != s_last_note) { draw_header(); s_last_note = midi; }   // gate no longer recolors
             unsigned ds = dials_sig();
-            if (ds != s_sig_dials) { draw_dials(); s_sig_dials = ds; }
+            if (ds != s_sig_dials) { draw_osc(); draw_dials(); s_sig_dials = ds; }
             unsigned as = adsr_sig();
             if (as != s_sig_adsr) { draw_adsr(); s_sig_adsr = as; }
             break;
         }
-        case EV_LONG_PRESS: return M_SYNTH_SETUP;
+        case EV_FWD:
+            if (s_live_edit) slive_edit(+1);
+            else s_live_sel = (s_live_sel + 1) % SLIVE_N;
+            slive_repaint();
+            break;
+        case EV_BWD:
+            if (s_live_edit) slive_edit(-1);
+            else s_live_sel = (s_live_sel + SLIVE_N - 1) % SLIVE_N;
+            slive_repaint();
+            break;
+        case EV_SHORT_PRESS:
+            if (s_live_sel == 0) return M_SYNTH_LOAD;   // Wave element -> Load Wave
+            s_live_edit = !s_live_edit;
+            slive_repaint();
+            break;
+        case EV_LONG_PRESS:
+            if (s_live_edit) { s_live_edit = false; slive_repaint(); }   // escape edit
+            else return M_SYNTH_SETUP;                                   // leave Live
+            break;
         default: break;
     }
     return 0;
