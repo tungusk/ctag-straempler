@@ -119,16 +119,32 @@ static inline float tp_softclip(float x, float amt)
     return y * 1.5f;
 }
 
-// start recording: roll from the crop IN (or 0 on an empty tape), then arm
+// punch IN. From STOP = a FRESH take: clear the tape and fill from 0 (extend
+// len as it rolls). While already PLAYING = overdub over the running loop.
 static void tape_rec_start(void)
 {
-    tp.rec_extend = (tp.len == 0);   // empty tape -> first-pass fill (extend len)
     if (!tp.playing) {
-        uint32_t ein, eout; tape_eff_window(&ein, &eout);
-        tp.pos = tp.len ? (double)ein : 0.0;
+        tp.len = 0; tp.pos = 0.0;
+        tp.in_pt = 0; tp.out_pt = 0;
+        tp.rec_extend = true;            // first-pass fill
         tp.playing = true;
+    } else {
+        tp.rec_extend = false;           // overdub within the existing loop
     }
     tp.recording = true;
+}
+
+// punch OUT. Finalize a fresh take (crop = whole take, loop from the start) and
+// keep PLAYING so you immediately hear it back; an overdub just disarms record.
+static void tape_rec_stop(void)
+{
+    tp.recording = false;
+    if (tp.rec_extend) {
+        tp.in_pt = 0;
+        tp.out_pt = tp.len;
+        tp.pos = 0.0;
+    }
+    tp.rec_extend = false;
 }
 
 static void tape_process(int32_t out[MACHINE_BLOCK],
@@ -169,10 +185,10 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     if (tp.rec_mode == TPR_MOMENTARY) {
         bool gate = !(io->trig_level & 2);
         if (gate && !tp.recording)      tape_rec_start();
-        else if (!gate && tp.recording) tp.recording = false;
+        else if (!gate && tp.recording) tape_rec_stop();
     } else {
         if (io->trig_rising & 2) {
-            if (tp.recording) tp.recording = false;
+            if (tp.recording) tape_rec_stop();
             else              tape_rec_start();
         }
     }
@@ -218,7 +234,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
                 float v = y * 32767.0f;
                 tp_wr(w, (int16_t)tp_clampf(v, -32768.0f, 32767.0f));
                 if (w + 1 > tp.len) tp.len = w + 1;
-                if (w + 1 >= tp.cap) { tp.recording = false; tp.playing = false; }
+                if (w + 1 >= tp.cap) { tape_rec_stop(); tp.playing = false; }   // tape full
             } else if (!empty_rec && w < tp.len) {
                 float v = y * 32767.0f;
                 tp_wr(w, (int16_t)tp_clampf(v, -32768.0f, 32767.0f));
