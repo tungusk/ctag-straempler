@@ -110,6 +110,17 @@ static inline float tp_softclip(float x, float amt)
     return y * 1.5f;
 }
 
+// start recording: roll from the crop IN (or 0 on an empty tape), then arm
+static void tape_rec_start(void)
+{
+    if (!tp.playing) {
+        uint32_t ein, eout; tape_eff_window(&ein, &eout);
+        tp.pos = tp.len ? (double)ein : 0.0;
+        tp.playing = true;
+    }
+    tp.recording = true;
+}
+
 static void tape_process(int32_t out[MACHINE_BLOCK],
                          const int32_t in[MACHINE_BLOCK],
                          const machine_io_t *io)
@@ -143,30 +154,16 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
             tp.playing = true;
         }
     }
-    if (io->trig_rising & 2) {
-        if (tp.recording) tp.recording = false;
-        else {
-            if (!tp.playing) {                       // rec from stop = start rolling
-                uint32_t ein, eout; tape_eff_window(&ein, &eout);
-                tp.pos = tp.len ? (double)ein : 0.0;
-                tp.playing = true;
-            }
-            tp.recording = true;
-        }
-    }
-    // on-device punch (UI encoder): 1 = punch IN (start rec), 2 = punch OUT (stop)
-    int rq = tp.ui_rec_req;
-    if (rq) {
-        tp.ui_rec_req = 0;
-        if (rq == 1 && !tp.recording) {
-            if (!tp.playing) {
-                uint32_t ein, eout; tape_eff_window(&ein, &eout);
-                tp.pos = tp.len ? (double)ein : 0.0;
-                tp.playing = true;
-            }
-            tp.recording = true;
-        } else if (rq == 2) {
-            tp.recording = false;
+    // TR2 record. PUNCH: each validated gate edge toggles record in/out.
+    // MOMENTARY: record only while the gate is HELD (active low -> bit clear).
+    if (tp.rec_mode == TPR_MOMENTARY) {
+        bool gate = !(io->trig_level & 2);
+        if (gate && !tp.recording)      tape_rec_start();
+        else if (!gate && tp.recording) tp.recording = false;
+    } else {
+        if (io->trig_rising & 2) {
+            if (tp.recording) tp.recording = false;
+            else              tape_rec_start();
         }
     }
 
@@ -602,6 +599,7 @@ static cJSON *tape_preset_save(void)
     cJSON_AddBoolToObject(o, "trmst", tp.trem.stereo);
     cJSON_AddNumberToObject(o, "lvl", tp.level);
     cJSON_AddNumberToObject(o, "rsrc", tp.rec_src);
+    cJSON_AddNumberToObject(o, "rmode", tp.rec_mode);
     cJSON_AddBoolToObject(o, "mon", tp.monitor);
     return o;
 }
@@ -661,6 +659,7 @@ static void tape_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx")) && cJSON_IsNumber(j)) reverb_set_mix(&tp.rv, (float)j->valueint / 100.0f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))  && cJSON_IsNumber(j)) tp.level = tp_clampf((float)j->valuedouble, 0, 1.2f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rsrc")) && cJSON_IsNumber(j)) tp.rec_src = j->valueint == TPS_TAPE ? TPS_TAPE : TPS_INPUT;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rmode")) && cJSON_IsNumber(j)) tp.rec_mode = j->valueint == TPR_MOMENTARY ? TPR_MOMENTARY : TPR_PUNCH;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "mon"))  && cJSON_IsBool(j))   tp.monitor = cJSON_IsTrue(j);
     tp.knob_ctx = -1;
 }

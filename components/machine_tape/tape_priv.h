@@ -52,6 +52,7 @@ static inline void bank_wr(tp_bank_t *b, uint32_t i, int16_t v)
 
 enum { TPF_OFF = 0, TPF_LP, TPF_BP, TPF_HP, TPF_N };
 enum { TPS_INPUT = 0, TPS_TAPE };     // record source
+enum { TPR_PUNCH = 0, TPR_MOMENTARY }; // TR2 record behaviour: edge-toggle vs gate-held
 
 typedef struct {
     // tape
@@ -64,8 +65,8 @@ typedef struct {
     // transport
     double   pos;                     // playhead
     volatile bool playing;
-    volatile bool recording;          // punch state (TR2 / UI)
-    volatile int  ui_rec_req;         // on-device punch: 1 = in, 2 = out (audio task consumes)
+    volatile bool recording;          // record state (driven by TR2)
+    int      rec_mode;                // TPR_PUNCH | TPR_MOMENTARY (Setup)
     int      rec_src;                 // TPS_INPUT | TPS_TAPE (re-print)
     bool     monitor;                 // hear input through FX while stopped
     // grid
