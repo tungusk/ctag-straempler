@@ -66,6 +66,7 @@ typedef struct {
     double   pos;                     // playhead
     volatile bool playing;
     volatile bool recording;          // record state (driven by TR2)
+    volatile bool rec_extend;         // this record pass started from empty -> extend len (fill)
     int      rec_mode;                // TPR_PUNCH | TPR_MOMENTARY (Setup)
     int      rec_src;                 // TPS_INPUT | TPS_TAPE (re-print)
     bool     monitor;                 // hear input through FX while stopped

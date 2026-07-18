@@ -122,6 +122,7 @@ static inline float tp_softclip(float x, float amt)
 // start recording: roll from the crop IN (or 0 on an empty tape), then arm
 static void tape_rec_start(void)
 {
+    tp.rec_extend = (tp.len == 0);   // empty tape -> first-pass fill (extend len)
     if (!tp.playing) {
         uint32_t ein, eout; tape_eff_window(&ein, &eout);
         tp.pos = tp.len ? (double)ein : 0.0;
@@ -178,7 +179,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
 
     uint32_t ein = 0, eout = 0;
     tape_eff_window(&ein, &eout);
-    bool empty_rec = (tp.len == 0);                  // first recording fills from 0
+    bool empty_rec = tp.rec_extend;                  // latched at punch-in (not per-block)
 
     float coef = 0, q = 0;
     if (tp.flt_mode != TPF_OFF) {
