@@ -206,6 +206,9 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     }
 
     bool have_tape = tp.tape.nblk > 0;
+    // FX apply to INCOMING audio only (monitor + what's printed to tape), NOT to
+    // playback — so the chain isn't doubled on top of the already-recorded take.
+    bool fx_apply = tp.recording || (!tp.playing && tp.monitor);
     int frames = MACHINE_BLOCK / 2;
     for (int f = 0; f < frames; f++) {
         // source: input while recording-from-input or monitoring; else tape
@@ -218,14 +221,17 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
         else if (on_tape)                                 src = (float)tp_rd(p) / 32768.0f;
         else if (!tp.playing && tp.monitor)               src = in_mid;
 
-        // fx chain: filter -> drive (reverb runs on the block below)
+        // filter -> drive on the INCOMING audio only (printed to tape + monitored);
+        // playback stays dry so the FX aren't applied a second time.
         float y = src;
-        if (tp.flt_mode != TPF_OFF) {
-            float lp, bp, hp;
-            svf_step(&tp.flt, y, coef, q, &lp, &bp, &hp);
-            y = tp.flt_mode == TPF_LP ? lp : tp.flt_mode == TPF_BP ? bp : hp;
+        if (fx_apply) {
+            if (tp.flt_mode != TPF_OFF) {
+                float lp, bp, hp;
+                svf_step(&tp.flt, y, coef, q, &lp, &bp, &hp);
+                y = tp.flt_mode == TPF_LP ? lp : tp.flt_mode == TPF_BP ? bp : hp;
+            }
+            if (tp.drive > 0.005f) y = tp_softclip(y, tp.drive);
         }
-        if (tp.drive > 0.005f) y = tp_softclip(y, tp.drive);
 
         // record head taps POST-FX (print the chain); recording extends len
         if (tp.recording && have_tape) {
@@ -263,8 +269,9 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     float bpm = clockin_beat_bpm(&tp.ci);
     if (bpm <= 0.0f) bpm = tp.manual_bpm;
     // Run the chain in float with a single soft limiter at the end (fxchain.h)
-    // so stacked effects don't hard-clip at every stage.
-    {
+    // so stacked effects don't hard-clip at every stage. INCOMING audio only —
+    // dry on playback (the take was already recorded through the chain).
+    if (fx_apply) {
         float fb[FX_SCRATCH_N];
         fx_unpack_i32(out, fb, frames * 2);
         if (tp.od_on) overdrive_block_f(&tp.od, fb, frames);
