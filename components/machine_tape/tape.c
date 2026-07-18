@@ -14,6 +14,7 @@
 #include "sample_ram.h"
 #include "sampfile.h"
 #include "sd_lock.h"
+#include "fxchain.h"
 #include "tape_priv.h"
 
 static const char *TAG = "TAPE";
@@ -223,23 +224,30 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // they lock to tempo (bpm computed once and reused across the block).
     float bpm = clockin_beat_bpm(&tp.ci);
     if (bpm <= 0.0f) bpm = tp.manual_bpm;
-    if (tp.od_on) overdrive_block_i32(&tp.od, out, frames);
-    if (tp.flg_on && tp.flg.bufL) {
-        flanger_set_rate_beats(&tp.flg, tp_dly_beats[tp.flg_div], bpm);
-        flanger_block_i32(&tp.flg, out, frames);
-    }
-    if (tp.trem_on) {
-        tremolo_set_rate_beats(&tp.trem, tp_dly_beats[tp.trem_div], bpm);
-        tremolo_block_i32(&tp.trem, out, frames);
-    }
-    if (tp.dly_on && tp.dly.bufL) {
-        fxdelay_set_time_beats(&tp.dly, tp_dly_beats[tp.dly_div], bpm);
-        fxdelay_block_i32(&tp.dly, out, frames);
-    }
-    if (tp.rv.mode != RV_OFF && tp.rv.slab) {
-        reverb_block_i32(&tp.rv, out, frames);
-        // reverb tail is output-only; the record head already wrote pre-reverb
-        // this block. Printing reverb: set Rec Source = TAPE and punch a pass.
+    // Run the chain in float with a single soft limiter at the end (fxchain.h)
+    // so stacked effects don't hard-clip at every stage.
+    {
+        float fb[FX_SCRATCH_N];
+        fx_unpack_i32(out, fb, frames * 2);
+        if (tp.od_on) overdrive_block_f(&tp.od, fb, frames);
+        if (tp.flg_on && tp.flg.bufL) {
+            flanger_set_rate_beats(&tp.flg, tp_dly_beats[tp.flg_div], bpm);
+            flanger_block_f(&tp.flg, fb, frames);
+        }
+        if (tp.trem_on) {
+            tremolo_set_rate_beats(&tp.trem, tp_dly_beats[tp.trem_div], bpm);
+            tremolo_block_f(&tp.trem, fb, frames);
+        }
+        if (tp.dly_on && tp.dly.bufL) {
+            fxdelay_set_time_beats(&tp.dly, tp_dly_beats[tp.dly_div], bpm);
+            fxdelay_block_f(&tp.dly, fb, frames);
+        }
+        if (tp.rv.mode != RV_OFF && tp.rv.slab) {
+            reverb_block_f(&tp.rv, fb, frames);
+            // reverb tail is output-only; the record head already wrote pre-reverb
+            // this block. Printing reverb: set Rec Source = TAPE and punch a pass.
+        }
+        fx_pack_softclip(fb, out, frames * 2);
     }
 }
 

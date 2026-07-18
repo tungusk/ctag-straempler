@@ -13,11 +13,12 @@
 // loaders resolve ids back to folders either way
 static const char *const dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
                                    "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
-                                   "/sdcard/usr/DRUMS"};
+                                   "/sdcard/usr/DRUMS", "/sdcard/usr/KEYS",
+                                   "/sdcard/usr/TAPE"};
 
 const char *sample_dir_name(int di)
 {
-    static const char *const names[] = {"pool", "REC", "LOOPS", "SLICES", "DRUMS"};
+    static const char *const names[] = {"pool", "REC", "LOOPS", "SLICES", "DRUMS", "KEYS", "TAPE"};
     return (di >= 0 && di < SAMPLE_DIR_N) ? names[di] : "all";
 }
 

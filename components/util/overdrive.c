@@ -8,6 +8,7 @@
 #include <math.h>
 #include <stddef.h>
 #include "overdrive.h"
+#include "fxchain.h"
 
 #define OD_RATE 44100.0f
 
@@ -22,7 +23,10 @@ static inline float fast_tanh(float x)
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
 
-void overdrive_block_i32(overdrive_t *o, int32_t *out, int frames)
+// float worker: reads/writes the interleaved float scratch, NO output clamp
+// (the chain's single soft limiter handles the ceiling). buf units are samples
+// (±32768), matching the >>16 machine format.
+void overdrive_block_f(overdrive_t *o, float *buf, int frames)
 {
     float drive = o->drive; if (drive < 0) drive = 0; else if (drive > 1) drive = 1;
     float tone  = o->tone;  if (tone < 0)  tone = 0;  else if (tone > 1)  tone = 1;
@@ -37,13 +41,24 @@ void overdrive_block_i32(overdrive_t *o, int32_t *out, int frames)
     for (int f = 0; f < frames; f++) {
         for (int ch = 0; ch < 2; ch++) {
             svf_t *flt = ch ? &o->tr : &o->tl;
-            float x  = (float)(out[f * 2 + ch] >> 16) / 32768.0f;
+            float x  = buf[f * 2 + ch] / 32768.0f;
             float sh = fast_tanh(g * (x + bias)) - dc;
             float lp; svf_step(flt, sh, cf, 1.0f, &lp, NULL, NULL);
-            float y  = lp * level * 32767.0f;
-            int32_t s = (int32_t)y;
-            if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
-            out[f * 2 + ch] = s << 16;
+            buf[f * 2 + ch] = lp * level * 32767.0f;
         }
+    }
+}
+
+// int32<<16 wrapper (single-FX callers): unpack -> worker -> hard-clamp pack.
+void overdrive_block_i32(overdrive_t *o, int32_t *out, int frames)
+{
+    float buf[FX_SCRATCH_N];
+    if (frames * 2 > FX_SCRATCH_N) frames = FX_SCRATCH_N / 2;
+    fx_unpack_i32(out, buf, frames * 2);
+    overdrive_block_f(o, buf, frames);
+    for (int i = 0; i < frames * 2; i++) {
+        int32_t s = (int32_t)buf[i];
+        if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
+        out[i] = s << 16;
     }
 }

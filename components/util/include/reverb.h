@@ -67,6 +67,8 @@ void reverb_set_mix(reverb_t *rv, float wet);   // 0..1
 // int32<<16 output buffer (the machine format). Wet/dry is equal-power.
 // No-op when mode == RV_OFF or rv is unallocated.
 void reverb_block_i32(reverb_t *rv, int32_t *out, int frames);
+// float-scratch worker for the hosted chain (see fxchain.h)
+void reverb_block_f(reverb_t *rv, float *buf, int frames);
 
 // SEND mode (drums, 2026-07-13 — a kick through a hall is mud; each voice
 // decides how much of itself goes in): the caller mixes a SEND bus (only the

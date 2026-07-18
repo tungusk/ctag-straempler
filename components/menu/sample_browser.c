@@ -29,7 +29,10 @@ static struct {
     int  n;              // files in the current folder
 } b;
 
-static const char *const k_fold[BR_NFOLD] = {"ALL", "POOL", "REC", "LOOPS", "SLICES", "DRUMS"};
+// one label per folder row: "ALL" + SAMPLE_DIR_* in order. MUST stay length
+// BR_NFOLD (SAMPLE_DIR_N + 1) — add a folder in sample_ram.h and here together,
+// or the extra folder rows read past the end of this array.
+static const char *const k_fold[BR_NFOLD] = {"ALL", "POOL", "REC", "LOOPS", "SLICES", "DRUMS", "KEYS", "TAPE"};
 static const color_t FOLD_FG  = {120, 205, 130};   // folder rows read green-ish
 static const color_t FOLD_DIM = {70, 120, 75};
 

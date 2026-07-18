@@ -40,3 +40,5 @@ void flanger_free(flanger_t *g);
 void flanger_clear(flanger_t *g);       // flush the line
 
 void flanger_block_i32(flanger_t *g, int32_t *out, int frames);
+// float-scratch worker for the hosted chain (see fxchain.h)
+void flanger_block_f(flanger_t *g, float *buf, int frames);

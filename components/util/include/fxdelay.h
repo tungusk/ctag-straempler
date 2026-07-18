@@ -57,6 +57,8 @@ void fxdelay_set_pingpong(fxdelay_t *d, bool on);
 // (and may fxdelay_clear to drop the tail) rather than pass wet 0, since a live
 // feedback tail must keep circulating to ring out.
 void fxdelay_block_i32(fxdelay_t *d, int32_t *out, int frames);
+// float-scratch worker for the hosted chain (see fxchain.h)
+void fxdelay_block_f(fxdelay_t *d, float *buf, int frames);
 
 static inline float fxdelay_time_ms(const fxdelay_t *d)
 {

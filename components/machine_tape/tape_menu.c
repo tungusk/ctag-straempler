@@ -17,6 +17,7 @@
 #include "tftspi.h"
 #include "machine.h"
 #include "sample_browser.h"
+#include "sample_ram.h"
 #include "tape_priv.h"
 
 static const color_t WF_DIM   = {70, 70, 80};     // outside the crop
@@ -500,6 +501,8 @@ static int tape_load_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
     if (event == EV_ENTERED_MENU) {
+        // plain browse (all folders reachable). NOT forced into usr/TAPE — it
+        // starts empty. TAPE is still a folder row + web destination.
         sample_browser_enter(true, "Load to Tape", "");
         return 0;
     }

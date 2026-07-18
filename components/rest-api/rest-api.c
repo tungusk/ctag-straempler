@@ -155,13 +155,16 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     // the opening brace rides in the output batcher below (obuf)
 
+    // KEEP IN SYNC with SAMPLE_DIR_* (sample_ram.h) and the other pool-folder
+    // arrays in this file (fdirs, del_dirs, mv_dirs/mv_tags, rn_dirs).
     static const char *const jdirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
                                         "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
-                                        "/sdcard/usr/DRUMS"};
+                                        "/sdcard/usr/DRUMS", "/sdcard/usr/KEYS",
+                                        "/sdcard/usr/TAPE"};
     // short folder tag streamed with each entry so the browser can SHOW the
     // card's organization instead of flattening it (pool/takes/loops/slices)
-    static const char *const jdir_tag[] = {"pool", "REC", "LOOPS", "SLICES", "DRUMS"};
-    #define JN_DIRS 5
+    static const char *const jdir_tag[] = {"pool", "REC", "LOOPS", "SLICES", "DRUMS", "KEYS", "TAPE"};
+    #define JN_DIRS 7
     // INTERNAL RAM, reused for every sidecar. Never PSRAM: SDMMC DMA cannot target it,
     // which is the whole reason sidecars were skipped here in the first place.
     static char sidecar_buf[512];
@@ -191,7 +194,7 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     #define FIDX_MAX 512
     static fidx_t *idx = NULL;   // PSRAM, one folder at a time (~22 KB)
     if (!idx) idx = heap_caps_malloc(FIDX_MAX * sizeof(fidx_t), MALLOC_CAP_SPIRAM);
-    static const char *const fdirs[] = {"usr", "usr/REC", "usr/LOOPS", "usr/SLICES", "usr/DRUMS"};
+    static const char *const fdirs[] = {"usr", "usr/REC", "usr/LOOPS", "usr/SLICES", "usr/DRUMS", "usr/KEYS", "usr/TAPE"};
 
     for (int di = 0; idx && di < JN_DIRS && !dead; di++) {
         int n_idx = 0;
@@ -316,7 +319,8 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
     // from the array so it can't drift again.
     static const char *const del_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
                                            "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
-                                           "/sdcard/usr/DRUMS"};
+                                           "/sdcard/usr/DRUMS", "/sdcard/usr/KEYS",
+                                           "/sdcard/usr/TAPE"};
     sd_lock_take();
     for (int d = 0; d < (int)(sizeof(del_dirs)/sizeof(del_dirs[0])); d++)
         for (int i = 0; i < 6; i++) {
@@ -335,9 +339,10 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
 // + .JSN + .OT travel together), destination = another pool folder, id kept.
 static const char *const mv_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
                                       "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
-                                      "/sdcard/usr/DRUMS"};
-static const char *const mv_tags[] = {"pool", "REC", "LOOPS", "SLICES", "DRUMS"};
-#define MV_DIRS 5
+                                      "/sdcard/usr/DRUMS", "/sdcard/usr/KEYS",
+                                      "/sdcard/usr/TAPE"};
+static const char *const mv_tags[] = {"pool", "REC", "LOOPS", "SLICES", "DRUMS", "KEYS", "TAPE"};
+#define MV_DIRS 7
 
 // sweep every piece of a sample (audio + .JSN + .OT, wherever each lives)
 // into mv_dirs[dst]. Creates the folder on first use; never clobbers a twin.
@@ -377,7 +382,7 @@ static esp_err_t files_move_handler(httpd_req_t *req)
     for (int d = 0; d < MV_DIRS; d++)
         if (strcasecmp(dir, mv_tags[d]) == 0) dst = d;
     if (dst < 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "dir must be pool/REC/LOOPS/SLICES/DRUMS");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "dir must be pool/REC/LOOPS/SLICES/DRUMS/KEYS/TAPE");
         return ESP_FAIL;
     }
     if (!files_move_pieces(name, dst)) {
@@ -430,7 +435,8 @@ static esp_err_t files_rename_handler(httpd_req_t *req)
     static const char *const rn_exts[] = {".RAW", ".WAV", ".AIF", ".AIFF", ".JSN", ".OT"};
     static const char *const rn_dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
                                           "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
-                                          "/sdcard/usr/DRUMS"};
+                                          "/sdcard/usr/DRUMS", "/sdcard/usr/KEYS",
+                                          "/sdcard/usr/TAPE"};
     char from_p[80], to_p[80];
     int moved = 0;
     sd_lock_take();
@@ -1294,7 +1300,7 @@ static void machine_web_apply(const machine_t *m)
         ESP_LOGI(TAG, "%s: %d machine URIs registered", m->name, n_machine_uris);
 }
 
-// ─── tracker module files (usr/MODS) ─────────────────────────────────────────
+// ─── tracker module files (usr/TRACKER) ─────────────────────────────────────────
 // Upload / list / download / delete for tracker modules. These live in the
 // CORE (not the Tracker machine) so they work regardless of the active machine
 // — a module is just a file. Path mirrors tracker_priv.h's TRK_DIR_* (the
@@ -1302,9 +1308,9 @@ static void machine_web_apply(const machine_t *m)
 #ifndef MIN
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #endif
-#define MOD_DIR_VFS  "/sdcard/usr/MODS"
-#define MOD_DIR_FAT  "/usr/MODS"
-#define MOD_TMP      "/usr/MODS/UPLOAD.TMP"   // atomic-upload scratch (8.3-safe)
+#define MOD_DIR_VFS  "/sdcard/usr/TRACKER"    // was usr/MODS (see tracker_priv.h)
+#define MOD_DIR_FAT  "/usr/TRACKER"
+#define MOD_TMP      "/usr/TRACKER/UPLOAD.TMP"   // atomic-upload scratch (8.3-safe)
 #define MOD_MAX_FILE (2 * 1024 * 1024)
 
 static const char *const MOD_UP_EXTS[] = {
@@ -1324,7 +1330,7 @@ static bool mod_name_safe(const char *n){
 }
 
 // PUT /trk/upload — headers Name (8.3 base, clamped) + Ext; body = raw bytes,
-// stored verbatim (no conversion) to usr/MODS/<NAME>.<EXT>.
+// stored verbatim (no conversion) to usr/TRACKER/<NAME>.<EXT>.
 static esp_err_t mod_upload_handler(httpd_req_t *req)
 {
     char name[16] = "", ext[8] = "";
@@ -1461,7 +1467,7 @@ static esp_err_t drop_ot_put_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// GET /trk/list — JSON {"modules":[{"name","size"}...]} from usr/MODS
+// GET /trk/list — JSON {"modules":[{"name","size"}...]} from usr/TRACKER
 static esp_err_t mod_list_handler(httpd_req_t *req)
 {
     char *out = malloc(4096);

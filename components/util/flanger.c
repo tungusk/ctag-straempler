@@ -9,6 +9,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "flanger.h"
+#include "fxchain.h"
 
 static const char *TAG = "FLANGER";
 
@@ -43,7 +44,7 @@ void flanger_clear(flanger_t *g)
     g->lpL = g->lpR = 0.0f;
 }
 
-void flanger_block_i32(flanger_t *g, int32_t *out, int frames)
+void flanger_block_f(flanger_t *g, float *buf, int frames)
 {
     if (!g->bufL) return;
     const int cap = g->cap;
@@ -70,8 +71,8 @@ void flanger_block_i32(flanger_t *g, int32_t *out, int frames)
         int   i1  = i0 + 1; if (i1 >= cap) i1 -= cap;
         float tl  = g->bufL[i0] * (1.0f - fr) + g->bufL[i1] * fr;
         float tr  = g->bufR[i0] * (1.0f - fr) + g->bufR[i1] * fr;
-        float xl  = (float)(out[f * 2]     >> 16);
-        float xr  = (float)(out[f * 2 + 1] >> 16);
+        float xl  = buf[f * 2];
+        float xr  = buf[f * 2 + 1];
         // damp the RECIRCULATED signal so a swept comb + feedback can't ring up
         // into metallic harshness on a sustained tone (the wet tap stays bright)
         lpL += dc * (tl - lpL);
@@ -81,13 +82,8 @@ void flanger_block_i32(flanger_t *g, int32_t *out, int frames)
         if (wr > 60000.0f) wr = 60000.0f; else if (wr < -60000.0f) wr = -60000.0f;
         g->bufL[w] = wl;
         g->bufR[w] = wr;
-        float ol = xl * dryg + tl * wetg;
-        float or_ = xr * dryg + tr * wetg;
-        int32_t l = (int32_t)ol, r = (int32_t)or_;
-        if (l > 32767) l = 32767; else if (l < -32768) l = -32768;
-        if (r > 32767) r = 32767; else if (r < -32768) r = -32768;
-        out[f * 2]     = l << 16;
-        out[f * 2 + 1] = r << 16;
+        buf[f * 2]     = xl * dryg + tl * wetg;   // no clamp (chain soft-limits)
+        buf[f * 2 + 1] = xr * dryg + tr * wetg;
         ph += inc; if (ph >= 1.0f) ph -= 1.0f;
         if (++w >= cap) w = 0;
     }
@@ -96,4 +92,18 @@ void flanger_block_i32(flanger_t *g, int32_t *out, int frames)
     // NaN guard: a runaway feedback path must never latch permanent noise
     if (!(fabsf(lpL) < 1e9f) || !(fabsf(lpR) < 1e9f)) { lpL = lpR = 0.0f; flanger_clear(g); }
     g->lpL = lpL; g->lpR = lpR;
+}
+
+// int32<<16 wrapper (single-FX callers): unpack -> worker -> hard-clamp pack.
+void flanger_block_i32(flanger_t *g, int32_t *out, int frames)
+{
+    float buf[FX_SCRATCH_N];
+    if (frames * 2 > FX_SCRATCH_N) frames = FX_SCRATCH_N / 2;
+    fx_unpack_i32(out, buf, frames * 2);
+    flanger_block_f(g, buf, frames);
+    for (int i = 0; i < frames * 2; i++) {
+        int32_t s = (int32_t)buf[i];
+        if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
+        out[i] = s << 16;
+    }
 }

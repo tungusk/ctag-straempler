@@ -16,6 +16,7 @@
 #include "tftspi.h"
 #include "machine.h"
 #include "sample_browser.h"
+#include "sample_ram.h"
 #include "instsampler_priv.h"
 
 static const color_t GATE_ON = {40, 200, 90};    // note stays green (gate flips too fast to read)
@@ -481,15 +482,18 @@ static int keys_load_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
     if (event == EV_ENTERED_MENU) {
-        sample_browser_enter(true, "Load Sample", inst.zone[0].sample);   // dated
+        // plain browse (opens in POOL, remembers position, all folders reachable).
+        // NOT forced into usr/KEYS: that folder starts empty, and landing there
+        // leaves nothing to load. KEYS is still a folder row + web destination.
+        sample_browser_enter(true, "Load Sample", inst.zone[0].sample);
         return 0;
     }
     int r = sample_browser_event(event);
     if (r == 1) {
         keys_load_zone(sample_browser_selected());
-        return M_ISMP_SETUP;
+        return M_ISMP_LIVE;             // loaded: jump straight to Live to play it
     }
-    if (r == 2) return M_ISMP_SETUP;
+    if (r == 2) return M_ISMP_SETUP;    // cancelled: back to Setup where we came from
     return 0;
 }
 

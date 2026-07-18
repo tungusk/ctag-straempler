@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "fxdelay.h"
+#include "fxchain.h"
 
 static const char *TAG = "FXDELAY";
 
@@ -91,7 +92,7 @@ void fxdelay_set_damp(fxdelay_t *d, float d01)
 
 void fxdelay_set_pingpong(fxdelay_t *d, bool on) { d->pingpong = on; }
 
-void fxdelay_block_i32(fxdelay_t *d, int32_t *out, int frames)
+void fxdelay_block_f(fxdelay_t *d, float *buf, int frames)
 {
     if (!d->bufL) { d->cost_us = 0; return; }
     int64_t t0 = esp_timer_get_time();
@@ -111,8 +112,8 @@ void fxdelay_block_i32(fxdelay_t *d, int32_t *out, int frames)
 
     for (int f = 0; f < frames; f++) {
         int r = w - len; if (r < 0) r += cap;
-        float dl = (float)(out[f * 2]     >> 16);
-        float dr = (float)(out[f * 2 + 1] >> 16);
+        float dl = buf[f * 2];
+        float dr = buf[f * 2 + 1];
         float tl = d->bufL[r], tr = d->bufR[r];        // wet taps (pre-damp)
         // darken the signal that recirculates
         lpL += dc * (tl - lpL);
@@ -124,13 +125,8 @@ void fxdelay_block_i32(fxdelay_t *d, int32_t *out, int frames)
             d->bufL[w] = dl + fb * lpL;
             d->bufR[w] = dr + fb * lpR;
         }
-        float ol  = dl * dryg + tl * wetg;
-        float or_ = dr * dryg + tr * wetg;
-        int32_t li = (int32_t)ol, ri = (int32_t)or_;
-        if (li > 32767) li = 32767; else if (li < -32768) li = -32768;
-        if (ri > 32767) ri = 32767; else if (ri < -32768) ri = -32768;
-        out[f * 2]     = li << 16;
-        out[f * 2 + 1] = ri << 16;
+        buf[f * 2]     = dl * dryg + tl * wetg;   // no clamp (chain soft-limits)
+        buf[f * 2 + 1] = dr * dryg + tr * wetg;
         if (++w >= cap) w = 0;
     }
 
@@ -141,4 +137,18 @@ void fxdelay_block_i32(fxdelay_t *d, int32_t *out, int frames)
 
     int us = (int)(esp_timer_get_time() - t0);
     d->cost_us += (us - d->cost_us) >> 3;              // EMA, ~8-block settle
+}
+
+// int32<<16 wrapper (single-FX callers, e.g. Drums): unpack -> worker -> clamp.
+void fxdelay_block_i32(fxdelay_t *d, int32_t *out, int frames)
+{
+    float buf[FX_SCRATCH_N];
+    if (frames * 2 > FX_SCRATCH_N) frames = FX_SCRATCH_N / 2;
+    fx_unpack_i32(out, buf, frames * 2);
+    fxdelay_block_f(d, buf, frames);
+    for (int i = 0; i < frames * 2; i++) {
+        int32_t s = (int32_t)buf[i];
+        if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
+        out[i] = s << 16;
+    }
 }

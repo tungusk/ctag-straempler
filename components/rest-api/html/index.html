@@ -100,6 +100,8 @@ input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:verti
     <div class="tab" id="fd-LOOPS" onclick="setDirFilt('LOOPS')">LOOPS</div>
     <div class="tab" id="fd-SLICES" onclick="setDirFilt('SLICES')">SLICES</div>
     <div class="tab" id="fd-DRUMS" onclick="setDirFilt('DRUMS')">DRUMS</div>
+    <div class="tab" id="fd-KEYS" onclick="setDirFilt('KEYS')">KEYS</div>
+    <div class="tab" id="fd-TAPE" onclick="setDirFilt('TAPE')">TAPE</div>
   </div>
   <table id="ftab">
     <thead><tr>
@@ -130,7 +132,7 @@ input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:verti
     <span class="kv" id="impmsg" style="margin-left:8px"></span>
   </div>
   <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
-    <b>Drop files here, or tap to browse</b> (one or many): <b>MP3/WAV/AIFF</b> upload as-is and convert on the module (fast &#8212; no giant RAW over WiFi); other audio (flac/ogg/m4a &#8594; decoded in-browser to RAW); 16-bit 44.1kHz stereo RAW; or <b>tracker modules</b> (MOD/XM/IT/&#8230; &#8594; usr/MODS). Review &amp; rename below, then Upload.
+    <b>Drop files here, or tap to browse</b> (one or many): <b>MP3/WAV/AIFF</b> upload as-is and convert on the module (fast &#8212; no giant RAW over WiFi); other audio (flac/ogg/m4a &#8594; decoded in-browser to RAW); 16-bit 44.1kHz stereo RAW; or <b>tracker modules</b> (MOD/XM/IT/&#8230; &#8594; usr/TRACKER). Review &amp; rename below, then Upload.
   </div>
   <input type="file" id="fi" multiple accept="audio/*,.raw,.RAW,.ot,.OT,.mod,.xm,.it,.s3m,.669,.mtm,.okt,.ult,.far,.med,.dbm,.amf,.ptm,.stm,.dmf,.gdm,.imf,.liq,.mdl,.pt3,.oxm,.digi,.emod,.MOD,.XM,.IT,.S3M" style="display:none" onchange="onFiles(this.files)">
   <div class="row" style="margin-top:6px"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('fi').click()">Choose files&#8230;</button></div>
@@ -370,14 +372,14 @@ function tab(n){
   else if(edTimer){clearInterval(edTimer);edTimer=null;}
 }
 
-// Files-page sub-tabs: 0 = Samples (usr/*.RAW), 1 = Modules (usr/MODS)
+// Files-page sub-tabs: 0 = Samples (usr/*.RAW), 1 = Modules (usr/TRACKER)
 function filesTab(n){
   document.getElementById('ft0').className='tab'+(n===0?' on':'');
   document.getElementById('ft1').className='tab'+(n===1?' on':'');
   document.getElementById('ftab').style.display=n===0?'':'none';
   document.getElementById('mtab').style.display=n===1?'':'none';
   // the folder chips only mean something for samples
-  ['fd-all','fd-pool','fd-REC','fd-LOOPS','fd-SLICES','fd-DRUMS'].forEach(function(id){
+  ['fd-all','fd-pool','fd-REC','fd-LOOPS','fd-SLICES','fd-DRUMS','fd-KEYS','fd-TAPE'].forEach(function(id){
     document.getElementById(id).style.display=n===0?'':'none';
   });
   n===0?loadFiles():loadMods();
@@ -387,7 +389,7 @@ function filesTab(n){
 var libFilt=null;   // null = all, else 'pool'/'REC'/'LOOPS'
 function setDirFilt(d){
   libFilt=d;
-  [[null,'fd-all'],['pool','fd-pool'],['REC','fd-REC'],['LOOPS','fd-LOOPS'],['SLICES','fd-SLICES'],['DRUMS','fd-DRUMS']].forEach(function(p){
+  [[null,'fd-all'],['pool','fd-pool'],['REC','fd-REC'],['LOOPS','fd-LOOPS'],['SLICES','fd-SLICES'],['DRUMS','fd-DRUMS'],['KEYS','fd-KEYS'],['TAPE','fd-TAPE']].forEach(function(p){
     document.getElementById(p[1]).className='tab'+(libFilt===p[0]?' on':'');
   });
   renderFiles();
@@ -475,7 +477,7 @@ function renderFiles(){
     // lives; picking another folder moves it (audio+sidecar+slices together)
     var dirSel='<select style="width:auto;font-size:10px;padding:1px 2px;color:#888" '
       +'onchange="moveFile(\''+esc(f.name)+'\',this.value)">';
-    ['pool','REC','LOOPS','SLICES','DRUMS'].forEach(function(dd){
+    ['pool','REC','LOOPS','SLICES','DRUMS','KEYS','TAPE'].forEach(function(dd){
       dirSel+='<option value="'+dd+'"'+((f.dir||'pool')===dd?' selected':'')+'>'+dd.toUpperCase()+'</option>';
     });
     dirSel+='</select>';
