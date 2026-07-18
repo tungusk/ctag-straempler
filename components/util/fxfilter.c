@@ -26,3 +26,21 @@ void fxfilter_block_f(fxfilter_t *fl, float *buf, int frames)
         buf[f * 2 + 1] = mode == FILT_LP ? lpr : mode == FILT_HP ? hpr : bpr;
     }
 }
+
+void fxfilter_band_block_f(fxfilter_t *fl, float *buf, int frames)
+{
+    float base  = fl->cutoff; if (base < 0) base = 0; else if (base > 1) base = 1;
+    float width = fl->reso;   if (width < 0) width = 0; else if (width > 1) width = 1;
+    float fc = 30.0f * powf(400.0f, base);            // center: 30 Hz .. ~12 kHz
+    float cf = svf_coef(fc, FLT_RATE, 1.3f);
+    float q  = 0.3f + width * 3.7f;                   // narrow/resonant .. wide/gentle
+    for (int f = 0; f < frames; f++) {
+        fl->cf_slew += 0.05f * (cf - fl->cf_slew);
+        float xl = buf[f * 2], xr = buf[f * 2 + 1];
+        float lpl, bpl, hpl, lpr, bpr, hpr;
+        svf_step(&fl->l, xl, fl->cf_slew, q, &lpl, &bpl, &hpl);
+        svf_step(&fl->r, xr, fl->cf_slew, q, &lpr, &bpr, &hpr);
+        buf[f * 2]     = bpl;                          // bandpass tap
+        buf[f * 2 + 1] = bpr;
+    }
+}

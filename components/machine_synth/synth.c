@@ -74,9 +74,10 @@ static esp_err_t synth_start(void)
     sy.cv12_floor[0] = sy.cv12_floor[1] = 4095;
     svf_reset(&sy.flt_l);
     fxfilter_init(&sy.filt);
+    fxfilter_init(&sy.band);
     sy.fx_slot[0] = sy.fx_slot[1] = FXK_OFF;
     sy_rk = (fxrack_t){ .od = &sy.od, .flg = &sy.flg, .trem = &sy.trem, .dly = &sy.dly,
-                        .filt = &sy.filt, .rv = &sy.rv, .slot = sy.fx_slot };
+                        .filt = &sy.filt, .band = &sy.band, .rv = &sy.rv, .slot = sy.fx_slot };
     return ESP_OK;
 }
 

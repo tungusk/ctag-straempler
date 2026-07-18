@@ -26,3 +26,8 @@ static inline void fxfilter_init(fxfilter_t *fl)
 
 // float-scratch worker (no clamp; the rack soft-limits at the end)
 void fxfilter_block_f(fxfilter_t *fl, float *buf, int frames);
+
+// BAND filter: a bandpass parameterized by center ("base", reuses .cutoff) and
+// bandwidth ("width", reuses .reso: 0 narrow/resonant .. 1 wide/gentle). Own
+// fxfilter_t instance so it can coexist with the LP/HP/BP brick in another slot.
+void fxfilter_band_block_f(fxfilter_t *fl, float *buf, int frames);

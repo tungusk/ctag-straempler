@@ -72,6 +72,13 @@ static void ft_aq(const fxrack_t*r,int d){r->filt->reso=clampf(r->filt->reso+d*0
 static const fx_p_t filt_params[]={{"Mode",ST_TOGGLE,ft_fm,ft_am},{"Cutoff",ST_RANGE,ft_fc,ft_ac},
     {"Reso",ST_RANGE,ft_fq,ft_aq}};
 
+// band filter (base/width) — reuses band->cutoff as base, band->reso as width
+static void bn_fb(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%.0f%%",r->band->cutoff*100);}
+static void bn_ab(const fxrack_t*r,int d){r->band->cutoff=clampf(r->band->cutoff+d*0.05f,0,1);}
+static void bn_fw(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%.0f%%",r->band->reso*100);}
+static void bn_aw(const fxrack_t*r,int d){r->band->reso=clampf(r->band->reso+d*0.05f,0,1);}
+static const fx_p_t band_params[]={{"Base",ST_RANGE,bn_fb,bn_ab},{"Width",ST_RANGE,bn_fw,bn_aw}};
+
 // reverb (FX3)
 static void rv_fx(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%.0f%%",r->rv->wet*100);}
 static void rv_ax(const fxrack_t*r,int d){reverb_set_mix(r->rv,clampf(r->rv->wet+d*0.05f,0,1));}
@@ -82,6 +89,7 @@ static const fx_desc_t gen_desc[FXK_NGEN]={
     [FXK_OFF]={"Off",NULL,0},           [FXK_OD]={"Overdrive",od_params,4},
     [FXK_FLG]={"Flanger",flg_params,4}, [FXK_TREM]={"Tremolo",trem_params,4},
     [FXK_DLY]={"Delay",dly_params,5},   [FXK_FILT]={"Filter",filt_params,3},
+    [FXK_BAND]={"Band",band_params,2},
 };
 
 // ---- process ------------------------------------------------------------------
@@ -96,6 +104,7 @@ void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames)
             case FXK_TREM: tremolo_block_f(rk->trem, fb, frames); break;
             case FXK_DLY:  if (rk->dly->bufL) fxdelay_block_f(rk->dly, fb, frames); break;
             case FXK_FILT: fxfilter_block_f(rk->filt, fb, frames); break;
+            case FXK_BAND: fxfilter_band_block_f(rk->band, fb, frames); break;
             default: break;
         }
     }
@@ -202,6 +211,8 @@ void fxrack_save(const fxrack_t *rk, cJSON *o)
     cJSON_AddNumberToObject(o, "fim", rk->filt->mode);
     cJSON_AddNumberToObject(o, "fic", (int)(rk->filt->cutoff * 100 + 0.5f));
     cJSON_AddNumberToObject(o, "fiq", (int)(rk->filt->reso * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "bnb", (int)(rk->band->cutoff * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "bnw", (int)(rk->band->reso * 100 + 0.5f));
 }
 
 void fxrack_load(const fxrack_t *rk, const cJSON *node)
@@ -258,4 +269,6 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fim")) && cJSON_IsNumber(j)) { int m = j->valueint; rk->filt->mode = (m < 0 || m >= FILT_NMODE) ? FILT_LP : m; }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fic")) && cJSON_IsNumber(j)) rk->filt->cutoff = clampf((float)j->valueint / 100.0f, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fiq")) && cJSON_IsNumber(j)) rk->filt->reso = clampf((float)j->valueint / 100.0f, 0, 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "bnb")) && cJSON_IsNumber(j)) rk->band->cutoff = clampf((float)j->valueint / 100.0f, 0, 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "bnw")) && cJSON_IsNumber(j)) rk->band->reso = clampf((float)j->valueint / 100.0f, 0, 1);
 }
