@@ -1,1 +1,1 @@
-midi-v1b-20260717 (play-midi below screen, machine-gated, CV percents restored)
+fxnav-v1-20260718 (fx rack shared slots keys+synth, base-width filter, tracker crash safety-net, keys+synth live encoder nav + synth osc)
