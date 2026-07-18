@@ -153,10 +153,8 @@ int fxrack_menu_rows(const fxrack_t *rk, int slot, setup_item_t *items, int8_t *
 void fxrack_menu_val(const fxrack_t *rk, int slot, int param, char *v, size_t n)
 {
     v[0] = 0;
-    if (param < 0) {                                   // effect-select row: name + live CPU
-        const char *nm = slot == 2 ? reverb_mode_name(rk->rv->mode) : gen_desc[rk->slot[slot]].name;
-        int pct = (int)((audio_proc_us() * 100 + 725) / 1450);   // 1450us = 100%
-        snprintf(v, n, "%s  %d%%%s", nm, pct, pct >= 85 ? " !" : "");
+    if (param < 0) {                                   // effect-select row
+        snprintf(v, n, "%s", slot == 2 ? reverb_mode_name(rk->rv->mode) : gen_desc[rk->slot[slot]].name);
         return;
     }
     if (slot == 2) rev_desc.p[param].fmt(rk, v, n);
