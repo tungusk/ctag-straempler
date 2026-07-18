@@ -30,7 +30,7 @@ static void note_name(float freq, char *buf, size_t n)
 
 static bool s_last_gate;
 static int  s_last_note = -9999;
-static unsigned s_sig_dials = 0, s_sig_adsr = 0;
+static unsigned s_sig_dials = 0, s_sig_adsr = 0, s_sig_osc = 0;
 
 // two-level encoder nav (mirrors Keys Live): browse elements, click in to edit,
 // long-press to escape. Elements: 0=Wave (header tag), 1..4 = dials
@@ -208,6 +208,16 @@ static unsigned adsr_sig(void)
     return (unsigned)(sy.atk*1000)*7u + (unsigned)(sy.dec*1000)*13u
          + (unsigned)(sy.sus*1000)*17u + (unsigned)(sy.rel*1000)*19u;
 }
+// the osc preview only depends on engine + timbre (+ FM ratio) — NOT on the
+// cut/res/env dials, so it doesn't repaint on their knob/CV jitter.
+static unsigned osc_sig(void)
+{
+    float t = sy.engine == ENG_FM ? sy.fm_index : sy.engine == ENG_WT ? sy.fold : sy.shape;
+    unsigned r = (unsigned)sy.engine * 101u + (unsigned)(t * 1000.0f) * 37u
+               + (s_live_sel == 0 ? (s_live_edit ? 2u : 1u) : 0u);   // focus box too
+    if (sy.engine == ENG_FM) r += (unsigned)(sy.fm_ratio * 100.0f) * 53u;
+    return r;
+}
 
 static void live_full_redraw(void)
 {
@@ -215,7 +225,7 @@ static void live_full_redraw(void)
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
     draw_header();      s_last_note = cur_midi();
-    draw_osc();
+    draw_osc();         s_sig_osc   = osc_sig();
     draw_dials();       s_sig_dials = dials_sig();
     draw_adsr();        s_sig_adsr  = adsr_sig();
     _fg = (color_t){90, 90, 90};
@@ -254,7 +264,7 @@ static void slive_edit(int dir)
 static void slive_repaint(void)
 {
     draw_header();
-    draw_osc();
+    draw_osc();   s_sig_osc   = osc_sig();
     draw_dials(); s_sig_dials = dials_sig();
     draw_adsr();  s_sig_adsr  = adsr_sig();
 }
@@ -269,8 +279,10 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
             // each block redraws only when its own values change (no free-running meter)
             int midi = cur_midi();
             if (midi != s_last_note) { draw_header(); s_last_note = midi; }   // gate no longer recolors
+            unsigned os = osc_sig();
+            if (os != s_sig_osc) { draw_osc(); s_sig_osc = os; }
             unsigned ds = dials_sig();
-            if (ds != s_sig_dials) { draw_osc(); draw_dials(); s_sig_dials = ds; }
+            if (ds != s_sig_dials) { draw_dials(); s_sig_dials = ds; }
             unsigned as = adsr_sig();
             if (as != s_sig_adsr) { draw_adsr(); s_sig_adsr = as; }
             break;
