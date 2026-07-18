@@ -264,19 +264,28 @@ static const setup_item_t ks_setup_items[] = {
     {"Attack",      ST_RANGE},  {"Decay",     ST_RANGE},  {"Sustain",   ST_RANGE},
     {"Release",     ST_RANGE},  {"Env>Cut",   ST_RANGE},  {"Glide",     ST_RANGE},
     {"Level",       ST_RANGE},
-    {"CV Matrix",   ST_ACTION}, {"FX",        ST_ACTION},
+    {"CV Matrix",   ST_ACTION},
+    {"FX1",         ST_ACTION}, {"FX2",       ST_ACTION}, {"FX3 Reverb", ST_ACTION},
     {"Save Patch",  ST_ACTION}, {"Load Patch", ST_ACTION},
 };
 
 // last saved patch id, shown inline on the Save Patch row as confirmation
 static char s_last_saved[12];
 
-// count of engaged effects, for the "FX" row affordance
-static int ks_fx_count(void)
+// effect name for a slot row on the Setup page (gen_desc is defined lower down)
+static const char *fxk_name(int k)
 {
-    return (inst.rv.mode != RV_OFF) + (inst.dly_on ? 1 : 0) + (inst.od_on ? 1 : 0)
-         + (inst.flg_on ? 1 : 0) + (inst.trem_on ? 1 : 0);
+    switch (k) {
+        case FXK_OD:   return "Overdrive";
+        case FXK_FLG:  return "Flanger";
+        case FXK_TREM: return "Tremolo";
+        case FXK_DLY:  return "Delay";
+        case FXK_FILT: return "Filter";
+        default:       return "Off";
+    }
 }
+static int s_cur_slot = 0;      // which FX slot the shared FX sub-page is editing
+static int s_setup_return = -1; // Setup row to restore on return from a sub-page
 
 static void ks_val(int i, char *v, size_t n)
 {
@@ -300,9 +309,11 @@ static void ks_val(int i, char *v, size_t n)
         case 14: snprintf(v, n, "%.0f%%", inst.level * 100.0f); break;
         case 15: { int on = 0; for (int d = 0; d < ISM_N; d++) if (inst.mtx_src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
-        case 16: { int on = ks_fx_count(); if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "off >"); break; }
-        case 17: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
-        case 18: snprintf(v, n, "load >"); break;
+        case 16: snprintf(v, n, "%s >", fxk_name(inst.fx_slot[0])); break;
+        case 17: snprintf(v, n, "%s >", fxk_name(inst.fx_slot[1])); break;
+        case 18: snprintf(v, n, "%s >", inst.rv.mode != RV_OFF ? reverb_mode_name(inst.rv.mode) : "Off"); break;
+        case 19: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
+        case 20: snprintf(v, n, "load >"); break;
     }
 }
 
@@ -345,20 +356,22 @@ static void ks_adj(int i, int dir)
 static int ks_action(int i)
 {
     if (i == 0)  return M_ISMP_LOAD;     // Load Sample -> browser
-    if (i == 15) return M_ISMP_MATRIX;   // CV Matrix
-    if (i == 16) return M_ISMP_FX;       // FX -> FX sub-page
-    if (i == 17) {                       // Save Patch: mint + write, stay on Setup
+    if (i == 15) { s_setup_return = 15; return M_ISMP_MATRIX; }   // CV Matrix
+    if (i == 16) { s_setup_return = 16; s_cur_slot = 0; return M_ISMP_FX; }   // FX1
+    if (i == 17) { s_setup_return = 17; s_cur_slot = 1; return M_ISMP_FX; }   // FX2
+    if (i == 18) { s_setup_return = 18; s_cur_slot = 2; return M_ISMP_FX; }   // FX3 reverb
+    if (i == 19) {                       // Save Patch: mint + write, stay on Setup
         if (keys_patch_save(s_last_saved, sizeof(s_last_saved)) != 0)
             snprintf(s_last_saved, sizeof(s_last_saved), "err");
         return 0;                        // framework redraws -> row shows the id
     }
-    if (i == 18) return M_ISMP_PATCH;    // Load Patch -> patch browser
+    if (i == 20) return M_ISMP_PATCH;    // Load Patch -> patch browser
     return 0;
 }
 
 static setup_menu_t ks_setup = {
     .items = ks_setup_items,
-    .n = 19,
+    .n = 21,
     .title = "Keys Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_ISMP_LIVE,
@@ -366,114 +379,210 @@ static setup_menu_t ks_setup = {
 };
 
 // ---- FX sub-page: all five effects, reached from the Setup "FX" row --------
-static const setup_item_t ks_fx_items[] = {
-    {"Reverb",    ST_TOGGLE}, {"Rev Mix",   ST_RANGE},
-    {"Delay",     ST_TOGGLE}, {"Dly Time",  ST_RANGE},  {"Dly Fdbk",  ST_RANGE},
-    {"Dly Mix",   ST_RANGE},  {"Dly Tone",  ST_RANGE},  {"Dly Ping",  ST_TOGGLE},
-    {"Overdrive", ST_TOGGLE}, {"OD Drive",  ST_RANGE},  {"OD Tone",   ST_RANGE},
-    {"OD Bias",   ST_RANGE},  {"OD Level",  ST_RANGE},
-    {"Flanger",   ST_TOGGLE}, {"Flg Rate",  ST_RANGE},  {"Flg Depth", ST_RANGE},
-    {"Flg Fdbk",  ST_RANGE},  {"Flg Mix",   ST_RANGE},
-    {"Tremolo",   ST_TOGGLE}, {"Trm Rate",  ST_RANGE},  {"Trm Depth", ST_RANGE},
-    {"Trm Shape", ST_TOGGLE}, {"Trm Stereo", ST_TOGGLE},
+// ===== FX rack: curated slots (FX1/FX2 = a generic effect each, FX3 = reverb).
+// The FX page is DYNAMIC: each slot shows a select row, and below it only the
+// selected effect's params. fmt/adj operate on the global `inst`. =============
+
+typedef struct { const char *label; setup_kind_t kind;
+                 void (*fmt)(char *, size_t); void (*adj)(int); } kfx_p_t;
+typedef struct { const char *name; const kfx_p_t *p; int np; } kfx_desc_t;
+
+// --- overdrive ---
+static void od_fd(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.od.drive*100);}
+static void od_ad(int d){inst.od.drive=clampf(inst.od.drive+d*0.05f,0,1);}
+static void od_ft(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.od.tone*100);}
+static void od_at(int d){inst.od.tone=clampf(inst.od.tone+d*0.05f,0,1);}
+static void od_fb(char*v,size_t n){snprintf(v,n,"%+.0f%%",inst.od.bias*100);}
+static void od_ab(int d){inst.od.bias=clampf(inst.od.bias+d*0.05f,-1,1);}
+static void od_fl(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.od.level*100);}
+static void od_al(int d){inst.od.level=clampf(inst.od.level+d*0.05f,0,1);}
+static const kfx_p_t od_params[] = {
+    {"Drive",ST_RANGE,od_fd,od_ad},{"Tone",ST_RANGE,od_ft,od_at},
+    {"Bias",ST_RANGE,od_fb,od_ab},{"Level",ST_RANGE,od_fl,od_al}};
+
+// --- flanger ---
+static void fl_fr(char*v,size_t n){snprintf(v,n,"%.2f Hz",inst.flg.rate);}
+static void fl_ar(int d){inst.flg.rate=clampf(inst.flg.rate+d*0.05f,0.01f,10);}
+static void fl_fd(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.flg.depth*100);}
+static void fl_ad(int d){inst.flg.depth=clampf(inst.flg.depth+d*0.05f,0,1);}
+static void fl_ff(char*v,size_t n){snprintf(v,n,"%+.0f%%",inst.flg.fb*100);}
+static void fl_af(int d){inst.flg.fb=clampf(inst.flg.fb+d*0.05f,-0.95f,0.95f);}
+static void fl_fm(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.flg.wet*100);}
+static void fl_am(int d){inst.flg.wet=clampf(inst.flg.wet+d*0.05f,0,1);}
+static const kfx_p_t flg_params[] = {
+    {"Rate",ST_RANGE,fl_fr,fl_ar},{"Depth",ST_RANGE,fl_fd,fl_ad},
+    {"Fdbk",ST_RANGE,fl_ff,fl_af},{"Mix",ST_RANGE,fl_fm,fl_am}};
+
+// --- tremolo ---
+static void tr_fr(char*v,size_t n){snprintf(v,n,"%.2f Hz",inst.trem.rate);}
+static void tr_ar(int d){inst.trem.rate=clampf(inst.trem.rate+d*0.25f,0.05f,20);}
+static void tr_fd(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.trem.depth*100);}
+static void tr_ad(int d){inst.trem.depth=clampf(inst.trem.depth+d*0.05f,0,1);}
+static void tr_fs(char*v,size_t n){snprintf(v,n,"%s",inst.trem.shape==TREM_TRI?"Tri":inst.trem.shape==TREM_SQR?"Sqr":"Sine");}
+static void tr_as(int d){(void)d;inst.trem.shape=(inst.trem.shape+1)%3;}
+static void tr_fst(char*v,size_t n){snprintf(v,n,"%s",inst.trem.stereo?"ON":"OFF");}
+static void tr_ast(int d){(void)d;inst.trem.stereo=!inst.trem.stereo;}
+static const kfx_p_t trem_params[] = {
+    {"Rate",ST_RANGE,tr_fr,tr_ar},{"Depth",ST_RANGE,tr_fd,tr_ad},
+    {"Shape",ST_TOGGLE,tr_fs,tr_as},{"Stereo",ST_TOGGLE,tr_fst,tr_ast}};
+
+// --- delay ---
+static void dl_ft(char*v,size_t n){snprintf(v,n,"%d ms",(int)(fxdelay_time_ms(&inst.dly)+0.5f));}
+static void dl_at(int d){if(inst.dly.bufL)fxdelay_set_time_ms(&inst.dly,fxdelay_time_ms(&inst.dly)+d*10.0f);}
+static void dl_ff(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.dly.fb*100);}
+static void dl_af(int d){if(inst.dly.bufL)fxdelay_set_feedback(&inst.dly,inst.dly.fb+d*0.05f);}
+static void dl_fm(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.dly.wet*100);}
+static void dl_am(int d){if(inst.dly.bufL)fxdelay_set_mix(&inst.dly,inst.dly.wet+d*0.05f);}
+static void dl_fto(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.dly.damp*100);}
+static void dl_ato(int d){if(inst.dly.bufL)fxdelay_set_damp(&inst.dly,inst.dly.damp+d*0.05f);}
+static void dl_fp(char*v,size_t n){snprintf(v,n,"%s",inst.dly.pingpong?"Ping-Pong":"Stereo");}
+static void dl_ap(int d){(void)d;if(inst.dly.bufL)fxdelay_set_pingpong(&inst.dly,!inst.dly.pingpong);}
+static const kfx_p_t dly_params[] = {
+    {"Time",ST_RANGE,dl_ft,dl_at},{"Fdbk",ST_RANGE,dl_ff,dl_af},
+    {"Mix",ST_RANGE,dl_fm,dl_am},{"Tone",ST_RANGE,dl_fto,dl_ato},
+    {"Ping",ST_TOGGLE,dl_fp,dl_ap}};
+
+// --- filter (insert brick) ---
+static void ft_fm(char*v,size_t n){snprintf(v,n,"%s",inst.filt.mode==FILT_LP?"LP":inst.filt.mode==FILT_HP?"HP":"BP");}
+static void ft_am(int d){(void)d;inst.filt.mode=(inst.filt.mode+1)%FILT_NMODE;}
+static void ft_fc(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.filt.cutoff*100);}
+static void ft_ac(int d){inst.filt.cutoff=clampf(inst.filt.cutoff+d*0.05f,0,1);}
+static void ft_fq(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.filt.reso*100);}
+static void ft_aq(int d){inst.filt.reso=clampf(inst.filt.reso+d*0.05f,0,1);}
+static const kfx_p_t filt_params[] = {
+    {"Mode",ST_TOGGLE,ft_fm,ft_am},{"Cutoff",ST_RANGE,ft_fc,ft_ac},
+    {"Reso",ST_RANGE,ft_fq,ft_aq}};
+
+// --- reverb (FX3, fixed slot) ---
+static void rv_fx(char*v,size_t n){snprintf(v,n,"%.0f%%",inst.rv.wet*100);}
+static void rv_ax(int d){reverb_set_mix(&inst.rv,clampf(inst.rv.wet+d*0.05f,0,1));}
+static const kfx_p_t rev_params[] = {{"Rev Mix",ST_RANGE,rv_fx,rv_ax}};
+static const kfx_desc_t rev_desc = {"Reverb", rev_params, 1};
+
+// generic-effect table indexed by FXK_* (FXK_OFF has no params)
+static const kfx_desc_t gen_desc[FXK_NGEN] = {
+    [FXK_OFF]  = {"OFF", NULL, 0},
+    [FXK_OD]   = {"Overdrive", od_params,   4},
+    [FXK_FLG]  = {"Flanger",   flg_params,  4},
+    [FXK_TREM] = {"Tremolo",   trem_params, 4},
+    [FXK_DLY]  = {"Delay",     dly_params,  5},
+    [FXK_FILT] = {"Filter",    filt_params, 3},
 };
+
+// dynamic row list built from the slots (select row + selected effect's params)
+#define KFX_MAXROWS 24
+static setup_item_t s_kfx_items[KFX_MAXROWS];
+static struct { int8_t slot; int8_t param; } s_kfx_row[KFX_MAXROWS];  // param<0 = select row
+static int s_kfx_n;
+static setup_menu_t ks_fx;   // defined below; rebuilt each entry/selection
+
+// keep the *_on enable cache in sync with the slot assignment
+static void ks_fx_sync(void){
+    inst.od_on=inst.flg_on=inst.trem_on=inst.dly_on=inst.filt_on=false;
+    for(int s=0;s<FX_NSLOT_GEN;s++) switch(inst.fx_slot[s]){
+        case FXK_OD:inst.od_on=true;break; case FXK_FLG:inst.flg_on=true;break;
+        case FXK_TREM:inst.trem_on=true;break; case FXK_DLY:inst.dly_on=true;break;
+        case FXK_FILT:inst.filt_on=true;break; default:break; }
+}
+
+// assign effect `kind` to `slot`: lazy-init buffers + audible defaults (like the
+// old toggles), enforce one-effect-per-slot, then sync enables.
+static void kfx_slot_set(int slot, int kind){
+    if(kind==FXK_DLY){ if(!inst.dly.bufL) fxdelay_init(&inst.dly);
+        if(!inst.dly.bufL) kind=FXK_OFF; else if(inst.dly.wet<0.01f) fxdelay_set_mix(&inst.dly,0.30f); }
+    else if(kind==FXK_FLG){ if(!inst.flg.bufL) flanger_init(&inst.flg);
+        if(!inst.flg.bufL) kind=FXK_OFF; else if(inst.flg.wet<0.01f) inst.flg.wet=0.5f; }
+    else if(kind==FXK_OD){ if(inst.od.level<0.01f){inst.od.drive=0.4f;inst.od.tone=0.5f;inst.od.level=0.8f;} overdrive_reset(&inst.od); }
+    else if(kind==FXK_TREM){ if(inst.trem.depth<0.01f){inst.trem.depth=0.5f;inst.trem.rate=5.0f;} }
+    for(int s=0;s<FX_NSLOT_GEN;s++) if(s!=slot && inst.fx_slot[s]==kind && kind!=FXK_OFF) inst.fx_slot[s]=FXK_OFF;
+    inst.fx_slot[slot]=kind;
+    ks_fx_sync();
+}
+
+// build the rows for the ONE slot being edited (s_cur_slot): an effect-select
+// row, then the selected effect's params. FX3 (slot 2) is the reverb slot.
+static void kfx_rebuild(void){
+    int r=0;
+    s_kfx_items[r].label="Effect"; s_kfx_items[r].kind=ST_TOGGLE;
+    s_kfx_row[r].param=-1; r++;
+    if(s_cur_slot==2){
+        if(inst.rv.mode!=RV_OFF) for(int p=0;p<rev_desc.np && r<KFX_MAXROWS;p++){
+            s_kfx_items[r].label=rev_desc.p[p].label; s_kfx_items[r].kind=rev_desc.p[p].kind;
+            s_kfx_row[r].param=p; r++; }
+    } else {
+        int k=inst.fx_slot[s_cur_slot];
+        if(k!=FXK_OFF) for(int p=0;p<gen_desc[k].np && r<KFX_MAXROWS;p++){
+            s_kfx_items[r].label=gen_desc[k].p[p].label; s_kfx_items[r].kind=gen_desc[k].p[p].kind;
+            s_kfx_row[r].param=p; r++; }
+    }
+    s_kfx_n=r; ks_fx.n=r;
+    ks_fx.title = s_cur_slot==0?"Keys FX1":s_cur_slot==1?"Keys FX2":"Keys FX3";
+    if(ks_fx.sel>=r) ks_fx.sel=r-1;
+    if(ks_fx.sel<0)  ks_fx.sel=0;
+}
 
 static void ks_fx_val(int i, char *v, size_t n)
 {
-    switch (i) {
-        case 0: snprintf(v, n, "%s", reverb_mode_name(inst.rv.mode)); break;
-        case 1: snprintf(v, n, "%.0f%%", inst.rv.wet * 100.0f); break;
-        case 2: snprintf(v, n, "%s", inst.dly_on ? "ON" : "OFF"); break;
-        case 3: snprintf(v, n, "%d ms", (int)(fxdelay_time_ms(&inst.dly) + 0.5f)); break;
-        case 4: snprintf(v, n, "%.0f%%", inst.dly.fb * 100.0f); break;
-        case 5: snprintf(v, n, "%.0f%%", inst.dly.wet * 100.0f); break;
-        case 6: snprintf(v, n, "%.0f%%", inst.dly.damp * 100.0f); break;
-        case 7: snprintf(v, n, "%s", inst.dly.pingpong ? "Ping-Pong" : "Stereo"); break;
-        case 8: snprintf(v, n, "%s", inst.od_on ? "ON" : "OFF"); break;
-        case 9: snprintf(v, n, "%.0f%%", inst.od.drive * 100.0f); break;
-        case 10: snprintf(v, n, "%.0f%%", inst.od.tone * 100.0f); break;
-        case 11: snprintf(v, n, "%+.0f%%", inst.od.bias * 100.0f); break;
-        case 12: snprintf(v, n, "%.0f%%", inst.od.level * 100.0f); break;
-        case 13: snprintf(v, n, "%s", inst.flg_on ? "ON" : "OFF"); break;
-        case 14: snprintf(v, n, "%.2f Hz", inst.flg.rate); break;
-        case 15: snprintf(v, n, "%.0f%%", inst.flg.depth * 100.0f); break;
-        case 16: snprintf(v, n, "%+.0f%%", inst.flg.fb * 100.0f); break;
-        case 17: snprintf(v, n, "%.0f%%", inst.flg.wet * 100.0f); break;
-        case 18: snprintf(v, n, "%s", inst.trem_on ? "ON" : "OFF"); break;
-        case 19: snprintf(v, n, "%.2f Hz", inst.trem.rate); break;
-        case 20: snprintf(v, n, "%.0f%%", inst.trem.depth * 100.0f); break;
-        case 21: snprintf(v, n, "%s", inst.trem.shape == TREM_TRI ? "Tri" : inst.trem.shape == TREM_SQR ? "Sqr" : "Sine"); break;
-        case 22: snprintf(v, n, "%s", inst.trem.stereo ? "ON" : "OFF"); break;
+    v[0] = 0;
+    if (i < 0 || i >= s_kfx_n) return;
+    int p = s_kfx_row[i].param;
+    if (p < 0) {                                   // effect-select row
+        if (s_cur_slot == 2) snprintf(v, n, "%s", reverb_mode_name(inst.rv.mode));
+        else snprintf(v, n, "%s", gen_desc[inst.fx_slot[s_cur_slot]].name);
+        return;
     }
+    if (s_cur_slot == 2) rev_desc.p[p].fmt(v, n);
+    else gen_desc[inst.fx_slot[s_cur_slot]].p[p].fmt(v, n);
 }
 
 static void ks_fx_adj(int i, int dir)
 {
-    float d = (float)dir;
-    switch (i) {
-        case 0: { int m = inst.rv.mode + dir;
-                   if (m < 0) m = RV_N_MODES - 1;
-                   if (m >= RV_N_MODES) m = RV_OFF;
-                   if (m != RV_OFF && !inst.rv.slab && reverb_init(&inst.rv) != ESP_OK) m = RV_OFF;
-                   reverb_set_mode(&inst.rv, m); } break;
-        case 1: reverb_set_mix(&inst.rv, clampf(inst.rv.wet + d * 0.05f, 0.0f, 1.0f)); break;
-        case 2: { bool on = !inst.dly_on;              // Delay on/off (lazy slab)
-                   if (on && !inst.dly.bufL && fxdelay_init(&inst.dly) != ESP_OK) on = false;
-                   if (on && inst.dly.wet < 0.01f) fxdelay_set_mix(&inst.dly, 0.30f);  // audible default
-                   inst.dly_on = on;
-                   if (!on) fxdelay_clear(&inst.dly); } break;   // drop the tail
-        case 3: if (inst.dly.bufL) fxdelay_set_time_ms(&inst.dly, fxdelay_time_ms(&inst.dly) + d * 10.0f); break;
-        case 4: if (inst.dly.bufL) fxdelay_set_feedback(&inst.dly, inst.dly.fb + d * 0.05f); break;
-        case 5: if (inst.dly.bufL) fxdelay_set_mix(&inst.dly, inst.dly.wet + d * 0.05f); break;
-        case 6: if (inst.dly.bufL) fxdelay_set_damp(&inst.dly, inst.dly.damp + d * 0.05f); break;
-        case 7: if (inst.dly.bufL) fxdelay_set_pingpong(&inst.dly, !inst.dly.pingpong); break;
-        case 8: { bool on = !inst.od_on;               // Overdrive on/off (no slab)
-                   if (on) {
-                       if (inst.od.level < 0.01f) { inst.od.drive = 0.4f; inst.od.tone = 0.5f; inst.od.level = 0.8f; }
-                       overdrive_reset(&inst.od);
-                   }
-                   inst.od_on = on; } break;
-        case 9: inst.od.drive = clampf(inst.od.drive + d * 0.05f, 0.0f, 1.0f); break;
-        case 10: inst.od.tone  = clampf(inst.od.tone  + d * 0.05f, 0.0f, 1.0f); break;
-        case 11: inst.od.bias  = clampf(inst.od.bias  + d * 0.05f, -1.0f, 1.0f); break;
-        case 12: inst.od.level = clampf(inst.od.level + d * 0.05f, 0.0f, 1.0f); break;
-        case 13: { bool on = !inst.flg_on;             // Flanger on/off (lazy slab)
-                   if (on && !inst.flg.bufL && flanger_init(&inst.flg) != ESP_OK) on = false;
-                   if (on && inst.flg.wet < 0.01f) inst.flg.wet = 0.5f;   // audible default
-                   inst.flg_on = on;
-                   if (!on) flanger_clear(&inst.flg); } break;   // drop the tail
-        case 14: if (inst.flg.bufL) inst.flg.rate  = clampf(inst.flg.rate  + d * 0.05f, 0.01f, 10.0f); break;
-        case 15: if (inst.flg.bufL) inst.flg.depth = clampf(inst.flg.depth + d * 0.05f, 0.0f, 1.0f); break;
-        case 16: if (inst.flg.bufL) inst.flg.fb    = clampf(inst.flg.fb    + d * 0.05f, -0.95f, 0.95f); break;
-        case 17: if (inst.flg.bufL) inst.flg.wet   = clampf(inst.flg.wet   + d * 0.05f, 0.0f, 1.0f); break;
-        case 18: { bool on = !inst.trem_on;            // Tremolo on/off (no slab)
-                   if (on && inst.trem.depth < 0.01f) { inst.trem.depth = 0.5f; inst.trem.rate = 5.0f; }
-                   inst.trem_on = on; } break;
-        case 19: inst.trem.rate  = clampf(inst.trem.rate + d * 0.25f, 0.05f, 20.0f); break;
-        case 20: inst.trem.depth = clampf(inst.trem.depth + d * 0.05f, 0.0f, 1.0f); break;
-        case 21: inst.trem.shape = (inst.trem.shape + 1) % 3; break;
-        case 22: inst.trem.stereo = !inst.trem.stereo; break;
+    if (i < 0 || i >= s_kfx_n) return;
+    int p = s_kfx_row[i].param;
+    if (p < 0) {                                   // effect-select row: change effect
+        if (s_cur_slot == 2) {                     // FX3: cycle reverb mode
+            int m = inst.rv.mode + dir;
+            if (m < 0) m = RV_N_MODES - 1;
+            if (m >= RV_N_MODES) m = RV_OFF;
+            if (m != RV_OFF && !inst.rv.slab && reverb_init(&inst.rv) != ESP_OK) m = RV_OFF;
+            reverb_set_mode(&inst.rv, m);
+        } else {                                   // FX1/FX2: cycle generic effect
+            int k = inst.fx_slot[s_cur_slot] + dir;
+            if (k < 0) k = FXK_NGEN - 1;
+            if (k >= FXK_NGEN) k = FXK_OFF;
+            kfx_slot_set(s_cur_slot, k);
+        }
+        kfx_rebuild();                             // param rows changed
+        return;
     }
+    if (s_cur_slot == 2) rev_desc.p[p].adj(dir);
+    else gen_desc[inst.fx_slot[s_cur_slot]].p[p].adj(dir);
 }
 
 static setup_menu_t ks_fx = {
-    .items = ks_fx_items,
-    .n = 23,
-    .title = "Keys FX",
+    .items = s_kfx_items,
+    .n = 0,                       // set by kfx_rebuild()
+    .title = "Keys FX",           // overwritten per-slot by kfx_rebuild()
     .aff_label = "Setup", .aff_target = M_ISMP_SETUP,
-    .live_target = M_ISMP_LIVE,
+    .live_target = M_ISMP_SETUP,  // long-press = up one level to Setup
     .render = ks_fx_val, .adjust = ks_fx_adj, .action = NULL,
 };
 
 static int keys_fx_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
+    if (event == EV_ENTERED_MENU) kfx_rebuild();   // dynamic row set
     return setup_menu_event(&ks_fx, event);
 }
 
 static int keys_setup_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
+    if (event == EV_ENTERED_MENU && s_setup_return >= 0) {   // came back from a sub-page
+        int p = s_setup_return; s_setup_return = -1;
+        setup_menu_enter_at(&ks_setup, p);                   // land on the line we left
+        return 0;
+    }
     return setup_menu_event(&ks_setup, event);
 }
 

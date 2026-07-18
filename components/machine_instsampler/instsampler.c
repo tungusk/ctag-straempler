@@ -117,6 +117,8 @@ static esp_err_t keys_start(void)
     inst.zone[0].loop_mode = LOOP_FWD;
     inst.zone[0].loop_xfade = 220;
     svf_reset(&inst.voice[0].flt);
+    fxfilter_init(&inst.filt);     // FX rack filter brick
+    inst.fx_slot[0] = inst.fx_slot[1] = FXK_OFF;   // rack empty until assigned
     return ESP_OK;
 }
 
@@ -304,10 +306,18 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     {
         float fb[FX_SCRATCH_N];
         fx_unpack_i32(out, fb, frames * 2);
-        if (inst.od_on)                              overdrive_block_f(&inst.od, fb, frames);
-        if (inst.flg_on && inst.flg.bufL)            flanger_block_f(&inst.flg, fb, frames);
-        if (inst.trem_on)                            tremolo_block_f(&inst.trem, fb, frames);
-        if (inst.dly_on && inst.dly.bufL)            fxdelay_block_f(&inst.dly, fb, frames);
+        // FX rack: run the two generic slots in order (FX1 then FX2), then the
+        // fixed reverb slot (FX3). Slot assignment = which effect + what order.
+        for (int s = 0; s < FX_NSLOT_GEN; s++) {
+            switch (inst.fx_slot[s]) {
+                case FXK_OD:   overdrive_block_f(&inst.od, fb, frames); break;
+                case FXK_FLG:  if (inst.flg.bufL) flanger_block_f(&inst.flg, fb, frames); break;
+                case FXK_TREM: tremolo_block_f(&inst.trem, fb, frames); break;
+                case FXK_DLY:  if (inst.dly.bufL) fxdelay_block_f(&inst.dly, fb, frames); break;
+                case FXK_FILT: fxfilter_block_f(&inst.filt, fb, frames); break;
+                default: break;
+            }
+        }
         if (inst.rv.mode != RV_OFF && inst.rv.slab)  reverb_block_f(&inst.rv, fb, frames);
         fx_pack_softclip(fb, out, frames * 2);
     }
@@ -352,6 +362,12 @@ static cJSON *keys_preset_save(void)
     cJSON_AddNumberToObject(o, "trmdp", (int)(inst.trem.depth * 100 + 0.5f));
     cJSON_AddNumberToObject(o, "trmsh", inst.trem.shape);
     cJSON_AddBoolToObject(o, "trmst", inst.trem.stereo);
+    // FX rack: slot assignment (FX1,FX2) + filter brick params
+    cJSON *sl = cJSON_AddArrayToObject(o, "fxsl");
+    for (int s = 0; s < FX_NSLOT_GEN; s++) cJSON_AddItemToArray(sl, cJSON_CreateNumber(inst.fx_slot[s]));
+    cJSON_AddNumberToObject(o, "fim", inst.filt.mode);
+    cJSON_AddNumberToObject(o, "fic", (int)(inst.filt.cutoff * 100 + 0.5f));
+    cJSON_AddNumberToObject(o, "fiq", (int)(inst.filt.reso * 100 + 0.5f));
     cJSON_AddStringToObject(o, "smp", z->sample);
     cJSON_AddNumberToObject(o, "root", z->root);
     cJSON_AddNumberToObject(o, "lm", z->loop_mode);
@@ -422,6 +438,26 @@ static void keys_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmdp")) && cJSON_IsNumber(j)) inst.trem.depth = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmsh")) && cJSON_IsNumber(j)) { int s = j->valueint; inst.trem.shape = (s < 0 || s >= TREM_NSHAPE) ? TREM_SINE : s; }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmst")) && cJSON_IsBool(j)) inst.trem.stereo = cJSON_IsTrue(j);
+    // filter brick params
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fim")) && cJSON_IsNumber(j)) { int m = j->valueint; inst.filt.mode = (m < 0 || m >= FILT_NMODE) ? FILT_LP : m; }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fic")) && cJSON_IsNumber(j)) inst.filt.cutoff = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fiq")) && cJSON_IsNumber(j)) inst.filt.reso = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
+    // FX slot assignment; migrate from the legacy *_on bools when absent
+    cJSON *fsl = cJSON_GetObjectItemCaseSensitive(node, "fxsl");
+    if (cJSON_IsArray(fsl)) {
+        for (int s = 0; s < FX_NSLOT_GEN; s++) {
+            cJSON *si = cJSON_GetArrayItem(fsl, s);
+            int v = cJSON_IsNumber(si) ? si->valueint : FXK_OFF;
+            inst.fx_slot[s] = (v < 0 || v >= FXK_NGEN) ? FXK_OFF : (int8_t)v;
+        }
+    } else {
+        int s = 0;   // legacy: rebuild slots from the loaded enables (od,flg,trem,dly order)
+        if (inst.od_on   && s < FX_NSLOT_GEN) inst.fx_slot[s++] = FXK_OD;
+        if (inst.flg_on  && s < FX_NSLOT_GEN) inst.fx_slot[s++] = FXK_FLG;
+        if (inst.trem_on && s < FX_NSLOT_GEN) inst.fx_slot[s++] = FXK_TREM;
+        if (inst.dly_on  && s < FX_NSLOT_GEN) inst.fx_slot[s++] = FXK_DLY;
+        while (s < FX_NSLOT_GEN) inst.fx_slot[s++] = FXK_OFF;
+    }
     // load the sample FIRST (it resets loop points), then restore them
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "smp"))   && cJSON_IsString(j) && j->valuestring[0]) keys_load_zone(j->valuestring);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "root"))  && cJSON_IsNumber(j)) z->root = (uint8_t)j->valueint;

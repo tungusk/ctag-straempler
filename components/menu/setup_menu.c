@@ -91,3 +91,12 @@ int setup_menu_event(setup_menu_t *m, int event)
     }
     return 0;
 }
+
+// Enter a setup page with the cursor already on row `pos` instead of the top —
+// e.g. returning from a sub-page to the line that opened it. Clamps out-of-range.
+void setup_menu_enter_at(setup_menu_t *m, int pos)
+{
+    m->pos = (pos >= 0 && pos < m->n) ? pos : 0;
+    m->sel = 0;
+    draw(m);
+}

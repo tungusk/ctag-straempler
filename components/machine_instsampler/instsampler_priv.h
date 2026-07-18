@@ -8,6 +8,13 @@
 #include "overdrive.h"
 #include "flanger.h"
 #include "tremolo.h"
+#include "fxfilter.h"
+
+// FX rack (curated slots). FX1/FX2 each hold one GENERIC effect (or OFF) and run
+// in slot order; FX3 is the fixed reverb slot. Reordering FX1<->FX2 changes the
+// chain order. Spike lives in Keys; extract to components/fxrack for Synth/Tape.
+enum { FXK_OFF = 0, FXK_OD, FXK_FLG, FXK_TREM, FXK_DLY, FXK_FILT, FXK_NGEN };
+#define FX_NSLOT_GEN 2
 
 // Keys — tonal instrument sampler (see machine_instsampler.h). v1: one mono
 // PSRAM-resident sample, varispeed-pitched across the keyboard from CV1
@@ -77,6 +84,11 @@ typedef struct {
     bool  flg_on;             // flanger engaged (slab stays allocated once inited)
     tremolo_t trem;           // output tremolo (no slab; zero-init)
     bool  trem_on;            // tremolo engaged
+    fxfilter_t filt;          // FX rack filter brick (insert; not the voice svf)
+    bool  filt_on;            // filter engaged
+    // FX rack: which generic effect (FXK_*) runs in slot 0 (FX1) and slot 1 (FX2).
+    // Source of truth for on/order; the *_on bools are kept synced from this.
+    int8_t fx_slot[FX_NSLOT_GEN];
 
     // CV matrix (identical mechanics to Synth)
     int8_t mtx_src[ISM_N];    // -1 off / 0..7 = CV1..8
