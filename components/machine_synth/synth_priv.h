@@ -8,6 +8,7 @@
 #include "overdrive.h"
 #include "flanger.h"
 #include "tremolo.h"
+#include "fxrack.h"       // shared FX slot rack (pulls fxfilter.h)
 
 // Synth voice — a no-sample sound source. v1 is a monophonic subtractive voice:
 // polyBLEP saw<->square oscillator, 1V/oct pitch on CV1, TR1 gate -> linear ADSR
@@ -59,6 +60,8 @@ typedef struct {
     bool  flg_on;                // flanger engaged (slab stays allocated once inited)
     tremolo_t trem;              // output tremolo (no slab; part of zero-init sy)
     bool  trem_on;               // tremolo engaged
+    fxfilter_t filt;             // FX rack filter brick (insert)
+    int8_t fx_slot[FX_NSLOT_GEN]; // FX rack: generic slot assignment (FX1,FX2)
 
     // params (Setup + knobs)
     int   engine;                // ENG_VA / ENG_FM
@@ -96,6 +99,7 @@ typedef struct {
 } sy_state_t;
 
 extern sy_state_t sy;
+extern fxrack_t sy_rk;    // FX rack pointer-view over sy's effect instances
 
 // load a pool sample as the wavetable (mono, up to SY_WT_MAX). Does NOT change
 // the engine — the caller (menu) selects ENG_WT on success. 0 ok, <0 fail.

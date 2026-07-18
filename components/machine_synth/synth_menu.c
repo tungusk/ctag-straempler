@@ -196,18 +196,29 @@ static const setup_item_t sy_setup_items[] = {
     {"Release",   ST_RANGE},  {"Env>Cut",   ST_RANGE},  {"Glide",     ST_RANGE},
     {"LFO Rate",  ST_RANGE},  {"LFO Depth", ST_RANGE},  {"LFO Dest",  ST_TOGGLE},
     {"Level",     ST_RANGE},
-    {"Load Wave", ST_ACTION}, {"CV Matrix", ST_ACTION}, {"FX",        ST_ACTION},
+    {"Load Wave", ST_ACTION}, {"CV Matrix", ST_ACTION},
+    {"FX1",        ST_ACTION}, {"FX2",       ST_ACTION}, {"FX3 Reverb", ST_ACTION},
     {"Save Patch", ST_ACTION}, {"Load Patch", ST_ACTION},
 };
 
 // last saved patch id, shown inline on the Save Patch row as confirmation
 static char s_last_saved[12];
 
-// count of engaged effects, for the "FX" row affordance
-static int sy_fx_count(void)
+// FX rack slot editor state (shared fxrack machinery drives the rows)
+static int s_cur_slot = 0;       // slot the FX sub-page is editing
+static int s_setup_return = -1;  // Setup row to restore on return from a sub-page
+static setup_menu_t sy_fx;       // defined below
+static setup_item_t s_syfx_items[FXRACK_MAXROWS];
+static int8_t s_syfx_param[FXRACK_MAXROWS];
+static int s_syfx_n;
+
+static void syfx_rebuild(void)
 {
-    return (sy.rv.mode != RV_OFF) + (sy.dly_on ? 1 : 0) + (sy.od_on ? 1 : 0)
-         + (sy.flg_on ? 1 : 0) + (sy.trem_on ? 1 : 0);
+    s_syfx_n = fxrack_menu_rows(&sy_rk, s_cur_slot, s_syfx_items, s_syfx_param);
+    sy_fx.n = s_syfx_n;
+    sy_fx.title = s_cur_slot == 0 ? "Synth FX1" : s_cur_slot == 1 ? "Synth FX2" : "Synth FX3";
+    if (sy_fx.sel >= s_syfx_n) sy_fx.sel = s_syfx_n - 1;
+    if (sy_fx.sel < 0) sy_fx.sel = 0;
 }
 
 static void setup_val(int i, char *v, size_t n)
@@ -233,9 +244,11 @@ static void setup_val(int i, char *v, size_t n)
         case 16: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
         case 17: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx_src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
-        case 18: { int on = sy_fx_count(); if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "off >"); break; }
-        case 19: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
-        case 20: snprintf(v, n, "load >"); break;
+        case 18: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 0)); break;
+        case 19: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 1)); break;
+        case 20: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 2)); break;
+        case 21: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
+        case 22: snprintf(v, n, "load >"); break;
     }
 }
 
@@ -265,20 +278,22 @@ static void sy_adj(int i, int dir)
 static int sy_setup_action(int i)
 {
     if (i == 16) return M_SYNTH_LOAD;      // Load Wave -> browser
-    if (i == 17) return M_SYNTH_MATRIX;    // CV Matrix -> matrix page
-    if (i == 18) return M_SYNTH_FX;        // FX -> FX sub-page
-    if (i == 19) {                         // Save Patch: mint + write, stay on Setup
+    if (i == 17) { s_setup_return = 17; return M_SYNTH_MATRIX; }   // CV Matrix
+    if (i == 18) { s_setup_return = 18; s_cur_slot = 0; return M_SYNTH_FX; }   // FX1
+    if (i == 19) { s_setup_return = 19; s_cur_slot = 1; return M_SYNTH_FX; }   // FX2
+    if (i == 20) { s_setup_return = 20; s_cur_slot = 2; return M_SYNTH_FX; }   // FX3 reverb
+    if (i == 21) {                         // Save Patch: mint + write, stay on Setup
         if (synth_patch_save(s_last_saved, sizeof(s_last_saved)) != 0)
             snprintf(s_last_saved, sizeof(s_last_saved), "err");
         return 0;                          // framework redraws -> row shows the id
     }
-    if (i == 20) return M_SYNTH_PATCH;     // Load Patch -> patch browser
+    if (i == 22) return M_SYNTH_PATCH;     // Load Patch -> patch browser
     return 0;
 }
 
 static setup_menu_t sy_setup = {
     .items = sy_setup_items,
-    .n = 21,
+    .n = 23,
     .title = "Synth Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_SYNTH_LIVE,
@@ -288,121 +303,42 @@ static setup_menu_t sy_setup = {
 static int synth_setup_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
+    if (event == EV_ENTERED_MENU && s_setup_return >= 0) {   // return from a sub-page
+        int p = s_setup_return; s_setup_return = -1;
+        setup_menu_enter_at(&sy_setup, p);
+        return 0;
+    }
     return setup_menu_event(&sy_setup, event);
 }
 
-// ---- FX sub-page: all five effects, reached from the Setup "FX" row --------
-static const setup_item_t sy_fx_items[] = {
-    {"Reverb",    ST_TOGGLE}, {"Rev Mix",   ST_RANGE},
-    {"Delay",     ST_TOGGLE}, {"Dly Time",  ST_RANGE},  {"Dly Fdbk",  ST_RANGE},
-    {"Dly Mix",   ST_RANGE},  {"Dly Tone",  ST_RANGE},  {"Dly Ping",  ST_TOGGLE},
-    {"Overdrive", ST_TOGGLE}, {"OD Drive",  ST_RANGE},  {"OD Tone",   ST_RANGE},
-    {"OD Bias",   ST_RANGE},  {"OD Level",  ST_RANGE},
-    {"Flanger",   ST_TOGGLE}, {"Flg Rate",  ST_RANGE},  {"Flg Depth", ST_RANGE},
-    {"Flg Fdbk",  ST_RANGE},  {"Flg Mix",   ST_RANGE},
-    {"Tremolo",   ST_TOGGLE}, {"Trm Rate",  ST_RANGE},  {"Trm Depth", ST_RANGE},
-    {"Trm Shape", ST_TOGGLE}, {"Trm Stereo", ST_TOGGLE},
-};
-
+// ---- FX slot editor: one slot at a time, rows driven by the shared fxrack ----
 static void sy_fx_val(int i, char *v, size_t n)
 {
-    switch (i) {
-        case 0: snprintf(v, n, "%s", reverb_mode_name(sy.rv.mode)); break;
-        case 1: snprintf(v, n, "%.0f%%", sy.rv.wet * 100.0f); break;
-        case 2: snprintf(v, n, "%s", sy.dly_on ? "ON" : "OFF"); break;
-        case 3: snprintf(v, n, "%d ms", (int)(fxdelay_time_ms(&sy.dly) + 0.5f)); break;
-        case 4: snprintf(v, n, "%.0f%%", sy.dly.fb * 100.0f); break;
-        case 5: snprintf(v, n, "%.0f%%", sy.dly.wet * 100.0f); break;
-        case 6: snprintf(v, n, "%.0f%%", sy.dly.damp * 100.0f); break;
-        case 7: snprintf(v, n, "%s", sy.dly.pingpong ? "Ping-Pong" : "Stereo"); break;
-        case 8: snprintf(v, n, "%s", sy.od_on ? "ON" : "OFF"); break;
-        case 9: snprintf(v, n, "%.0f%%", sy.od.drive * 100.0f); break;
-        case 10: snprintf(v, n, "%.0f%%", sy.od.tone * 100.0f); break;
-        case 11: snprintf(v, n, "%+.0f%%", sy.od.bias * 100.0f); break;
-        case 12: snprintf(v, n, "%.0f%%", sy.od.level * 100.0f); break;
-        case 13: snprintf(v, n, "%s", sy.flg_on ? "ON" : "OFF"); break;
-        case 14: snprintf(v, n, "%.2f Hz", sy.flg.rate); break;
-        case 15: snprintf(v, n, "%.0f%%", sy.flg.depth * 100.0f); break;
-        case 16: snprintf(v, n, "%+.0f%%", sy.flg.fb * 100.0f); break;
-        case 17: snprintf(v, n, "%.0f%%", sy.flg.wet * 100.0f); break;
-        case 18: snprintf(v, n, "%s", sy.trem_on ? "ON" : "OFF"); break;
-        case 19: snprintf(v, n, "%.2f Hz", sy.trem.rate); break;
-        case 20: snprintf(v, n, "%.0f%%", sy.trem.depth * 100.0f); break;
-        case 21: snprintf(v, n, "%s", sy.trem.shape == TREM_SINE ? "Sine" : sy.trem.shape == TREM_TRI ? "Tri" : "Sqr"); break;
-        case 22: snprintf(v, n, "%s", sy.trem.stereo ? "ON" : "OFF"); break;
-    }
+    if (i < 0 || i >= s_syfx_n) { v[0] = 0; return; }
+    fxrack_menu_val(&sy_rk, s_cur_slot, s_syfx_param[i], v, n);
 }
 
 static void sy_fx_adj(int i, int dir)
 {
-    float d = (float)dir;
-    switch (i) {
-        case 0: {   // reverb mode (lazy-init the tank on first non-off)
-            int m = sy.rv.mode + dir;
-            if (m < 0) m = RV_N_MODES - 1;
-            if (m >= RV_N_MODES) m = RV_OFF;
-            if (m != RV_OFF && !sy.rv.slab && reverb_init(&sy.rv) != ESP_OK) m = RV_OFF;
-            reverb_set_mode(&sy.rv, m);
-            break;
-        }
-        case 1: {
-            float w = sy.rv.wet + d * 0.05f;
-            if (w < 0) w = 0;
-            if (w > 1) w = 1;
-            reverb_set_mix(&sy.rv, w);
-            break;
-        }
-        case 2: { bool on = !sy.dly_on;               // Delay on/off (lazy slab)
-                   if (on && !sy.dly.bufL && fxdelay_init(&sy.dly) != ESP_OK) on = false;
-                   if (on && sy.dly.wet < 0.01f) fxdelay_set_mix(&sy.dly, 0.30f);  // audible default
-                   sy.dly_on = on;
-                   if (!on) fxdelay_clear(&sy.dly); } break;   // drop the tail
-        case 3: if (sy.dly.bufL) fxdelay_set_time_ms(&sy.dly, fxdelay_time_ms(&sy.dly) + d * 10.0f); break;
-        case 4: if (sy.dly.bufL) fxdelay_set_feedback(&sy.dly, sy.dly.fb + d * 0.05f); break;
-        case 5: if (sy.dly.bufL) fxdelay_set_mix(&sy.dly, sy.dly.wet + d * 0.05f); break;
-        case 6: if (sy.dly.bufL) fxdelay_set_damp(&sy.dly, sy.dly.damp + d * 0.05f); break;
-        case 7: if (sy.dly.bufL) fxdelay_set_pingpong(&sy.dly, !sy.dly.pingpong); break;
-        case 8: { bool on = !sy.od_on;                // Overdrive on/off (no slab)
-                   if (on) {
-                       if (sy.od.level < 0.01f) { sy.od.drive = 0.4f; sy.od.tone = 0.5f; sy.od.level = 0.8f; }
-                       overdrive_reset(&sy.od);
-                   }
-                   sy.od_on = on; } break;
-        case 9: sy.od.drive += d * 0.05f; if (sy.od.drive < 0) sy.od.drive = 0; if (sy.od.drive > 1) sy.od.drive = 1; break;
-        case 10: sy.od.tone  += d * 0.05f; if (sy.od.tone < 0) sy.od.tone = 0; if (sy.od.tone > 1) sy.od.tone = 1; break;
-        case 11: sy.od.bias  += d * 0.05f; if (sy.od.bias < -1) sy.od.bias = -1; if (sy.od.bias > 1) sy.od.bias = 1; break;
-        case 12: sy.od.level += d * 0.05f; if (sy.od.level < 0) sy.od.level = 0; if (sy.od.level > 1) sy.od.level = 1; break;
-        case 13: { bool on = !sy.flg_on;               // Flanger on/off (lazy slab)
-                   if (on && !sy.flg.bufL && flanger_init(&sy.flg) != ESP_OK) on = false;
-                   if (on && sy.flg.wet < 0.01f) sy.flg.wet = 0.5f;   // audible default
-                   sy.flg_on = on;
-                   if (!on) flanger_clear(&sy.flg); } break;   // drop the tail
-        case 14: if (sy.flg.bufL) { sy.flg.rate  += d * 0.05f; if (sy.flg.rate < 0.01f) sy.flg.rate = 0.01f; if (sy.flg.rate > 10) sy.flg.rate = 10; } break;
-        case 15: if (sy.flg.bufL) { sy.flg.depth += d * 0.05f; if (sy.flg.depth < 0) sy.flg.depth = 0; if (sy.flg.depth > 1) sy.flg.depth = 1; } break;
-        case 16: if (sy.flg.bufL) { sy.flg.fb    += d * 0.05f; if (sy.flg.fb < -0.95f) sy.flg.fb = -0.95f; if (sy.flg.fb > 0.95f) sy.flg.fb = 0.95f; } break;
-        case 17: if (sy.flg.bufL) { sy.flg.wet   += d * 0.05f; if (sy.flg.wet < 0) sy.flg.wet = 0; if (sy.flg.wet > 1) sy.flg.wet = 1; } break;
-        case 18: { bool on = !sy.trem_on;              // Tremolo on/off (no slab)
-                   if (on && sy.trem.depth < 0.01f) { sy.trem.depth = 0.5f; sy.trem.rate = 5.0f; }
-                   sy.trem_on = on; } break;
-        case 19: sy.trem.rate  += d * 0.25f; if (sy.trem.rate < 0.05f) sy.trem.rate = 0.05f; if (sy.trem.rate > 20) sy.trem.rate = 20; break;
-        case 20: sy.trem.depth += d * 0.05f; if (sy.trem.depth < 0) sy.trem.depth = 0; if (sy.trem.depth > 1) sy.trem.depth = 1; break;
-        case 21: sy.trem.shape = (sy.trem.shape + 1) % 3; break;
-        case 22: sy.trem.stereo = !sy.trem.stereo; break;
-    }
+    if (i < 0 || i >= s_syfx_n) return;
+    int p = s_syfx_param[i];
+    fxrack_menu_adj(&sy_rk, s_cur_slot, p, dir);
+    if (p < 0) syfx_rebuild();   // effect changed -> param rows changed
 }
 
 static setup_menu_t sy_fx = {
-    .items = sy_fx_items,
-    .n = 23,
-    .title = "Synth FX",
+    .items = s_syfx_items,
+    .n = 0,                       // set by syfx_rebuild()
+    .title = "Synth FX",          // overwritten per-slot by syfx_rebuild()
     .aff_label = "Setup", .aff_target = M_SYNTH_SETUP,
-    .live_target = M_SYNTH_LIVE,
+    .live_target = M_SYNTH_SETUP, // long-press = up one level to Setup
     .render = sy_fx_val, .adjust = sy_fx_adj, .action = NULL,
 };
 
 static int synth_fx_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
+    if (event == EV_ENTERED_MENU) syfx_rebuild();   // dynamic row set for s_cur_slot
     return setup_menu_event(&sy_fx, event);
 }
 
