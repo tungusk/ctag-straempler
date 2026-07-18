@@ -29,6 +29,7 @@ const char *const trk_ppb_names[5] = {"1 per 4 beats", "1 per 2 beats", "1 per b
 
 static volatile bool s_run = false, s_alive = false;
 static bool s_logged_play = false;   // one-shot stack-watermark log per load
+static uint32_t s_render_stack = 0;  // stack the render task actually got (see load gate)
 static char s_cur_file[TRK_NAME_LEN] = "";   // module currently loaded/requested
 
 // module extensions libxmp can load (subset shown to the browser + accepted by
@@ -129,9 +130,18 @@ static void *load_file_psram(const char *name, long *out_size)
     if (f) { fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET); }
     sd_lock_give();
     if (!f) { strlcpy(trk.fail_why, "open failed", sizeof(trk.fail_why)); return NULL; }
-    if (sz <= 0 || sz > TRK_MAX_FILE) {
+    // SAFETY NET: libxmp's loaders are stack-hungry, and when internal RAM was
+    // tight the render task fell back to a TRIMMED stack — on which a heavy
+    // module used to overrun and PANIC. Cap the loadable size by the stack we
+    // actually got, so a big module is REFUSED cleanly (not a crash). Free
+    // internal RAM (switch to Tracker first / reboot) to lift the cap.
+    long cap = TRK_MAX_FILE;
+    if (s_render_stack && s_render_stack < 32768)
+        cap = (s_render_stack < 24000) ? (256L * 1024) : (768L * 1024);
+    if (sz <= 0 || sz > cap) {
         sd_lock_take(); fclose(f); sd_lock_give();
-        strlcpy(trk.fail_why, sz > 0 ? "too big" : "empty", sizeof(trk.fail_why));
+        strlcpy(trk.fail_why, sz <= 0 ? "empty" : (cap < TRK_MAX_FILE ? "too big (low RAM)" : "too big"),
+                sizeof(trk.fail_why));
         return NULL;
     }
     uint8_t *buf = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
@@ -634,8 +644,11 @@ static esp_err_t tracker_start(void)
     bool task_ok = false;
     for (int i = 0; i < 3 && !task_ok; i++) {
         task_ok = xTaskCreate(render_task, "trk_render", trk_stacks[i], NULL, 5, NULL) == pdPASS;
-        if (task_ok && i > 0)
-            ESP_LOGW(TAG, "render task on a TRIMMED %u B stack (internal RAM tight) — heavy IT/XM may be risky", trk_stacks[i]);
+        if (task_ok) {
+            s_render_stack = trk_stacks[i];   // gate module size on this (see load_file_psram)
+            if (i > 0)
+                ESP_LOGW(TAG, "render task on a TRIMMED %u B stack (internal RAM tight) — capping module size", trk_stacks[i]);
+        }
     }
     audio_status_set_voices("tracker", "");
     if (!task_ok) {
