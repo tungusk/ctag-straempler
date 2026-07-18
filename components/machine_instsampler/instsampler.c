@@ -17,6 +17,7 @@
 #include "instsampler_priv.h"
 
 is_state_t inst;
+fxrack_t inst_rk;    // FX rack pointer-view (initialized in keys_start)
 
 // 4-point cubic (Catmull-Rom) interpolation over the mono int16 buffer at the
 // fractional cursor pos. Tonal material holds pitched partials, so cubic (not
@@ -119,6 +120,8 @@ static esp_err_t keys_start(void)
     svf_reset(&inst.voice[0].flt);
     fxfilter_init(&inst.filt);     // FX rack filter brick
     inst.fx_slot[0] = inst.fx_slot[1] = FXK_OFF;   // rack empty until assigned
+    inst_rk = (fxrack_t){ .od = &inst.od, .flg = &inst.flg, .trem = &inst.trem, .dly = &inst.dly,
+                          .filt = &inst.filt, .rv = &inst.rv, .slot = inst.fx_slot };
     return ESP_OK;
 }
 
@@ -300,27 +303,8 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
         out[f * 2 + 1] = s;
     }
 
-    // FX chain: overdrive -> flanger -> tremolo -> delay -> reverb. Run in float
-    // with a single soft limiter at the end (fxchain.h) so stacked effects don't
-    // hard-clip at every stage — the old all-_block_i32 chain had no headroom.
-    {
-        float fb[FX_SCRATCH_N];
-        fx_unpack_i32(out, fb, frames * 2);
-        // FX rack: run the two generic slots in order (FX1 then FX2), then the
-        // fixed reverb slot (FX3). Slot assignment = which effect + what order.
-        for (int s = 0; s < FX_NSLOT_GEN; s++) {
-            switch (inst.fx_slot[s]) {
-                case FXK_OD:   overdrive_block_f(&inst.od, fb, frames); break;
-                case FXK_FLG:  if (inst.flg.bufL) flanger_block_f(&inst.flg, fb, frames); break;
-                case FXK_TREM: tremolo_block_f(&inst.trem, fb, frames); break;
-                case FXK_DLY:  if (inst.dly.bufL) fxdelay_block_f(&inst.dly, fb, frames); break;
-                case FXK_FILT: fxfilter_block_f(&inst.filt, fb, frames); break;
-                default: break;
-            }
-        }
-        if (inst.rv.mode != RV_OFF && inst.rv.slab)  reverb_block_f(&inst.rv, fb, frames);
-        fx_pack_softclip(fb, out, frames * 2);
-    }
+    // FX rack: generic slots in order -> reverb, float chain + soft limiter.
+    fxrack_process_i32(&inst_rk, out, frames);
 }
 
 // ---- preset (autosave + named recall reuse the same (de)serializers) --------
@@ -339,35 +323,7 @@ static cJSON *keys_preset_save(void)
     cJSON_AddNumberToObject(o, "res", inst.res01);
     cJSON_AddNumberToObject(o, "gld", inst.glide);
     cJSON_AddNumberToObject(o, "lvl", inst.level);
-    cJSON_AddNumberToObject(o, "rv", inst.rv.mode);
-    cJSON_AddNumberToObject(o, "rvmx", (int)(inst.rv.wet * 100 + 0.5f));
-    cJSON_AddBoolToObject(o, "dly", inst.dly_on);
-    cJSON_AddNumberToObject(o, "dlyt", (int)(fxdelay_time_ms(&inst.dly) + 0.5f));
-    cJSON_AddNumberToObject(o, "dlyfb", (int)(inst.dly.fb * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "dlymx", (int)(inst.dly.wet * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "dlytn", (int)(inst.dly.damp * 100 + 0.5f));
-    cJSON_AddBoolToObject(o, "dlypp", inst.dly.pingpong);
-    cJSON_AddBoolToObject(o, "od", inst.od_on);
-    cJSON_AddNumberToObject(o, "oddr", (int)(inst.od.drive * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "odtn", (int)(inst.od.tone * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "odbs", (int)(inst.od.bias * 100 + (inst.od.bias < 0 ? -0.5f : 0.5f)));
-    cJSON_AddNumberToObject(o, "odlv", (int)(inst.od.level * 100 + 0.5f));
-    cJSON_AddBoolToObject(o, "flg", inst.flg_on);
-    cJSON_AddNumberToObject(o, "flgrt", (int)(inst.flg.rate * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "flgdp", (int)(inst.flg.depth * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "flgfb", (int)(inst.flg.fb * 100 + (inst.flg.fb < 0 ? -0.5f : 0.5f)));
-    cJSON_AddNumberToObject(o, "flgmx", (int)(inst.flg.wet * 100 + 0.5f));
-    cJSON_AddBoolToObject(o, "trem", inst.trem_on);
-    cJSON_AddNumberToObject(o, "trmrt", (int)(inst.trem.rate * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "trmdp", (int)(inst.trem.depth * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "trmsh", inst.trem.shape);
-    cJSON_AddBoolToObject(o, "trmst", inst.trem.stereo);
-    // FX rack: slot assignment (FX1,FX2) + filter brick params
-    cJSON *sl = cJSON_AddArrayToObject(o, "fxsl");
-    for (int s = 0; s < FX_NSLOT_GEN; s++) cJSON_AddItemToArray(sl, cJSON_CreateNumber(inst.fx_slot[s]));
-    cJSON_AddNumberToObject(o, "fim", inst.filt.mode);
-    cJSON_AddNumberToObject(o, "fic", (int)(inst.filt.cutoff * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "fiq", (int)(inst.filt.reso * 100 + 0.5f));
+    fxrack_save(&inst_rk, o);   // slots + every effect param (shared FX rack)
     cJSON_AddStringToObject(o, "smp", z->sample);
     cJSON_AddNumberToObject(o, "root", z->root);
     cJSON_AddNumberToObject(o, "lm", z->loop_mode);
@@ -399,65 +355,7 @@ static void keys_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "res"))   && cJSON_IsNumber(j)) inst.res01 = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) inst.glide = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) inst.level = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rv"))    && cJSON_IsNumber(j)) {
-        int m = j->valueint; if (m < 0 || m >= RV_N_MODES) m = RV_OFF;
-        if (m != RV_OFF && !inst.rv.slab && reverb_init(&inst.rv) != ESP_OK) m = RV_OFF;
-        reverb_set_mode(&inst.rv, m);
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx"))  && cJSON_IsNumber(j)) reverb_set_mix(&inst.rv, (float)j->valueint / 100.0f);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dly"))   && cJSON_IsBool(j)) {
-        bool on = cJSON_IsTrue(j);
-        if (on && !inst.dly.bufL && fxdelay_init(&inst.dly) != ESP_OK) on = false;
-        inst.dly_on = on;
-    }
-    if (inst.dly.bufL) {   // params apply once the slab exists (order-independent)
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyt"))  && cJSON_IsNumber(j)) fxdelay_set_time_ms(&inst.dly, (float)j->valueint);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyfb")) && cJSON_IsNumber(j)) fxdelay_set_feedback(&inst.dly, (float)j->valueint / 100.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlymx")) && cJSON_IsNumber(j)) fxdelay_set_mix(&inst.dly, (float)j->valueint / 100.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlytn")) && cJSON_IsNumber(j)) fxdelay_set_damp(&inst.dly, (float)j->valueint / 100.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlypp")) && cJSON_IsBool(j))   fxdelay_set_pingpong(&inst.dly, cJSON_IsTrue(j));
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "od"))    && cJSON_IsBool(j)) inst.od_on = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "oddr"))  && cJSON_IsNumber(j)) inst.od.drive = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odtn"))  && cJSON_IsNumber(j)) inst.od.tone = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odbs"))  && cJSON_IsNumber(j)) inst.od.bias = clampf((float)j->valueint / 100.0f, -1.0f, 1.0f);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odlv"))  && cJSON_IsNumber(j)) inst.od.level = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flg"))   && cJSON_IsBool(j)) {
-        bool on = cJSON_IsTrue(j);
-        if (on && !inst.flg.bufL && flanger_init(&inst.flg) != ESP_OK) on = false;
-        inst.flg_on = on;
-    }
-    if (inst.flg.bufL) {   // params apply once the slab exists (order-independent)
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgrt")) && cJSON_IsNumber(j)) inst.flg.rate = clampf((float)j->valueint / 100.0f, 0.01f, 10.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgdp")) && cJSON_IsNumber(j)) inst.flg.depth = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgfb")) && cJSON_IsNumber(j)) inst.flg.fb = clampf((float)j->valueint / 100.0f, -0.95f, 0.95f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgmx")) && cJSON_IsNumber(j)) inst.flg.wet = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trem"))  && cJSON_IsBool(j)) inst.trem_on = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmrt")) && cJSON_IsNumber(j)) inst.trem.rate = clampf((float)j->valueint / 100.0f, 0.05f, 20.0f);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmdp")) && cJSON_IsNumber(j)) inst.trem.depth = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmsh")) && cJSON_IsNumber(j)) { int s = j->valueint; inst.trem.shape = (s < 0 || s >= TREM_NSHAPE) ? TREM_SINE : s; }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmst")) && cJSON_IsBool(j)) inst.trem.stereo = cJSON_IsTrue(j);
-    // filter brick params
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fim")) && cJSON_IsNumber(j)) { int m = j->valueint; inst.filt.mode = (m < 0 || m >= FILT_NMODE) ? FILT_LP : m; }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fic")) && cJSON_IsNumber(j)) inst.filt.cutoff = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fiq")) && cJSON_IsNumber(j)) inst.filt.reso = clampf((float)j->valueint / 100.0f, 0.0f, 1.0f);
-    // FX slot assignment; migrate from the legacy *_on bools when absent
-    cJSON *fsl = cJSON_GetObjectItemCaseSensitive(node, "fxsl");
-    if (cJSON_IsArray(fsl)) {
-        for (int s = 0; s < FX_NSLOT_GEN; s++) {
-            cJSON *si = cJSON_GetArrayItem(fsl, s);
-            int v = cJSON_IsNumber(si) ? si->valueint : FXK_OFF;
-            inst.fx_slot[s] = (v < 0 || v >= FXK_NGEN) ? FXK_OFF : (int8_t)v;
-        }
-    } else {
-        int s = 0;   // legacy: rebuild slots from the loaded enables (od,flg,trem,dly order)
-        if (inst.od_on   && s < FX_NSLOT_GEN) inst.fx_slot[s++] = FXK_OD;
-        if (inst.flg_on  && s < FX_NSLOT_GEN) inst.fx_slot[s++] = FXK_FLG;
-        if (inst.trem_on && s < FX_NSLOT_GEN) inst.fx_slot[s++] = FXK_TREM;
-        if (inst.dly_on  && s < FX_NSLOT_GEN) inst.fx_slot[s++] = FXK_DLY;
-        while (s < FX_NSLOT_GEN) inst.fx_slot[s++] = FXK_OFF;
-    }
+    fxrack_load(&inst_rk, node);   // slots + every effect param (shared FX rack)
     // load the sample FIRST (it resets loop points), then restore them
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "smp"))   && cJSON_IsString(j) && j->valuestring[0]) keys_load_zone(j->valuestring);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "root"))  && cJSON_IsNumber(j)) z->root = (uint8_t)j->valueint;
