@@ -229,6 +229,12 @@ static void slive_edit(int dir)
 {
     float d = (float)dir;
     switch (s_live_sel) {
+        case 0:   // synth type / engine (VA / FM / WT); osc preview + K5 follow
+            sy.engine += dir;
+            if (sy.engine < 0) sy.engine = ENG_WT;
+            if (sy.engine > ENG_WT) sy.engine = ENG_VA;
+            sy.knob_engine = -1;   // K5 timbre is engine-specific -> recapture
+            break;
         case 1:   // timbre — engine-aware
             if (sy.engine == ENG_FM)      sy.fm_index = sclampf(sy.fm_index + d * 0.25f, 0.0f, 8.0f);
             else if (sy.engine == ENG_WT) sy.fold     = sclampf(sy.fold + d * 0.05f, 0.0f, 1.0f);
@@ -280,8 +286,7 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
             slive_repaint();
             break;
         case EV_SHORT_PRESS:
-            if (s_live_sel == 0) return M_SYNTH_LOAD;   // Wave element -> Load Wave
-            s_live_edit = !s_live_edit;
+            s_live_edit = !s_live_edit;   // click in/out (element 0 edits engine type)
             slive_repaint();
             break;
         case EV_LONG_PRESS:
