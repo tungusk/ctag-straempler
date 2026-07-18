@@ -33,3 +33,7 @@ typedef struct {
 
 // Feed a menusys event. Returns a target menu id to navigate to, or 0 to stay.
 int setup_menu_event(setup_menu_t *m, int event);
+
+// Enter a page with the cursor on row `pos` (e.g. return from a sub-page to the
+// line that opened it), instead of the default reset to the top row.
+void setup_menu_enter_at(setup_menu_t *m, int pos);
