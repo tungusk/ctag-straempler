@@ -154,6 +154,21 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
             tp.recording = true;
         }
     }
+    // on-device punch (UI encoder): 1 = punch IN (start rec), 2 = punch OUT (stop)
+    int rq = tp.ui_rec_req;
+    if (rq) {
+        tp.ui_rec_req = 0;
+        if (rq == 1 && !tp.recording) {
+            if (!tp.playing) {
+                uint32_t ein, eout; tape_eff_window(&ein, &eout);
+                tp.pos = tp.len ? (double)ein : 0.0;
+                tp.playing = true;
+            }
+            tp.recording = true;
+        } else if (rq == 2) {
+            tp.recording = false;
+        }
+    }
 
     uint32_t ein = 0, eout = 0;
     tape_eff_window(&ein, &eout);
