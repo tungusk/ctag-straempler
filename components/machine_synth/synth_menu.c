@@ -79,11 +79,10 @@ static void draw_osc(void)
     int fh = TFT_getfontheight();
     int x = 8, y0 = fh + 15, w = _width - 16, h = 26, cy = y0 + h / 2;
     _bg = TFT_BLACK; TFT_fillRect(x - 1, y0 - 2, w + 2, h + 4, _bg);
-    if (s_live_sel == 0) {                       // encoder-nav focus box
-        color_t hc = s_live_edit ? (color_t){255, 210, 60} : (color_t){150, 150, 170};
-        TFT_drawRect(x - 1, y0 - 1, w + 2, h + 2, hc);
-    }
-    color_t wc = {120, 190, 235};
+    // encoder-nav focus = a BOLDER trace (2 px, brighter), not a box
+    int foc = (s_live_sel == 0);
+    color_t wc = foc ? (s_live_edit ? (color_t){255, 210, 60} : (color_t){180, 225, 255})
+                     : (color_t){120, 190, 235};
     int prevy = cy, amp = h / 2 - 2, cycles = 2;
     for (int i = 0; i <= w; i++) {
         float ph = (float)i / (float)w * (float)cycles; ph -= (float)(int)ph;
@@ -98,7 +97,10 @@ static void draw_osc(void)
             yv = (1.0f - sy.shape) * saw + sy.shape * sq;
         }
         int py = cy - (int)(yv * (float)amp);
-        if (i > 0) TFT_drawLine(x + i - 1, prevy, x + i, py, wc);
+        if (i > 0) {
+            TFT_drawLine(x + i - 1, prevy, x + i, py, wc);
+            if (foc) TFT_drawLine(x + i - 1, prevy + 1, x + i, py + 1, wc);   // thicken
+        }
         prevy = py;
     }
 }
