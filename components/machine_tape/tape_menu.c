@@ -102,11 +102,13 @@ static void wave_col(int x)
             }
         }
     }
-    int pi = (x - W_X) * TP_PEAKS / W_W;
+    // column -> frame (via the zoomed view span) -> cap-binned peak index, so the
+    // waveform lines up with the crop/playhead (peaks are binned over tp.cap).
+    long fr = (long)((uint64_t)(x - W_X) * tape_view_span() / W_W);
+    int pi = tp.cap ? (int)((uint64_t)fr * TP_PEAKS / tp.cap) : 0;
     if (pi >= 0 && pi < TP_PEAKS && tp.peaks[pi]) {
         int ph = tp.peaks[pi] * (h / 2 - 2) / 255;
         if (ph < 1) ph = 1;
-        long fr = (long)((uint64_t)(x - W_X) * tape_view_span() / W_W);
         bool inside = fr >= (long)ein && fr < (long)eout;
         TFT_drawLine(x, cy - ph, x, cy + ph, inside ? WF_LIT : WF_DIM);
     } else {
