@@ -55,7 +55,7 @@ typedef struct {
     volatile int  state;           // TRK_*
     char  title[TRK_TITLE_LEN];    // internal module title (fallback: filename)
     char  fmt[20];                 // e.g. "Protracker", "Fast Tracker II"
-    char  fail_why[24];
+    char  fail_why[40];
     // sample/instrument names — composers often hide the song's message/credits
     // here. Captured once at load; read by the UI (scrolled on knob7/CV7).
     char  names[TRK_MAX_NAMES][TRK_NM_LEN];
