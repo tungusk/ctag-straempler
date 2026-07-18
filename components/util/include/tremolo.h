@@ -28,3 +28,5 @@ static inline void tremolo_set_rate_beats(tremolo_t *t, float beats, float bpm)
 }
 
 void tremolo_block_i32(tremolo_t *t, int32_t *out, int frames);
+// float-scratch worker for the hosted chain (see fxchain.h)
+void tremolo_block_f(tremolo_t *t, float *buf, int frames);

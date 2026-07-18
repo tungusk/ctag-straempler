@@ -99,7 +99,7 @@ static void sweepDir(const char *dir){
 
 static void sweepIncompleteFiles(){
     sweepDir("/sdcard/usr");
-    sweepDir("/sdcard/usr/MODS");
+    sweepDir("/sdcard/usr/TRACKER");
 }
 
 void checkSDStructure(){
@@ -120,6 +120,19 @@ void checkSDStructure(){
     if (stat("/sdcard/usr", &st) == -1) {
         mkdir("/sdcard/usr", 0777);
     }
+
+    // one-time rename: the tracker's module folder was usr/MODS, now usr/TRACKER.
+    // Migrate an existing MODS so previously-uploaded modules aren't orphaned.
+    if (stat("/sdcard/usr/TRACKER", &st) == -1 &&
+        stat("/sdcard/usr/MODS", &st) == 0) {
+        if (rename("/sdcard/usr/MODS", "/sdcard/usr/TRACKER") != 0)
+            ESP_LOGW("SD", "MODS->TRACKER migrate failed: %s", strerror(errno));
+    }
+
+    // per-machine home folders (organization for the two-level sample browser)
+    if (stat("/sdcard/usr/TRACKER", &st) == -1) mkdir("/sdcard/usr/TRACKER", 0777);
+    if (stat("/sdcard/usr/KEYS", &st) == -1)    mkdir("/sdcard/usr/KEYS", 0777);
+    if (stat("/sdcard/usr/TAPE", &st) == -1)    mkdir("/sdcard/usr/TAPE", 0777);
 
     // check if config file exists & has valid structure, else create/rewrite
     if (stat("/sdcard/CONFIG.JSN", &st) == -1 || validateConfig() == -1) {

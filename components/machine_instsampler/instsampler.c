@@ -13,6 +13,7 @@
 #include "svf.h"
 #include "sample_ram.h"
 #include "preset_store.h"
+#include "fxchain.h"
 #include "instsampler_priv.h"
 
 is_state_t inst;
@@ -297,17 +298,19 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
         out[f * 2 + 1] = s;
     }
 
-    // FX chain: overdrive -> flanger -> tremolo -> delay -> reverb
-    if (inst.od_on)
-        overdrive_block_i32(&inst.od, out, frames);
-    if (inst.flg_on && inst.flg.bufL)
-        flanger_block_i32(&inst.flg, out, frames);
-    if (inst.trem_on)
-        tremolo_block_i32(&inst.trem, out, frames);
-    if (inst.dly_on && inst.dly.bufL)
-        fxdelay_block_i32(&inst.dly, out, frames);
-    if (inst.rv.mode != RV_OFF && inst.rv.slab)
-        reverb_block_i32(&inst.rv, out, frames);
+    // FX chain: overdrive -> flanger -> tremolo -> delay -> reverb. Run in float
+    // with a single soft limiter at the end (fxchain.h) so stacked effects don't
+    // hard-clip at every stage — the old all-_block_i32 chain had no headroom.
+    {
+        float fb[FX_SCRATCH_N];
+        fx_unpack_i32(out, fb, frames * 2);
+        if (inst.od_on)                              overdrive_block_f(&inst.od, fb, frames);
+        if (inst.flg_on && inst.flg.bufL)            flanger_block_f(&inst.flg, fb, frames);
+        if (inst.trem_on)                            tremolo_block_f(&inst.trem, fb, frames);
+        if (inst.dly_on && inst.dly.bufL)            fxdelay_block_f(&inst.dly, fb, frames);
+        if (inst.rv.mode != RV_OFF && inst.rv.slab)  reverb_block_f(&inst.rv, fb, frames);
+        fx_pack_softclip(fb, out, frames * 2);
+    }
 }
 
 // ---- preset (autosave + named recall reuse the same (de)serializers) --------

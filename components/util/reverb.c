@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "reverb.h"
+#include "fxchain.h"
 
 static const char *TAG = "REVERB";
 
@@ -279,7 +280,7 @@ void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames
     rv->cost_us += (us - rv->cost_us) >> 3;
 }
 
-void reverb_block_i32(reverb_t *rv, int32_t *out, int frames)
+void reverb_block_f(reverb_t *rv, float *buf, int frames)
 {
     if (!rv->slab || rv->mode == RV_OFF) { rv->cost_us = 0; return; }
     int64_t t0 = esp_timer_get_time();
@@ -293,24 +294,32 @@ void reverb_block_i32(reverb_t *rv, int32_t *out, int frames)
     const float sg = rv->shim_gain;
 
     for (int f = 0; f < frames; f++) {
-        float dl = (float)(out[f * 2] >> 16);
-        float dr = (float)(out[f * 2 + 1] >> 16);
+        float dl = buf[f * 2];
+        float dr = buf[f * 2 + 1];
         float x = 0.5f * (dl + dr) * 0.6f;           // mono tank feed, headroom
 
         float yl, yr;
         tank_step(rv, x, decay, damp, bw, sg, &yl, &yr);
 
-        float ol = gd * dl + gw * yl;
-        float or_ = gd * dr + gw * yr;
-        if (ol > 32767.0f) ol = 32767.0f;
-        if (ol < -32768.0f) ol = -32768.0f;
-        if (or_ > 32767.0f) or_ = 32767.0f;
-        if (or_ < -32768.0f) or_ = -32768.0f;
-        out[f * 2]     = ((int32_t)ol) << 16;
-        out[f * 2 + 1] = ((int32_t)or_) << 16;
+        buf[f * 2]     = gd * dl + gw * yl;          // no clamp (chain soft-limits)
+        buf[f * 2 + 1] = gd * dr + gw * yr;
     }
 
     tank_nan_guard(rv);
     int us = (int)(esp_timer_get_time() - t0);
     rv->cost_us += (us - rv->cost_us) >> 3;          // EMA, ~8-block settle
+}
+
+// int32<<16 wrapper (single-FX callers, e.g. Slicer): unpack -> worker -> clamp.
+void reverb_block_i32(reverb_t *rv, int32_t *out, int frames)
+{
+    float buf[FX_SCRATCH_N];
+    if (frames * 2 > FX_SCRATCH_N) frames = FX_SCRATCH_N / 2;
+    fx_unpack_i32(out, buf, frames * 2);
+    reverb_block_f(rv, buf, frames);
+    for (int i = 0; i < frames * 2; i++) {
+        int32_t s = (int32_t)buf[i];
+        if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
+        out[i] = s << 16;
+    }
 }

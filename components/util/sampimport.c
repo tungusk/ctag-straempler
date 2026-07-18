@@ -344,7 +344,8 @@ static void import_task(void *pv)
     // those folders is still convert-on-import scanned (SLICES was missing).
     static const char *const dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
                                        "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
-                                       "/sdcard/usr/DRUMS"};
+                                       "/sdcard/usr/DRUMS", "/sdcard/usr/KEYS",
+                                       "/sdcard/usr/TAPE"};
     samp_import_done = 0;
     samp_import_fail = 0;
     samp_import_seen = 0;

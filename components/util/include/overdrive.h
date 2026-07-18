@@ -22,3 +22,5 @@ typedef struct {
 static inline void overdrive_reset(overdrive_t *o) { svf_reset(&o->tl); svf_reset(&o->tr); }
 
 void overdrive_block_i32(overdrive_t *o, int32_t *out, int frames);
+// float-scratch worker for the hosted chain (no clamp; see fxchain.h)
+void overdrive_block_f(overdrive_t *o, float *buf, int frames);

@@ -11,6 +11,7 @@
 #include "svf.h"
 #include "sample_ram.h"
 #include "preset_store.h"
+#include "fxchain.h"
 #include "synth_priv.h"
 
 sy_state_t sy;
@@ -285,18 +286,19 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
         out[f * 2 + 1] = s;
     }
 
-    // FX chain: overdrive -> flanger -> tremolo -> delay (repeats wash through reverb)
-    if (sy.od_on)
-        overdrive_block_i32(&sy.od, out, frames);
-    if (sy.flg_on && sy.flg.bufL)
-        flanger_block_i32(&sy.flg, out, frames);
-    if (sy.trem_on)
-        tremolo_block_i32(&sy.trem, out, frames);
-    if (sy.dly_on && sy.dly.bufL)
-        fxdelay_block_i32(&sy.dly, out, frames);
-    // output reverb (equal-power wet/dry, in place) — AFTER the voice/filter
-    if (sy.rv.mode != RV_OFF && sy.rv.slab)
-        reverb_block_i32(&sy.rv, out, frames);
+    // FX chain: overdrive -> flanger -> tremolo -> delay -> reverb. Run in float
+    // with a single soft limiter at the end (fxchain.h) so stacked effects don't
+    // hard-clip at every stage — the old all-_block_i32 chain had no headroom.
+    {
+        float fb[FX_SCRATCH_N];
+        fx_unpack_i32(out, fb, frames * 2);
+        if (sy.od_on)                            overdrive_block_f(&sy.od, fb, frames);
+        if (sy.flg_on && sy.flg.bufL)            flanger_block_f(&sy.flg, fb, frames);
+        if (sy.trem_on)                          tremolo_block_f(&sy.trem, fb, frames);
+        if (sy.dly_on && sy.dly.bufL)            fxdelay_block_f(&sy.dly, fb, frames);
+        if (sy.rv.mode != RV_OFF && sy.rv.slab)  reverb_block_f(&sy.rv, fb, frames);
+        fx_pack_softclip(fb, out, frames * 2);
+    }
 }
 
 static cJSON *synth_preset_save(void)

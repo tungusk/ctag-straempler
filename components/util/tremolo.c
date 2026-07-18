@@ -7,6 +7,7 @@
 
 #include <math.h>
 #include "tremolo.h"
+#include "fxchain.h"
 
 #define TR_RATE 44100.0f
 
@@ -19,7 +20,8 @@ static inline float trem_wave(int shape, float ph)
     }
 }
 
-void tremolo_block_i32(tremolo_t *t, int32_t *out, int frames)
+// float worker: pure amplitude ride (gain <= 1), reads/writes float scratch.
+void tremolo_block_f(tremolo_t *t, float *buf, int frames)
 {
     float rate  = t->rate;  if (rate < 0.01f) rate = 0.01f; else if (rate > 30.0f) rate = 30.0f;
     float depth = t->depth; if (depth < 0) depth = 0; else if (depth > 1) depth = 1;
@@ -35,9 +37,21 @@ void tremolo_block_i32(tremolo_t *t, int32_t *out, int frames)
             float pr = ph + 0.5f; if (pr >= 1.0f) pr -= 1.0f;
             gr = 1.0f - depth * (0.5f - 0.5f * trem_wave(shape, pr));
         }
-        out[f * 2]     = ((int32_t)((float)(out[f * 2]     >> 16) * gl)) << 16;
-        out[f * 2 + 1] = ((int32_t)((float)(out[f * 2 + 1] >> 16) * gr)) << 16;
+        buf[f * 2]     *= gl;
+        buf[f * 2 + 1] *= gr;
         ph += inc; if (ph >= 1.0f) ph -= 1.0f;
     }
     t->phase = ph;
+}
+
+// int32<<16 wrapper (single-FX callers). Tremolo only attenuates, so no clamp
+// is strictly needed, but keep the pack symmetric with the other effects.
+void tremolo_block_i32(tremolo_t *t, int32_t *out, int frames)
+{
+    float buf[FX_SCRATCH_N];
+    if (frames * 2 > FX_SCRATCH_N) frames = FX_SCRATCH_N / 2;
+    fx_unpack_i32(out, buf, frames * 2);
+    tremolo_block_f(t, buf, frames);
+    for (int i = 0; i < frames * 2; i++)
+        out[i] = ((int32_t)buf[i]) << 16;
 }

@@ -39,8 +39,10 @@ int sample_list_recent(char (**out)[24]);
 #define SAMPLE_DIR_LOOPS  2    // usr/LOOPS — looper saves
 #define SAMPLE_DIR_SLICES 3    // usr/SLICES — anything with an .OT slice map
 #define SAMPLE_DIR_DRUMS  4    // usr/DRUMS — drum one-shots / kits (Drums machine home)
-#define SAMPLE_DIR_N      5
-const char *sample_dir_name(int di);            // "all"/"pool"/"REC"/"LOOPS"/"SLICES"/"DRUMS"
+#define SAMPLE_DIR_KEYS   5    // usr/KEYS — tonal instrument samples (Keys machine home)
+#define SAMPLE_DIR_TAPE   6    // usr/TAPE — sounds loaded to Tape (Tape machine home)
+#define SAMPLE_DIR_N      7
+const char *sample_dir_name(int di);            // "all"/"pool"/"REC"/"LOOPS"/"SLICES"/"DRUMS"/"KEYS"/"TAPE"
 void sample_folder_counts(int out[SAMPLE_DIR_N]);  // per-folder entry counts (display)
 int sample_list_shared_dir(int di, char (**out)[24]);
 int sample_list_recent_dir(int di, char (**out)[24]);

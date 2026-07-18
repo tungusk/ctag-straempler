@@ -15,11 +15,12 @@
 #define TRK_LOW_WATER    (TRK_RATE / 4)       // unmute once ~0.25 s is buffered
 #define TRK_CHUNK        1024                 // frames per xmp_play_buffer call
 #define TRK_MAX_FILE     (2 * 1024 * 1024)    // reject modules bigger than this
-// modules live in their own folder so they don't mingle with the RAW sample
-// library. TRK_DIR_VFS is for opendir/fopen; TRK_DIR_FAT is the bare FatFS
-// path for f_open/f_mkdir (no /sdcard prefix — see CLAUDE.md).
-#define TRK_DIR_VFS      "/sdcard/usr/MODS"
-#define TRK_DIR_FAT      "/usr/MODS"
+// modules live in their own folder (usr/TRACKER, formerly usr/MODS — an
+// existing MODS dir is migrated at boot, see fileio.c) so they don't mingle
+// with the RAW sample library. TRK_DIR_VFS is for opendir/fopen; TRK_DIR_FAT
+// is the bare FatFS path for f_open/f_mkdir (no /sdcard prefix — see CLAUDE.md).
+#define TRK_DIR_VFS      "/sdcard/usr/TRACKER"
+#define TRK_DIR_FAT      "/usr/TRACKER"
 #define TRK_NAME_LEN     24                   // 8.3 filename incl. extension
 #define TRK_TITLE_LEN    40
 #define TRK_MAX_NAMES    48                   // captured sample/instrument names
