@@ -58,7 +58,10 @@ void flanger_block_f(flanger_t *g, float *buf, int frames)
     const float mind  = 1.0f * FLG_RATE / 1000.0f;   // 1 ms floor
     const float sweep = depth * ((float)(cap - 2) - mind);
     const float inc   = rate / (float)FLG_RATE;
-    const float dc    = 0.5f;                         // feedback damping (LP the ring)
+    const float dc    = 0.38f;                        // feedback damping (LP the ring;
+                                                      // lower = darker recirculation,
+                                                      // less metallic on held tones —
+                                                      // the wet tap below stays bright)
     float ph  = g->phase;
     float lpL = g->lpL, lpR = g->lpR;
     int   w   = g->w;
