@@ -54,7 +54,7 @@ static void draw_header(void)
     _fg = TFT_WHITE; TFT_print("Synth", 6, 4);
     const char *eng = sy.engine == ENG_FM ? "FM" : sy.engine == ENG_WT ? "WT" : "VA";
     int hf = slive_focus(0);   // Wave element focus tints the header tag
-    if (hf) _fg = hf == 2 ? (color_t){255,210,60} : (color_t){210,190,120};
+    if (hf) _fg = hf == 2 ? (color_t){130,255,150} : (color_t){210,190,120};
     else    _fg = (sy.engine == ENG_WT && !sy.wave_name[0]) ? (color_t){220,80,60} : (color_t){130,130,140};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     // show the wavetable name (WT) next to the engine tag, else just the engine
@@ -81,7 +81,7 @@ static void draw_osc(void)
     _bg = TFT_BLACK; TFT_fillRect(x - 1, y0 - 2, w + 2, h + 4, _bg);
     // encoder-nav focus = a BOLDER trace (2 px, brighter), not a box
     int foc = (s_live_sel == 0);
-    color_t wc = foc ? (s_live_edit ? (color_t){255, 210, 60} : (color_t){180, 225, 255})
+    color_t wc = foc ? (s_live_edit ? (color_t){130, 255, 150} : (color_t){180, 225, 255})
                      : (color_t){120, 190, 235};
     int prevy = cy, amp = h / 2 - 2, cycles = 2;
     for (int i = 0; i <= w; i++) {
@@ -112,24 +112,31 @@ static void dial(int cx, int cy, int r, float v01, const char *lab, const char *
     if (v01 < 0) v01 = 0;
     if (v01 > 1) v01 = 1;
     _bg = TFT_BLACK;
-    TFT_fillRect(cx - r - 5, cy - r - 5, (r + 5) * 2, r * 2 + 2 * fh + 11, _bg);
+    // clear generously: the pointer now ESCAPES past the ring (to r+7) and the
+    // focus ring sits at r+4 — cover both + the label row so nothing is stranded
+    int m = r + 8;
+    TFT_fillRect(cx - m, cy - m, m * 2, m + r + fh + 8, _bg);
     if (hi) {                                          // encoder-nav focus ring
-        color_t hc = hi == 2 ? (color_t){255, 210, 60} : (color_t){150, 150, 170};
+        color_t hc = hi == 2 ? (color_t){130, 255, 150} : (color_t){150, 150, 170};
         TFT_drawCircle(cx, cy, r + 3, hc);
         if (hi == 2) TFT_drawCircle(cx, cy, r + 4, hc);
     }
     // a knob that hasn't taken over yet (dev unit / untouched) reads dim
     color_t ring = live ? (color_t){0,150,220} : (color_t){70,70,80};
     TFT_drawCircle(cx, cy, r, ring);
+    // pointer that ESCAPES the ring: a radial tick from just inside the rim to
+    // past it, leaving the centre free for the value readout
     float ang = (-135.0f + v01 * 270.0f) * 0.01745329f;   // deg->rad, 0 = 12 o'clock
-    int px = cx + (int)(sinf(ang) * (float)(r - 4));
-    int py = cy - (int)(cosf(ang) * (float)(r - 4));
-    TFT_drawLine(cx, cy, px, py, live ? (color_t){255,255,255} : (color_t){150,150,160});
-    TFT_fillCircle(cx, cy, 3, ring);
-    _fg = (color_t){130,130,140};
-    TFT_print((char*)lab, cx - TFT_getStringWidth((char*)lab)/2, cy + r + 3);
+    float sn = sinf(ang), cs = cosf(ang);
+    color_t ncol = live ? (color_t){255,255,255} : (color_t){175,175,185};
+    TFT_drawLine(cx + (int)(sn * (r - 3)), cy - (int)(cs * (r - 3)),
+                 cx + (int)(sn * (r + 7)), cy - (int)(cs * (r + 7)), ncol);
+    // value in the MIDDLE of the dial
     _fg = TFT_WHITE;
-    TFT_print((char*)val, cx - TFT_getStringWidth((char*)val)/2, cy + r + 3 + fh + 1);
+    TFT_print((char*)val, cx - TFT_getStringWidth((char*)val)/2, cy - fh / 2);
+    // label stays BELOW the circle
+    _fg = (color_t){130,130,140};
+    TFT_print((char*)lab, cx - TFT_getStringWidth((char*)lab)/2, cy + r + 4);
 }
 
 // K5 is engine-specific — report its label / value / normalized position
@@ -144,8 +151,8 @@ static void k5_desc(const char **lab, char *val, size_t vn, float *v01)
 static void draw_dials(void)
 {
     int fh = TFT_getfontheight();
-    int cy = fh + 16 + 26 + 32, r = 24;   // +32: below the oscillator preview strip
-    int cx[4] = { 44, 128, 212, 292 };
+    int cy = fh + 16 + 26 + 40, r = 24;   // +40 (was +32): extra room for the escaping needle below the osc strip
+    int cx[4] = { 40, 120, 200, 280 };    // recentred + slightly tighter for the escaping-needle dials
     // K5 timbre (engine-aware)
     const char *l0; char v0[16]; float n0;
     k5_desc(&l0, v0, sizeof(v0), &n0);
@@ -178,19 +185,27 @@ static void draw_adsr(void)
     int sw = (w - 4) - aw - dw - rw;
     int xb = x + 2, yb = y + h - 2, yt = y + 2;
     int ys = yb - (int)(sy.sus * (float)(h - 4));
-    color_t col = {60, 200, 120};
+    int adsr_sel = (s_live_sel >= 5 && s_live_sel <= 8);   // an A/D/S/R point is the focus
+    // dim the envelope polyline unless it's the selected element
+    color_t col = adsr_sel ? (color_t){60, 200, 120} : (color_t){30, 96, 58};
     int x1 = xb + aw, x2 = x1 + dw, x3 = x2 + sw, x4 = x3 + rw;
     TFT_drawLine(xb, yb, x1, yt, col);
     TFT_drawLine(x1, yt, x2, ys, col);
     TFT_drawLine(x2, ys, x3, ys, col);
     TFT_drawLine(x3, ys, x4, yb, col);
-    if (s_live_sel >= 5 && s_live_sel <= 8) {   // encoder-nav focus point (A/D/S/R)
+    if (adsr_sel) {   // encoder-nav focus point (A/D/S/R)
         int mx = x1, my = yt;
         if (s_live_sel == 6) { mx = x2; my = ys; }
         else if (s_live_sel == 7) { mx = x3; my = ys; }
         else if (s_live_sel == 8) { mx = x4; my = yb; }
-        color_t hc = s_live_edit ? (color_t){255, 210, 60} : (color_t){200, 200, 220};
-        TFT_fillCircle(mx, my, s_live_edit ? 4 : 3, hc);
+        // bigger, green selection dot (edit mode stays amber to read distinct)
+        int r = s_live_edit ? 6 : 5;
+        // keep the whole dot inside the cleared rect (right = x+w-1, bottom =
+        // y+h+1) so the R point at the bottom-right corner leaves no artifact
+        if (mx + r > x + w - 1) mx = x + w - 1 - r;
+        if (my + r > y + h + 1) my = y + h + 1 - r;
+        color_t hc = s_live_edit ? (color_t){130, 255, 150} : (color_t){70, 255, 130};
+        TFT_fillCircle(mx, my, r, hc);
     }
 }
 
@@ -276,8 +291,16 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
     (void)it_id; (void)ev_data;
     switch (event) {
         case EV_ENTERED_MENU: live_full_redraw(); break;
-        case EV_TIMER_REPEATING_SLOW:
         case EV_TIMER_REPEATING_FAST: {
+            // cheap: note readout only. The heavy element redraws (osc/dials/
+            // adsr) are gated to the SLOW tick below — knob/CV ADC jitter was
+            // redrawing them every 300ms, and those TFT + PSRAM shadow-framebuffer
+            // writes contend with the PSRAM audio path (noise / audio loss).
+            int midi = cur_midi();
+            if (midi != s_last_note) { draw_header(); s_last_note = midi; }
+            break;
+        }
+        case EV_TIMER_REPEATING_SLOW: {
             // each block redraws only when its own values change (no free-running meter)
             int midi = cur_midi();
             if (midi != s_last_note) { draw_header(); s_last_note = midi; }   // gate no longer recolors
