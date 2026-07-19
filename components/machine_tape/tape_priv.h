@@ -55,6 +55,8 @@ static inline void bank_wr(tp_bank_t *b, uint32_t i, int16_t v)
 enum { TPF_OFF = 0, TPF_LP, TPF_BP, TPF_HP, TPF_N };
 enum { TPS_INPUT = 0, TPS_TAPE };     // record source
 enum { TPR_PUNCH = 0, TPR_MOMENTARY }; // TR2 record behaviour: edge-toggle vs gate-held
+enum { TPD_TAPE = 0, TPD_CARD };      // record destination: PSRAM loop tape / long WAV to card
+enum { TPQ_OFF = 0, TPQ_BEAT, TPQ_BAR }; // punch-out quantize: immediate / next beat / next bar
 
 typedef struct {
     // tape
@@ -70,6 +72,9 @@ typedef struct {
     volatile bool recording;          // record state (driven by TR2)
     volatile bool rec_extend;         // this record pass started from empty -> extend len (fill)
     int      rec_mode;                // TPR_PUNCH | TPR_MOMENTARY (Setup)
+    int      rec_dest;                // TPD_TAPE | TPD_CARD (Setup): loop tape vs long WAV
+    int      rec_quant;              // TPQ_* (Setup): quantize punch-out to beat/bar
+    uint32_t rec_stop_target;        // frame to finalize a fresh take at (0 = none pending)
     uint32_t tr2_hold;                // frames TR2 gate held (punch: long-hold = erase, arm)
     bool     tr2_armed;               // long-hold erased the tape -> record starts on release
     bool     tr2_overdub;             // this TR2 press started an overdub (convertible to erase)
@@ -122,6 +127,12 @@ typedef struct {
     bool     cropped;                // user actively set the crop on this take
     volatile bool autosave_req;      // audio task -> UI task: spawn the deferred save
     volatile bool pending_fresh;     // fresh take queued, waiting for the save to finish
+    // session continuity: the id of what's in the buffer (last saved take id or
+    // loaded sample name); persisted to CONFIG "tapelast" on leave and reloaded
+    // on return so work-in-progress survives a machine switch.
+    char     restore_id[24];
+    bool     restore_pending;        // reload the persisted take on first Tape-screen entry
+    int      take_num;               // session take counter -> "REC-###" title until saved
     // load progress ("" = idle) for the menu
     char     load_note[24];
     // ui hints
@@ -157,5 +168,7 @@ void tape_crop_beats(int beats);          // out = in + beats * beat
 uint32_t tape_snap(uint32_t frame);       // grid beat (bpm known) else zero-cross
 void tape_rebuild_peaks(bool full);       // UI task; incremental while recording
 void tape_autosave_kick(void);            // UI task: spawn the deferred auto-save if requested
+void tape_restore_last(void);             // UI task: reload the persisted take (session continuity)
+void tape_card_service(void);             // UI task: re-arm the streaming recorder in card mode
 
 #endif
