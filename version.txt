@@ -1,1 +1,1 @@
-tracker-ram-v1-20260718 (broadcast lazy + off by default -> frees 12KB internal so Tracker render task gets full 32KB, heavy IT loads)
+fx-stability-v1-20260718 (shimmer reverb no longer blooms to full-scale on silence, flanger recirc darker and less harsh)

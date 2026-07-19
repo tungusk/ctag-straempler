@@ -44,6 +44,7 @@ typedef struct {
     // shimmer: octave-up dual-head granular on the tank feed
     rv_line_t shim;             // shifter window
     float shim_pos;             // read phase (two heads at +N/2)
+    float shim_lp;              // one-pole LP state on the shimmer return (stability)
     // params (mode presets; UI-task-safe writes)
     volatile int   mode;
     float decay;                // tank feedback gain

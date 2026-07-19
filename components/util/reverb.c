@@ -134,7 +134,17 @@ static void tank_resize(reverb_t *rv, float size)
     }
     rv->damp_a = rv->damp_b = 0;
     rv->in_lp = 0;
+    rv->shim_lp = 0;
 }
+
+// Shimmer feedback stability. The octave-up shifter doubles frequency every
+// pass, so without loss the tail BLOOMS upward until it pins at full-scale on
+// silence (measured: RMS climbs to clip and stays there). Two brakes:
+//   SHIM_FB_LP  — one-pole LP on the return: once energy climbs past this
+//                 cutoff it's removed, killing the upward runaway.
+//   the mode's shim_gain is the loop gain for the low/mid band the LP can't
+//   catch; it must keep the whole loop < 1 so a silent tail DECAYS.
+#define SHIM_FB_LP  0.35f
 
 void reverb_set_mode(reverb_t *rv, int mode)
 {
@@ -154,8 +164,8 @@ void reverb_set_mode(reverb_t *rv, int mode)
             rv->in_bw = 0.90f; rv->shim_gain = 0.0f;
             break;
         case RV_SHIMMER:
-            size = 1.0f;  rv->decay = 0.65f; rv->damp = 0.25f;
-            rv->in_bw = 0.70f; rv->shim_gain = 0.45f;
+            size = 1.0f;  rv->decay = 0.63f; rv->damp = 0.25f;
+            rv->in_bw = 0.70f; rv->shim_gain = 0.38f;
             break;
         default:
             mode = RV_OFF;
@@ -197,8 +207,14 @@ static inline float shim_step(reverb_t *rv, float x)
 static inline void tank_step(reverb_t *rv, float x, float decay, float damp,
                              float bw, float sg, float *yl, float *yr)
 {
-    // shimmer: blend the octave-up of what the tank just produced
-    if (sg > 0) x += sg * shim_step(rv, rv->damp_a + rv->damp_b);
+    // shimmer: blend the octave-up of what the tank just produced, low-passed
+    // and gain-limited so the feedback loop stays < 1 (else it blooms to
+    // full-scale on silence — see SHIM_FB_LP).
+    if (sg > 0) {
+        float sh = shim_step(rv, rv->damp_a + rv->damp_b);
+        rv->shim_lp += SHIM_FB_LP * (sh - rv->shim_lp);
+        x += sg * rv->shim_lp;
+    }
 
     line_push(&rv->pre, x);
     x = line_read(&rv->pre, rv->pre.len - 1);
