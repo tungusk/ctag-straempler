@@ -661,7 +661,7 @@ static void save_task(void *pv)
     (void)pv;
     uint32_t a = tp.save_a, b = tp.save_b;
     char path[48];
-    snprintf(path, sizeof(path), "/sdcard/usr/%s.WAV", tp.save_id);
+    snprintf(path, sizeof(path), "/sdcard/usr/TAPE/%s.WAV", tp.save_id);   // Tape home folder (usr/TAPE now in SF_DIRS)
     // chunk on the HEAP, not the task stack (first hw run wedged in
     // "saving...": 2 KB stack buffer + FatFS frames overflowed 4 KB)
     int16_t *chunk = heap_caps_malloc(512 * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
@@ -691,7 +691,7 @@ static void save_task(void *pv)
     fclose(f);
     // minimal sidecar: /files lists ONLY ids with a .JSN ("complete sample")
     char jp[48];
-    snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", tp.save_id);
+    snprintf(jp, sizeof(jp), "/sdcard/usr/TAPE/%s.JSN", tp.save_id);
     FILE *jf = fopen(jp, "w");
     if (jf) { fputs(tp.save_crop ? "{\"src\":\"tape\",\"crop\":true}"
                                  : "{\"src\":\"tape\",\"crop\":false}", jf); fclose(jf); }

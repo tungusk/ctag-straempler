@@ -71,8 +71,13 @@ int sampwav_finish(FILE *f)
 static const char *const SF_EXTS[] = { ".RAW", ".WAV", ".AIF", ".AIFF" };
 #define SF_N_EXTS 4
 
-static const char *const SF_DIRS[] = { "usr", "usr/REC", "usr/LOOPS", "usr/SLICES", "usr/DRUMS" };
-#define SF_N_DIRS 5
+// resolve + next-index search these in order (root usr/ first so legacy ids
+// still win). MUST include every per-machine home folder or files saved there
+// are invisible to load/numbering — usr/KEYS + usr/TAPE were missing, so Tape
+// takes had to fall back to usr/ root (2026-07-18 fix).
+static const char *const SF_DIRS[] = { "usr", "usr/REC", "usr/LOOPS", "usr/SLICES",
+                                       "usr/DRUMS", "usr/KEYS", "usr/TAPE" };
+#define SF_N_DIRS 7
 
 int sample_resolve(const char *id, char *path, size_t path_len)
 {
