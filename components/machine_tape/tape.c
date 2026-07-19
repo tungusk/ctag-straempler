@@ -22,6 +22,8 @@ tape_state_t tp;
 
 static const uint32_t TP_LEN_SECS[TP_LEN_OPTS] = { 15, 30, 60 };
 
+static int tape_spawn_save(uint32_t a, uint32_t b, bool crop);   // background take writer (below)
+
 // ---- bank alloc (1 MiB blocks, fail-soft) ---------------------------------------
 static void bank_free(tp_bank_t *b)
 {
@@ -128,10 +130,12 @@ static void tape_rec_start(void)
         tp.in_pt = 0; tp.out_pt = 0;
         tp.rec_extend = true;            // first-pass fill
         tp.playing = true;
+        tp.cropped = false;              // fresh take: not yet cropped
     } else {
         tp.rec_extend = false;           // overdub within the existing loop
     }
     tp.recording = true;
+    tp.take_dirty = true;                // unsaved recorded audio now in the buffer
 }
 
 // punch OUT. Finalize a fresh take (crop = whole take, loop from the start) and
@@ -145,6 +149,46 @@ static void tape_rec_stop(void)
         tp.pos = 0.0;
     }
     tp.rec_extend = false;
+}
+
+// audio task: if the buffer holds an unsaved take, stage its bounds and ask the
+// UI task to write it out (crop if actively cropped, else the whole take). The
+// bank memory stays intact until a fresh take actually records over it, so the
+// deferred writer reads valid data even though `len` is about to reset.
+static void tape_stash_and_save(void)
+{
+    if (tp.take_dirty && tp.len > 1 && !tp.save_busy && !tp.autosave_req) {
+        tp.save_a = tp.cropped ? tp.in_pt : 0;
+        tp.save_b = tp.cropped ? tp.out_pt : tp.len;
+        tp.save_crop = tp.cropped;
+        tp.autosave_req = true;                  // UI task spawns the writer (reads intact banks)
+    }
+}
+
+// wipe the tape (no record). A TR2 long-hold erases here for immediate visual
+// feedback; the fresh take then rolls when the gate is RELEASED (so you set the
+// downbeat on release and don't capture the hold). Bank memory is left as-is so
+// a pending auto-save can still read it.
+static void tape_erase(void)
+{
+    tp.playing = false; tp.recording = false;
+    tp.len = 0; tp.in_pt = tp.out_pt = 0; tp.pos = 0.0;
+    tp.peaks_done = 0;
+    tp.take_dirty = false; tp.cropped = false;
+}
+
+// begin a fresh take from a STOPPED tape. If the buffer holds an unsaved take,
+// persist it first (deferred, non-racy) then roll; an empty (or already-saved)
+// tape records immediately. Arlo's rule: never silently lose a recording.
+static void tape_begin_fresh(void)
+{
+    if (tp.take_dirty && tp.len > 1) {
+        tape_stash_and_save();           // request save of the outgoing take
+        tape_erase();                    // wipe (banks kept for the writer)
+        tp.pending_fresh = true;         // fresh take rolls once the save completes
+    } else {
+        tape_rec_start();                // empty / nothing to save -> record now
+    }
 }
 
 static void tape_process(int32_t out[MACHINE_BLOCK],
@@ -171,6 +215,14 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     if (tp.knob_live[2]) tp.res01    = kn[2];
     if (tp.knob_live[3]) tp.drive    = kn[3];
 
+    // a deferred fresh take rolls once its auto-save has finished reading the
+    // old buffer (no race on the single PSRAM tape).
+    if (tp.pending_fresh && !tp.autosave_req && !tp.save_busy) {
+        tp.pending_fresh = false;
+        tp.playing = false; tp.peaks_done = 0;
+        tape_rec_start();
+    }
+
     // transport edges: TR1 play/stop, TR2 record punch
     if (io->trig_rising & 1) {
         if (tp.playing) { tp.playing = false; tp.recording = false; }
@@ -184,12 +236,34 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // MOMENTARY: record only while the gate is HELD (active low -> bit clear).
     if (tp.rec_mode == TPR_MOMENTARY) {
         bool gate = !(io->trig_level & 2);
-        if (gate && !tp.recording)      tape_rec_start();
+        if (gate && !tp.recording) {
+            if (tp.playing) tape_rec_start();            // overdub while held
+            else            tape_begin_fresh();          // fresh take (auto-saves the old one)
+        }
         else if (!gate && tp.recording) tape_rec_stop();
     } else {
         if (io->trig_rising & 2) {
-            if (tp.recording) tape_rec_stop();
-            else              tape_rec_start();
+            tp.tr2_hold = 0; tp.tr2_armed = false;
+            if (tp.recording)    { tape_rec_stop();    tp.tr2_overdub = false; }  // punch out
+            else if (tp.playing) { tape_rec_start();   tp.tr2_overdub = true;  }  // overdub (erasable by holding)
+            else                 { tape_begin_fresh(); tp.tr2_overdub = false; }  // stopped: fresh (auto-saves old)
+        }
+        // While overdubbing, holding TR2 ~0.7 s erases (armed) and the fresh take
+        // ROLLS on release, so you place the downbeat when you let go. A stopped
+        // TR2 tap already starts a fresh take (saving the old one), so hold-erase
+        // is only for converting an overdub into a start-over.
+        if (!(io->trig_level & 2)) {                     // gate held (active low)
+            if (tp.tr2_overdub) {
+                tp.tr2_hold += (uint32_t)(MACHINE_BLOCK / 2);
+                if (!tp.tr2_armed && tp.tr2_hold >= (uint32_t)(TP_RATE * 7 / 10)) {
+                    tp.tr2_armed = true;
+                    tape_stash_and_save();               // persist the outgoing take (deferred write)
+                    tape_erase();                        // wipe now (banks kept for the writer)
+                }
+            }
+        } else {                                         // released
+            if (tp.tr2_armed) tp.pending_fresh = true;   // fresh take rolls once the save is done
+            tp.tr2_hold = 0; tp.tr2_armed = false; tp.tr2_overdub = false;
         }
     }
 
@@ -210,6 +284,16 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // playback — so the chain isn't doubled on top of the already-recorded take.
     bool fx_apply = tp.recording || (!tp.playing && tp.monitor);
     int frames = MACHINE_BLOCK / 2;
+
+    // The record head taps the FULL chain's OUTPUT (prints od/flg/trem/dly/reverb,
+    // not just filter/drive). So the frame loop stages the filtered/driven signal
+    // into out[] at UNITY (±32767 = the fxchain reference), the block chain runs,
+    // THEN we write the post-chain samples to tape and apply the output level LAST.
+    // The write PLAN (target frame, len-extend, cap-stop) is decided here and
+    // replayed after the chain — it depends only on the playhead, not the sample
+    // value, so deferring the actual store is safe.
+    uint32_t wpos[MACHINE_BLOCK / 2];
+    bool     wdo[MACHINE_BLOCK / 2];
     for (int f = 0; f < frames; f++) {
         // source: input while recording-from-input or monitoring; else tape
         float src = 0.0f;
@@ -221,8 +305,8 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
         else if (on_tape)                                 src = (float)tp_rd(p) / 32768.0f;
         else if (!tp.playing && tp.monitor)               src = in_mid;
 
-        // filter -> drive on the INCOMING audio only (printed to tape + monitored);
-        // playback stays dry so the FX aren't applied a second time.
+        // filter -> drive on the INCOMING audio only (playback stays dry so the FX
+        // aren't applied a second time). Stage at UNITY into out[] for the chain.
         float y = src;
         if (fx_apply) {
             if (tp.flt_mode != TPF_OFF) {
@@ -232,18 +316,23 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
             }
             if (tp.drive > 0.005f) y = tp_softclip(y, tp.drive);
         }
+        float u = y * 32767.0f;
+        if (u > 32767.0f) u = 32767.0f; else if (u < -32768.0f) u = -32768.0f;
+        int32_t su = ((int32_t)(int16_t)u) << 16;
+        out[f * 2] = su;
+        out[f * 2 + 1] = su;
 
-        // record head taps POST-FX (print the chain); recording extends len
+        // plan the record write (the POST-CHAIN sample is stored below). Fresh take
+        // extends len; overdub writes within the existing loop.
+        wdo[f] = false;
         if (tp.recording && have_tape) {
             uint32_t w = (uint32_t)tp.pos;
             if (empty_rec && w < tp.cap) {
-                float v = y * 32767.0f;
-                tp_wr(w, (int16_t)tp_clampf(v, -32768.0f, 32767.0f));
+                wpos[f] = w; wdo[f] = true;
                 if (w + 1 > tp.len) tp.len = w + 1;
                 if (w + 1 >= tp.cap) { tape_rec_stop(); tp.playing = false; }   // tape full
             } else if (!empty_rec && w < tp.len) {
-                float v = y * 32767.0f;
-                tp_wr(w, (int16_t)tp_clampf(v, -32768.0f, 32767.0f));
+                wpos[f] = w; wdo[f] = true;
             }
         }
 
@@ -251,48 +340,37 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
         if (tp.playing) {
             tp.pos += 1.0;
             if (!empty_rec) {
-                if (tp.pos >= (double)eout || tp.pos >= (double)tp.len)
+                if (tp.pos >= (double)eout || tp.pos >= (double)tp.len) {
+                    if (tp.play_oneshot && !tp.recording) tp.playing = false;  // one-shot: stop at end
                     tp.pos = (double)ein;
+                }
             }
         }
+    }
 
-        float o = y * tp.level * 28000.0f;
+    // FX rack: FX1/FX2 generic slots (in order) then the fixed reverb. Rate
+    // effects (delay/flanger/tremolo) lock to the grid when their Sync is on —
+    // Tape feeds the current beat BPM in. INCOMING audio only (dry on playback);
+    // the rack unpacks->stages->soft-limits once (fxchain.h) internally.
+    float bpm = clockin_beat_bpm(&tp.ci);
+    if (bpm <= 0.0f) bpm = tp.manual_bpm;
+    if (fx_apply) {
+        tp_rk.bpm = bpm;
+        fxrack_process_i32(&tp_rk, out, frames);
+    }
+
+    // PRINT + output: the record head taps the POST-CHAIN buffer (mono = channel
+    // mean) so the whole FX chain is captured to tape. Output level is applied
+    // LAST as a master — turning Level down no longer changes what's recorded, and
+    // the chain always sees the full-scale reference.
+    for (int f = 0; f < frames; f++) {
+        int32_t v = ((out[f * 2] >> 16) + (out[f * 2 + 1] >> 16)) >> 1;   // mono print
+        if (wdo[f]) tp_wr(wpos[f], (int16_t)v);
+        float o = (float)v * tp.level * (28000.0f / 32767.0f);
         if (o > 32000.0f) o = 32000.0f; else if (o < -32000.0f) o = -32000.0f;
         int32_t s = ((int32_t)(int16_t)o) << 16;
         out[f * 2] = s;
         out[f * 2 + 1] = s;
-    }
-
-    // FX chain: overdrive -> flanger -> tremolo -> delay -> reverb. The rated
-    // effects are clock-synced — the current grid BPM sets their rate/tap so
-    // they lock to tempo (bpm computed once and reused across the block).
-    float bpm = clockin_beat_bpm(&tp.ci);
-    if (bpm <= 0.0f) bpm = tp.manual_bpm;
-    // Run the chain in float with a single soft limiter at the end (fxchain.h)
-    // so stacked effects don't hard-clip at every stage. INCOMING audio only —
-    // dry on playback (the take was already recorded through the chain).
-    if (fx_apply) {
-        float fb[FX_SCRATCH_N];
-        fx_unpack_i32(out, fb, frames * 2);
-        if (tp.od_on) overdrive_block_f(&tp.od, fb, frames);
-        if (tp.flg_on && tp.flg.bufL) {
-            flanger_set_rate_beats(&tp.flg, tp_dly_beats[tp.flg_div], bpm);
-            flanger_block_f(&tp.flg, fb, frames);
-        }
-        if (tp.trem_on) {
-            tremolo_set_rate_beats(&tp.trem, tp_dly_beats[tp.trem_div], bpm);
-            tremolo_block_f(&tp.trem, fb, frames);
-        }
-        if (tp.dly_on && tp.dly.bufL) {
-            fxdelay_set_time_beats(&tp.dly, tp_dly_beats[tp.dly_div], bpm);
-            fxdelay_block_f(&tp.dly, fb, frames);
-        }
-        if (tp.rv.mode != RV_OFF && tp.rv.slab) {
-            reverb_block_f(&tp.rv, fb, frames);
-            // reverb tail is output-only; the record head already wrote pre-reverb
-            // this block. Printing reverb: set Rec Source = TAPE and punch a pass.
-        }
-        fx_pack_softclip(fb, out, frames * 2);
     }
 }
 
@@ -315,6 +393,7 @@ int tape_set_len_sel(int sel)
     tp.len = 0; tp.in_pt = tp.out_pt = 0; tp.pos = 0;
     memset(tp.peaks, 0, sizeof(tp.peaks));
     tp.peaks_done = 0;
+    tp.take_dirty = false; tp.cropped = false;
     return 0;
 }
 
@@ -323,6 +402,10 @@ int tape_load(const char *name)
     if (!tp_stopped() || tp.tape.nblk == 0 || !name || !name[0]) return -1;
     char path[64];
     if (sample_resolve(name, path, sizeof(path)) != 0) return -2;
+    if (tp.take_dirty && tp.len > 1) {              // persist the current take before replacing it
+        tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped);
+        while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));
+    }
 
     // stream through sampfile in bursts; staging is INTERNAL DMA RAM (FatFS
     // can hand the buffer straight to SDMMC, which cannot target PSRAM)
@@ -361,6 +444,7 @@ int tape_load(const char *name)
 
     tp.len = done;
     tp.in_pt = 0; tp.out_pt = done; tp.pos = 0;
+    tp.take_dirty = false; tp.cropped = false;     // loaded content isn't an unsaved recording
     tape_rebuild_peaks(true);
     return 0;
 }
@@ -371,6 +455,7 @@ void tape_clear(void)
     tp.len = 0; tp.in_pt = tp.out_pt = 0; tp.pos = 0;
     memset(tp.peaks, 0, sizeof(tp.peaks));
     tp.peaks_done = 0;
+    tp.take_dirty = false; tp.cropped = false;     // explicit wipe = deliberate discard
 }
 
 void tape_norm(void)
@@ -469,11 +554,13 @@ void tape_crop_beats(int beats)
     crop_clamp();
 }
 
-// ---- save crop -> pool take (background job) -----------------------------------
+// ---- save take -> pool take (background job) -----------------------------------
+// Writes frames [save_a, save_b) as usr/<id>.WAV. Manual "Save Crop" and the
+// auto-save both stage save_a/save_b/save_crop then spawn this.
 static void save_task(void *pv)
 {
     (void)pv;
-    uint32_t a = tp.in_pt, b = tp.out_pt;
+    uint32_t a = tp.save_a, b = tp.save_b;
     char path[48];
     snprintf(path, sizeof(path), "/sdcard/usr/%s.WAV", tp.save_id);
     // chunk on the HEAP, not the task stack (first hw run wedged in
@@ -507,27 +594,49 @@ static void save_task(void *pv)
     char jp[48];
     snprintf(jp, sizeof(jp), "/sdcard/usr/%s.JSN", tp.save_id);
     FILE *jf = fopen(jp, "w");
-    if (jf) { fputs("{\"src\":\"tape\"}", jf); fclose(jf); }
+    if (jf) { fputs(tp.save_crop ? "{\"src\":\"tape\",\"crop\":true}"
+                                 : "{\"src\":\"tape\",\"crop\":false}", jf); fclose(jf); }
     sd_lock_give();
     heap_caps_free(chunk);
-    ESP_LOGI(TAG, "saved crop -> %s", tp.save_id);
+    ESP_LOGI(TAG, "saved take -> %s", tp.save_id);
     tp.save_busy = false;
     vTaskDelete(NULL);
+}
+
+// mint a marked id (TCR_ = actively cropped, TAP_ = full take) and spawn the
+// writer for [a,b). Must run in a NON-audio task (SD readdir + xTaskCreate).
+static int tape_spawn_save(uint32_t a, uint32_t b, bool crop)
+{
+    if (b <= a || tp.save_busy) return -1;
+    const char *pfx = crop ? "TCR_" : "TAP_";
+    int idx = sample_next_index(pfx);
+    if (idx < 0) idx = 0;
+    if (idx > 9999) idx = 9999;                // 8.3: id stays exactly 8 chars
+    snprintf(tp.save_id, sizeof(tp.save_id), "%s%04d", pfx, idx % 10000);
+    tp.save_a = a; tp.save_b = b; tp.save_crop = crop;
+    tp.save_busy = true;
+    if (xTaskCreate(save_task, "tape_sv", 8192, NULL, 4, NULL) != pdPASS) {
+        tp.save_busy = false; tp.save_id[0] = 0; return -2;
+    }
+    return 0;
 }
 
 int tape_save_crop(void)
 {
     if (!tp_stopped() || tp.len == 0 || tp.save_busy) return -1;
     crop_clamp();
-    int idx = sample_next_index("TAP_");
-    if (idx < 0) idx = 0;
-    if (idx > 9999) idx = 9999;                // 8.3: id stays exactly 8 chars
-    snprintf(tp.save_id, sizeof(tp.save_id), "TAP_%04d", idx % 10000);
-    tp.save_busy = true;
-    if (xTaskCreate(save_task, "tape_sv", 8192, NULL, 4, NULL) != pdPASS) {
-        tp.save_busy = false; tp.save_id[0] = 0; return -2;
-    }
-    return 0;
+    int r = tape_spawn_save(tp.in_pt, tp.out_pt, true);   // manual save = the crop, marked
+    if (r == 0) tp.take_dirty = false;                    // persisted -> don't re-save on leave
+    return r;
+}
+
+// UI task: spawn the auto-save the audio task requested (buffer is held intact
+// while pending). Called every menu tick.
+void tape_autosave_kick(void)
+{
+    if (!tp.autosave_req || tp.save_busy) return;
+    tp.autosave_req = false;
+    tape_spawn_save(tp.save_a, tp.save_b, tp.save_crop);
 }
 
 // ---- peaks (UI task) ------------------------------------------------------------
@@ -556,17 +665,13 @@ void tape_rebuild_peaks(bool full)
 }
 
 // ---- lifecycle / preset ----------------------------------------------------------
-// clock-synced delay divisions — see tape_priv.h (beat = quarter note)
-const float       tp_dly_beats[TP_DLY_NDIV] = { 0.25f, 1.0f/3.0f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f };
-const char *const tp_dly_names[TP_DLY_NDIV] = { "1/16", "1/8T", "1/8", "1/8.", "1/4", "1/4.", "1/2" };
+fxrack_t tp_rk;                                // pointer-view over tp's FX instances
 
 static esp_err_t tape_start(void)
 {
     memset(&tp, 0, sizeof(tp));
     tp.len_sel = 1;                            // 30 s default
     tp.manual_bpm = 120.0f;
-    tp.dly_div = 2;                            // 1/8 note default when delay is enabled
-    tp.trem_div = 2; tp.flg_div = 4;           // musical-division defaults
     tp.clk_src = clock_source_clamp_cv_audio(7);
     tp.level = 0.9f;
     tp.cutoff = 2000.0f;
@@ -576,6 +681,15 @@ static esp_err_t tape_start(void)
     tp.knob_ctx = -1;
     clockin_reset(&tp.ci, 1.0f);
     svf_reset(&tp.flt);
+    fxfilter_init(&tp.filt);
+    fxfilter_init(&tp.band);
+    // Tape's rate effects default to tempo-SYNCED (the tape identity — dub delays
+    // lock to the grid); the rack reads tp_rk.bpm per block. Musical-division
+    // defaults match the old Tape (1/8 delay, 1/8 tremolo, 1/4 flanger).
+    tp.dly.sync = tp.flg.sync = tp.trem.sync = true;
+    tp.dly.div = 2; tp.trem.div = 2; tp.flg.div = 4;
+    tp_rk = (fxrack_t){ .od = &tp.od, .flg = &tp.flg, .trem = &tp.trem, .dly = &tp.dly,
+                        .filt = &tp.filt, .band = &tp.band, .rv = &tp.rv, .slot = tp.fx_slot };
     if (bank_alloc(&tp.tape, TP_LEN_SECS[tp.len_sel] * TP_RATE) < 0) {
         ESP_LOGE(TAG, "tape bank alloc failed");
         return ESP_ERR_NO_MEM;
@@ -587,7 +701,12 @@ static esp_err_t tape_start(void)
 static void tape_stop(void)
 {
     tp.playing = false; tp.recording = false;
-    while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));   // job reads the tape
+    tp.pending_fresh = false; tp.autosave_req = false;
+    while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));   // let any in-flight save finish
+    if (tp.take_dirty && tp.len > 1) {                    // leaving Tape: persist the take first
+        tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped);
+        while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));
+    }
     bank_free(&tp.tape);
     bank_free(&tp.clip);
     tp.clip_len = 0;
@@ -607,33 +726,12 @@ static cJSON *tape_preset_save(void)
     cJSON_AddNumberToObject(o, "cut", tp.cutoff);
     cJSON_AddNumberToObject(o, "res", tp.res01);
     cJSON_AddNumberToObject(o, "drv", tp.drive);
-    cJSON_AddNumberToObject(o, "rv", tp.rv.mode);
-    cJSON_AddNumberToObject(o, "rvmx", (int)(tp.rv.wet * 100 + 0.5f));
-    cJSON_AddBoolToObject(o, "dly", tp.dly_on);
-    cJSON_AddNumberToObject(o, "dlydv", tp.dly_div);
-    cJSON_AddNumberToObject(o, "dlyfb", (int)(tp.dly.fb * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "dlymx", (int)(tp.dly.wet * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "dlytn", (int)(tp.dly.damp * 100 + 0.5f));
-    cJSON_AddBoolToObject(o, "dlypp", tp.dly.pingpong);
-    cJSON_AddBoolToObject(o, "od", tp.od_on);
-    cJSON_AddNumberToObject(o, "oddr", (int)(tp.od.drive * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "odtn", (int)(tp.od.tone * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "odbs", (int)(tp.od.bias * 100 + (tp.od.bias < 0 ? -0.5f : 0.5f)));
-    cJSON_AddNumberToObject(o, "odlv", (int)(tp.od.level * 100 + 0.5f));
-    cJSON_AddBoolToObject(o, "flg", tp.flg_on);
-    cJSON_AddNumberToObject(o, "flgdv", tp.flg_div);
-    cJSON_AddNumberToObject(o, "flgdp", (int)(tp.flg.depth * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "flgfb", (int)(tp.flg.fb * 100 + (tp.flg.fb < 0 ? -0.5f : 0.5f)));
-    cJSON_AddNumberToObject(o, "flgmx", (int)(tp.flg.wet * 100 + 0.5f));
-    cJSON_AddBoolToObject(o, "trem", tp.trem_on);
-    cJSON_AddNumberToObject(o, "trmdv", tp.trem_div);
-    cJSON_AddNumberToObject(o, "trmdp", (int)(tp.trem.depth * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "trmsh", tp.trem.shape);
-    cJSON_AddBoolToObject(o, "trmst", tp.trem.stereo);
+    fxrack_save(&tp_rk, o);                     // slots + every effect param (incl. sync/div)
     cJSON_AddNumberToObject(o, "lvl", tp.level);
     cJSON_AddNumberToObject(o, "rsrc", tp.rec_src);
     cJSON_AddNumberToObject(o, "rmode", tp.rec_mode);
     cJSON_AddBoolToObject(o, "mon", tp.monitor);
+    cJSON_AddBoolToObject(o, "osht", tp.play_oneshot);
     return o;
 }
 
@@ -651,49 +749,12 @@ static void tape_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cut"))  && cJSON_IsNumber(j)) tp.cutoff = tp_clampf((float)j->valuedouble, 30, 6000);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "res"))  && cJSON_IsNumber(j)) tp.res01 = tp_clampf((float)j->valuedouble, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "drv"))  && cJSON_IsNumber(j)) tp.drive = tp_clampf((float)j->valuedouble, 0, 1);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rv"))   && cJSON_IsNumber(j)) {
-        int m = j->valueint; if (m < 0 || m >= RV_N_MODES) m = RV_OFF;
-        if (m != RV_OFF && !tp.rv.slab && reverb_init(&tp.rv) != ESP_OK) m = RV_OFF;
-        reverb_set_mode(&tp.rv, m);
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dly"))   && cJSON_IsBool(j)) {
-        bool on = cJSON_IsTrue(j);
-        if (on && !tp.dly.bufL && fxdelay_init(&tp.dly) != ESP_OK) on = false;
-        tp.dly_on = on;
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlydv")) && cJSON_IsNumber(j)) tp.dly_div = tp_clampi(j->valueint, 0, TP_DLY_NDIV - 1);
-    if (tp.dly.bufL) {   // params apply once the slab exists (order-independent)
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyfb")) && cJSON_IsNumber(j)) fxdelay_set_feedback(&tp.dly, (float)j->valueint / 100.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlymx")) && cJSON_IsNumber(j)) fxdelay_set_mix(&tp.dly, (float)j->valueint / 100.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlytn")) && cJSON_IsNumber(j)) fxdelay_set_damp(&tp.dly, (float)j->valueint / 100.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlypp")) && cJSON_IsBool(j))   fxdelay_set_pingpong(&tp.dly, cJSON_IsTrue(j));
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "od"))   && cJSON_IsBool(j))   tp.od_on = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "oddr")) && cJSON_IsNumber(j)) tp.od.drive = tp_clampf((float)j->valueint / 100.0f, 0, 1);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odtn")) && cJSON_IsNumber(j)) tp.od.tone  = tp_clampf((float)j->valueint / 100.0f, 0, 1);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odbs")) && cJSON_IsNumber(j)) tp.od.bias  = tp_clampf((float)j->valueint / 100.0f, -1, 1);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "odlv")) && cJSON_IsNumber(j)) tp.od.level = tp_clampf((float)j->valueint / 100.0f, 0, 1);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flg"))  && cJSON_IsBool(j)) {
-        bool on = cJSON_IsTrue(j);
-        if (on && !tp.flg.bufL && flanger_init(&tp.flg) != ESP_OK) on = false;
-        tp.flg_on = on;
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgdv")) && cJSON_IsNumber(j)) tp.flg_div = tp_clampi(j->valueint, 0, TP_DLY_NDIV - 1);
-    if (tp.flg.bufL) {   // params apply once the slab exists (order-independent)
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgdp")) && cJSON_IsNumber(j)) tp.flg.depth = tp_clampf((float)j->valueint / 100.0f, 0, 1);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgfb")) && cJSON_IsNumber(j)) tp.flg.fb    = tp_clampf((float)j->valueint / 100.0f, -0.95f, 0.95f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgmx")) && cJSON_IsNumber(j)) tp.flg.wet   = tp_clampf((float)j->valueint / 100.0f, 0, 1);
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trem")) && cJSON_IsBool(j))   tp.trem_on = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmdv")) && cJSON_IsNumber(j)) tp.trem_div = tp_clampi(j->valueint, 0, TP_DLY_NDIV - 1);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmdp")) && cJSON_IsNumber(j)) tp.trem.depth = tp_clampf((float)j->valueint / 100.0f, 0, 1);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmsh")) && cJSON_IsNumber(j)) tp.trem.shape = tp_clampi(j->valueint, 0, TREM_NSHAPE - 1);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmst")) && cJSON_IsBool(j))   tp.trem.stereo = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx")) && cJSON_IsNumber(j)) reverb_set_mix(&tp.rv, (float)j->valueint / 100.0f);
+    fxrack_load(&tp_rk, node);                  // slots + effect params; migrates legacy on/off bools + divisions
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))  && cJSON_IsNumber(j)) tp.level = tp_clampf((float)j->valuedouble, 0, 1.2f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rsrc")) && cJSON_IsNumber(j)) tp.rec_src = j->valueint == TPS_TAPE ? TPS_TAPE : TPS_INPUT;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rmode")) && cJSON_IsNumber(j)) tp.rec_mode = j->valueint == TPR_MOMENTARY ? TPR_MOMENTARY : TPR_PUNCH;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "mon"))  && cJSON_IsBool(j))   tp.monitor = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "osht")) && cJSON_IsBool(j))   tp.play_oneshot = cJSON_IsTrue(j);
     tp.knob_ctx = -1;
 }
 

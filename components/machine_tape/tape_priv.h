@@ -20,6 +20,8 @@
 #include "overdrive.h"
 #include "flanger.h"
 #include "tremolo.h"
+#include "fxfilter.h"
+#include "fxrack.h"
 
 #define TP_RATE      44100
 #define TP_PEAKS     300              // overview columns
@@ -68,30 +70,35 @@ typedef struct {
     volatile bool recording;          // record state (driven by TR2)
     volatile bool rec_extend;         // this record pass started from empty -> extend len (fill)
     int      rec_mode;                // TPR_PUNCH | TPR_MOMENTARY (Setup)
+    uint32_t tr2_hold;                // frames TR2 gate held (punch: long-hold = erase, arm)
+    bool     tr2_armed;               // long-hold erased the tape -> record starts on release
+    bool     tr2_overdub;             // this TR2 press started an overdub (convertible to erase)
     int      rec_src;                 // TPS_INPUT | TPS_TAPE (re-print)
     bool     monitor;                 // hear input through FX while stopped
+    bool     play_oneshot;            // crop end: stop (one-shot) vs wrap (loop, default)
     // grid
     clockin_t ci;
     int      clk_src;                 // CV1..8 / AUDIO (clock.h encoding)
     float    manual_bpm;              // used when the clock is unlocked
-    // fx chain (in the path: source -> filter -> drive -> reverb -> out+tape)
+    // Setup filter + drive: a per-sample svf + cubic soft-clip on the INCOMING
+    // audio, AHEAD of the FX rack (printed to tape). Distinct from the rack's
+    // FILT/BAND bricks — this is Tape's own always-there tone stage.
     int      flt_mode;                // TPF_*
     float    cutoff;                  // Hz
     float    res01;
     float    drive;                   // 0..1 cubic soft-clip amount
-    reverb_t rv;
-    fxdelay_t dly;                    // clock-synced delay (runs delay->reverb)
-    bool     dly_on;                  // delay engaged (slab stays allocated once inited)
-    int      dly_div;                 // musical division index into tp_dly_beats[]
-    overdrive_t od;                   // tanh drive (no slab; memset-init)
-    bool     od_on;
-    flanger_t flg;                    // clock-synced flanger (lazy PSRAM slab, mirrors dly)
-    bool     flg_on;
-    int      flg_div;                 // musical division index into tp_dly_beats[]
-    tremolo_t trem;                   // clock-synced tremolo (no slab)
-    bool     trem_on;
-    int      trem_div;                // musical division index into tp_dly_beats[]
     svf_t    flt;
+    // FX rack: the shared curated slot rack (FX1/FX2 generic + FX3 reverb). Tape
+    // owns these effect instances; tp_rk is a pointer-view over them. Rate effects
+    // are clock-synced (Tape sets tp_rk.bpm each block -> dub delays lock to grid).
+    reverb_t    rv;
+    fxdelay_t   dly;
+    overdrive_t od;
+    flanger_t   flg;
+    tremolo_t   trem;
+    fxfilter_t  filt;                 // rack LP/HP/BP brick
+    fxfilter_t  band;                 // rack base/width brick
+    int8_t      fx_slot[FX_NSLOT_GEN];
     float    level;                   // output volume (post-record-tap)
     // knobs 5..8 with takeover: win move / cutoff / res / drive
     float    knob_capt[4];
@@ -104,9 +111,17 @@ typedef struct {
     // overview peaks (rebuilt by the UI task; dirty range for live record)
     uint8_t  peaks[TP_PEAKS];
     volatile uint32_t peaks_done;     // frames covered by peaks so far
-    // save-crop job
+    // background save job (Save Crop + auto-save both route through it)
     volatile bool save_busy;
     char     save_id[12];             // last minted take id ("" = none)
+    uint32_t save_a, save_b;          // frames [a,b) the writer will emit
+    bool     save_crop;              // true = an actively-cropped take (marked TCR_)
+    // auto-save: takes persist to the card when you move on from them (a fresh
+    // take overwrites, or you leave Tape). A recorded buffer is never lost.
+    bool     take_dirty;             // buffer holds unsaved recorded audio
+    bool     cropped;                // user actively set the crop on this take
+    volatile bool autosave_req;      // audio task -> UI task: spawn the deferred save
+    volatile bool pending_fresh;     // fresh take queued, waiting for the save to finish
     // load progress ("" = idle) for the menu
     char     load_note[24];
     // ui hints
@@ -115,12 +130,7 @@ typedef struct {
 } tape_state_t;
 
 extern tape_state_t tp;
-
-// clock-synced delay divisions (beat = quarter note); engine + menu share one
-// table so display order and the beats the kernel uses can never disagree.
-#define TP_DLY_NDIV 7
-extern const float       tp_dly_beats[TP_DLY_NDIV];
-extern const char *const tp_dly_names[TP_DLY_NDIV];
+extern fxrack_t     tp_rk;        // pointer-view over tp's effect instances
 
 static inline float tp_clampf(float x, float lo, float hi){ return x < lo ? lo : x > hi ? hi : x; }
 static inline int   tp_clampi(int x, int lo, int hi){ return x < lo ? lo : x > hi ? hi : x; }
@@ -142,9 +152,10 @@ void tape_fade(void);                     // TP_FADE_MS ramps at crop edges
 int  tape_copy(void);                     // crop -> clipboard. 0 ok
 int  tape_cut(void);                      // copy + delete crop (close gap)
 int  tape_paste(void);                    // insert clipboard at IN. 0 ok
-int  tape_save_crop(void);                // background: crop -> usr/TAP_NNNN.WAV
+int  tape_save_crop(void);                // background: crop -> usr/TCR_NNNN.WAV (marked)
 void tape_crop_beats(int beats);          // out = in + beats * beat
 uint32_t tape_snap(uint32_t frame);       // grid beat (bpm known) else zero-cross
 void tape_rebuild_peaks(bool full);       // UI task; incremental while recording
+void tape_autosave_kick(void);            // UI task: spawn the deferred auto-save if requested
 
 #endif
