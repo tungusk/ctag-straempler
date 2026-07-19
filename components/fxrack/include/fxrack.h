@@ -23,6 +23,14 @@
 enum { FXK_OFF = 0, FXK_OD, FXK_FLG, FXK_TREM, FXK_DLY, FXK_FILT, FXK_BAND, FXK_NGEN };
 #define FX_NSLOT_GEN 2          // FX1, FX2 (generic); FX3 (reverb) is separate
 
+// Shared musical divisions for the clock-syncable rate effects (delay time /
+// flanger + tremolo LFO). One table so display order and the beats the kernel
+// uses can never disagree; machines that know a tempo set fxrack_t.bpm and flip
+// an effect's `sync` on to lock it to the grid.
+#define FXRACK_NDIV 7
+extern const float       fxrack_div_beats[FXRACK_NDIV];
+extern const char *const fxrack_div_names[FXRACK_NDIV];
+
 typedef struct {
     overdrive_t *od;
     flanger_t   *flg;
@@ -32,6 +40,7 @@ typedef struct {
     fxfilter_t  *band;          // base/width band filter brick (own instance)
     reverb_t    *rv;
     int8_t      *slot;          // [FX_NSLOT_GEN] = FXK_* per generic slot
+    float        bpm;           // grid tempo for synced effects (0 = free-running)
 } fxrack_t;
 
 // process the machine buffer in place: unpack -> generic slots in order ->
