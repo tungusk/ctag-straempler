@@ -15,9 +15,11 @@
 #include "machine_tape.h"
 #include "machine_editor.h"
 
-// declared bare: machine_sampler2.h drags the legacy fork's whole type
-// universe into any TU that includes it
-extern const machine_t s2_machine_sampler;
+// NOTE: the legacy "Sampler2" fork (s2_machine_sampler, components/machine_sampler2)
+// was pulled from the build 2026-07-18 — sampler3 ("Sampler") has the hardware
+// verdict. The code stays in the repo but machine_sampler2 is now in
+// EXCLUDE_COMPONENTS (top-level CMakeLists.txt) so it no longer compiles or
+// links. Re-add it here + drop it from EXCLUDE_COMPONENTS to bring it back.
 
 // Machines shipped in this firmware, in selector order. This file is the ONLY
 // place outside a machine's own component that may name a machine symbol —
@@ -26,7 +28,6 @@ extern const machine_t s2_machine_sampler;
 extern const machine_t machine_stub;   // main/machine_stub.c
 
 const machine_t *const machine_registry[] = {
-    &s2_machine_sampler,     // "Sampler2" — HIDDEN fallback until sampler3 is hw-verified
     &machine_sampler3,       // "Sampler" — the deck-architecture rebuild
     &machine_looper,
     &machine_slicer,
