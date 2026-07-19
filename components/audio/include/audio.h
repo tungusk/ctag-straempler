@@ -50,8 +50,12 @@ void audio_bounce_stop(void);
 bool audio_bounce_active(void);
 
 // broadcast — a dedicated socket server (port 8000) streams the live output bus
-// as WAV to one browser/VLC client. Call audio_broadcast_init() AFTER initWifi().
-void audio_broadcast_init(void);       // start the server task (post-WiFi only)
+// as WAV to one browser/VLC client. OFF by default: its 12 KB task stack is
+// INTERNAL RAM, which the tracker's render task needs; enable on demand (System→
+// Settings, POST /bcast/enable, or the boot "broadcast" setting). Start/stop is
+// safe only AFTER initWifi() (the task calls socket()/isWiFiConnected()).
+void audio_broadcast_set_enabled(bool on); // spawn/tear-down the server task
+bool audio_broadcast_enabled(void);        // the listener task is up (intent)
 bool audio_broadcast_active(void);     // a client is currently connected
 const char *audio_broadcast_diag(void); // last MP3-path error ("ok" if none)
 uint32_t audio_proc_us(void);           // smoothed machine process() cost, us (1450 = 100%)

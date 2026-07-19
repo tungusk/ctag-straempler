@@ -398,6 +398,10 @@ void menuTFTPrintRemote(const char** items, const int* n_items, int *on){
     printSettingsValue(items, n_items, "Remote", *on ? "ON" : "OFF");
 }
 
+void menuTFTPrintBroadcast(const char** items, const int* n_items, int *on){
+    printSettingsValue(items, n_items, "Broadcast", *on ? "ON" : "OFF");
+}
+
 void menuTFTPrintListen(const char** items, const int* n_items, int *mode){
     static const char *names[] = {"OFF", "PULSE", "KICK", "FLUX", "GROOVE"};
     int m = (*mode >= 0 && *mode <= 4) ? *mode : 0;

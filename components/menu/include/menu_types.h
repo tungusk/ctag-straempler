@@ -139,7 +139,8 @@ typedef enum{
     SID_REMOTE,
     SID_LISTEN,        // beatlisten mode (System Settings row)
     SID_CLKOUT,        // beatlisten clock-out channel
-    SID_BOUNCE         // record the active machine's OUTPUT bus (press to toggle)
+    SID_BOUNCE,        // record the active machine's OUTPUT bus (press to toggle)
+    SID_BROADCAST      // :8000 live-stream listener (off by default; frees internal RAM)
 } submenu_ids_t;
 
 typedef enum{

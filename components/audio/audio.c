@@ -190,11 +190,25 @@ static volatile int  s_bc_src = 0;         // 0 = output bus, 1 = line INPUT ("/
 static const char *s_bc_err = "ok";        // last MP3-path failure, for /bcast/state
 static volatile uint32_t s_bc_enc_us = 0;  // smoothed encode cost per 26.1ms pass
 static volatile uint32_t s_proc_us = 0;    // smoothed machine process() cost (1450us = 100%)
+static volatile bool s_bc_srv_run = false; // listener task should keep running (user intent)
+static volatile bool s_bc_srv_alive = false; // listener task currently exists
 
 bool audio_broadcast_active(void) { return s_bc_on; }
 const char *audio_broadcast_diag(void) { return s_bc_err; }
 uint32_t audio_broadcast_enc_us(void) { return s_bc_enc_us; }
 uint32_t audio_proc_us(void) { return s_proc_us; }
+
+// Lazily allocate the ~176 KB PSRAM ring shared by the :8000 listener and the
+// icecast push. Allocated on first streaming use (broadcast is off at boot),
+// then kept for the session — freeing it would race the audio-task writer, and
+// PSRAM is abundant. The INTERNAL-RAM cost the tracker cares about is the task
+// stack + send buffer, which ARE released on teardown, not this ring.
+static bool bc_ring_ensure(void)
+{
+    if (s_bc_ring) return true;
+    s_bc_ring = heap_caps_malloc((size_t)BC_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    return s_bc_ring != NULL;
+}
 
 static void broadcast_push(const int32_t *out, int frames)
 {
@@ -256,14 +270,25 @@ static void bc_stream_mp3(int sock, volatile bool *run)
 
 static void broadcast_server_task(void *pv)
 {
-    s_bc_ring = heap_caps_malloc((size_t)BC_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    int16_t *sbuf = malloc(1024 * 2 * sizeof(int16_t));
-    if (!s_bc_ring || !sbuf) { ESP_LOGE("BCAST", "alloc failed"); vTaskDelete(NULL); return; }
+    // sbuf = the :8000 WAV send-staging buffer. PSRAM, not DMA: send() copies it
+    // into the lwip pbuf, so it never needs INTERNAL/DMA RAM — keep it off the
+    // internal heap the tracker's render stack competes for. The ring is PSRAM
+    // too (bc_ring_ensure). The only internal-RAM this feature costs is this
+    // task's 12 KB stack, released when the task exits (audio_broadcast_set_enabled).
+    int16_t *sbuf = heap_caps_malloc(1024 * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    if (!bc_ring_ensure() || !sbuf) {
+        ESP_LOGE("BCAST", "alloc failed");
+        if (sbuf) heap_caps_free(sbuf);
+        s_bc_srv_alive = false; s_bc_srv_run = false;
+        vTaskDelete(NULL); return;
+    }
 
-    // WAIT for the network: initAudio (and this task) runs BEFORE initWifi, so
-    // the TCP/IP stack isn't up yet — calling socket() early asserts (Invalid
-    // mbox). isWiFiConnected() implies tcpip_adapter_init + GOT_IP are done.
-    while (!isWiFiConnected()) vTaskDelay(pdMS_TO_TICKS(200));
+    // WAIT for the network: enable can race a not-yet-connected radio — calling
+    // socket() before the TCP/IP stack is up asserts (Invalid mbox).
+    // isWiFiConnected() implies tcpip_adapter_init + GOT_IP are done. Bail early
+    // if the user disabled us while we waited.
+    while (s_bc_srv_run && !isWiFiConnected()) vTaskDelay(pdMS_TO_TICKS(200));
+    if (!s_bc_srv_run) { heap_caps_free(sbuf); s_bc_srv_alive = false; vTaskDelete(NULL); return; }
 
     // streaming WAV header: 16-bit 44.1k stereo, max sizes so players keep going
     uint8_t wav[44] = {0};
@@ -281,18 +306,28 @@ static void broadcast_server_task(void *pv)
                                   "Connection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
 
     int srv = socket(AF_INET, SOCK_STREAM, 0);
-    if (srv < 0) { ESP_LOGE("BCAST", "socket failed"); vTaskDelete(NULL); return; }
+    if (srv < 0) {
+        ESP_LOGE("BCAST", "socket failed");
+        heap_caps_free(sbuf); s_bc_srv_alive = false; s_bc_srv_run = false;
+        vTaskDelete(NULL); return;
+    }
     int yes = 1; setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    // accept() timeout so the loop wakes ~2x/s to notice s_bc_srv_run going
+    // false (disable) and tear down instead of blocking forever.
+    struct timeval atv = { .tv_sec = 0, .tv_usec = 500000 };
+    setsockopt(srv, SOL_SOCKET, SO_RCVTIMEO, &atv, sizeof(atv));
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET; sa.sin_port = htons(BC_PORT); sa.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(srv, (struct sockaddr *)&sa, sizeof(sa)) < 0 || listen(srv, 1) < 0) {
-        ESP_LOGE("BCAST", "bind/listen failed"); close(srv); vTaskDelete(NULL); return;
+        ESP_LOGE("BCAST", "bind/listen failed"); close(srv);
+        heap_caps_free(sbuf); s_bc_srv_alive = false; s_bc_srv_run = false;
+        vTaskDelete(NULL); return;
     }
     ESP_LOGI("BCAST", "output broadcast on :%d (http://<ip>:%d/)", BC_PORT, BC_PORT);
 
-    for (;;) {
+    while (s_bc_srv_run) {
         int cl = accept(srv, NULL, NULL);
-        if (cl < 0) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
+        if (cl < 0) { continue; }   // accept timeout / error: re-check run flag
         if (s_ice_run) {   // the icecast push owns the ring — refuse listeners
             static const char BUSY[] = "HTTP/1.0 503 Busy\r\n\r\nicecast push active\n";
             send(cl, BUSY, strlen(BUSY), 0);
@@ -341,6 +376,14 @@ static void broadcast_server_task(void *pv)
         s_bc_on = false;
         close(cl);
     }
+    // disabled (s_bc_srv_run went false): drop the listener + its INTERNAL send
+    // buffer + 12 KB stack back to the heap the tracker needs. The PSRAM ring
+    // stays (see bc_ring_ensure).
+    close(srv);
+    heap_caps_free(sbuf);
+    s_bc_srv_alive = false;
+    ESP_LOGI("BCAST", "broadcast server stopped (freed internal RAM)");
+    vTaskDelete(NULL);
 }
 
 // ---- trig edge acquisition ----------------------------------------------------
@@ -509,12 +552,26 @@ void initAudio(void)
     xTaskCreatePinnedToCore(audio_task, "audio_task", 4096, NULL, 23, &audio_task_h, 1);
 }
 
-// Start the output-broadcast socket server. MUST be called AFTER initWifi() —
-// both socket() and isWiFiConnected() touch state that initWifi creates, and
-// calling either earlier asserts (Invalid mbox / xEventGroup). Unpinned.
-void audio_broadcast_init(void)
+// Enable/disable the port-8000 output-broadcast listener. OFF by default: its
+// 12 KB task stack is INTERNAL RAM, which permanently shrank the heap the
+// tracker's render task needs — enabling only on demand hands that block back.
+// Idempotent; safe only AFTER initWifi() (the task calls socket()/isWiFiConnected()).
+// The task self-frees its stack + send buffer on disable (see broadcast_server_task).
+bool audio_broadcast_enabled(void) { return s_bc_srv_run; }
+
+void audio_broadcast_set_enabled(bool on)
 {
-    xTaskCreate(broadcast_server_task, "bc_srv", 12288, NULL, 5, NULL);   // stack: shine encode runs here
+    if (on) {
+        if (s_bc_srv_run || s_bc_srv_alive) return;   // already up / tearing up
+        s_bc_srv_run = true;
+        s_bc_srv_alive = true;
+        if (xTaskCreate(broadcast_server_task, "bc_srv", 12288, NULL, 5, NULL) != pdPASS) {
+            s_bc_srv_run = false; s_bc_srv_alive = false;
+            ESP_LOGE("BCAST", "task create failed (heap?)");
+        }
+    } else {
+        s_bc_srv_run = false;   // the task closes its socket, frees RAM, self-deletes
+    }
 }
 
 // ---- icecast PUSH: the module as a SOURCE CLIENT (broadcast v2) --------------
@@ -619,6 +676,9 @@ int audio_icepush_start(const char *host, int port, const char *mount,
     else                 strlcpy(s_ice_mount, mount, sizeof(s_ice_mount));
     strlcpy(s_ice_pass, pass ? pass : "", sizeof(s_ice_pass));
     strlcpy(s_ice_name, name ? name : "", sizeof(s_ice_name));
+    // the push reads the shared PSRAM ring; broadcast may be off (ring not yet
+    // allocated), so ensure it before the writer (broadcast_push) or reader touch it.
+    if (!bc_ring_ensure()) { snprintf(s_ice_err, sizeof(s_ice_err), "no ram for ring"); return -3; }
     s_ice_retries = 0;
     s_ice_err[0] = 0;
     s_ice_run = true;
