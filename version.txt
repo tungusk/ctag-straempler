@@ -1,1 +1,1 @@
-fxnav-v1-20260718 (fx rack shared slots keys+synth, base-width filter, tracker crash safety-net, keys+synth live encoder nav + synth osc)
+taperack-v1-20260718 (clock-synced fx rack, tape ported to slot rack + print-fx + play-mode, auto-save takes w/ crop marks TCR_/TAP_, re-record UX)

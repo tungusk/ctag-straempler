@@ -188,14 +188,25 @@ static void draw_readout(void)
     TFT_print(c, x, y + 2);
 }
 
+// footer nav hints + a TRANSPORT hint that tracks state, so re-recording is
+// discoverable: from a stopped take TR2 cuts a fresh take, and a TR2 long-hold
+// erases + arms from any state (punch mode).
 static void draw_footer(void)
 {
-    _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     _bg = TFT_BLACK;
     TFT_fillRect(0, _height - TFT_getfontheight() - 2, _width, TFT_getfontheight() + 2, _bg);
-    TFT_print("turn:move  press:in/out/win  hold:setup   TR1:play  TR2:rec", 6,
-              _height - TFT_getfontheight() - 1);
+    bool punch = (tp.rec_mode == TPR_PUNCH);
+    const char *tr;
+    if (tp.recording)    tr = "TR1/TR2:stop";
+    else if (tp.playing) tr = punch ? "TR1:stop  TR2:overdub  hold-TR2:erase"
+                                    : "TR1:stop  TR2:overdub";
+    else if (tp.len)     tr = "TR1:play  TR2:new take";   // tap saves the old take first
+    else                 tr = "TR1:play  TR2:record";
+    char line[96];
+    snprintf(line, sizeof(line), "turn:move  hold:setup    %s", tr);
+    _fg = (color_t){90, 90, 90};
+    TFT_print(line, 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
@@ -253,6 +264,7 @@ static void nudge(int dir)
         tp.in_pt = (uint32_t)i;
         tp.out_pt = (uint32_t)(i + w);
     }
+    tp.cropped = true;                  // user shaped the crop -> auto-save marks it (TCR_)
 }
 
 static int tape_main_handler(int it_id, int event, void *ev_data)
@@ -269,7 +281,8 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
         case EV_LONG_PRESS: return M_TAPE_SETUP;
         case EV_TIMER_REPEATING_SLOW:
         case EV_TIMER_REPEATING_FAST: {
-            if (tp.recording && tp.len > s_wave_len) {   // live record growth
+            tape_autosave_kick();                        // spawn any auto-save the audio task requested
+            if (tp.recording && tp.len != s_wave_len) {  // live record growth (or erase reset)
                 tape_rebuild_peaks(false);
                 draw_wave();
             }
@@ -277,7 +290,7 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             if (hs != s_sig_head) {
                 draw_header();
                 int st = tp.recording ? 2 : tp.playing ? 1 : 0;
-                if (st != s_last_state) { draw_state_border(); s_last_state = st; }
+                if (st != s_last_state) { draw_state_border(); draw_footer(); s_last_state = st; }
                 s_sig_head = hs;
             }
             unsigned cs = crop_sig();
@@ -295,25 +308,24 @@ static const int BEAT_LADDER[] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32 };
 #define BEAT_LADDER_N 10
 static int s_beats_idx = 3;           // "4 beats"
 
-// Tape/transport params + edit actions live here; all five effects moved to a
-// dedicated FX sub-page (the "FX" action row) so this list stays readable.
+// Tape/transport params + edit actions live here; the FX rack lives on three
+// slot rows (FX1/FX2 generic + FX3 reverb), each opening the shared dynamic
+// per-slot sub-page (Effect select + its params). Keeps this list readable.
 static const setup_item_t tape_setup_items[] = {
     {"Crop Beats", ST_RANGE},  {"Clock Src",  ST_TOGGLE}, {"Manual BPM", ST_RANGE},
     {"Filter",     ST_TOGGLE}, {"Cutoff",     ST_RANGE},  {"Reso",       ST_RANGE},
     {"Drive",      ST_RANGE},  {"Level",      ST_RANGE},  {"Rec Source", ST_TOGGLE},
-    {"Monitor",    ST_TOGGLE}, {"FX",         ST_ACTION},
+    {"Monitor",    ST_TOGGLE},
+    {"FX1",        ST_ACTION}, {"FX2",        ST_ACTION}, {"FX3 Reverb", ST_ACTION},
     {"Copy",       ST_ACTION}, {"Cut",        ST_ACTION}, {"Paste",      ST_ACTION},
     {"Normalize",  ST_ACTION}, {"Reverse",    ST_ACTION}, {"Fade Edges", ST_ACTION},
     {"Save Crop",  ST_ACTION}, {"Load Sample", ST_ACTION}, {"Clear Tape", ST_ACTION},
-    {"Tape Len",   ST_TOGGLE}, {"Rec Mode",    ST_TOGGLE},
+    {"Tape Len",   ST_TOGGLE}, {"Rec Mode",    ST_TOGGLE}, {"Play Mode",   ST_TOGGLE},
 };
 
-// count of engaged effects, for the "FX" row affordance
-static int tape_fx_count(void)
-{
-    return (tp.rv.mode != RV_OFF) + (tp.dly_on ? 1 : 0) + (tp.od_on ? 1 : 0)
-         + (tp.flg_on ? 1 : 0) + (tp.trem_on ? 1 : 0);
-}
+// FX rack slot editor state (shared fxrack machinery drives the rows)
+static int s_cur_slot = 0;            // slot the FX sub-page is editing
+static int s_setup_return = -1;       // Setup row to restore on return from the sub-page
 
 static const char *stopped_or(const char *s) { return (!tp.playing && !tp.recording) ? s : "stop first"; }
 
@@ -335,31 +347,34 @@ static void tape_val(int i, char *v, size_t n)
         case 7: snprintf(v, n, "%.0f%%", tp.level * 100); break;
         case 8: snprintf(v, n, "%s", tp.rec_src == TPS_TAPE ? "tape (print)" : "input"); break;
         case 9: snprintf(v, n, "%s", tp.monitor ? "ON" : "OFF"); break;
-        case 10: { int on = tape_fx_count(); if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "off >"); break; }
-        case 11: {
+        case 10: snprintf(v, n, "%s >", fxrack_slot_name(&tp_rk, 0)); break;
+        case 11: snprintf(v, n, "%s >", fxrack_slot_name(&tp_rk, 1)); break;
+        case 12: snprintf(v, n, "%s >", fxrack_slot_name(&tp_rk, 2)); break;
+        case 13: {
             if (tp.clip_len) snprintf(v, n, "%.2fs held", (float)tp.clip_len / TP_RATE);
             else             snprintf(v, n, "%s", stopped_or("copy >"));
             break;
         }
-        case 12: snprintf(v, n, "%s", stopped_or("cut >")); break;
-        case 13: {
+        case 14: snprintf(v, n, "%s", stopped_or("cut >")); break;
+        case 15: {
             if (!tp.clip_len) snprintf(v, n, "(empty)");
             else              snprintf(v, n, "%s", stopped_or("at IN >"));
             break;
         }
-        case 14: snprintf(v, n, "%s", stopped_or("crop >")); break;
-        case 15: snprintf(v, n, "%s", stopped_or("crop >")); break;
         case 16: snprintf(v, n, "%s", stopped_or("crop >")); break;
-        case 17: {
+        case 17: snprintf(v, n, "%s", stopped_or("crop >")); break;
+        case 18: snprintf(v, n, "%s", stopped_or("crop >")); break;
+        case 19: {
             if (tp.save_busy)        snprintf(v, n, "saving...");
             else if (tp.save_id[0]) snprintf(v, n, "%s", tp.save_id);
             else                     snprintf(v, n, "%s", stopped_or("take >"));
             break;
         }
-        case 18: snprintf(v, n, "%s", stopped_or("browse >")); break;
-        case 19: snprintf(v, n, "%s", stopped_or("wipe >")); break;
-        case 20: snprintf(v, n, "%us", (unsigned)(tp.cap / TP_RATE)); break;
-        case 21: snprintf(v, n, "%s", tp.rec_mode == TPR_MOMENTARY ? "momentary" : "punch"); break;
+        case 20: snprintf(v, n, "%s", stopped_or("browse >")); break;
+        case 21: snprintf(v, n, "%s", stopped_or("wipe >")); break;
+        case 22: snprintf(v, n, "%us", (unsigned)(tp.cap / TP_RATE)); break;
+        case 23: snprintf(v, n, "%s", tp.rec_mode == TPR_MOMENTARY ? "momentary" : "punch"); break;
+        case 24: snprintf(v, n, "%s", tp.play_oneshot ? "one-shot" : "loop"); break;
     }
 }
 
@@ -382,32 +397,35 @@ static void tape_adj(int i, int dir)
         case 7: tp.level = tp_clampf(tp.level + d * 0.05f, 0, 1.2f); break;
         case 8: tp.rec_src = tp.rec_src == TPS_INPUT ? TPS_TAPE : TPS_INPUT; break;
         case 9: tp.monitor = !tp.monitor; break;
-        case 20: tape_set_len_sel(tp.len_sel + dir < 0 ? TP_LEN_OPTS - 1
+        case 22: tape_set_len_sel(tp.len_sel + dir < 0 ? TP_LEN_OPTS - 1
                                   : (tp.len_sel + dir) % TP_LEN_OPTS); break;
-        case 21: tp.rec_mode = tp.rec_mode == TPR_PUNCH ? TPR_MOMENTARY : TPR_PUNCH; break;
+        case 23: tp.rec_mode = tp.rec_mode == TPR_PUNCH ? TPR_MOMENTARY : TPR_PUNCH; break;
+        case 24: tp.play_oneshot = !tp.play_oneshot; break;
     }
 }
 
 static int tape_action(int i)
 {
     switch (i) {
-        case 10: return M_TAPE_FX;       // FX -> FX sub-page
-        case 11: tape_copy(); break;
-        case 12: tape_cut(); break;
-        case 13: tape_paste(); break;
-        case 14: tape_norm(); break;
-        case 15: tape_reverse(); break;
-        case 16: tape_fade(); break;
-        case 17: tape_save_crop(); break;
-        case 18: return M_TAPE_LOAD;
-        case 19: tape_clear(); break;
+        case 10: s_setup_return = 10; s_cur_slot = 0; return M_TAPE_FX;   // FX1
+        case 11: s_setup_return = 11; s_cur_slot = 1; return M_TAPE_FX;   // FX2
+        case 12: s_setup_return = 12; s_cur_slot = 2; return M_TAPE_FX;   // FX3 reverb
+        case 13: tape_copy(); break;
+        case 14: tape_cut(); break;
+        case 15: tape_paste(); break;
+        case 16: tape_norm(); break;
+        case 17: tape_reverse(); break;
+        case 18: tape_fade(); break;
+        case 19: tape_save_crop(); break;
+        case 20: return M_TAPE_LOAD;
+        case 21: tape_clear(); break;
     }
     return 0;
 }
 
 static setup_menu_t tape_setup = {
     .items = tape_setup_items,
-    .n = 22,
+    .n = 25,
     .title = "Tape Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_TAPE_MAIN,
@@ -417,106 +435,49 @@ static setup_menu_t tape_setup = {
 static int tape_setup_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
+    if (event == EV_ENTERED_MENU && s_setup_return >= 0) {   // return from a slot sub-page
+        int p = s_setup_return; s_setup_return = -1;
+        setup_menu_enter_at(&tape_setup, p);
+        return 0;
+    }
     return setup_menu_event(&tape_setup, event);
 }
 
-// ---- FX sub-page: all five effects, reached from the Setup "FX" row --------
-// Effects are clock-synced: Delay/Flanger/Tremolo divisions read tp_dly_names[].
-static const setup_item_t tape_fx_items[] = {
-    {"Reverb",     ST_TOGGLE}, {"Rev Mix",    ST_RANGE},
-    {"Delay",      ST_TOGGLE}, {"Dly Div",    ST_RANGE},  {"Dly Fdbk",   ST_RANGE},
-    {"Dly Mix",    ST_RANGE},  {"Dly Tone",   ST_RANGE},  {"Dly Ping",   ST_TOGGLE},
-    {"Overdrive",  ST_TOGGLE}, {"OD Drive",   ST_RANGE},  {"OD Tone",    ST_RANGE},
-    {"OD Bias",    ST_RANGE},  {"OD Level",   ST_RANGE},
-    {"Flanger",    ST_TOGGLE}, {"Flg Div",    ST_RANGE},  {"Flg Depth",  ST_RANGE},
-    {"Flg Fdbk",   ST_RANGE},  {"Flg Mix",    ST_RANGE},
-    {"Tremolo",    ST_TOGGLE}, {"Trm Div",    ST_RANGE},  {"Trm Depth",  ST_RANGE},
-    {"Trm Shape",  ST_TOGGLE}, {"Trm Stereo", ST_TOGGLE},
-};
+// ---- FX slot editor: one slot at a time, rows driven by the shared fxrack ----
+// Reached from the FX1/FX2/FX3 Setup rows; the rate effects (delay/flanger/
+// tremolo) carry a Sync toggle + Div, and Tape feeds the grid BPM so they lock.
+static setup_menu_t tape_fx;             // defined below
+static setup_item_t s_tfx_items[FXRACK_MAXROWS];
+static int8_t s_tfx_param[FXRACK_MAXROWS];
+static int s_tfx_n;
+
+static void tfx_rebuild(void)
+{
+    s_tfx_n = fxrack_menu_rows(&tp_rk, s_cur_slot, s_tfx_items, s_tfx_param);
+    tape_fx.n = s_tfx_n;
+    tape_fx.title = s_cur_slot == 0 ? "Tape FX1" : s_cur_slot == 1 ? "Tape FX2" : "Tape FX3";
+    if (tape_fx.sel >= s_tfx_n) tape_fx.sel = s_tfx_n - 1;
+    if (tape_fx.sel < 0) tape_fx.sel = 0;
+}
 
 static void tape_fx_val(int i, char *v, size_t n)
 {
-    switch (i) {
-        case 0: snprintf(v, n, "%s", reverb_mode_name(tp.rv.mode)); break;
-        case 1: snprintf(v, n, "%.0f%%", tp.rv.wet * 100); break;
-        case 2: snprintf(v, n, "%s", tp.dly_on ? "ON" : "OFF"); break;
-        case 3: snprintf(v, n, "%s", tp_dly_names[tp.dly_div]); break;
-        case 4: snprintf(v, n, "%.0f%%", tp.dly.fb * 100.0f); break;
-        case 5: snprintf(v, n, "%.0f%%", tp.dly.wet * 100.0f); break;
-        case 6: snprintf(v, n, "%.0f%%", tp.dly.damp * 100.0f); break;
-        case 7: snprintf(v, n, "%s", tp.dly.pingpong ? "Ping-Pong" : "Stereo"); break;
-        case 8: snprintf(v, n, "%s", tp.od_on ? "ON" : "OFF"); break;
-        case 9: snprintf(v, n, "%.0f%%", tp.od.drive * 100); break;
-        case 10: snprintf(v, n, "%.0f%%", tp.od.tone * 100); break;
-        case 11: snprintf(v, n, "%+.0f%%", tp.od.bias * 100); break;
-        case 12: snprintf(v, n, "%.0f%%", tp.od.level * 100); break;
-        case 13: snprintf(v, n, "%s", tp.flg_on ? "ON" : "OFF"); break;
-        case 14: snprintf(v, n, "%s", tp_dly_names[tp.flg_div]); break;
-        case 15: snprintf(v, n, "%.0f%%", tp.flg.depth * 100); break;
-        case 16: snprintf(v, n, "%+.0f%%", tp.flg.fb * 100); break;
-        case 17: snprintf(v, n, "%.0f%%", tp.flg.wet * 100); break;
-        case 18: snprintf(v, n, "%s", tp.trem_on ? "ON" : "OFF"); break;
-        case 19: snprintf(v, n, "%s", tp_dly_names[tp.trem_div]); break;
-        case 20: snprintf(v, n, "%.0f%%", tp.trem.depth * 100); break;
-        case 21: snprintf(v, n, "%s", tp.trem.shape == TREM_SINE ? "Sine" :
-                                      tp.trem.shape == TREM_TRI ? "Tri" : "Sqr"); break;
-        case 22: snprintf(v, n, "%s", tp.trem.stereo ? "ON" : "OFF"); break;
-    }
+    if (i < 0 || i >= s_tfx_n) { v[0] = 0; return; }
+    fxrack_menu_val(&tp_rk, s_cur_slot, s_tfx_param[i], v, n);
 }
 
 static void tape_fx_adj(int i, int dir)
 {
-    float d = (float)dir;
-    switch (i) {
-        case 0: { int m = tp.rv.mode + dir;
-                  if (m < 0) m = RV_N_MODES - 1;
-                  if (m >= RV_N_MODES) m = RV_OFF;
-                  if (m != RV_OFF && !tp.rv.slab && reverb_init(&tp.rv) != ESP_OK) m = RV_OFF;
-                  reverb_set_mode(&tp.rv, m); } break;
-        case 1: reverb_set_mix(&tp.rv, tp_clampf(tp.rv.wet + d * 0.05f, 0, 1)); break;
-        case 2: { bool on = !tp.dly_on;               // Delay on/off (lazy slab)
-                   if (on && !tp.dly.bufL && fxdelay_init(&tp.dly) != ESP_OK) on = false;
-                   if (on && tp.dly.wet < 0.01f) fxdelay_set_mix(&tp.dly, 0.30f);  // audible default
-                   tp.dly_on = on;
-                   if (!on) fxdelay_clear(&tp.dly); } break;   // drop the tail
-        case 3: tp.dly_div = (tp.dly_div + dir + TP_DLY_NDIV) % TP_DLY_NDIV; break;
-        case 4: if (tp.dly.bufL) fxdelay_set_feedback(&tp.dly, tp.dly.fb + d * 0.05f); break;
-        case 5: if (tp.dly.bufL) fxdelay_set_mix(&tp.dly, tp.dly.wet + d * 0.05f); break;
-        case 6: if (tp.dly.bufL) fxdelay_set_damp(&tp.dly, tp.dly.damp + d * 0.05f); break;
-        case 7: if (tp.dly.bufL) fxdelay_set_pingpong(&tp.dly, !tp.dly.pingpong); break;
-        case 8: { bool on = !tp.od_on;                // Overdrive on/off
-                   if (on) {
-                       if (tp.od.level < 0.01f) { tp.od.drive = 0.4f; tp.od.tone = 0.5f; tp.od.level = 0.8f; }
-                       overdrive_reset(&tp.od);
-                   }
-                   tp.od_on = on; } break;
-        case 9: tp.od.drive = tp_clampf(tp.od.drive + d * 0.05f, 0, 1); break;
-        case 10: tp.od.tone  = tp_clampf(tp.od.tone  + d * 0.05f, 0, 1); break;
-        case 11: tp.od.bias  = tp_clampf(tp.od.bias  + d * 0.05f, -1, 1); break;
-        case 12: tp.od.level = tp_clampf(tp.od.level + d * 0.05f, 0, 1); break;
-        case 13: { bool on = !tp.flg_on;               // Flanger on/off (lazy slab)
-                   if (on && !tp.flg.bufL && flanger_init(&tp.flg) != ESP_OK) on = false;
-                   if (on && tp.flg.wet < 0.01f) tp.flg.wet = 0.5f;   // audible default
-                   tp.flg_on = on;
-                   if (!on) flanger_clear(&tp.flg); } break;   // drop the tail
-        case 14: tp.flg_div = (tp.flg_div + dir + TP_DLY_NDIV) % TP_DLY_NDIV; break;
-        case 15: if (tp.flg.bufL) tp.flg.depth = tp_clampf(tp.flg.depth + d * 0.05f, 0, 1); break;
-        case 16: if (tp.flg.bufL) tp.flg.fb    = tp_clampf(tp.flg.fb    + d * 0.05f, -0.95f, 0.95f); break;
-        case 17: if (tp.flg.bufL) tp.flg.wet   = tp_clampf(tp.flg.wet   + d * 0.05f, 0, 1); break;
-        case 18: { bool on = !tp.trem_on;              // Tremolo on/off
-                   if (on && tp.trem.depth < 0.01f) tp.trem.depth = 0.5f;
-                   tp.trem_on = on; } break;
-        case 19: tp.trem_div = (tp.trem_div + dir + TP_DLY_NDIV) % TP_DLY_NDIV; break;
-        case 20: tp.trem.depth = tp_clampf(tp.trem.depth + d * 0.05f, 0, 1); break;
-        case 21: tp.trem.shape = (tp.trem.shape + 1) % 3; break;
-        case 22: tp.trem.stereo = !tp.trem.stereo; break;
-    }
+    if (i < 0 || i >= s_tfx_n) return;
+    int p = s_tfx_param[i];
+    fxrack_menu_adj(&tp_rk, s_cur_slot, p, dir);
+    if (p < 0) tfx_rebuild();            // effect changed -> param rows changed
 }
 
 static setup_menu_t tape_fx = {
-    .items = tape_fx_items,
-    .n = 23,
-    .title = "Tape FX",
+    .items = s_tfx_items,
+    .n = 0,                              // set by tfx_rebuild()
+    .title = "Tape FX",                  // overwritten per-slot by tfx_rebuild()
     .aff_label = "Setup", .aff_target = M_TAPE_SETUP,
     .live_target = M_TAPE_MAIN,
     .render = tape_fx_val, .adjust = tape_fx_adj, .action = NULL,
@@ -525,6 +486,7 @@ static setup_menu_t tape_fx = {
 static int tape_fx_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
+    if (event == EV_ENTERED_MENU) tfx_rebuild();   // dynamic row set for s_cur_slot
     return setup_menu_event(&tape_fx, event);
 }
 
@@ -557,6 +519,7 @@ static void tape_register_pages(void *menusys)
 static int tape_main_event(int event, void *ev_data)
 {
     (void)ev_data;
+    tape_autosave_kick();   // machine-ambient: spawn a requested auto-save from any Tape page
     if (event == EV_ENTERED_MENU || event == EV_TIMER_REPEATING_SLOW) {
         int fh = TFT_getfontheight();
         _bg = TFT_BLACK; TFT_fillRect(0, fh + 12, _width, 24, _bg);
