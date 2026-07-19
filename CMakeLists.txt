@@ -2,6 +2,14 @@
 # in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.13)
 
+# The legacy "Sampler2" fork is kept in the repo (components/machine_sampler2)
+# but dropped from the build — sampler3 has the hardware verdict (2026-07-18).
+# Guarded so tools/proof_build.sh, which passes its own -DEXCLUDE_COMPONENTS,
+# still overrides this for the stub-only proof build.
+if(NOT DEFINED EXCLUDE_COMPONENTS)
+    set(EXCLUDE_COMPONENTS machine_sampler2)
+endif()
+
 # pull in idf specific items, config vars etc.
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
