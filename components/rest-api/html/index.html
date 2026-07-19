@@ -229,7 +229,11 @@ input[type=range].vsl{-webkit-appearance:none;appearance:none;writing-mode:verti
   <div class="card" id="bcastcard">
     <div class="row tight" style="align-items:center">
       <b style="flex:1;color:#0af">BROADCAST</b>
-      <span id="bcstate" style="color:#888;margin-right:8px">idle</span>
+      <span id="bcstate" style="color:#888;margin-right:8px">off</span>
+      <button class="btn" id="bcenbtn" style="flex:0 0 84px" onclick="bcastToggle()">Enable</button>
+    </div>
+    <div class="row tight" style="align-items:center;margin-top:4px">
+      <span style="flex:1;color:#888">output stream</span>
       <a class="btn" id="bclinkmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
       <a class="btn" id="bclink" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
     </div>
@@ -1154,9 +1158,16 @@ function bcastInit(){
   var im=document.getElementById('bclinkinmp3'); if(im)im.href=base+'in.mp3';
   var a=document.getElementById('bcaudio'); if(a&&!a.getAttribute('src'))a.setAttribute('src',base+'live.mp3');
 }
+var bcEn=false;
+function bcastToggle(){
+  fetch('/bcast/enable?on='+(bcEn?0:1)).then(function(){bcastPoll();}).catch(function(){});
+}
 function bcastPoll(){
   fetch('/bcast/state').then(function(r){return r.json();}).then(function(d){
-    var s=document.getElementById('bcstate'); if(s)s.textContent=d.live?'listener connected':'idle';
+    bcEn=!!d.enabled;
+    var s=document.getElementById('bcstate');
+    if(s)s.textContent=d.enabled?(d.live?'listener connected':'on (idle)'):'off';
+    var b=document.getElementById('bcenbtn'); if(b){b.textContent=d.enabled?'Disable':'Enable';b.className=d.enabled?'btn on':'btn';}
   }).catch(function(){});
   icePoll();
 }

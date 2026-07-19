@@ -18,6 +18,7 @@
 #include "disp_lock.h"
 #include "tftspi.h"
 #include "audio.h"
+#include "menu_config.h"
 #include "machine.h"
 #include "beatlisten.h"
 #include "strampler_version.h"
@@ -1567,10 +1568,27 @@ static esp_err_t bounce_state_handler(httpd_req_t *req)
 
 static esp_err_t bcast_state_handler(httpd_req_t *req)
 {
-    char buf[112];
-    snprintf(buf, sizeof(buf), "{\"live\":%s,\"diag\":\"%s\",\"enc_us\":%u}",
+    char buf[140];
+    snprintf(buf, sizeof(buf), "{\"enabled\":%s,\"live\":%s,\"diag\":\"%s\",\"enc_us\":%u}",
+             audio_broadcast_enabled() ? "true" : "false",
              audio_broadcast_active() ? "true" : "false", audio_broadcast_diag(),
              (unsigned)audio_broadcast_enc_us());
+    return send_json(req, buf);
+}
+
+// GET /bcast/enable?on=0|1 — the :8000 listener is OFF at boot (its 12 KB task
+// stack is INTERNAL RAM the tracker's render task needs). Turn it on here right
+// before opening the stream; persisted as settings.broadcast so it survives reboot.
+static esp_err_t bcast_enable_handler(httpd_req_t *req)
+{
+    char v[8];
+    if (!get_query_param(req, "on", v, sizeof(v)))
+        return send_json(req, "{\"err\":\"need ?on=0|1\"}");
+    int on = atoi(v) ? 1 : 0;
+    audio_broadcast_set_enabled(on);
+    configSetIntSetting("broadcast", on);
+    char buf[48];
+    snprintf(buf, sizeof(buf), "{\"enabled\":%s}", on ? "true" : "false");
     return send_json(req, buf);
 }
 
@@ -1858,6 +1876,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/bounce/stop",   .method = HTTP_POST, .handler = bounce_stop_handler },
     { .uri = "/bounce/state",  .method = HTTP_GET,  .handler = bounce_state_handler },
     { .uri = "/bcast/state",   .method = HTTP_GET,  .handler = bcast_state_handler },
+    { .uri = "/bcast/enable",  .method = HTTP_GET,  .handler = bcast_enable_handler },
     { .uri = "/ws/midi",       .method = HTTP_GET,  .handler = midi_ws_handler, .is_websocket = true },
     { .uri = "/midi/on",       .method = HTTP_POST, .handler = midi_post_handler },
     { .uri = "/midi/off",      .method = HTTP_POST, .handler = midi_post_handler },

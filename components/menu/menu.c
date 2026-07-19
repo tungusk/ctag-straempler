@@ -40,8 +40,8 @@ static void autosave_kick(void);
 static xQueueHandle s_ev_queue = NULL;
 
 // core menu labels (machine-independent pages)
-static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "Listen", "ClkOut", "Bounce", "IP"};
-static const int n_settings_menus = 9;
+static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "Listen", "ClkOut", "Bounce", "Broadcast", "IP"};
+static const int n_settings_menus = 10;
 
 static void incSettingsItem(int *tz, int index){
     if (index == SID_TIMEZONE) { if(*tz + 1 >= 12) *tz = 12; else (*tz)++; }
@@ -335,10 +335,10 @@ static int listen_cycle(int cur, int dir){
 }
 
 static int settings_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE, SID_LISTEN, SID_CLKOUT, SID_BOUNCE};
+    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE, SID_LISTEN, SID_CLKOUT, SID_BOUNCE, SID_BROADCAST};
     const int items = sizeof(menu_items)/sizeof(int);
     static int menu_pos = 0, selected = 0;
-    static int remote_on = 1;
+    static int remote_on = 1, broadcast_on = 0;
     static int listen_mode = 0, clkout_ch = 0;
     static cJSON *cfgData = NULL, *settings = NULL;
     switch(event){
@@ -357,12 +357,14 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 settings = cJSON_GetObjectItemCaseSensitive(cfgData, "settings");
                 if(settings != NULL)menuTFTPrintSettings(settings);
                 remote_on = 1;
+                broadcast_on = audio_broadcast_enabled() ? 1 : 0;   // live state is the truth
                 if(settings != NULL){
                     cJSON *r = cJSON_GetObjectItemCaseSensitive(settings, "remote");
                     if(r != NULL && cJSON_IsNumber(r)) remote_on = r->valueint ? 1 : 0;
                 }
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
+                menuTFTPrintBroadcast(settings_menus, &n_settings_menus, &broadcast_on);
                 // live service values are the truth (boot-applied from settings)
                 listen_mode = beatlisten_get_mode();
                 clkout_ch = beatlisten_get_out();
@@ -387,6 +389,9 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             }else if(menu_items[menu_pos] == SID_CLKOUT){
                 clkout_ch = (clkout_ch + 1) % 3;
                 menuTFTPrintClkOut(settings_menus, &n_settings_menus, &clkout_ch);
+            }else if(menu_items[menu_pos] == SID_BROADCAST){
+                broadcast_on = !broadcast_on;
+                menuTFTPrintBroadcast(settings_menus, &n_settings_menus, &broadcast_on);
             }else{
                 incSettingsItem(&tz_shift, menu_items[menu_pos]);
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
@@ -407,6 +412,9 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             }else if(menu_items[menu_pos] == SID_CLKOUT){
                 clkout_ch = (clkout_ch + 2) % 3;
                 menuTFTPrintClkOut(settings_menus, &n_settings_menus, &clkout_ch);
+            }else if(menu_items[menu_pos] == SID_BROADCAST){
+                broadcast_on = !broadcast_on;
+                menuTFTPrintBroadcast(settings_menus, &n_settings_menus, &broadcast_on);
             }else{
                 decSettingsItem(&tz_shift, menu_items[menu_pos]);
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
@@ -420,7 +428,8 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 break;
             }
             if(menu_items[menu_pos] != SID_TIMEZONE && menu_items[menu_pos] != SID_REMOTE &&
-               menu_items[menu_pos] != SID_LISTEN && menu_items[menu_pos] != SID_CLKOUT){
+               menu_items[menu_pos] != SID_LISTEN && menu_items[menu_pos] != SID_CLKOUT &&
+               menu_items[menu_pos] != SID_BROADCAST){
                 _state_json = (void*) cfgData;
                 _state_data = (void*) &menu_pos;
                 return M_SETTINGS_INPUT;
@@ -437,6 +446,10 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             cJSON_DeleteItemFromObjectCaseSensitive(settings, "remote");
             cJSON_AddNumberToObject(settings, "remote", remote_on);
             rest_remote_enable(remote_on);
+            //persist + apply the broadcast listener (off by default; frees internal RAM)
+            cJSON_DeleteItemFromObjectCaseSensitive(settings, "broadcast");
+            cJSON_AddNumberToObject(settings, "broadcast", broadcast_on);
+            audio_broadcast_set_enabled(broadcast_on);
             //persist + apply the beat listener (mode change implies relock)
             cJSON_DeleteItemFromObjectCaseSensitive(settings, "blisten");
             cJSON_AddNumberToObject(settings, "blisten", listen_mode);

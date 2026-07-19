@@ -16,6 +16,7 @@
 #include "tft.h"
 #include "disp_lock.h"
 #include "menu.h"
+#include "menu_config.h"
 #include "freesound.h"
 #include "mp3.h"
 #include "wifi.h"
@@ -245,7 +246,7 @@ void initUI(){
     
     initWifi();
     xTaskCreate(otaValidateTask, "ota_validate", 3072, NULL, 3, NULL);   // commit or roll back this OTA image
-    audio_broadcast_init();   // output-broadcast socket server — AFTER initWifi (needs tcpip + the wifi event group)
+    audio_broadcast_set_enabled(configGetIntSetting("broadcast", 0));   // OFF by default (frees 12 KB internal for the tracker); AFTER initWifi. Toggle in System→Settings / web.
     freesoundInit(ui_ev_queue);
     initMP3Engine(ui_ev_queue);
     startRestAPI(ui_ev_queue);

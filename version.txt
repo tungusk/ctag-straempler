@@ -1,1 +1,1 @@
-tapeui-v1-20260718 (tape transport redesign, auto-restore, card-record, save-on-finalize CUT takes, beat-bar rec-quant)
+tracker-ram-v1-20260718 (broadcast lazy + off by default -> frees 12KB internal so Tracker render task gets full 32KB, heavy IT loads)
