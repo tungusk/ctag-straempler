@@ -1,1 +1,1 @@
-taperack-v1-20260718 (clock-synced fx rack, tape ported to slot rack + print-fx + play-mode, auto-save takes w/ crop marks TCR_/TAP_, re-record UX)
+tapeui-v1-20260718 (tape transport redesign, auto-restore, card-record, save-on-finalize CUT takes, beat-bar rec-quant)

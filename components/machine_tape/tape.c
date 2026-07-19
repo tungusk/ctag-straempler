@@ -15,6 +15,8 @@
 #include "sampfile.h"
 #include "sd_lock.h"
 #include "fxchain.h"
+#include "menu_config.h"
+#include "recording.h"
 #include "tape_priv.h"
 
 static const char *TAG = "TAPE";
@@ -23,6 +25,7 @@ tape_state_t tp;
 static const uint32_t TP_LEN_SECS[TP_LEN_OPTS] = { 15, 30, 60 };
 
 static int tape_spawn_save(uint32_t a, uint32_t b, bool crop);   // background take writer (below)
+static void tape_stash_and_save(void);                          // request async save of the current take
 
 // ---- bank alloc (1 MiB blocks, fail-soft) ---------------------------------------
 static void bank_free(tp_bank_t *b)
@@ -131,6 +134,8 @@ static void tape_rec_start(void)
         tp.rec_extend = true;            // first-pass fill
         tp.playing = true;
         tp.cropped = false;              // fresh take: not yet cropped
+        tp.restore_id[0] = 0;            // new take is unsaved until it's persisted
+        tp.take_num++;                   // -> "REC-###" title
     } else {
         tp.rec_extend = false;           // overdub within the existing loop
     }
@@ -140,6 +145,8 @@ static void tape_rec_start(void)
 
 // punch OUT. Finalize a fresh take (crop = whole take, loop from the start) and
 // keep PLAYING so you immediately hear it back; an overdub just disarms record.
+// A finalized take is stable (playing, not being overwritten), so auto-save it
+// now — no race, and re-recording/erasing later needs no save-before-overwrite.
 static void tape_rec_stop(void)
 {
     tp.recording = false;
@@ -147,8 +154,41 @@ static void tape_rec_stop(void)
         tp.in_pt = 0;
         tp.out_pt = tp.len;
         tp.pos = 0.0;
+        tp.rec_extend = false;
+        tape_stash_and_save();           // persist the finished take (async, stable buffer)
+        return;
     }
     tp.rec_extend = false;
+}
+
+// finalize a fresh take at a specific (beat/bar-quantized) length; loop [0,out).
+static void tape_rec_stop_at(uint32_t out_len)
+{
+    tp.recording = false; tp.rec_extend = false; tp.rec_stop_target = 0;
+    if (out_len < 1) out_len = 1;
+    if (tp.len < out_len) tp.len = out_len;
+    tp.in_pt = 0; tp.out_pt = out_len; tp.pos = 0.0;
+    tape_stash_and_save();
+}
+
+// user asked to stop recording. A fresh take with quantize on keeps rolling to
+// the next beat/bar so the loop is a whole number of beats; else stop now.
+static void tape_rec_stop_request(void)
+{
+    if (!tp.recording) return;
+    if (tp.rec_extend && tp.rec_quant != TPQ_OFF && !tp.rec_stop_target) {
+        uint32_t beat = tape_beat_frames();
+        if (beat >= 64) {                                        // a grid exists
+            uint32_t unit = (tp.rec_quant == TPQ_BAR) ? beat * 4 : beat;
+            uint32_t pos = (uint32_t)tp.pos;
+            uint32_t target = ((pos + unit / 2) / unit) * unit;  // nearest boundary
+            if (target < unit) target = unit;                    // at least one unit
+            if (pos >= target) tape_rec_stop_at(target);         // already there -> now
+            else tp.rec_stop_target = target;                    // keep recording to the beat
+            return;
+        }
+    }
+    tape_rec_stop();
 }
 
 // audio task: if the buffer holds an unsaved take, stage its bounds and ask the
@@ -174,20 +214,76 @@ static void tape_erase(void)
     tp.playing = false; tp.recording = false;
     tp.len = 0; tp.in_pt = tp.out_pt = 0; tp.pos = 0.0;
     tp.peaks_done = 0;
-    tp.take_dirty = false; tp.cropped = false;
+    tp.take_dirty = false; tp.cropped = false; tp.restore_id[0] = 0;
 }
 
-// begin a fresh take from a STOPPED tape. If the buffer holds an unsaved take,
-// persist it first (deferred, non-racy) then roll; an empty (or already-saved)
-// tape records immediately. Arlo's rule: never silently lose a recording.
+// begin a fresh take from a STOPPED tape. Records immediately (reliable) — the
+// outgoing take was already auto-saved when it finalized (punch/stop), so there
+// is nothing to save-before-overwrite here and no defer/stall.
 static void tape_begin_fresh(void)
 {
-    if (tp.take_dirty && tp.len > 1) {
-        tape_stash_and_save();           // request save of the outgoing take
-        tape_erase();                    // wipe (banks kept for the writer)
-        tp.pending_fresh = true;         // fresh take rolls once the save completes
+    tp.peaks_done = 0;
+    tape_rec_start();                    // rec_start's fresh branch clears len/crop
+}
+
+// ---- card-record mode: long takes stream straight to a WAV (no 30 s cap) ------
+// The PSRAM tape is bypassed. Incoming audio runs through the filter/drive + FX
+// rack (monitored), and while armed each post-FX block is pushed to the shared
+// streaming recorder (usr/REC/TAP_NNNN.WAV). TR2 punches record in/out; the UI
+// task (tape_card_service) re-arms the writer after each take. Audio task only
+// does trigger/finish/push — all atomic/queue, no SD.
+static void tape_card_process(int32_t out[MACHINE_BLOCK],
+                              const int32_t in[MACHINE_BLOCK],
+                              const machine_io_t *io)
+{
+    bool rec = recording_is_active();
+    if (tp.rec_mode == TPR_MOMENTARY) {
+        bool gate = !(io->trig_level & 2);
+        if (gate && !rec && recording_is_prepared()) { recording_trigger(); tp.pos = 0.0; }
+        else if (!gate && rec) recording_finish();
     } else {
-        tape_rec_start();                // empty / nothing to save -> record now
+        if (io->trig_rising & 2) {
+            if (rec) recording_finish();
+            else if (recording_is_prepared()) { recording_trigger(); tp.pos = 0.0; }
+        }
+    }
+    tp.recording = recording_is_active();
+
+    float coef = 0, q = 0;
+    if (tp.flt_mode != TPF_OFF) {
+        float fc = tp_clampf(tp.cutoff, 20.0f, 6500.0f);
+        coef = svf_coef(fc, TP_RATE, 1.0f);
+        q = svf_damp(tp.res01, 0.6f, 2.0f);
+        if (!(fabsf(tp.flt.lp) < 1e9f) || !(fabsf(tp.flt.bp) < 1e9f)) svf_reset(&tp.flt);
+    }
+    int frames = MACHINE_BLOCK / 2;
+    for (int f = 0; f < frames; f++) {
+        float in_mid = (float)(((int32_t)(int16_t)(in[f*2] >> 16) +
+                                (int32_t)(int16_t)(in[f*2+1] >> 16)) >> 1) / 32768.0f;
+        float y = in_mid;
+        if (tp.flt_mode != TPF_OFF) {
+            float lp, bp, hp; svf_step(&tp.flt, y, coef, q, &lp, &bp, &hp);
+            y = tp.flt_mode == TPF_LP ? lp : tp.flt_mode == TPF_BP ? bp : hp;
+        }
+        if (tp.drive > 0.005f) y = tp_softclip(y, tp.drive);
+        float u = y * 32767.0f;
+        if (u > 32767.0f) u = 32767.0f; else if (u < -32768.0f) u = -32768.0f;
+        int32_t su = ((int32_t)(int16_t)u) << 16;
+        out[f * 2] = su; out[f * 2 + 1] = su;
+    }
+    float bpm = clockin_beat_bpm(&tp.ci);
+    if (bpm <= 0.0f) bpm = tp.manual_bpm;
+    tp_rk.bpm = bpm;
+    fxrack_process_i32(&tp_rk, out, frames);      // print the chain into the stream too
+
+    if (recording_is_active()) { recording_push(out); tp.pos += (double)frames; }  // pos = elapsed frames
+
+    for (int f = 0; f < frames; f++) {            // monitor output (level applied last)
+        int32_t v = out[f * 2] >> 16;
+        float o = (float)v * tp.level;
+        if (o > 32000.0f) o = 32000.0f; else if (o < -32000.0f) o = -32000.0f;
+        int32_t s = ((int32_t)(int16_t)o) << 16;
+        out[f * 2] = s; out[f * 2 + 1] = s;
     }
 }
 
@@ -215,17 +311,17 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     if (tp.knob_live[2]) tp.res01    = kn[2];
     if (tp.knob_live[3]) tp.drive    = kn[3];
 
-    // a deferred fresh take rolls once its auto-save has finished reading the
-    // old buffer (no race on the single PSRAM tape).
-    if (tp.pending_fresh && !tp.autosave_req && !tp.save_busy) {
-        tp.pending_fresh = false;
-        tp.playing = false; tp.peaks_done = 0;
-        tape_rec_start();
-    }
+    if (tp.rec_dest == TPD_CARD) { tape_card_process(out, in, io); return; }
 
     // transport edges: TR1 play/stop, TR2 record punch
     if (io->trig_rising & 1) {
-        if (tp.playing) { tp.playing = false; tp.recording = false; }
+        if (tp.playing) {
+            if (tp.recording && tp.rec_extend) {   // stopping a fresh take: finalize + save
+                tp.in_pt = 0; tp.out_pt = tp.len; tp.rec_extend = false;
+                tape_stash_and_save();
+            }
+            tp.playing = false; tp.recording = false; tp.rec_stop_target = 0;   // cancel any pending beat-stop
+        }
         else if (tp.len || tp.rec_src == TPS_INPUT) {
             uint32_t ein, eout; tape_eff_window(&ein, &eout);
             tp.pos = (double)ein;
@@ -240,11 +336,11 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
             if (tp.playing) tape_rec_start();            // overdub while held
             else            tape_begin_fresh();          // fresh take (auto-saves the old one)
         }
-        else if (!gate && tp.recording) tape_rec_stop();
+        else if (!gate && tp.recording) tape_rec_stop_request();   // quantize to beat if enabled
     } else {
         if (io->trig_rising & 2) {
             tp.tr2_hold = 0; tp.tr2_armed = false;
-            if (tp.recording)    { tape_rec_stop();    tp.tr2_overdub = false; }  // punch out
+            if (tp.recording)    { tape_rec_stop_request(); tp.tr2_overdub = false; }  // punch out (quantized)
             else if (tp.playing) { tape_rec_start();   tp.tr2_overdub = true;  }  // overdub (erasable by holding)
             else                 { tape_begin_fresh(); tp.tr2_overdub = false; }  // stopped: fresh (auto-saves old)
         }
@@ -257,12 +353,11 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
                 tp.tr2_hold += (uint32_t)(MACHINE_BLOCK / 2);
                 if (!tp.tr2_armed && tp.tr2_hold >= (uint32_t)(TP_RATE * 7 / 10)) {
                     tp.tr2_armed = true;
-                    tape_stash_and_save();               // persist the outgoing take (deferred write)
-                    tape_erase();                        // wipe now (banks kept for the writer)
+                    tape_erase();                        // wipe now (the loop was saved on its finalize)
                 }
             }
         } else {                                         // released
-            if (tp.tr2_armed) tp.pending_fresh = true;   // fresh take rolls once the save is done
+            if (tp.tr2_armed) tape_rec_start();          // roll the fresh take immediately (reliable)
             tp.tr2_hold = 0; tp.tr2_armed = false; tp.tr2_overdub = false;
         }
     }
@@ -346,6 +441,9 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
                 }
             }
         }
+        // quantized punch-out: finalize once the take reaches the target beat/bar
+        if (tp.recording && tp.rec_stop_target && tp.pos >= (double)tp.rec_stop_target)
+            tape_rec_stop_at(tp.rec_stop_target);
     }
 
     // FX rack: FX1/FX2 generic slots (in order) then the fixed reverb. Rate
@@ -393,7 +491,7 @@ int tape_set_len_sel(int sel)
     tp.len = 0; tp.in_pt = tp.out_pt = 0; tp.pos = 0;
     memset(tp.peaks, 0, sizeof(tp.peaks));
     tp.peaks_done = 0;
-    tp.take_dirty = false; tp.cropped = false;
+    tp.take_dirty = false; tp.cropped = false; tp.restore_id[0] = 0;
     return 0;
 }
 
@@ -445,6 +543,7 @@ int tape_load(const char *name)
     tp.len = done;
     tp.in_pt = 0; tp.out_pt = done; tp.pos = 0;
     tp.take_dirty = false; tp.cropped = false;     // loaded content isn't an unsaved recording
+    snprintf(tp.restore_id, sizeof(tp.restore_id), "%s", name);   // reload this on return
     tape_rebuild_peaks(true);
     return 0;
 }
@@ -455,7 +554,7 @@ void tape_clear(void)
     tp.len = 0; tp.in_pt = tp.out_pt = 0; tp.pos = 0;
     memset(tp.peaks, 0, sizeof(tp.peaks));
     tp.peaks_done = 0;
-    tp.take_dirty = false; tp.cropped = false;     // explicit wipe = deliberate discard
+    tp.take_dirty = false; tp.cropped = false; tp.restore_id[0] = 0;   // explicit wipe = discard
 }
 
 void tape_norm(void)
@@ -608,11 +707,12 @@ static void save_task(void *pv)
 static int tape_spawn_save(uint32_t a, uint32_t b, bool crop)
 {
     if (b <= a || tp.save_busy) return -1;
-    const char *pfx = crop ? "TCR_" : "TAP_";
+    const char *pfx = crop ? "TCR_" : "CUT_";
     int idx = sample_next_index(pfx);
     if (idx < 0) idx = 0;
     if (idx > 9999) idx = 9999;                // 8.3: id stays exactly 8 chars
     snprintf(tp.save_id, sizeof(tp.save_id), "%s%04d", pfx, idx % 10000);
+    snprintf(tp.restore_id, sizeof(tp.restore_id), "%s", tp.save_id);   // this take is now on card
     tp.save_a = a; tp.save_b = b; tp.save_crop = crop;
     tp.save_busy = true;
     if (xTaskCreate(save_task, "tape_sv", 8192, NULL, 4, NULL) != pdPASS) {
@@ -637,6 +737,36 @@ void tape_autosave_kick(void)
     if (!tp.autosave_req || tp.save_busy) return;
     tp.autosave_req = false;
     tape_spawn_save(tp.save_a, tp.save_b, tp.save_crop);
+}
+
+// UI task: reload the take persisted on the last leave (CONFIG "tapelast"), so
+// work-in-progress survives a machine switch. Silent no-op if empty or the file
+// is gone (e.g. the take was deleted from the card).
+void tape_restore_last(void)
+{
+    char id[24];
+    if (configGetStringSetting("tapelast", id, sizeof(id)) != 1 || !id[0]) return;
+    char path[64];
+    if (sample_resolve(id, path, sizeof(path)) != 0) return;   // file no longer on card
+    tape_load(id);                                             // sets restore_id + peaks
+}
+
+// UI task: in card mode keep the streaming recorder armed so a TR2 punch starts
+// instantly (prepare does the heavy SD scan + writer-task create off the audio
+// task); also consume the writer's "saved" flag so it can't auto-load into the
+// next machine. Cancels a parked writer when card mode is left.
+void tape_card_service(void)
+{
+    int v; char fn[48];
+    recording_poll_load(&v, fn);               // clear a completed-take flag (leak guard)
+    if (tp.rec_dest != TPD_CARD) {
+        if (recording_is_prepared() && !recording_is_active()) recording_cancel_prepared();
+        return;
+    }
+    if (!recording_is_active() && !recording_is_prepared()) {
+        recording_set_prefix("TAP");
+        recording_prepare(-1);                 // re-arm for the next punch-in
+    }
 }
 
 // ---- peaks (UI task) ------------------------------------------------------------
@@ -679,6 +809,7 @@ static esp_err_t tape_start(void)
     tp.flt_mode = TPF_OFF;
     tp.monitor = true;
     tp.knob_ctx = -1;
+    tp.restore_pending = true;                 // reload the persisted take on first screen entry
     clockin_reset(&tp.ci, 1.0f);
     svf_reset(&tp.flt);
     fxfilter_init(&tp.filt);
@@ -702,11 +833,15 @@ static void tape_stop(void)
 {
     tp.playing = false; tp.recording = false;
     tp.pending_fresh = false; tp.autosave_req = false;
+    if (recording_is_active()) recording_finish();     // finalize a card take in flight
+    recording_cancel_prepared();                       // drop a parked (empty) writer
     while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));   // let any in-flight save finish
     if (tp.take_dirty && tp.len > 1) {                    // leaving Tape: persist the take first
         tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped);
         while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));
     }
+    // remember what's in the buffer so we can reload it on return (empty = nothing)
+    configSetStringSetting("tapelast", tp.len > 1 ? tp.restore_id : "");
     bank_free(&tp.tape);
     bank_free(&tp.clip);
     tp.clip_len = 0;
@@ -730,6 +865,8 @@ static cJSON *tape_preset_save(void)
     cJSON_AddNumberToObject(o, "lvl", tp.level);
     cJSON_AddNumberToObject(o, "rsrc", tp.rec_src);
     cJSON_AddNumberToObject(o, "rmode", tp.rec_mode);
+    cJSON_AddNumberToObject(o, "rdest", tp.rec_dest);
+    cJSON_AddNumberToObject(o, "rquant", tp.rec_quant);
     cJSON_AddBoolToObject(o, "mon", tp.monitor);
     cJSON_AddBoolToObject(o, "osht", tp.play_oneshot);
     return o;
@@ -753,6 +890,8 @@ static void tape_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))  && cJSON_IsNumber(j)) tp.level = tp_clampf((float)j->valuedouble, 0, 1.2f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rsrc")) && cJSON_IsNumber(j)) tp.rec_src = j->valueint == TPS_TAPE ? TPS_TAPE : TPS_INPUT;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rmode")) && cJSON_IsNumber(j)) tp.rec_mode = j->valueint == TPR_MOMENTARY ? TPR_MOMENTARY : TPR_PUNCH;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rdest")) && cJSON_IsNumber(j)) tp.rec_dest = j->valueint == TPD_CARD ? TPD_CARD : TPD_TAPE;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rquant")) && cJSON_IsNumber(j)) tp.rec_quant = tp_clampi(j->valueint, 0, TPQ_BAR);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "mon"))  && cJSON_IsBool(j))   tp.monitor = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "osht")) && cJSON_IsBool(j))   tp.play_oneshot = cJSON_IsTrue(j);
     tp.knob_ctx = -1;
