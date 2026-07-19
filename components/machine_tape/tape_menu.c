@@ -92,7 +92,7 @@ static void draw_header(void)
     _fg = (color_t){150, 155, 172}; TFT_print("Tape", 6, 2);
     tape_beat_frames();
     const char *st = tp.recording ? "REC" : tp.playing ? "PLAY" : "STOP";
-    char b[48];
+    char b[48];                                      // compact status (elapsed time); beats live UNDER THE BAR while recording
     if (tp.rec_dest == TPD_CARD) snprintf(b, sizeof(b), "%s  %.1fs   %.0f %s", st,
         (float)tp.pos / TP_RATE, tp.disp_bpm, tp.disp_clk ? "CLK" : "man");
     else snprintf(b, sizeof(b), "%s  %.1f/%.0fs   %.0f %s", st,
@@ -233,9 +233,25 @@ static void draw_crop_readout(void)
 {
     int y = crop_ry();
     _bg = TFT_BLACK; TFT_fillRect(0, y, _width, TFT_getfontheight() + 3, _bg);
-    if (tp.rec_dest == TPD_CARD || tp.len == 0) return;
-    char a[16], b2[16]; fmt_secs(tp.in_pt, a, sizeof(a)); fmt_secs(tp.out_pt, b2, sizeof(b2));
+    if (tp.rec_dest == TPD_CARD) return;
     uint32_t bt = tape_beat_frames();
+    if (tp.recording) {                              // while recording, the crop is meaningless —
+        // show live elapsed time + beats, COLUMN-ALIGNED with the IN/OUT/beats
+        // readout below (so the numbers don't jump when recording stops).
+        int xout   = 6 + TFT_getStringWidth("IN 00.00s") + 16;      // OUT-segment column
+        int xbeats = xout + TFT_getStringWidth("OUT 00.00s") + 16;  // beats column
+        char t[16]; _fg = REC_COL;
+        TFT_print("REC", 6, y);                                     // where "IN" sits
+        snprintf(t, sizeof(t), "%.2fs", (float)tp.pos / TP_RATE);
+        TFT_print(t, xout + TFT_getStringWidth("OUT "), y);         // under the OUT time
+        if (tp.disp_bpm > 0 && bt) {
+            snprintf(t, sizeof(t), "%.1f beats", (float)tp.pos / (float)bt);
+            TFT_print(t, xbeats, y);                                // under the crop beats
+        }
+        return;
+    }
+    if (tp.len == 0) return;
+    char a[16], b2[16]; fmt_secs(tp.in_pt, a, sizeof(a)); fmt_secs(tp.out_pt, b2, sizeof(b2));
     float beats = bt ? (float)(tp.out_pt - tp.in_pt) / (float)bt : 0;
     char seg[28]; int x = 6;
     _fg = (s_btn == TB_IN) ? TFT_CYAN : (color_t){150, 150, 162};
@@ -293,7 +309,7 @@ static void draw_hint(void)
         case TB_NORM: h = stopped ? "press: normalize the crop" : "stop first"; break;
         case TB_FADE: h = stopped ? "press: fade crop edges"    : "stop first"; break;
         case TB_CLR:  h = stopped ? "press: clear the tape"     : "stop first"; break;
-        case TB_FX1: case TB_FX2: case TB_FX3: h = "press: edit this FX slot"; break;
+        case TB_FX1: case TB_FX2: case TB_FX3: h = "press: cycle FX   long: Setup"; break;
     }
     _fg = (color_t){110, 110, 120};
     if (h[0]) TFT_print((char *)h, 6, y);
@@ -382,7 +398,13 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
         case EV_BWD: {
             int dir = (event == EV_FWD) ? +1 : -1;
             if (s_grab && tb_is_crop(s_btn)) nudge(dir);              // move the grabbed point
-            else s_btn = (s_btn + dir + TB_N) % TB_N;                 // scroll the selection
+            else {
+                // scroll the selection, SKIPPING the edit actions (Rev/Norm/Fade/
+                // Clear) while rolling — they can't fire, so don't make the user
+                // turn past dead buttons. Always ≥1 selectable (name/crop/FX).
+                do { s_btn = (s_btn + dir + TB_N) % TB_N; }
+                while (!tp_ui_stopped() && s_btn >= TB_REV && s_btn <= TB_CLR);
+            }
             draw_header(); draw_wave(); redraw_strip(); s_sig_crop = crop_sig();  // header = name-select highlight
             break;
         }
@@ -390,8 +412,9 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             if (s_grab) s_grab = false;                              // drop the crop point
             else if (tb_is_crop(s_btn)) s_grab = true;               // grab it
             else if (s_btn == TB_NAME) return M_TAPE_LOAD;           // the name IS the load button
-            else if (tb_is_fx(s_btn)) { s_cur_slot = s_btn - TB_FX1; return M_TAPE_FX; }  // FX slot
-            else switch (s_btn) {                                   // fire an edit action
+            else if (tb_is_fx(s_btn))                               // cycle this slot's effect IN PLACE
+                fxrack_menu_adj(&tp_rk, s_btn - TB_FX1, -1, +1);    //   (params: long-press -> Setup > FX)
+            else if (tp_ui_stopped()) switch (s_btn) {              // edit actions: STOPPED only (enforce the "stop first" hint, don't just show it)
                 case TB_REV:  tape_reverse(); break;
                 case TB_NORM: tape_norm();    break;
                 case TB_FADE: tape_fade();    break;
@@ -402,22 +425,33 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
         case EV_LONG_PRESS:
             if (s_grab) { s_grab = false; draw_wave(); redraw_strip(); break; }   // escape grab
             return M_TAPE_SETUP;
-        case EV_TIMER_REPEATING_SLOW:
         case EV_TIMER_REPEATING_FAST: {
-            tape_autosave_kick();                        // spawn any auto-save the audio task requested
-            tape_card_service();                         // keep the card-mode recorder armed
-            if (tp.recording && tp.len != s_wave_len) {  // live record growth (or erase reset)
-                tape_rebuild_peaks(false);
-                draw_wave();
-            }
+            // cheap + frequent: services (auto-save + card recorder must stay
+            // responsive), the header/beat readout, and the playhead. The heavy
+            // waveform redraws are gated to the SLOW tick below — rebuild_peaks +
+            // a full-strip redraw and its PSRAM shadow-FB writes contend with the
+            // audio path (screen is 2nd priority to audio here).
+            tape_autosave_kick();
+            tape_card_service();
             unsigned hs = head_sig();
             if (hs != s_sig_head) {
                 draw_header();
-                int st = tp.recording ? 2 : tp.playing ? 1 : 0;
-                if (st != s_last_state) {                // state changed -> recolor the waveform
-                    draw_wave(); redraw_strip(); s_last_state = st;
-                }
+                if (tp.recording) draw_crop_readout();   // live elapsed/beats under the bar
                 s_sig_head = hs;
+            }
+            draw_playhead();
+            break;
+        }
+        case EV_TIMER_REPEATING_SLOW: {
+            tape_autosave_kick();
+            tape_card_service();
+            if (tp.recording && tp.len != s_wave_len) {  // live record growth (throttled to 1 Hz)
+                tape_rebuild_peaks(false);
+                draw_wave();
+            }
+            int st = tp.recording ? 2 : tp.playing ? 1 : 0;
+            if (st != s_last_state) {                     // state changed -> recolor the waveform
+                draw_wave(); redraw_strip(); s_last_state = st;
             }
             unsigned cs = crop_sig();
             if (cs != s_sig_crop) { draw_wave(); redraw_strip(); s_sig_crop = cs; }
