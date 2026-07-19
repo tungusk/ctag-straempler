@@ -1,1 +1,1 @@
-fx-stability-v1-20260718 (shimmer reverb no longer blooms to full-scale on silence, flanger recirc darker and less harsh)
+keysui-v1-20260718 (Keys+Synth Live UI polish, redraw throttle fixes audio dropout, shimmer anti-fade, reverb no-explosion, green hl)

@@ -45,6 +45,7 @@ typedef struct {
     rv_line_t shim;             // shifter window
     float shim_pos;             // read phase (two heads at +N/2)
     float shim_lp;              // one-pole LP state on the shimmer return (stability)
+    float shim_dc;              // DC-blocker state on the shimmer return (anti-drift)
     // params (mode presets; UI-task-safe writes)
     volatile int   mode;
     float decay;                // tank feedback gain

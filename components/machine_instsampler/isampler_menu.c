@@ -21,7 +21,8 @@
 #include "instsampler_priv.h"
 
 static const color_t GATE_ON = {40, 200, 90};    // note stays green (gate flips too fast to read)
-static const color_t WF_GREY = {125, 125, 135};  // waveform
+static const color_t WF_DIM  = {85, 88, 100};    // waveform when NOT the focus (dimmer)
+static const color_t WF_ORIG = {235, 238, 245};  // white zero/origin reference line
 static const color_t LOOP_COL = {70, 200, 235};  // loop window (cyan)
 static const color_t PH_COL  = {240, 240, 245};  // playhead (white)
 
@@ -62,6 +63,14 @@ static bool s_live_edit = false;  // false = browsing, true = editing the focus
 // focus code for a drawn element: 0 none, 1 selected(browse), 2 editing
 static int klive_focus(int elem) { return s_live_sel != elem ? 0 : (s_live_edit ? 2 : 1); }
 
+// waveform trace colour: pops bright when the Sample/title element (sel 0) is
+// the encoder focus, dimmer otherwise. Shared by the full strip + the
+// per-column playhead-erase path so the two never disagree.
+static inline color_t wf_color(void)
+{
+    return (s_live_sel == 0) ? (color_t){205, 210, 230} : WF_DIM;
+}
+
 // ---- header: title + sample tag + note name (green) ------------------------
 static void draw_header(void)
 {
@@ -69,7 +78,7 @@ static void draw_header(void)
     _bg = TFT_BLACK; TFT_fillRect(0, 0, _width, fh + 12, _bg);
     _fg = TFT_WHITE; TFT_print("Keys", 6, 4);
     int hf = klive_focus(0);   // Sample element focus highlights the file name
-    _fg = hf == 2 ? (color_t){255, 210, 60} : hf == 1 ? (color_t){210, 190, 120} : (color_t){130, 130, 140};
+    _fg = hf == 2 ? (color_t){130, 255, 150} : hf == 1 ? (color_t){210, 190, 120} : (color_t){130, 130, 140};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     char tag[26]; snprintf(tag, sizeof(tag), "%s", inst.zone[0].sample[0] ? inst.zone[0].sample : "(no sample)");
     TFT_print(tag, 54, 6);
@@ -92,7 +101,8 @@ static void wave_col(int x)
     int h = inst.peaks[pi] * (L_WH / 2) / 255;
     if (h < 1 && inst.zone[0].frames) h = 1;
     int cy = wy + L_WH / 2;
-    if (h > 0) TFT_drawLine(x, cy - h, x, cy + h, WF_GREY);
+    if (h > 0) TFT_drawLine(x, cy - h, x, cy + h, wf_color());
+    TFT_drawLine(x, cy, x, cy, WF_ORIG);   // keep the origin line continuous under the playhead sweep
     if (inst.zone[0].loop_mode == LOOP_FWD && inst.zone[0].frames) {
         if (x == loop_x(inst.zone[0].loop_start) || x == loop_x(inst.zone[0].loop_end))
             TFT_drawLine(x, wy, x, wy + L_WH, LOOP_COL);
@@ -110,14 +120,16 @@ static void draw_wave(void)
         s_last_ph = -1;
         return;
     }
-    // waveform POPS brighter when the Sample/title element is selected
-    color_t wcol = (s_live_sel == 0) ? (color_t){205, 210, 230} : WF_GREY;
+    // waveform POPS brighter when the Sample/title element is selected, dimmer otherwise
+    color_t wcol = wf_color();
     for (int c = 0; c < L_WW; c++) {
         int pi = c * IS_PEAKS / L_WW;
         int h = inst.peaks[pi] * (L_WH / 2) / 255;
         if (h < 1) h = 1;
         TFT_drawLine(L_WX + c, cy - h, L_WX + c, cy + h, wcol);
     }
+    // white zero/origin reference line across the strip
+    TFT_drawLine(L_WX, cy, L_WX + L_WW - 1, cy, WF_ORIG);
     if (inst.zone[0].loop_mode == LOOP_FWD) {
         int lsx = loop_x(inst.zone[0].loop_start), lex = loop_x(inst.zone[0].loop_end);
         TFT_drawLine(lsx, wy, lsx, wy + L_WH, LOOP_COL);
@@ -145,31 +157,38 @@ static void dial(int cx, int cy, int r, float v01, const char *lab, const char *
     int fh = TFT_getfontheight();
     v01 = clampf(v01, 0.0f, 1.0f);
     _bg = TFT_BLACK;
-    TFT_fillRect(cx - r - 5, cy - r - 5, (r + 5) * 2, r * 2 + 2 * fh + 11, _bg);
+    // clear generously: the pointer now ESCAPES past the ring (to r+7) and the
+    // focus ring sits at r+4 — cover both + the label row so nothing is stranded
+    int m = r + 8;
+    TFT_fillRect(cx - m, cy - m, m * 2, m + r + fh + 8, _bg);
     if (hi) {                                          // encoder-nav focus ring
-        color_t hc = hi == 2 ? (color_t){255, 210, 60} : (color_t){150, 150, 170};
+        color_t hc = hi == 2 ? (color_t){130, 255, 150} : (color_t){150, 150, 170};
         TFT_drawCircle(cx, cy, r + 3, hc);
         if (hi == 2) TFT_drawCircle(cx, cy, r + 4, hc);   // thicker while editing
     }
     color_t ring = live ? (color_t){0, 150, 220} : (color_t){70, 70, 80};
     TFT_drawCircle(cx, cy, r, ring);
+    // pointer that ESCAPES the ring: a radial tick from just inside the rim to
+    // past it, leaving the centre free for the value readout
     float ang = (-135.0f + v01 * 270.0f) * 0.01745329f;
-    int px = cx + (int)(sinf(ang) * (float)(r - 4));
-    int py = cy - (int)(cosf(ang) * (float)(r - 4));
-    TFT_drawLine(cx, cy, px, py, live ? (color_t){255, 255, 255} : (color_t){150, 150, 160});
-    TFT_fillCircle(cx, cy, 3, ring);
-    _fg = (color_t){130, 130, 140};
-    TFT_print((char *)lab, cx - TFT_getStringWidth((char *)lab) / 2, cy + r + 3);
+    float sn = sinf(ang), cs = cosf(ang);
+    color_t ncol = live ? (color_t){255, 255, 255} : (color_t){175, 175, 185};
+    TFT_drawLine(cx + (int)(sn * (r - 3)), cy - (int)(cs * (r - 3)),
+                 cx + (int)(sn * (r + 7)), cy - (int)(cs * (r + 7)), ncol);
+    // value in the MIDDLE of the dial
     _fg = TFT_WHITE;
-    TFT_print((char *)val, cx - TFT_getStringWidth((char *)val) / 2, cy + r + 3 + fh + 1);
+    TFT_print((char *)val, cx - TFT_getStringWidth((char *)val) / 2, cy - fh / 2);
+    // label stays BELOW the circle
+    _fg = (color_t){130, 130, 140};
+    TFT_print((char *)lab, cx - TFT_getStringWidth((char *)lab) / 2, cy + r + 4);
 }
 
-static int dial_cy(void) { return L_wy() + L_WH + 8 + 20; }
+static int dial_cy(void) { return L_wy() + L_WH + 8 + 28; }   // +8 lower: room for the bigger dials' escaping needle above
 
 static void draw_dials(void)
 {
-    int cy = dial_cy(), r = 20;
-    int cx[4] = { 44, 128, 212, 292 };
+    int cy = dial_cy(), r = 24;
+    int cx[4] = { 40, 120, 200, 280 };   // recentred + slightly tighter for the bigger dials
     char v[16];
     snprintf(v, sizeof(v), "%.0f%%", inst.start_frac * 100.0f);
     dial(cx[0], cy, r, inst.start_frac, "start", v, inst.knob_live[0], klive_focus(1));
@@ -199,20 +218,28 @@ static void draw_adsr(void)
     int sw = (w - 4) - aw - dw - rw;
     int xb = x + 2, yb = y + h - 2, yt = y + 2;
     int ys = yb - (int)(inst.sus * (float)(h - 4));
-    color_t col = {60, 200, 120};
+    int adsr_sel = (s_live_sel >= 5 && s_live_sel <= 8);   // an A/D/S/R point is the focus
+    // dim the envelope polyline unless it's the selected element
+    color_t col = adsr_sel ? (color_t){60, 200, 120} : (color_t){30, 96, 58};
     int x1 = xb + aw, x2 = x1 + dw, x3 = x2 + sw, x4 = x3 + rw;
     TFT_drawLine(xb, yb, x1, yt, col);
     TFT_drawLine(x1, yt, x2, ys, col);
     TFT_drawLine(x2, ys, x3, ys, col);
     TFT_drawLine(x3, ys, x4, yb, col);
     // encoder-nav focus marker on the selected point (5=A 6=D 7=S 8=R)
-    if (s_live_sel >= 5 && s_live_sel <= 8) {
+    if (adsr_sel) {
         int mx = x1, my = yt;
         if (s_live_sel == 6) { mx = x2; my = ys; }
         else if (s_live_sel == 7) { mx = x3; my = ys; }
         else if (s_live_sel == 8) { mx = x4; my = yb; }
-        color_t hc = s_live_edit ? (color_t){255, 210, 60} : (color_t){200, 200, 220};
-        TFT_fillCircle(mx, my, s_live_edit ? 4 : 3, hc);
+        // bigger, green selection dot (edit mode stays amber to read distinct)
+        int r = s_live_edit ? 6 : 5;
+        // keep the whole dot inside the cleared rect (right = x+w-1, bottom =
+        // y+h+1) so the R point at the bottom-right corner leaves no artifact
+        if (mx + r > x + w - 1) mx = x + w - 1 - r;
+        if (my + r > y + h + 1) my = y + h + 1 - r;
+        color_t hc = s_live_edit ? (color_t){130, 255, 150} : (color_t){70, 255, 130};
+        TFT_fillCircle(mx, my, r, hc);
     }
 }
 
@@ -289,8 +316,18 @@ static int keys_live_handler(int it_id, int event, void *ev_data)
     (void)it_id; (void)ev_data;
     switch (event) {
         case EV_ENTERED_MENU: live_full_redraw(); break;
-        case EV_TIMER_REPEATING_SLOW:
         case EV_TIMER_REPEATING_FAST: {
+            // cheap + frequent: playhead + note readout ONLY. The heavy element
+            // redraws (dials/wave/adsr) are gated to the SLOW tick below — knob/
+            // CV ADC jitter was redrawing the dials every 300ms, and those TFT +
+            // PSRAM shadow-framebuffer writes contend with the PSRAM audio path
+            // (Arlo: "noise and eventual loss of audio on the keys live screen").
+            int midi = (int)lroundf(inst.note_disp);
+            if (midi != s_last_note) { draw_header(); s_last_note = midi; }
+            draw_playhead();
+            break;
+        }
+        case EV_TIMER_REPEATING_SLOW: {
             int midi = (int)lroundf(inst.note_disp);
             if (midi != s_last_note) { draw_header(); s_last_note = midi; }
             unsigned ws = wave_sig();

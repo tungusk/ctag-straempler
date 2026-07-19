@@ -135,6 +135,7 @@ static void tank_resize(reverb_t *rv, float size)
     rv->damp_a = rv->damp_b = 0;
     rv->in_lp = 0;
     rv->shim_lp = 0;
+    rv->shim_dc = 0;
 }
 
 // Shimmer feedback stability. The octave-up shifter doubles frequency every
@@ -149,6 +150,11 @@ static void tank_resize(reverb_t *rv, float size)
 void reverb_set_mode(reverb_t *rv, int mode)
 {
     if (!rv->slab) { rv->mode = RV_OFF; return; }
+    // mute the tank FIRST (the kernel gates on rv->mode) so the audio task
+    // outputs dry while we reconfigure — otherwise a torn param read + the
+    // residual tail meeting the new decay/shim gain cracks like an explosion
+    // on switch-in.
+    rv->mode = RV_OFF;
     float size = 1.0f;
     switch (mode) {
         case RV_ROOM:
@@ -171,7 +177,14 @@ void reverb_set_mode(reverb_t *rv, int mode)
             mode = RV_OFF;
             break;
     }
-    if (mode != RV_OFF) tank_resize(rv, size);
+    if (mode != RV_OFF) {
+        tank_resize(rv, size);
+        // clear EVERY line (pre + diffusers + tank + shim window) so the switch
+        // starts from true silence — no residual energy to detonate under the
+        // new mode's gain. One memset over the contiguous slab; lengths/states
+        // were just reset by tank_resize.
+        memset(rv->slab, 0, (size_t)RV_SLAB * sizeof(float));
+    }
     rv->shim_pos = 0;
     rv->mode = mode;                 // set LAST: the kernel gates on it
 }
@@ -209,11 +222,14 @@ static inline void tank_step(reverb_t *rv, float x, float decay, float damp,
 {
     // shimmer: blend the octave-up of what the tank just produced, low-passed
     // and gain-limited so the feedback loop stays < 1 (else it blooms to
-    // full-scale on silence — see SHIM_FB_LP).
+    // full-scale on silence — see SHIM_FB_LP), and DC-BLOCKED so a tiny offset
+    // can't circulate the loop and slowly rail the tank to silence over minutes
+    // (the "shimmer fades all the way out / needs a reset" drift).
     if (sg > 0) {
         float sh = shim_step(rv, rv->damp_a + rv->damp_b);
-        rv->shim_lp += SHIM_FB_LP * (sh - rv->shim_lp);
-        x += sg * rv->shim_lp;
+        rv->shim_lp += SHIM_FB_LP * (sh - rv->shim_lp);        // LP: tame the upward climb
+        rv->shim_dc += 0.0007f * (rv->shim_lp - rv->shim_dc);  // track the slow DC
+        x += sg * (rv->shim_lp - rv->shim_dc);                 // inject DC-free
     }
 
     line_push(&rv->pre, x);
