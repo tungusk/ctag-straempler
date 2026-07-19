@@ -24,6 +24,8 @@ typedef struct {
     volatile float depth;   // 0..1 sweep depth
     volatile float fb;      // -0.95..0.95 feedback
     volatile float wet;     // 0..1 equal-power mix
+    volatile bool  sync;    // clock-sync the rate to `div` (fxrack sets it per block)
+    volatile int8_t div;    // division index into fxrack_div_beats[] when synced
     float  phase;           // 0..1 LFO phase
     float  lpL, lpR;        // feedback damping one-pole state (tames the ring-up)
 } flanger_t;

@@ -16,6 +16,8 @@ typedef struct {
     volatile float depth;   // 0..1 (1 = amplitude dips to silence)
     volatile int   shape;   // TREM_*
     volatile bool  stereo;  // true = L/R antiphase (auto-pan)
+    volatile bool  sync;    // clock-sync the rate to `div` (fxrack sets it per block)
+    volatile int8_t div;    // division index into fxrack_div_beats[] when synced
     float phase;            // 0..1 LFO phase
 } tremolo_t;
 

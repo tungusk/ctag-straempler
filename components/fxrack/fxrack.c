@@ -6,6 +6,11 @@
 
 static inline float clampf(float x, float lo, float hi){ return x < lo ? lo : x > hi ? hi : x; }
 
+// shared musical divisions (beat = quarter note) for the syncable rate effects
+const float       fxrack_div_beats[FXRACK_NDIV] = { 0.25f, 1.0f/3.0f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f };
+const char *const fxrack_div_names[FXRACK_NDIV] = { "1/16", "1/8T", "1/8", "1/8.", "1/4", "1/4.", "1/2" };
+static inline int div_clamp(int d){ return d < 0 ? 0 : d >= FXRACK_NDIV ? FXRACK_NDIV - 1 : d; }
+
 // ---- per-effect param descriptors (operate through the rack's pointers) -------
 typedef struct { const char *label; setup_kind_t kind;
                  void (*fmt)(const fxrack_t *, char *, size_t);
@@ -33,8 +38,13 @@ static void fl_ff(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%+.0f%%",r->fl
 static void fl_af(const fxrack_t*r,int d){r->flg->fb=clampf(r->flg->fb+d*0.05f,-0.95f,0.95f);}
 static void fl_fm(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%.0f%%",r->flg->wet*100);}
 static void fl_am(const fxrack_t*r,int d){r->flg->wet=clampf(r->flg->wet+d*0.05f,0,1);}
+static void fl_fsy(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%s",r->flg->sync?"ON":"OFF");}
+static void fl_asy(const fxrack_t*r,int d){(void)d;r->flg->sync=!r->flg->sync;}
+static void fl_fdv(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%s",fxrack_div_names[div_clamp(r->flg->div)]);}
+static void fl_adv(const fxrack_t*r,int d){r->flg->div=(int8_t)((div_clamp(r->flg->div)+d+FXRACK_NDIV)%FXRACK_NDIV);}
 static const fx_p_t flg_params[]={{"Rate",ST_RANGE,fl_fr,fl_ar},{"Depth",ST_RANGE,fl_fd,fl_ad},
-    {"Fdbk",ST_RANGE,fl_ff,fl_af},{"Mix",ST_RANGE,fl_fm,fl_am}};
+    {"Fdbk",ST_RANGE,fl_ff,fl_af},{"Mix",ST_RANGE,fl_fm,fl_am},
+    {"Sync",ST_TOGGLE,fl_fsy,fl_asy},{"Div",ST_RANGE,fl_fdv,fl_adv}};
 
 // tremolo
 static void tr_fr(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%.2f Hz",r->trem->rate);}
@@ -45,8 +55,13 @@ static void tr_fs(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%s",r->trem->s
 static void tr_as(const fxrack_t*r,int d){(void)d;r->trem->shape=(r->trem->shape+1)%3;}
 static void tr_fst(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%s",r->trem->stereo?"ON":"OFF");}
 static void tr_ast(const fxrack_t*r,int d){(void)d;r->trem->stereo=!r->trem->stereo;}
+static void tr_fsy(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%s",r->trem->sync?"ON":"OFF");}
+static void tr_asy(const fxrack_t*r,int d){(void)d;r->trem->sync=!r->trem->sync;}
+static void tr_fdv(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%s",fxrack_div_names[div_clamp(r->trem->div)]);}
+static void tr_adv(const fxrack_t*r,int d){r->trem->div=(int8_t)((div_clamp(r->trem->div)+d+FXRACK_NDIV)%FXRACK_NDIV);}
 static const fx_p_t trem_params[]={{"Rate",ST_RANGE,tr_fr,tr_ar},{"Depth",ST_RANGE,tr_fd,tr_ad},
-    {"Shape",ST_TOGGLE,tr_fs,tr_as},{"Stereo",ST_TOGGLE,tr_fst,tr_ast}};
+    {"Shape",ST_TOGGLE,tr_fs,tr_as},{"Stereo",ST_TOGGLE,tr_fst,tr_ast},
+    {"Sync",ST_TOGGLE,tr_fsy,tr_asy},{"Div",ST_RANGE,tr_fdv,tr_adv}};
 
 // delay
 static void dl_ft(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%d ms",(int)(fxdelay_time_ms(r->dly)+0.5f));}
@@ -59,8 +74,13 @@ static void dl_fto(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%.0f%%",r->dl
 static void dl_ato(const fxrack_t*r,int d){if(r->dly->bufL)fxdelay_set_damp(r->dly,r->dly->damp+d*0.05f);}
 static void dl_fp(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%s",r->dly->pingpong?"Ping-Pong":"Stereo");}
 static void dl_ap(const fxrack_t*r,int d){(void)d;if(r->dly->bufL)fxdelay_set_pingpong(r->dly,!r->dly->pingpong);}
+static void dl_fsy(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%s",r->dly->sync?"ON":"OFF");}
+static void dl_asy(const fxrack_t*r,int d){(void)d;r->dly->sync=!r->dly->sync;}
+static void dl_fdv(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%s",fxrack_div_names[div_clamp(r->dly->div)]);}
+static void dl_adv(const fxrack_t*r,int d){r->dly->div=(int8_t)((div_clamp(r->dly->div)+d+FXRACK_NDIV)%FXRACK_NDIV);}
 static const fx_p_t dly_params[]={{"Time",ST_RANGE,dl_ft,dl_at},{"Fdbk",ST_RANGE,dl_ff,dl_af},
-    {"Mix",ST_RANGE,dl_fm,dl_am},{"Tone",ST_RANGE,dl_fto,dl_ato},{"Ping",ST_TOGGLE,dl_fp,dl_ap}};
+    {"Mix",ST_RANGE,dl_fm,dl_am},{"Tone",ST_RANGE,dl_fto,dl_ato},{"Ping",ST_TOGGLE,dl_fp,dl_ap},
+    {"Sync",ST_TOGGLE,dl_fsy,dl_asy},{"Div",ST_RANGE,dl_fdv,dl_adv}};
 
 // filter
 static void ft_fm(const fxrack_t*r,char*v,size_t n){snprintf(v,n,"%s",r->filt->mode==FILT_LP?"LP":r->filt->mode==FILT_HP?"HP":"BP");}
@@ -87,8 +107,8 @@ static const fx_desc_t rev_desc={"Reverb",rev_params,1};
 
 static const fx_desc_t gen_desc[FXK_NGEN]={
     [FXK_OFF]={"Off",NULL,0},           [FXK_OD]={"Overdrive",od_params,4},
-    [FXK_FLG]={"Flanger",flg_params,4}, [FXK_TREM]={"Tremolo",trem_params,4},
-    [FXK_DLY]={"Delay",dly_params,5},   [FXK_FILT]={"Filter",filt_params,3},
+    [FXK_FLG]={"Flanger",flg_params,6}, [FXK_TREM]={"Tremolo",trem_params,6},
+    [FXK_DLY]={"Delay",dly_params,7},   [FXK_FILT]={"Filter",filt_params,3},
     [FXK_BAND]={"Band",band_params,2},
 };
 
@@ -100,9 +120,17 @@ void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames)
     for (int s = 0; s < FX_NSLOT_GEN; s++) {
         switch (rk->slot[s]) {
             case FXK_OD:   overdrive_block_f(rk->od, fb, frames); break;
-            case FXK_FLG:  if (rk->flg->bufL) flanger_block_f(rk->flg, fb, frames); break;
-            case FXK_TREM: tremolo_block_f(rk->trem, fb, frames); break;
-            case FXK_DLY:  if (rk->dly->bufL) fxdelay_block_f(rk->dly, fb, frames); break;
+            case FXK_FLG:  if (rk->flg->bufL) {
+                    if (rk->flg->sync && rk->bpm > 0) flanger_set_rate_beats(rk->flg, fxrack_div_beats[div_clamp(rk->flg->div)], rk->bpm);
+                    flanger_block_f(rk->flg, fb, frames);
+                } break;
+            case FXK_TREM:
+                if (rk->trem->sync && rk->bpm > 0) tremolo_set_rate_beats(rk->trem, fxrack_div_beats[div_clamp(rk->trem->div)], rk->bpm);
+                tremolo_block_f(rk->trem, fb, frames); break;
+            case FXK_DLY:  if (rk->dly->bufL) {
+                    if (rk->dly->sync && rk->bpm > 0) fxdelay_set_time_beats(rk->dly, fxrack_div_beats[div_clamp(rk->dly->div)], rk->bpm);
+                    fxdelay_block_f(rk->dly, fb, frames);
+                } break;
             case FXK_FILT: fxfilter_block_f(rk->filt, fb, frames); break;
             case FXK_BAND: fxfilter_band_block_f(rk->band, fb, frames); break;
             default: break;
@@ -194,6 +222,8 @@ void fxrack_save(const fxrack_t *rk, cJSON *o)
     cJSON_AddNumberToObject(o, "dlymx", (int)(rk->dly->wet * 100 + 0.5f));
     cJSON_AddNumberToObject(o, "dlytn", (int)(rk->dly->damp * 100 + 0.5f));
     cJSON_AddBoolToObject(o, "dlypp", rk->dly->pingpong);
+    cJSON_AddBoolToObject(o, "dlysy", rk->dly->sync);
+    cJSON_AddNumberToObject(o, "dlydv", div_clamp(rk->dly->div));
     cJSON_AddNumberToObject(o, "oddr", (int)(rk->od->drive * 100 + 0.5f));
     cJSON_AddNumberToObject(o, "odtn", (int)(rk->od->tone * 100 + 0.5f));
     cJSON_AddNumberToObject(o, "odbs", (int)(rk->od->bias * 100 + (rk->od->bias < 0 ? -0.5f : 0.5f)));
@@ -202,10 +232,14 @@ void fxrack_save(const fxrack_t *rk, cJSON *o)
     cJSON_AddNumberToObject(o, "flgdp", (int)(rk->flg->depth * 100 + 0.5f));
     cJSON_AddNumberToObject(o, "flgfb", (int)(rk->flg->fb * 100 + (rk->flg->fb < 0 ? -0.5f : 0.5f)));
     cJSON_AddNumberToObject(o, "flgmx", (int)(rk->flg->wet * 100 + 0.5f));
+    cJSON_AddBoolToObject(o, "flgsy", rk->flg->sync);
+    cJSON_AddNumberToObject(o, "flgdv", div_clamp(rk->flg->div));
     cJSON_AddNumberToObject(o, "trmrt", (int)(rk->trem->rate * 100 + 0.5f));
     cJSON_AddNumberToObject(o, "trmdp", (int)(rk->trem->depth * 100 + 0.5f));
     cJSON_AddNumberToObject(o, "trmsh", rk->trem->shape);
     cJSON_AddBoolToObject(o, "trmst", rk->trem->stereo);
+    cJSON_AddBoolToObject(o, "trmsy", rk->trem->sync);
+    cJSON_AddNumberToObject(o, "trmdv", div_clamp(rk->trem->div));
     cJSON_AddNumberToObject(o, "fim", rk->filt->mode);
     cJSON_AddNumberToObject(o, "fic", (int)(rk->filt->cutoff * 100 + 0.5f));
     cJSON_AddNumberToObject(o, "fiq", (int)(rk->filt->reso * 100 + 0.5f));
@@ -250,6 +284,8 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
         if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlytn")) && cJSON_IsNumber(j)) fxdelay_set_damp(rk->dly, (float)j->valueint / 100.0f);
         if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlypp")) && cJSON_IsBool(j))   fxdelay_set_pingpong(rk->dly, cJSON_IsTrue(j));
     }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlysy")) && cJSON_IsBool(j))   rk->dly->sync = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlydv")) && cJSON_IsNumber(j)) rk->dly->div = (int8_t)div_clamp(j->valueint);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "oddr")) && cJSON_IsNumber(j)) rk->od->drive = clampf((float)j->valueint / 100.0f, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "odtn")) && cJSON_IsNumber(j)) rk->od->tone = clampf((float)j->valueint / 100.0f, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "odbs")) && cJSON_IsNumber(j)) rk->od->bias = clampf((float)j->valueint / 100.0f, -1, 1);
@@ -260,10 +296,14 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
         if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgfb")) && cJSON_IsNumber(j)) rk->flg->fb = clampf((float)j->valueint / 100.0f, -0.95f, 0.95f);
         if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgmx")) && cJSON_IsNumber(j)) rk->flg->wet = clampf((float)j->valueint / 100.0f, 0, 1);
     }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgsy")) && cJSON_IsBool(j))   rk->flg->sync = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgdv")) && cJSON_IsNumber(j)) rk->flg->div = (int8_t)div_clamp(j->valueint);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmrt")) && cJSON_IsNumber(j)) rk->trem->rate = clampf((float)j->valueint / 100.0f, 0.05f, 20);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmdp")) && cJSON_IsNumber(j)) rk->trem->depth = clampf((float)j->valueint / 100.0f, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmsh")) && cJSON_IsNumber(j)) { int s = j->valueint; rk->trem->shape = (s < 0 || s >= TREM_NSHAPE) ? TREM_SINE : s; }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmst")) && cJSON_IsBool(j)) rk->trem->stereo = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmsy")) && cJSON_IsBool(j)) rk->trem->sync = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmdv")) && cJSON_IsNumber(j)) rk->trem->div = (int8_t)div_clamp(j->valueint);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fim")) && cJSON_IsNumber(j)) { int m = j->valueint; rk->filt->mode = (m < 0 || m >= FILT_NMODE) ? FILT_LP : m; }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fic")) && cJSON_IsNumber(j)) rk->filt->cutoff = clampf((float)j->valueint / 100.0f, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fiq")) && cJSON_IsNumber(j)) rk->filt->reso = clampf((float)j->valueint / 100.0f, 0, 1);

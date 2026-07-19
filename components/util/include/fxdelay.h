@@ -36,6 +36,8 @@ typedef struct {
     volatile float wet;         // 0..1, equal-power mix
     volatile bool  pingpong;    // cross the feedback taps L<->R
     volatile float damp;        // feedback damping, 0 = bright .. 1 = dark
+    volatile bool  sync;        // clock-sync the time to `div` (fxrack sets it per block)
+    volatile int8_t div;        // division index into fxrack_div_beats[] when synced
     float  lpL, lpR;            // feedback one-pole states
     volatile int cost_us;       // EMA process cost, us per block (1450 = 100%)
 } fxdelay_t;
