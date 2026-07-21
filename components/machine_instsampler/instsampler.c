@@ -12,6 +12,7 @@
 #include "cvsmooth.h"
 #include "svf.h"
 #include "sample_ram.h"
+#include "pitch_detect.h"
 #include "preset_store.h"
 #include "fxchain.h"
 #include "instsampler_priv.h"
@@ -59,6 +60,11 @@ int keys_load_zone(const char *name)
     z->frames = n;
     strlcpy(z->sample, name, sizeof(z->sample));
     z->root = (uint8_t)inst.base_note;
+    z->fine = 0.0f;
+    inst.tune_hz = 0.0f;          // a new sample invalidates the last verdict
+    inst.tune_conf = 0.0f;
+    inst.tune_src = TUNE_NONE;
+    inst.tune_hint = -1;
     z->loop_start = 0;
     z->loop_end = n;
     if (z->loop_xfade == 0) z->loop_xfade = 220;         // ~5 ms default
@@ -72,7 +78,64 @@ int keys_load_zone(const char *name)
         pk >>= 7;
         inst.peaks[c] = (uint8_t)(pk > 255 ? 255 : pk);
     }
+    if (inst.autotune_load) keys_autotune();     // sets root+fine, or leaves them
     inst.loading = false;
+    return 0;
+}
+
+// Auto-tune: detect the loaded sample's fundamental and write it into the
+// zone's root + fine so the sample plays IN TUNE across the keyboard (root is
+// the whole semitone, fine the cents remainder — root alone can only ever get
+// within half a semitone). Buffer is already PSRAM-resident, so this is pure
+// DSP: no SD, no lock, ~50 ms. UI/loader context only, never the audio task.
+// A low-confidence verdict (chord, noise hit, percussion) is REPORTED and
+// DISCARDED rather than applied — a bad auto-tune is worse than none.
+int keys_autotune(void)
+{
+    is_zone_t *z = &inst.zone[0];
+    inst.tune_hz = 0.0f;
+    inst.tune_conf = 0.0f;
+    inst.tune_src = TUNE_NONE;
+    if (!z->buf || z->frames < 4096) return -1;
+
+    // the id often names the note it was recorded at ("EP_C4", "PNOF#3")
+    bool hint_iso = false;
+    int  hint = pitch_name_hint(z->sample, &hint_iso);
+    inst.tune_hint = (int16_t)hint;
+
+    pitch_result_t r = { 0 };     // a failed detect leaves it untouched
+    bool heard = (pitch_detect_buf(z->buf, z->frames, (float)IS_RATE, &r) == 0) &&
+                 r.conf >= 0.30f;
+    if (heard) { inst.tune_hz = r.hz; inst.tune_conf = r.conf; }
+    else if (r.hz > 0.0f) { inst.tune_hz = r.hz; inst.tune_conf = r.conf; }
+
+    int   midi  = 0;
+    float cents = 0.0f;
+    if (heard) {
+        midi  = r.midi;
+        cents = r.cents;
+        inst.tune_src = TUNE_AUDIO;
+        // The audio is the authority on PITCH CLASS and cents; where detection
+        // actually goes wrong is the OCTAVE (a chord or a strong sub-harmonic
+        // reads an octave or two down). So a same-pitch-class name hint gets to
+        // move the register, and nothing else. A hint that disagrees on pitch
+        // class is reported, not obeyed — the recording beats the label.
+        if (hint >= 0 && ((hint % 12) == (midi % 12))) {
+            if (hint != midi) { midi = hint; inst.tune_src = TUNE_BOTH; }
+        } else if (hint >= 0) {
+            inst.tune_src = TUNE_CONFLICT;
+        }
+    } else if (hint >= 0 && hint_iso) {
+        // nothing pitched heard (percussive/noisy) but the id names a note
+        // outright — trust the label, and say so in the UI
+        midi = hint;
+        inst.tune_src = TUNE_NAME;
+    } else {
+        return -1;
+    }
+
+    z->root = (uint8_t)clampi(midi, 12, 108);
+    z->fine = clampf(cents / 100.0f, -1.0f, 1.0f);
     return 0;
 }
 
@@ -245,7 +308,7 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
         v->cur_note = note;
     }
     float pnote = v->cur_note + m_semi;
-    float inc = exp2f((pnote - (float)z->root) / 12.0f);
+    float inc = exp2f((pnote - ((float)z->root + z->fine)) / 12.0f);
     if (inc < 0.25f) inc = 0.25f; else if (inc > 4.0f) inc = 4.0f;   // +/-2 octaves
 
     float q = svf_damp(res_eff, 0.6f, 2.0f);
@@ -322,6 +385,8 @@ static cJSON *keys_preset_save(void)
     fxrack_save(&inst_rk, o);   // slots + every effect param (shared FX rack)
     cJSON_AddStringToObject(o, "smp", z->sample);
     cJSON_AddNumberToObject(o, "root", z->root);
+    cJSON_AddNumberToObject(o, "fn", z->fine);      // cents-as-semitones (auto-tune)
+    cJSON_AddBoolToObject(o, "atl", inst.autotune_load);
     cJSON_AddNumberToObject(o, "lm", z->loop_mode);
     cJSON_AddNumberToObject(o, "ls", (double)z->loop_start);
     cJSON_AddNumberToObject(o, "le", (double)z->loop_end);
@@ -340,6 +405,9 @@ static void keys_preset_load(const cJSON *node)
     cJSON *j;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "base"))  && cJSON_IsNumber(j)) inst.base_note = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "quant")) && cJSON_IsBool(j))   inst.quantize = cJSON_IsTrue(j);
+    // read BEFORE "smp": it decides whether the reload below auto-tunes at all
+    // (the stored root/fine then land on top either way)
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "atl"))   && cJSON_IsBool(j))   inst.autotune_load = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "atk"))   && cJSON_IsNumber(j)) inst.atk = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "dec"))   && cJSON_IsNumber(j)) inst.dec = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sus"))   && cJSON_IsNumber(j)) inst.sus = (float)j->valuedouble;
@@ -353,6 +421,7 @@ static void keys_preset_load(const cJSON *node)
     // load the sample FIRST (it resets loop points), then restore them
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "smp"))   && cJSON_IsString(j) && j->valuestring[0]) keys_load_zone(j->valuestring);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "root"))  && cJSON_IsNumber(j)) z->root = (uint8_t)j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fn"))    && cJSON_IsNumber(j)) z->fine = clampf((float)j->valuedouble, -1.0f, 1.0f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lm"))    && cJSON_IsNumber(j)) z->loop_mode = (uint8_t)j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "ls"))    && cJSON_IsNumber(j)) z->loop_start = (uint32_t)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "le"))    && cJSON_IsNumber(j)) z->loop_end = (uint32_t)j->valuedouble;

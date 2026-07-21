@@ -29,6 +29,14 @@
 enum { ENV_IDLE = 0, ENV_ATK, ENV_DEC, ENV_SUS, ENV_REL };   // as Synth
 enum { LOOP_OFF = 0, LOOP_FWD };                              // LOOP_PP = v2
 
+// what an auto-tune verdict rests on (inst.tune_src) — surfaced on the Setup
+// row so a tuning taken from the FILE NAME is never mistaken for a heard one
+enum { TUNE_NONE = 0,   // nothing ran, or nothing usable
+       TUNE_AUDIO,      // detected from the audio alone
+       TUNE_BOTH,       // detected, with the id's note fixing the octave
+       TUNE_NAME,       // nothing pitched heard; the id named the note
+       TUNE_CONFLICT }; // detected, but the id claims a different pitch class
+
 // CV matrix destinations — each carries a source (-1 off / 0..7 = CV1..8) and a
 // bipolar amount; modulation ADDS to the knob/Setup base per block.
 enum { ISM_CUTOFF = 0, ISM_RES, ISM_ENVCUT, ISM_LEVEL,
@@ -42,6 +50,8 @@ typedef struct {
     int16_t *buf;             // PSRAM-resident audio (mono int16), lazy alloc
     uint32_t frames;          // valid frames in buf (0 = empty)
     uint8_t  root;            // MIDI note that plays buf at native rate
+    float    fine;            // + cents-as-semitones on top of root (-1..+1);
+                              // auto-tune writes the fractional part here
     uint8_t  loop_mode;       // LOOP_OFF / LOOP_FWD
     uint32_t loop_start, loop_end;
     uint32_t loop_xfade;      // crossfade frames at the wrap seam (0 = hard loop)
@@ -65,6 +75,11 @@ typedef struct {
     // shared instrument params (Setup + knobs)
     int   base_note;          // note the CV1 offset adds to (default 48 = C3)
     bool  quantize;           // snap pitch to semitones
+    bool  autotune_load;      // run auto-tune on every fresh sample load
+    float tune_hz;            // last auto-tune verdict (0 = none), UI only
+    float tune_conf;          // its confidence 0..1, UI only
+    int8_t tune_src;          // TUNE_* — what the verdict was based on, UI only
+    int16_t tune_hint;        // note parsed out of the sample id (-1 = none)
     float atk, dec, sus, rel; // ADSR (Synth semantics)
     float env_to_cut;         // 0..1
     float cutoff_base;        // Hz (K6)
@@ -114,6 +129,13 @@ extern fxrack_t inst_rk;    // FX rack pointer-view over inst's effect instances
 // loop to the whole sample; caller/preset may then set loop points. Sets/clears
 // inst.loading around the SD read.
 int keys_load_zone(const char *name);
+
+// AUTO-TUNE zone[0]: detect the loaded sample's fundamental (shared
+// util/pitch_detect, YIN over the resident PSRAM buffer) and set root + fine so
+// it plays in tune. Returns 0 when a confident pitch was found and APPLIED, <0
+// when nothing usable was heard (tuning untouched). Either way inst.tune_hz /
+// tune_conf carry the verdict for the UI. UI/loader context — ~50 ms, no SD.
+int keys_autotune(void);
 
 // snap a frame index to the nearest RISING zero crossing in zone[0]'s buffer
 // (declick for loop points). Offline scan — call from the UI/adjust path only.
