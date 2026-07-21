@@ -247,7 +247,13 @@ The machines (all working; archives in `bin/`):
   tape-style. Pads row "Pitch" (±12) + knob7 CW target "pitch" (noon→CW
   tunes 0→-12, the drum move; appended as DR_CW_PITCH so old presets' cw
   values keep meaning). Pitch is knob-owned ONLY in that CW mode — a decay
-  gesture in other modes won't wipe a row-set pitch.
+  gesture in other modes won't wipe a row-set pitch. PITCH CV: per-pad
+  source row (none/CV1..8) + conditional Mode row — "+/-" (bipolar around
+  mid-scale, ±12; a ±5V source on ch3) or "V/oct" (semitones above the
+  channel's TRACKED idle floor, 49 counts/semi, 0..+12 — root at 0V);
+  quantized, adds to the base per block so ringing pads retune live
+  (preset "pcv"/"pcm"). The Pads page SCROLLS (windowed around the
+  cursor, ^/v arrows in the title row; no hint line).
   Live grid: a layered pad draws as two half-cells (own dot, name,
   trigger tag, rectified half-wave converging on the midline); the selection box
   is the HALF; the encoder traces the grid circularly
