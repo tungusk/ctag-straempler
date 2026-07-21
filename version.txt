@@ -1,1 +1,1 @@
-drumsfx-cvmtx-v1-20260720 (drums FX slots+routing+pitch, tape+FX CV matrix, knob autosave, incl tape-live 07-19)
+tuner-autotune-v1-20260720 (Keys auto-tune + name hint, line-in tuner, shared pitch_detect, incl drums FX/pitch + tape CV matrix)
