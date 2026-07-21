@@ -208,7 +208,12 @@ static void draw_pad_cell(int i, bool lit){
     // the knobs know where to return) — so "selected" is sel_pad AND not-the-box,
     // or the pad stays outlined and two things look selected at once
     bool sel = (i == dr.sel_pad) && !dr.sel_filter;
-    color_t border = p->enabled ? (color_t){90, 90, 110} : (color_t){50, 50, 60};
+    // wet pads wear an accent-tinted border while an FX slot is actually
+    // live — the at-a-glance "which pads are in the chain" marker
+    bool wet = p->fx_on && (dr.fx_slot[0] != FXK_OFF || dr.fx_slot[1] != FXK_OFF);
+    color_t border = p->enabled ? (wet ? (color_t){40, 140, 160}
+                                       : (color_t){90, 90, 110})
+                                : (color_t){50, 50, 60};
 
     if (p->layered){
         int cmid = y + h / 2;
@@ -551,15 +556,16 @@ static void row_draw(int i, int pos, int sel, const char *label, const char *raw
 // when B layers are on). The old index-keyed toggle macro would have silently
 // mis-assigned click behaviour the moment a row was inserted.
 enum { PR_PAD = 0, PR_LAYERED, PR_LAYER, PR_SAMPLE, PR_TRIG, PR_LEVEL, PR_PAN,
-       PR_SEND, PR_DECAY, PR_CW, PR_RETRIG, PR_ENABLED, PR_COUNT };
+       PR_SEND, PR_FX, PR_DECAY, PR_CW, PR_RETRIG, PR_ENABLED, PR_COUNT };
 
 static const char *pads_labels[PR_COUNT] = {"Pad", "B Layer", "Layer", "Sample",
                                             "Trig In", "Level", "Pan", "Rev Send",
-                                            "Decay", "Knob7 CW", "Retrig",
+                                            "FX", "Decay", "Knob7 CW", "Retrig",
                                             "Enabled"};
 // small option sets flip on a click; ranges keep click-to-edit
 #define PADS_IS_TOGGLE(id) ((id) == PR_PAD || (id) == PR_LAYERED || \
-                            (id) == PR_LAYER || (id) == PR_CW || (id) == PR_ENABLED)
+                            (id) == PR_LAYER || (id) == PR_CW || \
+                            (id) == PR_FX || (id) == PR_ENABLED)
 
 static int s_prows[PR_COUNT], s_pnrows;
 
@@ -597,6 +603,14 @@ static void pads_value_str(int id, char *v, size_t n){
             if (dr.rv.mode == RV_OFF) snprintf(v, n, "%d%% (rev off)",
                                                (int)p->rv_send * 100 / 255);
             else snprintf(v, n, "%d%%", (int)p->rv_send * 100 / 255);
+            break;
+        // per-pad FX1/FX2 routing. "wet" with the slots empty is legal (and
+        // silent) — say so, or the row reads as a broken effect
+        case PR_FX:
+            if (!p->fx_on) snprintf(v, n, "dry");
+            else if (dr.fx_slot[0] == FXK_OFF && dr.fx_slot[1] == FXK_OFF)
+                snprintf(v, n, "wet (FX off)");
+            else snprintf(v, n, "wet");
             break;
         case PR_PAN:
             if (p->pan == 128) snprintf(v, n, "C");
@@ -726,6 +740,7 @@ static void pads_adj(int id, int dir){
             p->loop_reps = reps[k];
             break;
         }
+        case PR_FX: p->fx_on = !p->fx_on; break;
         case PR_ENABLED: p->enabled = !p->enabled; break;
     }
 }
@@ -809,12 +824,14 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
 // items/n) is rebuilt whenever the trigger mode changes; s_rows[] maps a visible
 // index back to its R_* id for the render/adjust/action callbacks.
 enum { R_PADEDIT = 0, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL,
-       R_KNOB, R_FILTER, R_REVERB, R_RVMIX, R_RVTAP,
-       R_DELAY, R_DLYTIME, R_DLYFB, R_DLYMIX, R_DLYTONE, R_DLYPING, R_COUNT };
+       R_KNOB, R_FILTER, R_FX1, R_FX2, R_FX3, R_RVTAP, R_COUNT };
 
-// the full kind table: Pad Setup opens a page (ACTION), the two selector CVs are
-// wide (none + 8 channels) so they keep click-to-edit (RANGE) as does Rev Return
-// (a %); everything else is a small option set (TOGGLE)
+// the full kind table: Pad Setup + the three FX slots open pages (ACTION), the
+// two selector CVs are wide (none + 8 channels) so they keep click-to-edit
+// (RANGE); everything else is a small option set (TOGGLE). The reverb/delay
+// param rows moved into the shared rack's per-slot sub-pages (FX3 = reverb:
+// mode + Rev Return); only Send Tap stays here — it's Drums' own send-bus
+// architecture, not a rack parameter. Per-pad sends live on the Pads page.
 static const setup_item_t dr_all_items[R_COUNT] = {
     [R_PADEDIT] = {"Pad Setup",  ST_ACTION},
     [R_TRIG]    = {"Trigger",    ST_TOGGLE},
@@ -824,15 +841,10 @@ static const setup_item_t dr_all_items[R_COUNT] = {
     [R_VEL]     = {"Velocity",   ST_TOGGLE},
     [R_KNOB]    = {"Knob 6/7",   ST_TOGGLE},
     [R_FILTER]  = {"Filter",     ST_TOGGLE},
-    [R_REVERB]  = {"Reverb",     ST_TOGGLE},
-    [R_RVMIX]   = {"Rev Return", ST_RANGE},
+    [R_FX1]     = {"FX1",        ST_ACTION},
+    [R_FX2]     = {"FX2",        ST_ACTION},
+    [R_FX3]     = {"FX3 Reverb", ST_ACTION},
     [R_RVTAP]   = {"Send Tap",   ST_TOGGLE},
-    [R_DELAY]   = {"Delay",      ST_TOGGLE},
-    [R_DLYTIME] = {"Dly Time",   ST_RANGE},
-    [R_DLYFB]   = {"Dly Fdbk",   ST_RANGE},
-    [R_DLYMIX]  = {"Dly Mix",    ST_RANGE},
-    [R_DLYTONE] = {"Dly Tone",   ST_RANGE},
-    [R_DLYPING] = {"Dly Ping",   ST_TOGGLE},
 };
 
 // visible rows, rebuilt whenever the trigger mode changes; s_rows[k] = the R_* id
@@ -868,18 +880,10 @@ static void setup_value_str(int id, char *v, size_t n){
         case R_VEL:  snprintf(v, n, "%s", dr.velocity ? "ON" : "OFF"); break;
         case R_KNOB: snprintf(v, n, "%s", dr.cv_mod ? "level/decay" : "OFF"); break;
         case R_FILTER: snprintf(v, n, "%s", dr.flt_box ? "box" : "OFF"); break;
-        case R_REVERB:
-            if (dr.rv.mode == RV_OFF) snprintf(v, n, "OFF");
-            else snprintf(v, n, "%s %dus", reverb_mode_name(dr.rv.mode), dr.rv.cost_us);
-            break;
-        case R_RVMIX: snprintf(v, n, "%d%%", (int)(dr.rv.wet * 100 + 0.5f)); break;   // RETURN
+        case R_FX1: snprintf(v, n, "%s >", fxrack_slot_name(&dr_rk, 0)); break;
+        case R_FX2: snprintf(v, n, "%s >", fxrack_slot_name(&dr_rk, 1)); break;
+        case R_FX3: snprintf(v, n, "%s >", fxrack_slot_name(&dr_rk, 2)); break;
         case R_RVTAP: snprintf(v, n, "%s", dr.rv_post ? "post-filter" : "pre-filter"); break;
-        case R_DELAY:  snprintf(v, n, "%s", dr.dly_on ? "ON" : "OFF"); break;
-        case R_DLYTIME: snprintf(v, n, "%d ms", (int)(fxdelay_time_ms(&dr.dly) + 0.5f)); break;
-        case R_DLYFB:  snprintf(v, n, "%d%%", (int)(dr.dly.fb * 100 + 0.5f)); break;
-        case R_DLYMIX: snprintf(v, n, "%d%%", (int)(dr.dly.wet * 100 + 0.5f)); break;
-        case R_DLYTONE: snprintf(v, n, "%d%%", (int)(dr.dly.damp * 100 + 0.5f)); break;
-        case R_DLYPING: snprintf(v, n, "%s", dr.dly.pingpong ? "Ping-Pong" : "Stereo"); break;
         default: v[0] = 0;
     }
 }
@@ -905,28 +909,7 @@ static void setup_adj(int id, int dir){
             dr.flt_box = !dr.flt_box;
             if (!dr.flt_box) dr.sel_filter = false;   // don't strand the encoder on a
             break;                                    // box that no longer exists
-        case R_REVERB: {
-            int m = (dr.rv.mode + (dir > 0 ? 1 : RV_N_MODES - 1)) % RV_N_MODES;
-            // lazy slab on first use; a failed PSRAM alloc fails soft to OFF
-            if (m != RV_OFF && !dr.rv.slab && reverb_init(&dr.rv) != ESP_OK) m = RV_OFF;
-            reverb_set_mode(&dr.rv, m);
-            break;
-        }
-        case R_RVMIX: reverb_set_mix(&dr.rv, dr.rv.wet + (float)dir * 0.05f); break;
         case R_RVTAP: dr.rv_post = !dr.rv_post; break;   // flip it while playing
-        case R_DELAY: {   // master delay on/off (lazy slab)
-            bool on = !dr.dly_on;
-            if (on && !dr.dly.bufL && fxdelay_init(&dr.dly) != ESP_OK) on = false;
-            if (on && dr.dly.wet < 0.01f) fxdelay_set_mix(&dr.dly, 0.30f);   // audible default
-            dr.dly_on = on;
-            if (!on) fxdelay_clear(&dr.dly);   // drop the tail
-            break;
-        }
-        case R_DLYTIME: if (dr.dly.bufL) fxdelay_set_time_ms(&dr.dly, fxdelay_time_ms(&dr.dly) + (float)dir * 10.0f); break;
-        case R_DLYFB:   if (dr.dly.bufL) fxdelay_set_feedback(&dr.dly, dr.dly.fb + (float)dir * 0.05f); break;
-        case R_DLYMIX:  if (dr.dly.bufL) fxdelay_set_mix(&dr.dly, dr.dly.wet + (float)dir * 0.05f); break;
-        case R_DLYTONE: if (dr.dly.bufL) fxdelay_set_damp(&dr.dly, dr.dly.damp + (float)dir * 0.05f); break;
-        case R_DLYPING: if (dr.dly.bufL) fxdelay_set_pingpong(&dr.dly, !dr.dly.pingpong); break;
     }
 }
 
@@ -942,8 +925,17 @@ static void dr_setup_adj(int i, int dir){
     if (id == R_TRIG) setup_build_rows();
 }
 
+// FX rack slot editor state (shared fxrack machinery drives the rows —
+// synth_menu's pattern, verbatim)
+static int s_cur_slot = 0;       // slot the FX sub-page is editing
+static int s_setup_return = -1;  // Setup row to restore on return from the sub-page
+
 static int dr_setup_action(int i){
-    if (s_rows[i] == R_PADEDIT) return M_DRUM_PADS;   // per-pad editor
+    int id = s_rows[i];
+    if (id == R_PADEDIT) return M_DRUM_PADS;   // per-pad editor
+    if (id == R_FX1){ s_setup_return = i; s_cur_slot = 0; return M_DRUM_FX; }
+    if (id == R_FX2){ s_setup_return = i; s_cur_slot = 1; return M_DRUM_FX; }
+    if (id == R_FX3){ s_setup_return = i; s_cur_slot = 2; return M_DRUM_FX; }
     return 0;
 }
 
@@ -957,8 +949,57 @@ static setup_menu_t dr_setup = {
 
 static int drum_setup_handler(int it_id, int event, void *ev_data){
     (void)it_id; (void)ev_data;
-    if (event == EV_ENTERED_MENU) setup_build_rows();   // list depends on cv_select
+    if (event == EV_ENTERED_MENU){
+        setup_build_rows();                     // list depends on cv_select
+        if (s_setup_return >= 0){               // return from the FX sub-page
+            int p = s_setup_return; s_setup_return = -1;
+            if (p >= s_nrows) p = s_nrows - 1;  // (cv_select can't change in there,
+            setup_menu_enter_at(&dr_setup, p);  //  but stay bounds-safe anyway)
+            return 0;
+        }
+    }
     return setup_menu_event(&dr_setup, event);
+}
+
+// ---- FX slot editor: one slot at a time, rows driven by the shared fxrack ----
+static setup_menu_t dr_fx;       // defined below
+static setup_item_t s_drfx_items[FXRACK_MAXROWS];
+static int8_t s_drfx_param[FXRACK_MAXROWS];
+static int s_drfx_n;
+
+static void drfx_rebuild(void){
+    s_drfx_n = fxrack_menu_rows(&dr_rk, s_cur_slot, s_drfx_items, s_drfx_param);
+    dr_fx.n = s_drfx_n;
+    dr_fx.title = s_cur_slot == 0 ? "Drums FX1" : s_cur_slot == 1 ? "Drums FX2" : "Drums FX3";
+    if (dr_fx.sel >= s_drfx_n) dr_fx.sel = s_drfx_n - 1;
+    if (dr_fx.sel < 0) dr_fx.sel = 0;
+}
+
+static void dr_fx_val(int i, char *v, size_t n){
+    if (i < 0 || i >= s_drfx_n) { v[0] = 0; return; }
+    fxrack_menu_val(&dr_rk, s_cur_slot, s_drfx_param[i], v, n);
+}
+
+static void dr_fx_adj(int i, int dir){
+    if (i < 0 || i >= s_drfx_n) return;
+    int p = s_drfx_param[i];
+    fxrack_menu_adj(&dr_rk, s_cur_slot, p, dir);
+    if (p < 0) drfx_rebuild();   // effect changed -> param rows changed
+}
+
+static setup_menu_t dr_fx = {
+    .items = s_drfx_items,
+    .n = 0,                       // set by drfx_rebuild()
+    .title = "Drums FX",          // overwritten per-slot by drfx_rebuild()
+    .aff_label = "Setup", .aff_target = M_DRUM_SETUP,
+    .live_target = M_DRUM_SETUP,  // long-press = up one level to Setup
+    .render = dr_fx_val, .adjust = dr_fx_adj, .action = NULL,
+};
+
+static int drum_fx_handler(int it_id, int event, void *ev_data){
+    (void)it_id; (void)ev_data;
+    if (event == EV_ENTERED_MENU) drfx_rebuild();   // dynamic row set for s_cur_slot
+    return setup_menu_event(&dr_fx, event);
 }
 
 // ---- registration ---------------------------------------------------------
@@ -968,6 +1009,7 @@ static void drum_register_pages(void *menusys){
     menusys_new_item(_ms, M_DRUM_PADS);  menusys_item_set_default_cb(_ms, M_DRUM_PADS, drum_pads_handler);
     menusys_new_item(_ms, M_DRUM_LOAD);  menusys_item_set_default_cb(_ms, M_DRUM_LOAD, drum_load_handler);
     menusys_new_item(_ms, M_DRUM_SETUP); menusys_item_set_default_cb(_ms, M_DRUM_SETUP, drum_setup_handler);
+    menusys_new_item(_ms, M_DRUM_FX);    menusys_item_set_default_cb(_ms, M_DRUM_FX, drum_fx_handler);
 }
 
 static int drum_main_event(int event, void *ev_data){
