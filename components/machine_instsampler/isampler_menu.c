@@ -17,6 +17,7 @@
 #include "machine.h"
 #include "sample_browser.h"
 #include "sample_ram.h"
+#include "pitch_detect.h"          // Auto-Tune row: name/cents for the verdict
 #include "audio.h"                 // audio_proc_us() for the FX cost-guard
 #include "instsampler_priv.h"
 
@@ -367,7 +368,9 @@ static int keys_live_handler(int it_id, int event, void *ev_data)
 // Instrument params live here; all five effects moved to a dedicated FX
 // sub-page (the "FX" action row) so this list stays readable.
 static const setup_item_t ks_setup_items[] = {
-    {"Load Sample", ST_ACTION}, {"Root Note", ST_RANGE},  {"Base Note", ST_RANGE},
+    {"Load Sample", ST_ACTION}, {"Root Note", ST_RANGE},  {"Fine",      ST_RANGE},
+    {"Auto-Tune",   ST_ACTION}, {"Tune on Load", ST_TOGGLE},
+    {"Base Note",   ST_RANGE},
     {"Quantize",    ST_TOGGLE}, {"Loop Mode", ST_TOGGLE}, {"Loop Start", ST_RANGE},
     {"Loop End",    ST_RANGE},  {"Loop Xfade", ST_RANGE},
     {"Attack",      ST_RANGE},  {"Decay",     ST_RANGE},  {"Sustain",   ST_RANGE},
@@ -391,26 +394,57 @@ static void ks_val(int i, char *v, size_t n)
     switch (i) {
         case 0: snprintf(v, n, "%s", z->sample[0] ? z->sample : "(none)"); break;
         case 1: note_name_midi(z->root, nm, sizeof(nm)); snprintf(v, n, "%s (%d)", nm, z->root); break;
-        case 2: note_name_midi(inst.base_note, nm, sizeof(nm)); snprintf(v, n, "%s (%d)", nm, inst.base_note); break;
-        case 3: snprintf(v, n, "%s", inst.quantize ? "ON" : "OFF"); break;
-        case 4: snprintf(v, n, "%s", z->loop_mode == LOOP_FWD ? "Fwd" : "Off"); break;
-        case 5: snprintf(v, n, "%u ms", (unsigned)((uint64_t)z->loop_start * 1000 / IS_RATE)); break;
-        case 6: snprintf(v, n, "%u ms", (unsigned)((uint64_t)z->loop_end * 1000 / IS_RATE)); break;
-        case 7: snprintf(v, n, "%u ms", (unsigned)((uint64_t)z->loop_xfade * 1000 / IS_RATE)); break;
-        case 8: snprintf(v, n, "%d ms", (int)(inst.atk * 1000.0f)); break;
-        case 9: snprintf(v, n, "%d ms", (int)(inst.dec * 1000.0f)); break;
-        case 10: snprintf(v, n, "%.0f%%", inst.sus * 100.0f); break;
-        case 11: snprintf(v, n, "%d ms", (int)(inst.rel * 1000.0f)); break;
-        case 12: snprintf(v, n, "%.0f%%", inst.env_to_cut * 100.0f); break;
-        case 13: snprintf(v, n, "%d ms", (int)(inst.glide * 1000.0f)); break;
-        case 14: snprintf(v, n, "%.0f%%", inst.level * 100.0f); break;
-        case 15: { int on = 0; for (int d = 0; d < ISM_N; d++) if (inst.mtx.src[d] >= 0) on++;
+        case 2: snprintf(v, n, "%+d c", (int)lroundf(z->fine * 100.0f)); break;
+        case 3: {   // Auto-Tune: the last verdict + WHERE it came from, so a
+                    // name-derived tuning never passes for a heard one
+                    char hn[12];
+                    switch (inst.tune_src) {
+                        case TUNE_NAME:
+                            pitch_note_name(inst.tune_hint, nm, sizeof(nm));
+                            snprintf(v, n, "%s (name)", nm);
+                            break;
+                        case TUNE_CONFLICT:
+                            note_name_midi(z->root, nm, sizeof(nm));
+                            pitch_note_name(inst.tune_hint, hn, sizeof(hn));
+                            snprintf(v, n, "%s %+dc !%s", nm, (int)lroundf(z->fine * 100.0f), hn);
+                            break;
+                        case TUNE_AUDIO:
+                        case TUNE_BOTH:
+                            note_name_midi(z->root, nm, sizeof(nm));
+                            snprintf(v, n, "%s %+dc%s", nm, (int)lroundf(z->fine * 100.0f),
+                                     inst.tune_src == TUNE_BOTH ? " (nm oct)" : "");
+                            break;
+                        default:
+                            if (inst.tune_hz > 0.0f) {   // heard something, too weak to apply
+                                pitch_result_t r = { .hz = inst.tune_hz };
+                                pitch_from_hz(inst.tune_hz, &r);
+                                pitch_note_name(r.midi, nm, sizeof(nm));
+                                snprintf(v, n, "unsure (%s?)", nm);
+                            } else snprintf(v, n, "run >");
+                            break;
+                    }
+                } break;
+        case 4: snprintf(v, n, "%s", inst.autotune_load ? "ON" : "OFF"); break;
+        case 5: note_name_midi(inst.base_note, nm, sizeof(nm)); snprintf(v, n, "%s (%d)", nm, inst.base_note); break;
+        case 6: snprintf(v, n, "%s", inst.quantize ? "ON" : "OFF"); break;
+        case 7: snprintf(v, n, "%s", z->loop_mode == LOOP_FWD ? "Fwd" : "Off"); break;
+        case 8: snprintf(v, n, "%u ms", (unsigned)((uint64_t)z->loop_start * 1000 / IS_RATE)); break;
+        case 9: snprintf(v, n, "%u ms", (unsigned)((uint64_t)z->loop_end * 1000 / IS_RATE)); break;
+        case 10: snprintf(v, n, "%u ms", (unsigned)((uint64_t)z->loop_xfade * 1000 / IS_RATE)); break;
+        case 11: snprintf(v, n, "%d ms", (int)(inst.atk * 1000.0f)); break;
+        case 12: snprintf(v, n, "%d ms", (int)(inst.dec * 1000.0f)); break;
+        case 13: snprintf(v, n, "%.0f%%", inst.sus * 100.0f); break;
+        case 14: snprintf(v, n, "%d ms", (int)(inst.rel * 1000.0f)); break;
+        case 15: snprintf(v, n, "%.0f%%", inst.env_to_cut * 100.0f); break;
+        case 16: snprintf(v, n, "%d ms", (int)(inst.glide * 1000.0f)); break;
+        case 17: snprintf(v, n, "%.0f%%", inst.level * 100.0f); break;
+        case 18: { int on = 0; for (int d = 0; d < ISM_N; d++) if (inst.mtx.src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
-        case 16: snprintf(v, n, "%s >", fxrack_slot_name(&inst_rk, 0)); break;
-        case 17: snprintf(v, n, "%s >", fxrack_slot_name(&inst_rk, 1)); break;
-        case 18: snprintf(v, n, "%s >", fxrack_slot_name(&inst_rk, 2)); break;
-        case 19: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
-        case 20: snprintf(v, n, "load >"); break;
+        case 19: snprintf(v, n, "%s >", fxrack_slot_name(&inst_rk, 0)); break;
+        case 20: snprintf(v, n, "%s >", fxrack_slot_name(&inst_rk, 1)); break;
+        case 21: snprintf(v, n, "%s >", fxrack_slot_name(&inst_rk, 2)); break;
+        case 22: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
+        case 23: snprintf(v, n, "load >"); break;
     }
 }
 
@@ -421,10 +455,12 @@ static void ks_adj(int i, int dir)
     long step = IS_RATE / 100;                        // ~10 ms for loop points
     switch (i) {
         case 1: z->root = (uint8_t)clampi((int)z->root + dir, 12, 108); break;
-        case 2: inst.base_note = clampi(inst.base_note + dir, 12, 108); break;
-        case 3: inst.quantize = !inst.quantize; break;
-        case 4: z->loop_mode = (z->loop_mode == LOOP_FWD) ? LOOP_OFF : LOOP_FWD; break;
-        case 5: if (z->frames) {                       // Loop Start (zero-cross snapped)
+        case 2: z->fine = clampf(z->fine + d * 0.02f, -1.0f, 1.0f); break;   // 2 cents/detent
+        case 4: inst.autotune_load = !inst.autotune_load; break;
+        case 5: inst.base_note = clampi(inst.base_note + dir, 12, 108); break;
+        case 6: inst.quantize = !inst.quantize; break;
+        case 7: z->loop_mode = (z->loop_mode == LOOP_FWD) ? LOOP_OFF : LOOP_FWD; break;
+        case 8: if (z->frames) {                       // Loop Start (zero-cross snapped)
                     long ls = clampi((int)((long)z->loop_start + dir * step), 0, (int)z->loop_end - 64);
                     if (ls < 0) ls = 0;
                     ls = (long)keys_snap_zero((uint32_t)ls);
@@ -432,43 +468,44 @@ static void ks_adj(int i, int dir)
                     if (ls < 0) ls = 0;
                     z->loop_start = (uint32_t)ls;
                 } break;
-        case 6: if (z->frames) {                       // Loop End (zero-cross snapped)
+        case 9: if (z->frames) {                       // Loop End (zero-cross snapped)
                     long le = clampi((int)((long)z->loop_end + dir * step), (int)z->loop_start + 64, (int)z->frames);
                     le = (long)keys_snap_zero((uint32_t)le);
                     if (le > (long)z->frames) le = (long)z->frames;
                     if (le <= (long)z->loop_start) le = (long)z->loop_start + 64;
                     z->loop_end = (uint32_t)le;
                 } break;
-        case 7: z->loop_xfade = (uint32_t)clampi((int)z->loop_xfade + dir * (IS_RATE / 1000), 0, 4096); break;
-        case 8: inst.atk = clampf(inst.atk + d * 0.005f, 0.0005f, 2.0f); break;
-        case 9: inst.dec = clampf(inst.dec + d * 0.01f, 0.001f, 2.0f); break;
-        case 10: inst.sus = clampf(inst.sus + d * 0.05f, 0.0f, 1.0f); break;
-        case 11: inst.rel = clampf(inst.rel + d * 0.02f, 0.001f, 3.0f); break;
-        case 12: inst.env_to_cut = clampf(inst.env_to_cut + d * 0.05f, 0.0f, 1.0f); break;
-        case 13: inst.glide = clampf(inst.glide + d * 0.02f, 0.0f, 2.0f); break;
-        case 14: inst.level = clampf(inst.level + d * 0.05f, 0.0f, 1.0f); break;
+        case 10: z->loop_xfade = (uint32_t)clampi((int)z->loop_xfade + dir * (IS_RATE / 1000), 0, 4096); break;
+        case 11: inst.atk = clampf(inst.atk + d * 0.005f, 0.0005f, 2.0f); break;
+        case 12: inst.dec = clampf(inst.dec + d * 0.01f, 0.001f, 2.0f); break;
+        case 13: inst.sus = clampf(inst.sus + d * 0.05f, 0.0f, 1.0f); break;
+        case 14: inst.rel = clampf(inst.rel + d * 0.02f, 0.001f, 3.0f); break;
+        case 15: inst.env_to_cut = clampf(inst.env_to_cut + d * 0.05f, 0.0f, 1.0f); break;
+        case 16: inst.glide = clampf(inst.glide + d * 0.02f, 0.0f, 2.0f); break;
+        case 17: inst.level = clampf(inst.level + d * 0.05f, 0.0f, 1.0f); break;
     }
 }
 
 static int ks_action(int i)
 {
     if (i == 0)  return M_ISMP_LOAD;     // Load Sample -> browser
-    if (i == 15) { s_setup_return = 15; return M_ISMP_MATRIX; }   // CV Matrix
-    if (i == 16) { s_setup_return = 16; s_cur_slot = 0; return M_ISMP_FX; }   // FX1
-    if (i == 17) { s_setup_return = 17; s_cur_slot = 1; return M_ISMP_FX; }   // FX2
-    if (i == 18) { s_setup_return = 18; s_cur_slot = 2; return M_ISMP_FX; }   // FX3 reverb
-    if (i == 19) {                       // Save Patch: mint + write, stay on Setup
+    if (i == 3)  { keys_autotune(); return 0; }   // detect + apply; row shows the verdict
+    if (i == 18) { s_setup_return = 18; return M_ISMP_MATRIX; }   // CV Matrix
+    if (i == 19) { s_setup_return = 19; s_cur_slot = 0; return M_ISMP_FX; }   // FX1
+    if (i == 20) { s_setup_return = 20; s_cur_slot = 1; return M_ISMP_FX; }   // FX2
+    if (i == 21) { s_setup_return = 21; s_cur_slot = 2; return M_ISMP_FX; }   // FX3 reverb
+    if (i == 22) {                       // Save Patch: mint + write, stay on Setup
         if (keys_patch_save(s_last_saved, sizeof(s_last_saved)) != 0)
             snprintf(s_last_saved, sizeof(s_last_saved), "err");
         return 0;                        // framework redraws -> row shows the id
     }
-    if (i == 20) return M_ISMP_PATCH;    // Load Patch -> patch browser
+    if (i == 23) return M_ISMP_PATCH;    // Load Patch -> patch browser
     return 0;
 }
 
 static setup_menu_t ks_setup = {
     .items = ks_setup_items,
-    .n = 21,
+    .n = 24,
     .title = "Keys Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_ISMP_LIVE,

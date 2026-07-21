@@ -294,6 +294,20 @@ The machines (all working; archives in `bin/`):
   Live UI: big value dials (centred value, escaping needle, label below),
   ADSR pane (dimmed unfocused), waveform with origin line, green edit
   highlights. Loads via the plain browser from usr/KEYS.
+  AUTO-TUNE (2026-07-20): Setup "Auto-Tune" detects the loaded sample's
+  fundamental (shared `util/pitch_detect`, over the already-resident PSRAM
+  buffer — ~50 ms, no SD) and writes zone `root` + the new `fine`
+  (cents-as-semitones, persisted "fn"; root alone can only land within half a
+  semitone, so `fine` is what makes "in tune" reachable). "Tune on Load"
+  ("atl", default OFF) runs it on every fresh load; a patch's stored root/fn
+  still land on top, so hand-tuning is never stomped. The sample id's note
+  name ("EP_C4", "PNOF#3") is parsed as a HINT that may only fix the OCTAVE
+  when it agrees on pitch class — the recording beats the label — and stands
+  alone only when nothing pitched was heard. The row reports its source
+  (`C4 +3c` / `(nm oct)` / `(name)` / `!F#3` conflict / `unsure`), and a
+  low-confidence verdict is shown but NOT applied. Known: stretched partials
+  (piano/bell) read ~8-9 cents sharp (intrinsic to period detection — trim
+  with Fine); chords tune to the chord root, often an octave down.
 - `machine_tape` ("Tape", 2026-07-16..19) — single-track tape recorder/looper:
   records line-in (auto take on punch-out, card-record for >30 s takes,
   beat-quantized record), in-place crop, Rev/Norm/Fade/Clear ops, loop /
@@ -417,6 +431,15 @@ The machines (all working; archives in `bin/`):
   (channel assignment, not a matrix — don't duplicate); Deck's contextual
   loop knobs ARE its CV interface, no matrix by design. Lives in
   components/menu (the sample_browser precedent — it draws).
+- `components/util/pitch_detect.{h,c}` — monophonic PITCH DETECTION (YIN:
+  coarse lag sweep on a 4x decimated window, then a native-rate refine +
+  parabolic fit; ~6 KB scratch, no SD/globals). Sub-cent on host tests from
+  55 Hz to 1.3 kHz, refuses noise/silence. Also parses a note name out of a
+  sample id (`pitch_name_hint`, reporting whether the match was isolated or
+  buried in a word like "TAPE4"). NOT audio-task work (a scan is ~50 ms) —
+  UI/loader context, as bpm_analysis is. Host: Keys auto-tune; the live
+  line-in tuner (beatlisten-shaped service) is the queued second consumer,
+  which is why the single-window entry point is public.
 - `components/util/svf.{h,c}` — the Chamberlin state-variable filter, ONE copy
   (it had been hand-written three times: deck, looper engine, looper bounce).
   `svf_step()` gives lp/bp/hp taps; the caller keeps the coefficient slew and
