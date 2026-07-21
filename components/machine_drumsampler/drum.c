@@ -30,6 +30,14 @@ static inline int soft_clip(int x)
     return (int)(v * L);
 }
 
+// per-semitone playback step in Q12 (4096 = native), -12..+12: index by
+// pitch_semi + 12. A LUT because the mixer must not call powf per voice.
+static const uint16_t dr_pitch_q12[25] = {
+    2048, 2170, 2299, 2435, 2580, 2734, 2896, 3069, 3251, 3444, 3649, 3866,
+    4096, 4340, 4598, 4871, 5161, 5468, 5793, 6137, 6502, 6889, 7298, 7732,
+    8192,
+};
+
 // where a hit starts: the head the pad is told to skip (knob7 clockwise, in
 // DR_CW_START mode). Clamped well inside the sample so a hit is never silence.
 static uint32_t layer_start(const dr_pad_t *p, const dr_layer_t *L)
@@ -60,6 +68,7 @@ static void trigger_pad(dr_pad_t *p, int ly, uint8_t vel)
     } else {
         p->cur    = (uint8_t)ly;
         p->pos    = layer_start(p, L);
+        p->pos_fr = 0;
         p->vel    = vel;
         p->retrig = false;
         p->playing = true;
@@ -75,6 +84,7 @@ static void trigger_pad(dr_pad_t *p, int ly, uint8_t vel)
 typedef struct {
     const int16_t *buf;
     uint32_t len, st, ll, df, af;
+    uint32_t step;                // Q12 cursor advance per output frame (pitch)
 } dr_voice_t;
 
 static void voice_setup(dr_pad_t *p, dr_voice_t *v)
@@ -82,6 +92,10 @@ static void voice_setup(dr_pad_t *p, dr_voice_t *v)
     dr_layer_t *L = &p->ly[p->cur];
     v->buf = L->buf;
     v->len = L->len;
+    int pi = p->pitch_semi;
+    if (pi < -12) pi = -12;
+    if (pi > 12) pi = 12;
+    v->step = dr_pitch_q12[pi + 12];
     v->df  = (uint32_t)p->decay_ms * 441 / 10;    // decay length in frames
     v->af  = (uint32_t)p->attack_ms * 441 / 10;   // attack length in frames
     v->st  = layer_start(p, L);                   // hits begin here
@@ -247,6 +261,10 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
                 sp->attack_ms = 0;
                 sp->start_off = 0;
                 sp->loop_ms = 0;
+                // pitch is knob-owned ONLY in DR_CW_PITCH mode (it has its own
+                // Pads row, unlike the other CW targets) — don't wipe a
+                // row-set pitch from a decay gesture in another mode
+                if (sp->cw_mode == DR_CW_PITCH) sp->pitch_semi = 0;
             } else {
                 uint32_t cw = (uint32_t)(dc - 2048);          // 0..2047 above noon
                 sp->decay_ms = 0;                             // full sample again
@@ -264,6 +282,10 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
                     // into a buzz as you turn
                     uint32_t span = DR_LOOP_MAX_MS - DR_LOOP_MIN_MS;
                     sp->loop_ms = (uint16_t)(DR_LOOP_MAX_MS - cw * span / 2047);
+                } else if (sp->cw_mode == DR_CW_PITCH) {
+                    // tune DOWN from native, -12 at full clockwise (tuning up
+                    // is on the Pads row; down is the performance move)
+                    sp->pitch_semi = (int8_t)-((int)cw * 12 / 2047);
                 }
             }
         }
@@ -386,6 +408,7 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         int32_t *mixL = (fx_live && p->fx_on) ? fxbL : accL;
         int32_t *mixR = (fx_live && p->fx_on) ? fxbR : accR;
         uint32_t len = v.len, df = v.df, af = v.af, st = v.st, ll = v.ll;
+        uint32_t step = v.step;
         for (int f = 0; f < frames; f++) {
             if (p->retrig) {
                 // fade the sounding voice out, then start next_layer — the same
@@ -400,7 +423,9 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
                     voice_setup(p, &v);
                     if (!v.buf || !v.len) { p->playing = false; break; }
                     len = v.len; df = v.df; af = v.af; st = v.st; ll = v.ll;
+                    step = v.step;
                     p->pos = st;
+                    p->pos_fr = 0;
                     p->vel = p->vel_next;
                     continue;
                 }
@@ -457,9 +482,16 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
             // the loop wraps the READ inside the window; pos keeps counting, so the
             // pad still dies at the end of the sample's natural length. Same
             // underflow guard as above: st can move under a running voice.
+            // PITCH: the cursor is fractional (pos_fr under pos), so the read
+            // linearly interpolates toward the next sample — inside the loop
+            // window the neighbour wraps with it, at the buffer end it clamps.
             uint32_t lel = (pos > st) ? pos - st : 0;
             uint32_t idx = ll ? st + (lel % ll) : pos;
-            int s = (v.buf[idx] * env) >> 8;
+            uint32_t nxt = ll ? st + ((lel + 1) % ll)
+                              : (idx + 1 < len ? idx + 1 : idx);
+            int s0 = v.buf[idx];
+            int s = s0 + (((v.buf[nxt] - s0) * (int)p->pos_fr) >> 12);
+            s = (s * env) >> 8;
             // gain: 255 = unity, above that the pad is driven. Clip SOFTLY —
             // letting a 4x sample slam into the int16 clamp is fuzz, not drive.
             int g = ((int)p->level * (int)p->vel) >> 8;      // 0..DR_LEVEL_MAX
@@ -473,7 +505,9 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
                 sndL[f] += (xl * p->rv_send) >> 8;
                 sndR[f] += (xr * p->rv_send) >> 8;
             }
-            p->pos = pos + 1;
+            uint32_t adv = p->pos_fr + step;  // fractional advance (Q12 pitch)
+            p->pos = pos + (adv >> 12);
+            p->pos_fr = adv & 0xFFF;
         }
     }
     // ---- master filter + output ------------------------------------------------
@@ -675,6 +709,7 @@ static cJSON *drum_preset_save(void)
         cJSON_AddNumberToObject(p, "cw", dr.pad[i].cw_mode);         // knob7 clockwise target
         cJSON_AddNumberToObject(p, "reps", dr.pad[i].loop_reps);     // retrig cap (255 = INF)
         cJSON_AddBoolToObject(p, "fx", dr.pad[i].fx_on);             // FX1/FX2 bus routing
+        cJSON_AddNumberToObject(p, "pit", dr.pad[i].pitch_semi);     // -12..+12 semitones
         cJSON_AddItemToArray(pads, p);
     }
     return o;
@@ -764,6 +799,12 @@ static void drum_preset_load(const cJSON *node)
             // absent (pre-routing preset) leaves the default: wet
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "fx")) && cJSON_IsBool(j))
                 dr.pad[i].fx_on = cJSON_IsTrue(j);
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "pit")) && cJSON_IsNumber(j)) {
+                int ps = j->valueint;
+                if (ps < -12) ps = -12;
+                if (ps > 12) ps = 12;
+                dr.pad[i].pitch_semi = (int8_t)ps;
+            }
             // reload the remembered samples. An old preset has no "s2" — absent
             // simply means the pad has no B layer, which is today's behaviour.
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "s")) && cJSON_IsString(j) && j->valuestring[0])

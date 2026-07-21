@@ -241,6 +241,13 @@ The machines (all working; archives in `bin/`):
   Setup row). Legacy master-delay presets migrate into FX1=Delay via
   fxrack_load; pads default WET so they keep their sound. Knob edits flag
   `machine_state_dirty()` so kits dialed in by knob AUTOSAVE (see below).
+  PITCH (2026-07-20): per-pad chromatic repitch ±12 semitones — fractional
+  read cursor (Q12 semitone LUT + linear interp, works inside the stutter
+  loop), envelopes/loops stay sample-domain so tuning down stretches
+  tape-style. Pads row "Pitch" (±12) + knob7 CW target "pitch" (noon→CW
+  tunes 0→-12, the drum move; appended as DR_CW_PITCH so old presets' cw
+  values keep meaning). Pitch is knob-owned ONLY in that CW mode — a decay
+  gesture in other modes won't wipe a row-set pitch.
   Live grid: a layered pad draws as two half-cells (own dot, name,
   trigger tag, rectified half-wave converging on the midline); the selection box
   is the HALF; the encoder traces the grid circularly
@@ -437,9 +444,9 @@ midi-v1; FX pack SHIPPED; tuner + Keys sample auto-tune, scenes, Ableton Link
 still queued). Drums per-pad FX SHIPPED 2026-07-20 as the lighter routing design (Arlo):
 fxrack slots + per-pad wet/dry flag on an FX bus — NOT per-pad inserts (built,
 awaiting hardware verify; module was offline). Tape crop CV matrix + Live
-Crop button SHIPPED 2026-07-20 (the shared cvmtx widget — same
-built-not-yet-verified state). Still open: drums per-pad pitch (needs a
-fractional read cursor),
+Crop button SHIPPED 2026-07-20 (the shared cvmtx widget), and drums per-pad
+PITCH SHIPPED 2026-07-20 (all in the same built-not-yet-verified state).
+Still open:
 granular rework (Arlo flag 2026-07-18, specifics TBD — ask), Freesound
 OAuth2, looper overdub, glitch grid-align, sampler3 v2 leftovers (ADSR,
 delay, web upload-to-track). Sampler2 was pulled from the build 2026-07-18.

@@ -556,12 +556,13 @@ static void row_draw(int i, int pos, int sel, const char *label, const char *raw
 // when B layers are on). The old index-keyed toggle macro would have silently
 // mis-assigned click behaviour the moment a row was inserted.
 enum { PR_PAD = 0, PR_LAYERED, PR_LAYER, PR_SAMPLE, PR_TRIG, PR_LEVEL, PR_PAN,
-       PR_SEND, PR_FX, PR_DECAY, PR_CW, PR_RETRIG, PR_ENABLED, PR_COUNT };
+       PR_SEND, PR_FX, PR_PITCH, PR_DECAY, PR_CW, PR_RETRIG, PR_ENABLED,
+       PR_COUNT };
 
 static const char *pads_labels[PR_COUNT] = {"Pad", "B Layer", "Layer", "Sample",
                                             "Trig In", "Level", "Pan", "Rev Send",
-                                            "FX", "Decay", "Knob7 CW", "Retrig",
-                                            "Enabled"};
+                                            "FX", "Pitch", "Decay", "Knob7 CW",
+                                            "Retrig", "Enabled"};
 // small option sets flip on a click; ranges keep click-to-edit
 #define PADS_IS_TOGGLE(id) ((id) == PR_PAD || (id) == PR_LAYERED || \
                             (id) == PR_LAYER || (id) == PR_CW || \
@@ -612,6 +613,10 @@ static void pads_value_str(int id, char *v, size_t n){
                 snprintf(v, n, "wet (FX off)");
             else snprintf(v, n, "wet");
             break;
+        case PR_PITCH:
+            if (p->pitch_semi == 0) snprintf(v, n, "native");
+            else snprintf(v, n, "%+d st", p->pitch_semi);
+            break;
         case PR_PAN:
             if (p->pan == 128) snprintf(v, n, "C");
             else if (p->pan < 128) snprintf(v, n, "L%d", (128 - p->pan) * 100 / 128);
@@ -630,6 +635,10 @@ static void pads_value_str(int id, char *v, size_t n){
                 snprintf(v, n, "start %d%%", (int)p->start_off * 100 / 255);
             else if (p->cw_mode == DR_CW_ATTACK)
                 snprintf(v, n, "attack %dms", p->attack_ms);
+            else if (p->cw_mode == DR_CW_PITCH) {
+                if (p->pitch_semi) snprintf(v, n, "pitch %+d", p->pitch_semi);
+                else               snprintf(v, n, "pitch");
+            }
             else if (p->loop_ms)                       // named to match the Retrig row
                 snprintf(v, n, "retrig %dms", p->loop_ms);
             else
@@ -741,6 +750,13 @@ static void pads_adj(int id, int dir){
             break;
         }
         case PR_FX: p->fx_on = !p->fx_on; break;
+        case PR_PITCH: {
+            int ps = (int)p->pitch_semi + dir;
+            if (ps < -12) ps = -12;
+            if (ps > 12) ps = 12;
+            p->pitch_semi = (int8_t)ps;
+            break;
+        }
         case PR_ENABLED: p->enabled = !p->enabled; break;
     }
 }
