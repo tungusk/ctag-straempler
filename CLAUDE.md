@@ -27,17 +27,18 @@ export PATH=/path/to/xtensa-esp32-elf/bin:/path/to/esp32ulp-elf/bin:$PATH
 
 **No CV/gate OUTPUT** — the only output is audio via the I2S codec (WM8731 line out on GPIO22). There is no CV/gate DAC anywhere; a machine's `process()` can only write the two audio channels, and those outputs are AC-coupled (can't hold a DC level). So true analog CV/gates are NOT achievable — any "output" feature must be an audio-rate signal. (Input side is rich: 8 CV in + 2 gate in.)
 
-**No reliable TFT readback on this unit.** The ILI9341 GRAM read path
-(`read_data`/`TFT_RAMRD`, 0x2E) returns ALL 0xFF at runtime — MISO idles high,
-the panel drives nothing back (verified 2026-07-15: a `/screenshot` endpoint
-came back a solid white 320×240 BMP, every pixel byte 0xFF). **`find_rd_speed()`
-does NOT prove readback works** — it starts `max_speed=1000000` and only raises
-it on a *successful* compare, so a total read failure silently returns the 1 MHz
-fallback and the boot log looks normal. So a web screenshot cannot be built on
-panel readback; it would need a **PSRAM shadow framebuffer** (draws write through
-to a 320×240 RGB565 copy, serve that). The dormant `/screenshot` endpoint +
-`components/util/disp_lock.{h,c}` (a display-bus mutex; UI task holds it around
-each `menuProcessEvent`, readers per-burst) are left in as infra for that.
+**No reliable TFT readback on this unit — screenshots come from the PSRAM
+SHADOW FRAMEBUFFER.** The ILI9341 GRAM read path (`read_data`/`TFT_RAMRD`,
+0x2E) returns ALL 0xFF at runtime — MISO idles high, the panel drives nothing
+back. **`find_rd_speed()` does NOT prove readback works** — a total read
+failure silently returns its 1 MHz fallback and the boot log looks normal.
+So `GET /screenshot` (shipped, `shadow-fb-v1`) serves a 24-bit BMP from
+`tft_shadow`, a 320×240 write-through copy kept by draw hooks in tftspi.c.
+The shadow is **LAZY** (a 230 KB boot alloc starved libxmp): the first call
+allocates it, kicks a full redraw, and returns **503 Warming** — retry for a
+complete frame. `components/util/disp_lock.{h,c}` (display-bus mutex; UI task
+holds it around each `menuProcessEvent`) is taken per-row against tearing.
+Use /screenshot for eye-tests instead of guessing at UI state.
 
 **Audio block size:** 64 samples per I2S DMA block at 44100 Hz (~1.45ms per audio loop tick).
 
@@ -71,6 +72,16 @@ EINVAL (errno 22). This is why every id in the system is short: recording uses
 it ≤ 8 chars — do NOT append `_<tag>` to an existing (already up-to-8-char) id.
 `sample_next_index("XX_")` gives a safe `XX_NNNN`.
 
+**Machine SD home folders (2026-07-17)** — the pool is split into per-machine
+homes: `SF_DIRS[]` in sampfile.c = `usr`, `usr/REC`, `usr/LOOPS`,
+`usr/SLICES`, `usr/DRUMS`, `usr/KEYS`, `usr/TAPE` (7 dirs; boot migration
+moved legacy files; `SAMPLE_DIR_*` constants in sample_ram.h select a home).
+**GOTCHA: the folder indices thread through several hand-parallel arrays**
+(sampfile.c / sampfile_f.c / sample_ram) — adding a folder means updating ALL
+of them in lockstep; a bare count bump reads out of bounds = corruption.
+(2026-07-18: KEYS/TAPE were missing from `SF_DIRS` — Tape takes silently
+landed in usr/ root.)
+
 **SD bus is serialized by `sd_lock`** (`components/util/sd_lock.{h,c}`) — a global recursive mutex that EVERY SD I/O burst must hold: the audio raw-FatFS reads, REST file serving, recording writer, config/JSON, `sample_ram`. Acquired INSIDE the per-voice `file_mutex` (consistent order → no deadlock), released between bursts. The raw audio read path bypasses the esp_vfs_fat lock, so without this it races VFS I/O and wedges/corrupts the card. Don't add SD access that skips `sd_lock`.
 
 **SDMMC DMA can't target PSRAM** — read SD data into INTERNAL DMA-capable RAM (`heap_caps_malloc(sz, MALLOC_CAP_DMA)`), never a PSRAM buffer, or `sdmmc_read_blocks` fails `ESP_ERR_NO_MEM (257)` under memory pressure (its internal bounce-buffer alloc fails). This bit `readJSONFileAsCJSON` (empty web browser) — reads into PSRAM failed for every sidecar. Internal RAM is tight (~250 KB total); prefer STREAMING responses (see `/files`) over building big buffers, which also OOMs.
@@ -81,9 +92,13 @@ it ≤ 8 chars — do NOT append `_<tag>` to an existing (already up-to-8-char) 
 `initWifi()` (see ui.c), and the TCP/IP stack + the WiFi event group don't exist
 until initWifi. A task that calls `socket()` (assert: "Invalid mbox") or
 `isWiFiConnected()` (assert: "xEventGroup") before then crash-LOOPS the boot. The
-output-broadcast server is created by `audio_broadcast_init()`, called from ui.c
-right after `initWifi()`, not from initAudio — do the same for any new socket
-task. There is a raw lwip socket server on **port 8000** streaming live audio
+output-broadcast server is **LAZY and OFF BY DEFAULT** (2026-07-18: its 12 KB
+internal task stack, spawned every boot, starved libxmp's 32 KB render stack —
+the tracker "no RAM for render" bug): `audio_broadcast_set_enabled()` spawns or
+tears down the task, called from ui.c AFTER `initWifi()` with the persisted
+`settings.broadcast` (default 0). Toggles: System→Settings row, web button,
+`GET /bcast/enable?on=`. When enabled it is a raw lwip socket server on
+**port 8000** streaming live audio
 (`http://<ip>:8000/` = output bus as stereo WAV, `/live.mp3` = output as
 shine 96 kbps mono MP3 icecast-style, `/in` + `/in.mp3` = the same two taps
 on the LINE INPUT — streaming-bridge mode) — deliberately NOT on the shared httpd,
@@ -118,17 +133,19 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   runs in the audio task once per 64-sample block; no SD/heap/blocking there.
 - **Registry**: `main/machine_registry.c` is the ONLY file outside a machine's
   own component that may name a machine symbol. Registry (selector order):
-  Sampler2 / Sampler / Looper / Slicer / Granular / Glitch / Drums / Deck /
-  Tracker / Freesound / Radio / Synth / Editor / Stub. (Display names: "Sampler" = the deck-pattern
-  rebuild in machine_sampler3; "Sampler2" = the legacy `s2_` fork in
-  machine_sampler2, kept as a fallback until sampler3 has a full hardware
-  verdict, then scheduled for removal. The frozen original machine_sampler
-  ["Sampler0"] was deleted 2026-07-12 — upstream v0.9 remains available via
-  git history and bin/ archives.) **Stub AND Sampler2 are HIDDEN from the
-  System→Machine selector** (skipped by name in both selector paths in
-  `menu.c`; Sampler2 stays reachable via the web Remote tab's machine
-  switch) but stay in the registry as fallback + proof target; the selector
-  uses a parallel `machines[]` array so hidden entries don't desync the
+  Sampler / Looper / Slicer / Granular / Glitch / Drums / Deck / DoubleDecker /
+  Tracker / Freesound / Radio / Synth / Keys / Tape / Editor / Stub.
+  ("Sampler" = the deck-pattern rebuild in machine_sampler3. The legacy
+  "Sampler2" `s2_` fork was **PULLED FROM THE BUILD 2026-07-18** — sampler3
+  has the hardware verdict; `components/machine_sampler2` stays in the repo
+  but sits in `EXCLUDE_COMPONENTS` in the top-level CMakeLists.txt, guarded so
+  `proof_build.sh`'s own `-DEXCLUDE_COMPONENTS` still wins. To resurrect it:
+  re-add the registry line + drop it from EXCLUDE_COMPONENTS. The frozen
+  original machine_sampler ["Sampler0"] was deleted 2026-07-12 — upstream v0.9
+  remains available via git history and bin/ archives.) **Stub is HIDDEN from
+  the System→Machine selector** (skipped by name in both selector paths in
+  `menu.c`) but stays in the registry as fallback + proof target; the selector
+  uses a parallel `machines[18]` array so hidden entries don't desync the
   on-screen index.
 - **Machine web URIs**: a machine may publish REST endpoints served only while
   it is active (`machine_ui_t.web_uris` = `const httpd_uri_t[]`); the core
@@ -140,6 +157,13 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
 - **Per-machine autosave**: `AUTOSAVE.JSN` keys each machine's `preset_save`
   state under its name, so machines remember settings independently across
   switches/reboots. `"machine"` in CONFIG.JSN persists the boot choice.
+  Triggers: any encoder/button event arms a 2 s debounced save (menu.c), a
+  machine switch saves immediately, and POLLED-KNOB edits (which never enter
+  the UI event queue) flag `machine_state_dirty()` — a 1 s menu poll arms the
+  same debounce, with a forced save every ~10 s during a continuous gesture.
+  Engines must flag only on a COMMITTED value change (past the take-over/
+  move threshold), never every block, or the backstop saves forever. Drums
+  is wired; Deck/DoubleDecker/Tape knob edits could adopt it the same way.
 - **Adding a machine**: new `components/machine_<name>/` (see machine_glitch as
   the smallest clean example — engine + menu + priv header + CMakeLists), add
   one line to the registry + `main/CMakeLists.txt` REQUIRES, add it to
@@ -174,12 +198,9 @@ The machines (all working; archives in `bin/`):
   panels (track 2 right-justified), playbar = black canvas + bold white
   waveform with the FAT state-colored box's ends sitting AT the crop
   points (the box IS the loop window), total length under the bar.
-- `machine_sampler2` ("Sampler2", HIDDEN) — legacy `s2_`-prefixed fork:
-  crop mode, signed CV matrix amounts, CV-addressable start/length.
-  Patched 2026-07-12 (deferred auto-load, DMA-capable SD buffers, no
-  abort-on-missing-file) but retains at least one residual race (WDT
-  panic-in-panic minutes into record sessions) — fallback only, removal
-  pending sampler3's full hardware verdict.
+- `machine_sampler2` ("Sampler2") — legacy `s2_`-prefixed fork, **OUT OF THE
+  BUILD since 2026-07-18** (see Registry above). Code retained in the repo for
+  reference only; it had a residual WDT race in long record sessions.
 - `machine_looper` — 4-track clock-synced RAM looper, save-to-library, per-track
   BP filter. House-style UI (2026-07-13): waveform-thumbnail lanes w/ state-colored
   playhead + slice redraws, click-toggle Setup rows w/ [ value ] bracket edits
@@ -207,7 +228,16 @@ The machines (all working; archives in `bin/`):
   MASTER FILTER: a box in the middle of the menu bar that the encoder selects
   like a pad (knob6 = the deck's DJ sweep, knob7 = resonance, which forces a
   lower stability ceiling + a damping floor that rises with cutoff + a NaN
-  guard). Live grid: a layered pad draws as two half-cells (own dot, name,
+  guard). FX (2026-07-20): hosts the shared fxrack — FX1/FX2 generic slots on
+  a dedicated FX BUS, with a per-pad wet/dry ROUTING flag (Pads page "FX"
+  row; one shared chain, not per-pad inserts — slab economics; wet pads wear
+  an accent-tinted border in Live while a slot is live). FX3 = the reverb for
+  menu/persistence, but its PROCESS stays Drums' per-pad SEND bus
+  (`fxrack_process_gen_i32` skips the rack's insert reverb; Send Tap stays a
+  Setup row). Legacy master-delay presets migrate into FX1=Delay via
+  fxrack_load; pads default WET so they keep their sound. Knob edits flag
+  `machine_state_dirty()` so kits dialed in by knob AUTOSAVE (see below).
+  Live grid: a layered pad draws as two half-cells (own dot, name,
   trigger tag, rectified half-wave converging on the midline); the selection box
   is the HALF; the encoder traces the grid circularly
   (1A > filter > 2A > 2B > 4A > 4B > 3B > 3A > 1B).
@@ -231,6 +261,40 @@ The machines (all working; archives in `bin/`):
   instrument-verified: 90% of beats ±7 ms, +1.2 ms/min slip
   (tools/analyze_drift.py + tools/make_clicktrack.py are the rig).
   Archived: bin/deck-v2 (deck-v1 = pre-precision baseline).
+- `machine_dualdeck` ("DoubleDecker") — two clock-locked decks + equal-power
+  crossfade (knob6/CV), per-deck DJ filter sweeps, indexed loop-ladder knobs
+  with hysteresis, auto-BPM on load (Deck's analysis engine reused). Same
+  ~60 s post-boot settle as Deck before judging sync.
+- `machine_tracker` — libxmp module player (MOD/XM/IT/S3M…): renders in a
+  reader task with a **32 KB stack** (large modules verified — a 982 KB .IT
+  loads), KO-II-style sequence loop + bar scrub, external clock sync via a
+  tick-based phase servo. Voices RINGING OUT across a pattern wrap is a
+  FEATURE (let-ring) — don't "fix" it by choking. Broadcast being on used to
+  starve its render stack — see the broadcast-lazy note above.
+- `machine_instsampler` ("Keys", 2026-07-16) — tonal instrument sampler:
+  plays a pitched pool sample chromatically (CV1 1V/oct or the soft-MIDI
+  bridge, TR1/MIDI gate) with sustain loop + ADSR; hosts the shared FX rack.
+  Live UI: big value dials (centred value, escaping needle, label below),
+  ADSR pane (dimmed unfocused), waveform with origin line, green edit
+  highlights. Loads via the plain browser from usr/KEYS.
+- `machine_tape` ("Tape", 2026-07-16..19) — single-track tape recorder/looper:
+  records line-in (auto take on punch-out, card-record for >30 s takes,
+  beat-quantized record), in-place crop, Rev/Norm/Fade/Clear ops, loop /
+  one-shot play modes, auto-restores the last take (`tapelast`), saves
+  finalized takes as CUT_/TCR_ WAVs into usr/TAPE. **FX are PRINTED on the
+  way in** (record path only — dry playback, no doubling); hosts the
+  clock-aware shared FX rack; Level = output master. CV MATRIX (2026-07-20,
+  the shared cvmtx widget — Setup > CV Matrix): Crop In / Crop Out / Window /
+  Level / Cutoff, each off/CV1..8 + bipolar amount, applied as live offsets
+  (crop dests as fractions of len inside tape_eff_window; Level additive —
+  full-negative CV = VCA duck; Cutoff log-domain via `tp_cut_eff`) — PLUS
+  five FX destinations (FX1 A/B, FX2 A/B, Rev Mix) feeding the rack's CV
+  offsets; those matrix rows RENAME with the loaded effect ("Dly Mix" when
+  FX1 = delay; labels refresh on page entry via tape_mtx_refresh_labels). Live UI:
+  DejaVu24 title, big state-coloured waveform (redraw throttled to ~1 Hz —
+  heavy TFT redraws starve the PSRAM audio path), Rev/Norm/Fade/Crop + FX1-3
+  button row (short-press cycles the slot's effect, long-press opens its
+  Setup; Crop = save-crop-as-take — Clear moved to Setup only, 2026-07-20).
 - `machine_radio` ("Radio", 2026-07-15) — internet radio: streams an
   icecast/shoutcast MP3 station. One unpinned task GETs the endless HTTP body
   (esp_http_client + `esp_crt_bundle_attach` → http+https), decodes with helix
@@ -290,7 +354,47 @@ The machines (all working; archives in `bin/`):
   `sample_load` goes through it.
 - `components/util/reverb.{h,c}` — multi-mode Dattorro reverb (Room/Hall/
   Plate/Shimmer over one PSRAM tank, ~170 KB lazy slab, live cost meter);
-  drums hosts it post-filter.
+  drums hosts it post-filter. Shimmer runaway-on-silence + fade-out fixed
+  2026-07-18 (`SHIM_FB_LP` feedback low-pass, DC-block, gain/decay retune);
+  reverb mode switches mute + clear the tank (no explosion).
+- **`components/fxrack/` — the shared FX rack** (plan:
+  `plans/fx-rack-20260717.md`): FX1/FX2 = curated generic slots
+  (Off/Overdrive/Flanger/Tremolo/Delay/Filter/Band), FX3 = the reverb slot;
+  ONE descriptor table + dynamic per-slot Setup menu + process path
+  (`fxrack_process_i32`) + (de)serializer, hosted by Keys / Synth / Tape /
+  Drums instead of per-machine copies. An `fxrack_t` is a POINTER VIEW — the
+  machine owns the effect structs and hands the rack pointers. Clock-sync
+  divisions come from ONE shared table (`fxrack_div_beats/_names`); machines
+  that know a tempo set `.bpm` and flip an effect's `sync` on.
+  `fxrack_process_gen_i32` runs the generic slots WITHOUT the insert-reverb
+  stage — for hosts whose reverb is a send bus (Drums). CV MODULATION
+  (2026-07-20): `fxrack_t.cv1/cv2[slot]` + `.cv_rv` are per-block bipolar
+  offsets the host's CV matrix writes; applied INSIDE process as a
+  push/compare-restore around each stage, so menu + preset always see the
+  un-modulated base (a mid-block UI edit survives the restore). Curated A/B
+  param per kind (`fxrack_cv_label` names them): OD drive/level, flanger
+  depth/fdbk, tremolo depth/rate (rate = ±3 octaves log, rides ON TOP of
+  sync), delay mix/fdbk, filter cutoff/reso, band base/width, reverb mix.
+- **FX bricks** (`components/util/`): `fxdelay` (stereo feedback delay,
+  ~690 KB lazy PSRAM slab, ms + beats time modes, ping-pong, damping),
+  `overdrive` (tanh shaper, tone/asymmetry, no slab), `tremolo` (LFO
+  amp / stereo auto-pan, beats-syncable), `flanger` (~1-11 ms swept
+  fractional delay + feedback, lazy slab; recirculation darkened 07-18),
+  `fxfilter` (LP/HP/BP + base/width band variant).
+- `components/util/fxchain.h` — the FLOAT-chain convention: a hosted chain
+  unpacks int32 once, runs ALL stages in float scratch, and soft-clips ONCE
+  at the end — no inter-stage clamps (stacked FX used to clip at every
+  seam). Machines with int32 buffers use the `*_block_i32` wrappers.
+- `components/util/preset_store.{h,c}` — named machine-preset save/recall
+  on SD (the Scenes roadmap item builds on it).
+- `components/menu/cvmtx.{h,c}` — the shared assignable CV MATRIX widget
+  (2026-07-20, Tape = first host; synth/sampler3 matrices predate it and can
+  migrate later): N host-labeled destinations, each source (off/CV1..8) +
+  bipolar amount; owns the ch1/2 floor-tracked conditioning (1V/oct jacks
+  idle ~21% — synth's sy_mtx_cv01 lifted), the matrix page (label|[src]|[amt]
+  rows, press cycles nav>src>amt), and "mxs"/"mxa" (de)serialization. Host
+  applies `cvmtx_val()` (-1..+1) as live OFFSETS — the win_move convention.
+  Lives in components/menu (the sample_browser precedent — it draws).
 - `components/util/svf.{h,c}` — the Chamberlin state-variable filter, ONE copy
   (it had been hand-written three times: deck, looper engine, looper bounce).
   `svf_step()` gives lp/bp/hp taps; the caller keeps the coefficient slew and
@@ -319,10 +423,18 @@ synced decks + equal-power crossfade on knob6/CV, quantized deck starts)
 cherry-picking the proven parts. Do NOT fold dual into Deck — they stay
 separate machines by design. Resources check out: 2x6s rings ~2.1MB PSRAM,
 SD dual-stream is the classic sampler's proven load.
-Still open: Freesound OAuth2, looper overdub, granular position-CV, glitch
-grid-align, sampler2 removal (gated on sampler3's full hardware verdict),
-sampler3 v2 leftovers (ADSR, delay, web upload-to-track; CV matrix + crop SHIPPED 2026-07-12).
-Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
+Current build queue: **`plans/roadmap-20260717.md`** (MIDI bridge SHIPPED as
+midi-v1; FX pack SHIPPED; tuner + Keys sample auto-tune, scenes, Ableton Link
+still queued). Drums per-pad FX SHIPPED 2026-07-20 as the lighter routing design (Arlo):
+fxrack slots + per-pad wet/dry flag on an FX bus — NOT per-pad inserts (built,
+awaiting hardware verify; module was offline). Tape crop CV matrix + Live
+Crop button SHIPPED 2026-07-20 (the shared cvmtx widget — same
+built-not-yet-verified state). Still open: drums per-pad pitch (needs a
+fractional read cursor),
+granular rework (Arlo flag 2026-07-18, specifics TBD — ask), Freesound
+OAuth2, looper overdub, glitch grid-align, sampler3 v2 leftovers (ADSR,
+delay, web upload-to-track). Sampler2 was pulled from the build 2026-07-18.
+Sampler3 SHIPPED 2026-07-12.
 
 ## Web UI / REST
 
@@ -330,7 +442,12 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
   auto-built** — after editing, regenerate `components/rest-api/include/index.html.h`
   with `html/convert.sh` (`xxd -i` + sed) or the change won't ship.
 - **Endpoints** (`rest-api.c`): `/status` (hot 500ms poll: machine, rec, v0/v1,
-  8 CV, trig bits), `/sysinfo` (IP + SD free/total + remote flag + machine list,
+  8 CV, trig bits, `aus` = audio-loop cost in µs — 1450 µs ≈ 100% of the
+  block budget, the load meter), `/screenshot` (shadow-FB BMP — see the TFT
+  section; first call 503 Warming), `/peaks?name=&n=` (n peak bytes for web
+  waveform thumbnails, cost independent of file size), `/bcast/enable?on=` +
+  `/bcast/state` (the :8000 broadcast, off by default), `/ws/midi` +
+  `/midi/*` (MIDI bridge), `/ota` + `/ota/state`, `/sysinfo` (IP + SD free/total + remote flag + machine list,
   on-demand — not in the hot poll), `/files` (**streamed**, name+size only, no
   sidecar reads — see the PSRAM/DMA rule), `/files/raw` (download), `/settings`,
   `/drop_sample` (upload — sniffs the payload and kicks convert-on-import for
@@ -344,6 +461,15 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
   Freesound (search/Get + direct-URL fetch), Remote (monitor + controls +
   machine settings form), Settings. Device IP also appears on the on-device
   **System→Settings** screen (`wifiGetIPString` tries STA then AP).
+- **MIDI bridge (midi-v1, 2026-07-17)**: web "MIDI" tab = musical typing
+  (GarageBand-style computer-keyboard layout) + WebMIDI device capture →
+  WebSocket `/ws/midi` (needs `CONFIG_HTTPD_WS_SUPPORT` — NOTE sdkconfig is
+  gitignored, keep the flag when regenerating) with `/midi/*` per-event
+  fallback → core soft-MIDI state in audio.c (`audio_midi_note_on/off`,
+  held-note stack, last-note priority, `audio_midi_gate/note` + liveness
+  heartbeat). Synth + Keys opt in next to their CV1/TR1 reads — exact pitch,
+  no CV quantization detour. No hardware MIDI (USB impossible on this ESP32;
+  a TR2-UART TRS-MIDI experiment is parked in `plans/roadmap-20260717.md`).
 - **HTTPS from the device** needs `.crt_bundle_attach = esp_crt_bundle_attach`
   in every `esp_http_client_config_t` — IDF 4.3 esp-tls REFUSES https with no
   verification option (the upstream freesound code was silently broken by this).
@@ -353,7 +479,11 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
 - **Version string**: `version.txt` in the repo root sets `PROJECT_VER`
   (shown on the About page) — bump it at milestones alongside the `bin/`
   archive; without it IDF falls back to git-describe with a `-dirty`
-  suffix on any uncommitted build.
+  suffix on any uncommitted build. **GOTCHAS**: a `;` OR a `#` anywhere in
+  version.txt breaks the CMake build, and keep it under ~140 chars (it is
+  embedded in `/sysinfo`; overlong trips a -Werror in rest-api). The device
+  often runs code PAST its version stamp between milestones — re-OTA only to
+  sync the About label.
 - **Build**: `export PATH="$HOME/.espressif/tools/xtensa-esp32-elf/esp-2021r2-patch3-8.4.0/xtensa-esp32-elf/bin:$HOME/.espressif/tools/esp32ulp-elf/2.28.51-esp-20191205/esp32ulp-elf-binutils/bin:$PATH"; export IDF_PATH="$HOME/esp/esp-idf-v4.3"` then `idf.py build -DCMAKE_POLICY_VERSION_MINIMUM=3.5`.
 - **Flash — OTA is the primary path now (2026-07-15).** The device runs an
   OTA-capable image (two 3 MB app slots `ota_0`/`ota_1` + otadata; see
@@ -361,7 +491,9 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
   streams the build into the inactive slot and reboots into it) — ~14 s,
   untethered, no ROM-download-mode risk. `GET /ota/state` reports the running
   slot. Still announce before flashing (it reboots). No rollback yet (a bad
-  image needs serial recovery — a deliberate follow-up).
+  image needs serial recovery — a deliberate follow-up). A long
+  screenshot/OTA/take marathon can exhaust internal RAM (`ota_begin failed`,
+  audio glitches) — there is NO /reboot endpoint; recover with a power-cycle.
 - **Serial flash = migration + recovery only.** Use the esptool invocation with
   `--flash_size detect` when (a) migrating the partition layout, or (b)
   recovering a device that won't boot: `bin/<archive>/flash.sh` restores a
@@ -396,7 +528,15 @@ Sampler3 SHIPPED 2026-07-12 (the former "deferred fork" roadmap item).
   queue, shared PPQ clock front-end, zero-tick busy-spin sweep).
   `drums-v2` (four pads, per-pad A/B choke layers, performable knobs w/ soft-clip
   drive + retrig, master filter, half-cell Live grid; shared SVF; newest-first
-  browser; grey waveform).
+  browser; grey waveform). Later (2026-07-14..19, see each README):
+  `dualdeck-v1`/`doubledecker-v1`, `import-v1`, `convergence-v1`,
+  `clock-unify-v1`, `deck-loop-v2`, `menu-unify-v1`, `synth-v1`,
+  `keys-v1`/`keys-patch-v1`/`keysui-v1` (Keys machine + Live UI polish +
+  redraw-throttle audio fix), `slicer-fx-v1`, `fxnav-v1`, `fx-stability-v1`
+  (shimmer runaway + flanger fixes), `folders-v1` (machine SD homes),
+  `broadcast-mp3-v1(a)`, `icepush-v1`, `shadow-fb-v1(a)` (/screenshot),
+  `midi-v1`, `tape-v1`/`taperack-v1`/`tapeui-v1`, `tracker-ram-v1`
+  (broadcast-lazy RAM fix), `wav-v1`, `looper-v3`, `streaming-slicer-v1`.
   `bin/<name>/flash.sh` returns to any known-good state.
   Matching dated git tags.
 - **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
