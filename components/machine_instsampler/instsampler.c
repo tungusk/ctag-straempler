@@ -39,20 +39,11 @@ static inline float cubic_read(const int16_t *b, uint32_t n, double pos)
     return ((a0*t + a1)*t + a2)*t + y1;
 }
 
-// ch1/2 (1V/oct jacks) idle high (~21%), so rescale a matrix CV read from its
-// tracked idle floor so a patched source spans the full 0..1 (as Synth/Sampler3).
-static inline float is_mtx_cv01(const int *cvm, const int *floor, int src)
-{
-    int c = cvm[src & 7];
-    if ((src & 7) < 2) {
-        int fl = floor[src & 7];
-        if (fl > 3800) return 0.0f;                     // channel not converged / dead
-        c = (int)((int32_t)(c - fl) * 4095 / (4095 - fl));
-        if (c < 0) c = 0;
-        if (c > 4095) c = 4095;
-    }
-    return (float)c / 4095.0f;
-}
+// CV matrix destination names (order = the ISM_* enum). Source conditioning +
+// page + persistence live in the shared cvmtx widget now.
+const char *const keys_mtx_labels[ISM_N] = {
+    "Cutoff", "Reso", "Env>Cut", "Level", "Pitch", "Start", "LoopMov", "LoopLen"
+};
 
 int keys_load_zone(const char *name)
 {
@@ -112,8 +103,7 @@ static esp_err_t keys_start(void)
     inst.level = 0.85f;
     inst.start_frac = 0.0f;
     inst.knob_ctx = -1;           // force a knob recapture on the first block
-    for (int d = 0; d < ISM_N; d++) { inst.mtx_src[d] = -1; inst.mtx_amt[d] = 0.0f; }
-    inst.cv12_floor[0] = inst.cv12_floor[1] = 4095;
+    cvmtx_init(&inst.mtx, keys_mtx_labels, ISM_N);   // matrix off, floors armed
     inst.zone[0].root = 48;
     inst.zone[0].loop_mode = LOOP_FWD;
     inst.zone[0].loop_xfade = 220;
@@ -160,6 +150,17 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     if (inst.knob_live[1]) inst.cutoff_base = 10.0f * powf(600.0f, kn[1]); // K6 = cutoff (log)
     if (inst.knob_live[2]) inst.res01       = kn[2];                       // K7 = resonance
     if (inst.knob_live[3]) inst.env_to_cut  = kn[3];                       // K8 = env>cut
+    // knob edits never reach the UI event queue: flag committed moves so the
+    // autosave picks them up (hysteresis — live knobs track every block)
+    {
+        static float s_kdirty[4] = {-1, -1, -1, -1};
+        for (int i = 0; i < 4; i++)
+            if (inst.knob_live[i] &&
+                (s_kdirty[i] < 0 || fabsf(kn[i] - s_kdirty[i]) > 0.03f)) {
+                s_kdirty[i] = kn[i];
+                machine_state_dirty();
+            }
+    }
 
     inst.cv1_disp = cvm[0];
     float note;
@@ -173,28 +174,22 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     note = clampf(note, 0.0f, 127.0f);
     inst.note_disp = note;
 
-    for (int c = 0; c < 2; c++) {                     // track ch1/2 idle floor
-        int cv = io->cv[c];
-        if (cv < inst.cv12_floor[c]) inst.cv12_floor[c] = cv;
-        else if (inst.cv12_floor[c] < 4095) inst.cv12_floor[c]++;
-    }
+    cvmtx_track(&inst.mtx, cvm);                      // ch1/2 idle-floor follow
 
     // ---- CV matrix -> per-destination modulation on top of the base ----
     float m_cut = 0, m_res = 0, m_e2c = 0, m_lvl = 0, m_semi = 0, m_start = 0, m_lmov = 0, m_llen = 0;
     for (int d = 0; d < ISM_N; d++) {
-        int src = inst.mtx_src[d];
-        if (src < 0) continue;
-        float cv01 = is_mtx_cv01(cvm, inst.cv12_floor, src);
-        float a = inst.mtx_amt[d];
+        float av = cvmtx_val(&inst.mtx, cvm, d);      // amt * conditioned CV
+        if (av == 0.0f) continue;
         switch (d) {
-            case ISM_CUTOFF:  m_cut   += a * 4000.0f * cv01; break;
-            case ISM_RES:     m_res   += a * cv01;           break;
-            case ISM_ENVCUT:  m_e2c   += a * cv01;           break;
-            case ISM_LEVEL:   m_lvl   += a * cv01;           break;
-            case ISM_PITCH:   m_semi  += a * 24.0f * cv01;   break;
-            case ISM_START:   m_start += a * cv01;           break;
-            case ISM_LOOPMOV: m_lmov  += a * cv01;           break;
-            case ISM_LOOPLEN: m_llen  += a * cv01;           break;
+            case ISM_CUTOFF:  m_cut   += av * 4000.0f; break;
+            case ISM_RES:     m_res   += av;           break;
+            case ISM_ENVCUT:  m_e2c   += av;           break;
+            case ISM_LEVEL:   m_lvl   += av;           break;
+            case ISM_PITCH:   m_semi  += av * 24.0f;   break;
+            case ISM_START:   m_start += av;           break;
+            case ISM_LOOPMOV: m_lmov  += av;           break;
+            case ISM_LOOPLEN: m_llen  += av;           break;
         }
     }
     float cutoff_eff = inst.cutoff_base + m_cut;
@@ -331,12 +326,10 @@ static cJSON *keys_preset_save(void)
     cJSON_AddNumberToObject(o, "ls", (double)z->loop_start);
     cJSON_AddNumberToObject(o, "le", (double)z->loop_end);
     cJSON_AddNumberToObject(o, "lx", (double)z->loop_xfade);
-    cJSON *ms = cJSON_AddArrayToObject(o, "msrc");
-    cJSON *ma = cJSON_AddArrayToObject(o, "mamt");
-    for (int d = 0; d < ISM_N; d++) {
-        cJSON_AddItemToArray(ms, cJSON_CreateNumber(inst.mtx_src[d]));
-        cJSON_AddItemToArray(ma, cJSON_CreateNumber(inst.mtx_amt[d]));
-    }
+    // K5 start offset was knob-only (never persisted) until the autosave
+    // sweep made knob edits savable
+    cJSON_AddNumberToObject(o, "stf", inst.start_frac);
+    cvmtx_save(&inst.mtx, o);                // matrix ("mxs"/"mxa")
     return o;
 }
 
@@ -368,15 +361,11 @@ static void keys_preset_load(const cJSON *node)
         if (z->loop_end > z->frames) z->loop_end = z->frames;
         if (z->loop_start >= z->loop_end) z->loop_start = 0;
     }
-    cJSON *ms = cJSON_GetObjectItemCaseSensitive(node, "msrc");
-    cJSON *ma = cJSON_GetObjectItemCaseSensitive(node, "mamt");
-    if (cJSON_IsArray(ms) && cJSON_IsArray(ma)) {
-        for (int d = 0; d < ISM_N; d++) {
-            cJSON *si = cJSON_GetArrayItem(ms, d), *ai = cJSON_GetArrayItem(ma, d);
-            if (cJSON_IsNumber(si)) { int val = si->valueint; inst.mtx_src[d] = (val < -1 || val > 7) ? -1 : (int8_t)val; }
-            if (cJSON_IsNumber(ai)) { float a = (float)ai->valuedouble; inst.mtx_amt[d] = a < -1 ? -1 : a > 1 ? 1 : a; }
-        }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "stf")) && cJSON_IsNumber(j)) {
+        float s = (float)j->valuedouble;
+        inst.start_frac = s < 0 ? 0 : s > 0.99f ? 0.99f : s;
     }
+    cvmtx_load(&inst.mtx, node);   // "mxs"/"mxa", with the legacy "msrc"/"mamt" fallback
     inst.knob_ctx = -1;   // re-arm knob takeover against the loaded values
 }
 

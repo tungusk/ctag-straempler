@@ -391,7 +391,7 @@ static void setup_val(int i, char *v, size_t n)
         case 14: snprintf(v, n, "%s", sy.lfo_dest == LFO_CUT ? "cutoff" : sy.lfo_dest == LFO_PITCH ? "pitch" : "off"); break;
         case 15: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
         case 16: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
-        case 17: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx_src[d] >= 0) on++;
+        case 17: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx.src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
         case 18: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 0)); break;
         case 19: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 1)); break;
@@ -509,82 +509,14 @@ static int synth_load_handler(int it_id, int event, void *ev_data)
     return 0;
 }
 
-// ---- CV Matrix page: per-destination source + bipolar amount ---------------
-static const char *const mtx_labels[SYM_N] = {
-    "Cutoff", "Reso", "Timbre", "Env>Cut", "LFO Rate", "LFO Dep", "Level", "Pitch"
-};
-
-static void mtx_redraw(int pos, int field)   // field: 0 nav / 1 edit src / 2 edit amt
-{
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
-    _fg = TFT_WHITE; TFT_print("Synth CV Matrix", 6, 4);
-    menuTFTPrintAffordance("Setup", pos == -1);
-    int row_h = fh + 5, y0 = fh + 14;
-    int vis = (_height - fh - 6 - y0) / row_h;
-    if (vis < 1) vis = 1;
-    int top = 0;
-    if (pos >= vis) top = pos - vis + 1;
-    for (int r = 0; r < vis; r++) {
-        int i = top + r;
-        if (i >= SYM_N) break;
-        int y = y0 + r * row_h;
-        _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-        TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
-        _fg = TFT_WHITE;
-        TFT_print((char *)mtx_labels[i], 8, y);
-        char src[8], amt[10];
-        if (sy.mtx_src[i] < 0) snprintf(src, sizeof(src), "off");
-        else                   snprintf(src, sizeof(src), "CV%d", sy.mtx_src[i] + 1);
-        snprintf(amt, sizeof(amt), "%+d%%", (int)(sy.mtx_amt[i] * 100.0f));
-        // fixed positions + brackets that hug the value -> nothing shifts on select
-        int cw = TFT_getStringWidth("]");
-        // middle column (src): value at a fixed x
-        int src_x = _width - 150, src_w = TFT_getStringWidth(src);
-        _fg = (i == pos && field == 1) ? TFT_CYAN : (color_t){170, 170, 180};
-        TFT_print(src, src_x, y);
-        if (i == pos && field == 1) { TFT_print("[", src_x - cw, y); TFT_print("]", src_x + src_w, y); }
-        // right column (amt): right-aligned, indented one char from the edge
-        int amt_w = TFT_getStringWidth(amt), amt_x = _width - 10 - cw - amt_w;
-        _fg = (sy.mtx_src[i] < 0) ? (color_t){80, 80, 90}
-            : (i == pos && field == 2) ? TFT_CYAN : TFT_WHITE;
-        TFT_print(amt, amt_x, y);
-        if (i == pos && field == 2) { TFT_print("[", amt_x - cw, y); TFT_print("]", amt_x + amt_w, y); }
-    }
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("press: src > amt > done   turn: change", 8, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
-}
-
+// ---- CV Matrix page: the shared cvmtx widget drives everything --------------
+// (this file used to own the page; it moved to components/menu/cvmtx.c when
+// Tape became the third matrix host)
 static int synth_matrix_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
-    static int pos = 0, field = 0;
-    switch (event) {
-        case EV_ENTERED_MENU: pos = 0; field = 0; mtx_redraw(pos, field); break;
-        case EV_FWD:
-            if (field == 1)      { int s = sy.mtx_src[pos] + 1; if (s > 7)  s = -1; sy.mtx_src[pos] = (int8_t)s; }
-            else if (field == 2) { float a = sy.mtx_amt[pos] + 0.05f; if (a > 1.0f) a = 1.0f; sy.mtx_amt[pos] = a; }
-            else { pos++; if (pos >= SYM_N) pos = -1; }
-            mtx_redraw(pos, field);
-            break;
-        case EV_BWD:
-            if (field == 1)      { int s = sy.mtx_src[pos] - 1; if (s < -1) s = 7; sy.mtx_src[pos] = (int8_t)s; }
-            else if (field == 2) { float a = sy.mtx_amt[pos] - 0.05f; if (a < -1.0f) a = -1.0f; sy.mtx_amt[pos] = a; }
-            else { pos--; if (pos < -1) pos = SYM_N - 1; }
-            mtx_redraw(pos, field);
-            break;
-        case EV_SHORT_PRESS:
-            if (pos == -1) return M_SYNTH_SETUP;
-            field = (field + 1) % 3;                     // nav -> src -> amt -> nav
-            mtx_redraw(pos, field);
-            break;
-        case EV_LONG_PRESS: return M_SYNTH_LIVE;
-        default: break;
-    }
-    return 0;
+    return cvmtx_menu_event(&sy.mtx, event, "Synth CV Matrix",
+                            M_SYNTH_SETUP, M_SYNTH_LIVE);
 }
 
 // ---- Load Patch: a scrollable list of usr/synth/PAT_NNN.jsn (newest first) --

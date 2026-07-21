@@ -162,8 +162,12 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   the UI event queue) flag `machine_state_dirty()` — a 1 s menu poll arms the
   same debounce, with a forced save every ~10 s during a continuous gesture.
   Engines must flag only on a COMMITTED value change (past the take-over/
-  move threshold), never every block, or the backstop saves forever. Drums
-  is wired; Deck/DoubleDecker/Tape knob edits could adopt it the same way.
+  move threshold), never every block, or the backstop saves forever. Wired
+  (2026-07-20 sweep): Drums, Tape (K6-8; K5 win_move is performance-only,
+  unsaved), Synth + Keys (all four macro knobs; synth cut/res/fold + keys
+  start_frac became persisted keys in the same sweep), Deck (loop-length
+  ladder — llenq was persisted but knob-driven). DoubleDecker needs nothing
+  (its ladder is Setup/encoder-driven).
 - **Adding a machine**: new `components/machine_<name>/` (see machine_glitch as
   the smallest clean example — engine + menu + priv header + CMakeLists), add
   one line to the registry + `main/CMakeLists.txt` REQUIRES, add it to
@@ -388,13 +392,18 @@ The machines (all working; archives in `bin/`):
 - `components/util/preset_store.{h,c}` — named machine-preset save/recall
   on SD (the Scenes roadmap item builds on it).
 - `components/menu/cvmtx.{h,c}` — the shared assignable CV MATRIX widget
-  (2026-07-20, Tape = first host; synth/sampler3 matrices predate it and can
-  migrate later): N host-labeled destinations, each source (off/CV1..8) +
+  (2026-07-20): N host-labeled destinations, each source (off/CV1..8) +
   bipolar amount; owns the ch1/2 floor-tracked conditioning (1V/oct jacks
   idle ~21% — synth's sy_mtx_cv01 lifted), the matrix page (label|[src]|[amt]
-  rows, press cycles nav>src>amt), and "mxs"/"mxa" (de)serialization. Host
-  applies `cvmtx_val()` (-1..+1) as live OFFSETS — the win_move convention.
-  Lives in components/menu (the sample_browser precedent — it draws).
+  rows, press cycles nav>src>amt), and "mxs"/"mxa" (de)serialization (loads
+  the legacy synth/keys "msrc"/"mamt" keys transparently). Hosts: Tape,
+  Synth, Keys (the latter two MIGRATED 2026-07-20 — their hand-rolled matrix
+  pages are deleted). Host applies `cvmtx_val()` (-1..+1) as live OFFSETS —
+  the win_move convention. Sampler3's matrix is engine-woven (per-voice
+  speed/start/length) and stays bespoke. DoubleDecker keeps its own CV Map
+  (channel assignment, not a matrix — don't duplicate); Deck's contextual
+  loop knobs ARE its CV interface, no matrix by design. Lives in
+  components/menu (the sample_browser precedent — it draws).
 - `components/util/svf.{h,c}` — the Chamberlin state-variable filter, ONE copy
   (it had been hand-written three times: deck, looper engine, looper bounce).
   `svf_step()` gives lp/bp/hp taps; the caller keeps the coefficient slew and

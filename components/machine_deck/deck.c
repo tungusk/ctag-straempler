@@ -760,6 +760,8 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
                         s_loop_len_idx = ni;
                         dk.loop_len_beats = dk_loop_q[ni];
                         deck_loop_remap(cs, nl);
+                        machine_state_dirty();   // llenq is persisted; the knob
+                                                 // never enters the UI queue
                     }
                 } else if (ni == s_loop_len_idx) s_mv7 = 0;
             }

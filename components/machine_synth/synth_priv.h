@@ -9,6 +9,7 @@
 #include "flanger.h"
 #include "tremolo.h"
 #include "fxrack.h"       // shared FX slot rack (pulls fxfilter.h)
+#include "cvmtx.h"        // shared CV matrix widget
 
 // Synth voice — a no-sample sound source. v1 is a monophonic subtractive voice:
 // polyBLEP saw<->square oscillator, 1V/oct pitch on CV1, TR1 gate -> linear ADSR
@@ -93,11 +94,13 @@ typedef struct {
     bool  knob_live[4];          // knob has moved past threshold -> it drives its param
     int   knob_engine;           // engine the captures are valid for (-1 = recapture)
 
-    // CV matrix: per-destination source + bipolar amount (adds on top of base)
-    int8_t mtx_src[SYM_N];       // -1 = off, 0..7 = CV1..CV8
-    float  mtx_amt[SYM_N];       // -1..+1 depth
-    int    cv12_floor[2];        // tracked idle floor for ch1/2 (1V/oct jacks idle ~21%)
+    // CV matrix (the shared cvmtx widget since 2026-07-20; adds on top of
+    // base — dest meanings/scales in synth.c's apply switch). Owns the
+    // ch1/2 floor conditioning that used to live here as cv12_floor.
+    cvmtx_t mtx;
 } sy_state_t;
+
+extern const char *const synth_mtx_labels[SYM_N];   // dest names (synth.c)
 
 extern sy_state_t sy;
 extern fxrack_t sy_rk;    // FX rack pointer-view over sy's effect instances
