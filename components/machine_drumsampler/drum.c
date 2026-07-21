@@ -92,7 +92,7 @@ static void voice_setup(dr_pad_t *p, dr_voice_t *v)
     dr_layer_t *L = &p->ly[p->cur];
     v->buf = L->buf;
     v->len = L->len;
-    int pi = p->pitch_semi;
+    int pi = p->pitch_semi + p->pitch_cv;   // base + live CV offset
     if (pi < -12) pi = -12;
     if (pi > 12) pi = 12;
     v->step = dr_pitch_q12[pi + 12];
@@ -120,6 +120,8 @@ static esp_err_t drum_start(void)
         dr.pad[i].fx_on = true;   // wet by default: FX1/FX2 start Off, so this
                                   // is silent until an effect is chosen — and a
                                   // legacy master-delay preset keeps its sound
+        dr.pad[i].pitch_src = DR_SRC_NONE;
+        dr.pad[i].pitch_floor = 4095;      // V/oct floor converges down on first reads
         for (int l = 0; l < DR_LAYERS; l++) {
             // A fires from the pad's own CV; B fires from NOTHING until it is
             // routed — sharing A's channel would make B choke A on every hit,
@@ -315,6 +317,29 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         float qfloor = DR_Q_SQUELCH + 0.8f * (dr.flt_f > 0.85f ? (dr.flt_f - 0.85f) : 0.0f);
         if (q_t < qfloor) q_t = qfloor;
         dr.flt_q += 0.2f * (q_t - dr.flt_q);     // a jumped q clicks: slew it too
+    }
+
+    // ---- per-pad PITCH CV -> quantized semitone offset (see drum_priv.h) ----
+    // computed every block so a held/ringing pad retunes live (voice_setup
+    // refreshes the step per block)
+    for (int i = 0; i < DR_PADS; i++) {
+        dr_pad_t *p = &dr.pad[i];
+        int srcp = p->pitch_src;
+        if (srcp < 0) { p->pitch_cv = 0; continue; }
+        int c = cvm[srcp & 7];
+        int semi;
+        if (p->pitch_mode == DR_PCV_VOCT) {
+            // root at the channel's idle: follow the floor down, drift back up
+            if (c < p->pitch_floor) p->pitch_floor = c;
+            else if (p->pitch_floor < 4095) p->pitch_floor++;
+            semi = (c - p->pitch_floor + DR_PCV_CTS_SEMI / 2) / DR_PCV_CTS_SEMI;
+            if (semi > 12) semi = 12;
+        } else {                       // +/-: bipolar around mid-scale
+            semi = ((c - 2048) * 12) / 2048;
+            if (semi < -12) semi = -12;
+            if (semi > 12) semi = 12;
+        }
+        p->pitch_cv = (int8_t)semi;
     }
 
     // ---- triggers ----
@@ -710,6 +735,8 @@ static cJSON *drum_preset_save(void)
         cJSON_AddNumberToObject(p, "reps", dr.pad[i].loop_reps);     // retrig cap (255 = INF)
         cJSON_AddBoolToObject(p, "fx", dr.pad[i].fx_on);             // FX1/FX2 bus routing
         cJSON_AddNumberToObject(p, "pit", dr.pad[i].pitch_semi);     // -12..+12 semitones
+        cJSON_AddNumberToObject(p, "pcv", dr.pad[i].pitch_src + 1);  // pitch CV (0 = none)
+        cJSON_AddNumberToObject(p, "pcm", dr.pad[i].pitch_mode);     // +/- vs V/oct
         cJSON_AddItemToArray(pads, p);
     }
     return o;
@@ -805,6 +832,13 @@ static void drum_preset_load(const cJSON *node)
                 if (ps > 12) ps = 12;
                 dr.pad[i].pitch_semi = (int8_t)ps;
             }
+            // pcv is 1-based; 0/absent = none (the src convention)
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "pcv")) && cJSON_IsNumber(j))
+                dr.pad[i].pitch_src = (j->valueint <= 0) ? DR_SRC_NONE
+                                                         : ((j->valueint - 1) & 7);
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "pcm")) && cJSON_IsNumber(j))
+                dr.pad[i].pitch_mode = (j->valueint == DR_PCV_VOCT) ? DR_PCV_VOCT
+                                                                    : DR_PCV_BI;
             // reload the remembered samples. An old preset has no "s2" — absent
             // simply means the pad has no B layer, which is today's behaviour.
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "s")) && cJSON_IsString(j) && j->valuestring[0])
