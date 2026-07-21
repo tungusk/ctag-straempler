@@ -315,6 +315,18 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     if (tp.knob_live[1]) tp.cutoff   = 30.0f * powf(200.0f, kn[1]);        // 30 Hz .. 6 kHz
     if (tp.knob_live[2]) tp.res01    = kn[2];
     if (tp.knob_live[3]) tp.drive    = kn[3];
+    // K6..K8 land in PERSISTED params (cut/res/drv) but never touch the UI
+    // event queue — flag committed moves for the autosave (K5's win_move is
+    // performance-only, not saved, so it doesn't flag)
+    {
+        static float s_kdirty[4] = {-1, -1, -1, -1};
+        for (int i = 1; i < 4; i++)
+            if (tp.knob_live[i] &&
+                (s_kdirty[i] < 0 || fabsf(kn[i] - s_kdirty[i]) > 0.03f)) {
+                s_kdirty[i] = kn[i];
+                machine_state_dirty();
+            }
+    }
 
     // CV matrix: one value per destination per block, from the same
     // conditioned snapshot the knobs use. Written before the card branch so

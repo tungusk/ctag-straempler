@@ -142,7 +142,14 @@ void cvmtx_load(cvmtx_t *m, const cJSON *node)
     if (!node) return;
     cJSON *ms = cJSON_GetObjectItemCaseSensitive(node, "mxs");
     cJSON *ma = cJSON_GetObjectItemCaseSensitive(node, "mxa");
-    if (!cJSON_IsArray(ms)) return;                     // pre-matrix preset: leave defaults
+    bool legacy = false;
+    if (!cJSON_IsArray(ms)) {
+        // pre-cvmtx synth/keys matrices: "msrc"/"mamt", amounts as raw floats
+        ms = cJSON_GetObjectItemCaseSensitive(node, "msrc");
+        ma = cJSON_GetObjectItemCaseSensitive(node, "mamt");
+        if (!cJSON_IsArray(ms)) return;                 // pre-matrix preset: leave defaults
+        legacy = true;
+    }
     for (int d = 0; d < m->n; d++) {
         cJSON *si = cJSON_GetArrayItem(ms, d);
         cJSON *ai = cJSON_IsArray(ma) ? cJSON_GetArrayItem(ma, d) : NULL;
@@ -151,7 +158,8 @@ void cvmtx_load(cvmtx_t *m, const cJSON *node)
             m->src[d] = (v < -1 || v > 7) ? -1 : (int8_t)v;
         }
         if (cJSON_IsNumber(ai)) {
-            float a = (float)ai->valueint / 100.0f;
+            float a = legacy ? (float)ai->valuedouble
+                             : (float)ai->valueint / 100.0f;
             m->amt[d] = a < -1.0f ? -1.0f : a > 1.0f ? 1.0f : a;
         }
     }

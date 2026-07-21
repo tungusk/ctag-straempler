@@ -404,7 +404,7 @@ static void ks_val(int i, char *v, size_t n)
         case 12: snprintf(v, n, "%.0f%%", inst.env_to_cut * 100.0f); break;
         case 13: snprintf(v, n, "%d ms", (int)(inst.glide * 1000.0f)); break;
         case 14: snprintf(v, n, "%.0f%%", inst.level * 100.0f); break;
-        case 15: { int on = 0; for (int d = 0; d < ISM_N; d++) if (inst.mtx_src[d] >= 0) on++;
+        case 15: { int on = 0; for (int d = 0; d < ISM_N; d++) if (inst.mtx.src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
         case 16: snprintf(v, n, "%s >", fxrack_slot_name(&inst_rk, 0)); break;
         case 17: snprintf(v, n, "%s >", fxrack_slot_name(&inst_rk, 1)); break;
@@ -551,79 +551,12 @@ static int keys_load_handler(int it_id, int event, void *ev_data)
     return 0;
 }
 
-// ---- CV Matrix page (Synth's, relabelled for the sampler) ------------------
-static const char *const mtx_labels[ISM_N] = {
-    "Cutoff", "Reso", "Env>Cut", "Level", "Pitch", "Start", "LoopMov", "LoopLen"
-};
-
-static void mtx_redraw(int pos, int field)
-{
-    TFT_resetclipwin();
-    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
-    int fh = TFT_getfontheight();
-    _fg = TFT_WHITE; TFT_print("Keys CV Matrix", 6, 4);
-    menuTFTPrintAffordance("Setup", pos == -1);
-    int row_h = fh + 5, y0 = fh + 14;
-    int vis = (_height - fh - 6 - y0) / row_h;
-    if (vis < 1) vis = 1;
-    int top = 0;
-    if (pos >= vis) top = pos - vis + 1;
-    for (int r = 0; r < vis; r++) {
-        int i = top + r;
-        if (i >= ISM_N) break;
-        int y = y0 + r * row_h;
-        _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-        TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
-        _fg = TFT_WHITE;
-        TFT_print((char *)mtx_labels[i], 8, y);
-        char src[8], amt[10];
-        if (inst.mtx_src[i] < 0) snprintf(src, sizeof(src), "off");
-        else                     snprintf(src, sizeof(src), "CV%d", inst.mtx_src[i] + 1);
-        snprintf(amt, sizeof(amt), "%+d%%", (int)(inst.mtx_amt[i] * 100.0f));
-        int cw = TFT_getStringWidth("]");
-        int src_x = _width - 150, src_w = TFT_getStringWidth(src);
-        _fg = (i == pos && field == 1) ? TFT_CYAN : (color_t){170, 170, 180};
-        TFT_print(src, src_x, y);
-        if (i == pos && field == 1) { TFT_print("[", src_x - cw, y); TFT_print("]", src_x + src_w, y); }
-        int amt_w = TFT_getStringWidth(amt), amt_x = _width - 10 - cw - amt_w;
-        _fg = (inst.mtx_src[i] < 0) ? (color_t){80, 80, 90}
-            : (i == pos && field == 2) ? TFT_CYAN : TFT_WHITE;
-        TFT_print(amt, amt_x, y);
-        if (i == pos && field == 2) { TFT_print("[", amt_x - cw, y); TFT_print("]", amt_x + amt_w, y); }
-    }
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("press: src > amt > done   turn: change", 8, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
-}
-
+// ---- CV Matrix page: the shared cvmtx widget drives everything --------------
 static int keys_matrix_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
-    static int pos = 0, field = 0;
-    switch (event) {
-        case EV_ENTERED_MENU: pos = 0; field = 0; mtx_redraw(pos, field); break;
-        case EV_FWD:
-            if (field == 1)      { int s = inst.mtx_src[pos] + 1; if (s > 7)  s = -1; inst.mtx_src[pos] = (int8_t)s; }
-            else if (field == 2) { float a = inst.mtx_amt[pos] + 0.05f; if (a > 1.0f) a = 1.0f; inst.mtx_amt[pos] = a; }
-            else { pos++; if (pos >= ISM_N) pos = -1; }
-            mtx_redraw(pos, field);
-            break;
-        case EV_BWD:
-            if (field == 1)      { int s = inst.mtx_src[pos] - 1; if (s < -1) s = 7; inst.mtx_src[pos] = (int8_t)s; }
-            else if (field == 2) { float a = inst.mtx_amt[pos] - 0.05f; if (a < -1.0f) a = -1.0f; inst.mtx_amt[pos] = a; }
-            else { pos--; if (pos < -1) pos = ISM_N - 1; }
-            mtx_redraw(pos, field);
-            break;
-        case EV_SHORT_PRESS:
-            if (pos == -1) return M_ISMP_SETUP;
-            field = (field + 1) % 3;
-            mtx_redraw(pos, field);
-            break;
-        case EV_LONG_PRESS: return M_ISMP_LIVE;
-        default: break;
-    }
-    return 0;
+    return cvmtx_menu_event(&inst.mtx, event, "Keys CV Matrix",
+                            M_ISMP_SETUP, M_ISMP_LIVE);
 }
 
 // ---- Load Patch: a scrollable list of usr/keys/PAT_NNN.jsn (newest first) ---

@@ -9,6 +9,7 @@
 #include "flanger.h"
 #include "tremolo.h"
 #include "fxrack.h"       // shared FX slot rack (FXK_*, FX_NSLOT_GEN, fxfilter)
+#include "cvmtx.h"        // shared CV matrix widget
 
 // Keys — tonal instrument sampler (see machine_instsampler.h). v1: one mono
 // PSRAM-resident sample, varispeed-pitched across the keyboard from CV1
@@ -32,6 +33,8 @@ enum { LOOP_OFF = 0, LOOP_FWD };                              // LOOP_PP = v2
 // bipolar amount; modulation ADDS to the knob/Setup base per block.
 enum { ISM_CUTOFF = 0, ISM_RES, ISM_ENVCUT, ISM_LEVEL,
        ISM_PITCH, ISM_START, ISM_LOOPMOV, ISM_LOOPLEN, ISM_N };
+
+extern const char *const keys_mtx_labels[ISM_N];   // dest names (instsampler.c)
 
 // one mapped sample region (v1 uses zone[0] only)
 typedef struct {
@@ -85,10 +88,9 @@ typedef struct {
     // Source of truth for on/order; the *_on bools are kept synced from this.
     int8_t fx_slot[FX_NSLOT_GEN];
 
-    // CV matrix (identical mechanics to Synth)
-    int8_t mtx_src[ISM_N];    // -1 off / 0..7 = CV1..8
-    float  mtx_amt[ISM_N];    // -1..+1
-    int    cv12_floor[2];     // tracked idle floor for ch1/2
+    // CV matrix (the shared cvmtx widget since 2026-07-20 — identical
+    // mechanics to Synth; owns the old cv12_floor conditioning)
+    cvmtx_t mtx;
 
     // four macro knobs w/ takeover (Synth machinery); knob_ctx = -1 -> recapture
     float knob_capt[4];

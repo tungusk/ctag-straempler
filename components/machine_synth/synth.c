@@ -70,8 +70,7 @@ static esp_err_t synth_start(void)
     sy.res01 = 0.2f;
     sy.freq = 261.6f;           // C4-ish until CV read
     sy.knob_engine = -1;        // force a knob recapture on the first block
-    for (int d = 0; d < SYM_N; d++) { sy.mtx_src[d] = -1; sy.mtx_amt[d] = 0.0f; }  // matrix off
-    sy.cv12_floor[0] = sy.cv12_floor[1] = 4095;
+    cvmtx_init(&sy.mtx, synth_mtx_labels, SYM_N);      // matrix off, floors armed
     svf_reset(&sy.flt_l);
     fxfilter_init(&sy.filt);
     fxfilter_init(&sy.band);
@@ -90,21 +89,11 @@ static void synth_stop(void)
     flanger_free(&sy.flg);
 }
 
-// CV matrix source read -> 0..1, from the median-conditioned snapshot. ch1/2 are
-// 1V/oct jacks that idle ~21% up the scale, so rescale from the tracked floor
-// (like sampler3) so a patched source spans the full range.
-static inline float sy_mtx_cv01(const int *cvm, const int *floor, int src)
-{
-    int c = cvm[src & 7];
-    if ((src & 7) < 2) {
-        int fl = floor[src & 7];
-        if (fl > 3800) return 0.0f;                     // channel not converged / dead
-        c = (int)((int32_t)(c - fl) * 4095 / (4095 - fl));
-        if (c < 0) c = 0;
-        if (c > 4095) c = 4095;
-    }
-    return (float)c / 4095.0f;
-}
+// CV matrix destination names (order = the SYM_* enum). Source conditioning +
+// page + persistence all live in the shared cvmtx widget now.
+const char *const synth_mtx_labels[SYM_N] = {
+    "Cutoff", "Reso", "Timbre", "Env>Cut", "LFO Rate", "LFO Dep", "Level", "Pitch"
+};
 
 static void synth_process(int32_t out[MACHINE_BLOCK],
                           const int32_t in[MACHINE_BLOCK],
@@ -138,6 +127,17 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
         else if (sy.engine == ENG_WT) sy.fold     = kn[0];
         else                          sy.shape    = kn[0];
     }
+    // knob edits never reach the UI event queue: flag a committed move so the
+    // autosave picks it up (hysteresis — live knobs track every block)
+    {
+        static float s_kdirty[4] = {-1, -1, -1, -1};
+        for (int i = 0; i < 4; i++)
+            if (sy.knob_live[i] &&
+                (s_kdirty[i] < 0 || fabsf(kn[i] - s_kdirty[i]) > 0.03f)) {
+                s_kdirty[i] = kn[i];
+                machine_state_dirty();
+            }
+    }
     sy.cv1_disp = cvm[0];
     // gate on TR1 (active low) or a web/soft MIDI note; computed up here so the
     // pitch holds through the release tail instead of snapping to the C3 fallback
@@ -152,26 +152,20 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
 
     // ---- CV matrix: assigned CVs modulate params ON TOP of the knob/Setup base
     // (block-rate; median-conditioned; ch1/2 rescaled from their idle floor) ----
-    for (int c = 0; c < 2; c++) {                     // track ch1/2 idle floor
-        int cv = io->cv[c];
-        if (cv < sy.cv12_floor[c]) sy.cv12_floor[c] = cv;
-        else if (sy.cv12_floor[c] < 4095) sy.cv12_floor[c]++;
-    }
+    cvmtx_track(&sy.mtx, cvm);                        // ch1/2 idle-floor follow
     float m_cut = 0, m_res = 0, m_tmb = 0, m_e2c = 0, m_lfr = 0, m_lfd = 0, m_lvl = 0, m_semi = 0;
     for (int d = 0; d < SYM_N; d++) {
-        int src = sy.mtx_src[d];
-        if (src < 0) continue;
-        float cv01 = sy_mtx_cv01(cvm, sy.cv12_floor, src);
-        float a = sy.mtx_amt[d];
+        float av = cvmtx_val(&sy.mtx, cvm, d);        // amt * conditioned CV
+        if (av == 0.0f) continue;
         switch (d) {
-            case SYM_CUTOFF:   m_cut  += a * 4000.0f * cv01; break;
-            case SYM_RES:      m_res  += a * cv01;           break;
-            case SYM_TIMBRE:   m_tmb  += a * cv01;           break;
-            case SYM_ENVCUT:   m_e2c  += a * cv01;           break;
-            case SYM_LFORATE:  m_lfr  += a * 20.0f * cv01;   break;
-            case SYM_LFODEPTH: m_lfd  += a * cv01;           break;
-            case SYM_LEVEL:    m_lvl  += a * cv01;           break;
-            case SYM_PITCH:    m_semi += a * 24.0f * cv01;   break;
+            case SYM_CUTOFF:   m_cut  += av * 4000.0f; break;
+            case SYM_RES:      m_res  += av;           break;
+            case SYM_TIMBRE:   m_tmb  += av;           break;
+            case SYM_ENVCUT:   m_e2c  += av;           break;
+            case SYM_LFORATE:  m_lfr  += av * 20.0f;   break;
+            case SYM_LFODEPTH: m_lfd  += av;           break;
+            case SYM_LEVEL:    m_lvl  += av;           break;
+            case SYM_PITCH:    m_semi += av * 24.0f;   break;
         }
     }
     float cutoff_eff = sy.cutoff_base + m_cut;
@@ -317,12 +311,12 @@ static cJSON *synth_preset_save(void)
     cJSON_AddNumberToObject(o, "lfd", sy.lfo_depth);
     cJSON_AddNumberToObject(o, "lfx", sy.lfo_dest);
     cJSON_AddNumberToObject(o, "lvl", sy.level);
-    cJSON *ms = cJSON_AddArrayToObject(o, "msrc");
-    cJSON *ma = cJSON_AddArrayToObject(o, "mamt");
-    for (int d = 0; d < SYM_N; d++) {
-        cJSON_AddItemToArray(ms, cJSON_CreateNumber(sy.mtx_src[d]));
-        cJSON_AddItemToArray(ma, cJSON_CreateNumber(sy.mtx_amt[d]));
-    }
+    // K6/K7/WT-fold state was knob-only (never persisted) until the autosave
+    // sweep made knob edits savable — save what the save now fires for
+    cJSON_AddNumberToObject(o, "cut", sy.cutoff_base);
+    cJSON_AddNumberToObject(o, "res", sy.res01);
+    cJSON_AddNumberToObject(o, "fold", sy.fold);
+    cvmtx_save(&sy.mtx, o);                  // matrix ("mxs"/"mxa")
     return o;
 }
 
@@ -348,15 +342,19 @@ static void synth_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfd"))   && cJSON_IsNumber(j)) sy.lfo_depth = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfx"))   && cJSON_IsNumber(j)) sy.lfo_dest = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) sy.level = (float)j->valuedouble;
-    cJSON *ms = cJSON_GetObjectItemCaseSensitive(node, "msrc");
-    cJSON *ma = cJSON_GetObjectItemCaseSensitive(node, "mamt");
-    if (cJSON_IsArray(ms) && cJSON_IsArray(ma)) {
-        for (int d = 0; d < SYM_N; d++) {
-            cJSON *si = cJSON_GetArrayItem(ms, d), *ai = cJSON_GetArrayItem(ma, d);
-            if (cJSON_IsNumber(si)) { int v = si->valueint; sy.mtx_src[d] = (v < -1 || v > 7) ? -1 : (int8_t)v; }
-            if (cJSON_IsNumber(ai)) { float a = (float)ai->valuedouble; sy.mtx_amt[d] = a < -1 ? -1 : a > 1 ? 1 : a; }
-        }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cut")) && cJSON_IsNumber(j)) {
+        float c = (float)j->valuedouble;
+        sy.cutoff_base = c < 10.0f ? 10.0f : c > 6000.0f ? 6000.0f : c;
     }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "res")) && cJSON_IsNumber(j)) {
+        float r = (float)j->valuedouble;
+        sy.res01 = r < 0 ? 0 : r > 1 ? 1 : r;
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fold")) && cJSON_IsNumber(j)) {
+        float f = (float)j->valuedouble;
+        sy.fold = f < 0 ? 0 : f > 1 ? 1 : f;
+    }
+    cvmtx_load(&sy.mtx, node);   // "mxs"/"mxa", with the legacy "msrc"/"mamt" fallback
 }
 
 // ---- named patch files: usr/synth/PAT_NNN.jsn (shared preset_store) --------
