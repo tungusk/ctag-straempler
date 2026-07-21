@@ -102,7 +102,19 @@ typedef struct {
     // decay, and the stutter loop all live in SAMPLE frames, so pitching
     // down stretches everything tape-style — that is the intended feel.
     // Per PAD (both layers), like every other performable value.
-    volatile int8_t pitch_semi;   // -12..+12, 0 = native
+    volatile int8_t pitch_semi;   // -12..+12, 0 = native (the BASE)
+    // PITCH CV (Arlo 2026-07-20): an assignable per-pad CV source ADDS to the
+    // base, quantized to semitones. Two modes:
+    //   +/-    bipolar around mid-scale (2048 = native, rails = +/-12) — for
+    //          a +/-5V mod source (ch3; ch4's jack is dead). The 1V/oct
+    //          jacks idle ~21% up and read as a standing offset here.
+    //   V/oct  semitones above the channel's TRACKED idle floor (~49 ADC
+    //          counts/semi, this unit's measured scale), 0..+12 — root at
+    //          0V, play the pad up the keyboard. Unpatched = native.
+    volatile int8_t pitch_src;    // -1 none / 0..7 = CV1..8
+    volatile int8_t pitch_mode;   // DR_PCV_BI / DR_PCV_VOCT
+    volatile int8_t pitch_cv;     // engine-computed semitone offset this block
+    int pitch_floor;              // engine: tracked idle floor for V/oct mode
     uint32_t pos_fr;              // engine only: Q12 fraction under pos
     volatile uint8_t vel;         // velocity of the current hit, 0..255
     volatile bool hit;            // set on trigger, cleared by the UI (pad flash)
@@ -142,6 +154,10 @@ typedef struct {
 #define DR_CW_START     2         // skip into the sample, up to DR_START_MAX/255
 #define DR_CW_NONE      3         // clockwise does NOTHING: knob7 is a decay-only
                                   // control, and half its travel is a safe zone
+#define DR_PCV_BI       0         // pitch CV mode: bipolar +/- around mid-scale
+#define DR_PCV_VOCT     1         // pitch CV mode: 1V/oct above the tracked floor
+#define DR_PCV_CTS_SEMI 49        // this unit's measured 1V/oct scale (ADC counts)
+
 #define DR_CW_PITCH     4         // tune DOWN: noon = native, full CW = -12 semi
                                   // (the classic drum move; UP is on the Pads row).
                                   // APPENDED so old presets' cw values keep meaning

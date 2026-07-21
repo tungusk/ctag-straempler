@@ -536,11 +536,11 @@ static int drum_live_handler(int it_id, int event, void *ev_data){
 // the cyan alone didn't read as a mode.
 #define DR_ROW_Y(i) (TFT_getfontheight() + 16 + (i) * (TFT_getfontheight() + 8))
 
-static void row_draw(int i, int pos, int sel, const char *label, const char *raw){
+// draws at a SCREEN SLOT (the page scrolls now — the caller maps row -> slot)
+static void row_draw(int slot, bool selrow, bool editing, const char *label, const char *raw){
     int fh = TFT_getfontheight();
-    int y = DR_ROW_Y(i);
-    bool editing = (i == pos && sel);
-    _bg = (i == pos) ? (color_t){10, 18, 56} : SCREEN_BG;
+    int y = DR_ROW_Y(slot);
+    _bg = selrow ? (color_t){10, 18, 56} : SCREEN_BG;
     _fg = editing ? TFT_CYAN : TFT_WHITE;
     TFT_fillRect(0, y - 2, _width, fh + 6, _bg);
     TFT_print((char*)label, 8, y);
@@ -556,25 +556,35 @@ static void row_draw(int i, int pos, int sel, const char *label, const char *raw
 // when B layers are on). The old index-keyed toggle macro would have silently
 // mis-assigned click behaviour the moment a row was inserted.
 enum { PR_PAD = 0, PR_LAYERED, PR_LAYER, PR_SAMPLE, PR_TRIG, PR_LEVEL, PR_PAN,
-       PR_SEND, PR_FX, PR_PITCH, PR_DECAY, PR_CW, PR_RETRIG, PR_ENABLED,
-       PR_COUNT };
+       PR_SEND, PR_FX, PR_PITCH, PR_PITCHCV, PR_PITCHMODE, PR_DECAY, PR_CW,
+       PR_RETRIG, PR_ENABLED, PR_COUNT };
 
 static const char *pads_labels[PR_COUNT] = {"Pad", "B Layer", "Layer", "Sample",
                                             "Trig In", "Level", "Pan", "Rev Send",
-                                            "FX", "Pitch", "Decay", "Knob7 CW",
+                                            "FX", "Pitch", "Pitch CV",
+                                            "Pitch Mode", "Decay", "Knob7 CW",
                                             "Retrig", "Enabled"};
 // small option sets flip on a click; ranges keep click-to-edit
 #define PADS_IS_TOGGLE(id) ((id) == PR_PAD || (id) == PR_LAYERED || \
                             (id) == PR_LAYER || (id) == PR_CW || \
-                            (id) == PR_FX || (id) == PR_ENABLED)
+                            (id) == PR_FX || (id) == PR_PITCHMODE || \
+                            (id) == PR_ENABLED)
 
 static int s_prows[PR_COUNT], s_pnrows;
+static int s_ptop = 0;                 // first visible row (the page SCROLLS now)
+
+static int pads_vis(void){
+    int fh = TFT_getfontheight();
+    return (_height - (fh + 16) - 4) / (fh + 8);
+}
 
 static void pads_build_rows(void){
     bool layered = dr.pad[dr.sel_pad].layered;   // layering is per PAD now
     s_pnrows = 0;
     for (int id = 0; id < PR_COUNT; id++){
         if (id == PR_LAYER && !layered) continue;   // nothing to switch between
+        if (id == PR_PITCHMODE && dr.pad[dr.sel_pad].pitch_src < 0)
+            continue;                               // no source -> no mode to pick
         s_prows[s_pnrows++] = id;
     }
     if (!layered) s_layer = 0;
@@ -605,17 +615,25 @@ static void pads_value_str(int id, char *v, size_t n){
                                                (int)p->rv_send * 100 / 255);
             else snprintf(v, n, "%d%%", (int)p->rv_send * 100 / 255);
             break;
-        // per-pad FX1/FX2 routing. "wet" with the slots empty is legal (and
-        // silent) — say so, or the row reads as a broken effect
+        // per-pad FX1/FX2 routing. Routed with the slots empty is legal (and
+        // silent) — say so, or the row reads as a broken effect. Plain
+        // on/off wording (Arlo: "wet (FX off)" read as a contradiction).
         case PR_FX:
-            if (!p->fx_on) snprintf(v, n, "dry");
+            if (!p->fx_on) snprintf(v, n, "off");
             else if (dr.fx_slot[0] == FXK_OFF && dr.fx_slot[1] == FXK_OFF)
-                snprintf(v, n, "wet (FX off)");
-            else snprintf(v, n, "wet");
+                snprintf(v, n, "on (no FX)");
+            else snprintf(v, n, "on");
             break;
         case PR_PITCH:
             if (p->pitch_semi == 0) snprintf(v, n, "native");
             else snprintf(v, n, "%+d st", p->pitch_semi);
+            break;
+        case PR_PITCHCV:
+            if (p->pitch_src == DR_SRC_NONE) snprintf(v, n, "none");
+            else snprintf(v, n, "CV%d", (p->pitch_src & 7) + 1);
+            break;
+        case PR_PITCHMODE:
+            snprintf(v, n, "%s", p->pitch_mode == DR_PCV_VOCT ? "V/oct" : "+/-");
             break;
         case PR_PAN:
             if (p->pan == 128) snprintf(v, n, "C");
@@ -655,27 +673,35 @@ static void pads_value_str(int id, char *v, size_t n){
 }
 
 static void pads_row_redraw(int idx, int pos, int sel){
+    int slot = idx - s_ptop;
+    if (slot < 0 || slot >= pads_vis()) return;   // scrolled out of the window
     char raw[24];
     int id = s_prows[idx];
     pads_value_str(id, raw, sizeof(raw));
-    row_draw(idx, pos, sel, pads_labels[id], raw);
+    row_draw(slot, idx == pos, idx == pos && sel, pads_labels[id], raw);
 }
 
+// full page: clamp the scroll window around the cursor, draw what fits (the
+// hint line is gone — Arlo: it wasn't earning its row)
 static void pads_redraw(int pos, int sel){
+    int vis = pads_vis();
+    if (pos < s_ptop) s_ptop = pos;
+    if (pos >= s_ptop + vis) s_ptop = pos - vis + 1;
+    if (s_ptop > s_pnrows - vis) s_ptop = s_pnrows - vis;
+    if (s_ptop < 0) s_ptop = 0;
     TFT_resetclipwin();
     _bg = SCREEN_BG; TFT_fillScreen(SCREEN_BG);
     _fg = TFT_WHITE;
-    char h[24];
-    snprintf(h, sizeof(h), "Drum Pads");
-    TFT_print(h, 6, 4);
-    for (int i = 0; i < s_pnrows; i++) pads_row_redraw(i, pos, sel);
+    TFT_print("Drum Pads", 6, 4);
+    // scroll arrows in the title row when there's more above/below
+    _fg = (color_t){110, 110, 130};
+    if (s_ptop > 0) TFT_print("^", _width - 16, 4);
+    if (s_ptop + vis < s_pnrows)
+        TFT_print("v", _width - 16 - (s_ptop > 0 ? 12 : 0), 4);
+    _fg = TFT_WHITE;
+    for (int i = s_ptop; i < s_pnrows && i < s_ptop + vis; i++)
+        pads_row_redraw(i, pos, sel);
     _bg = SCREEN_BG;
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print(dr.pad[dr.sel_pad].layered ? "B chokes A: one voice, two sounds"
-                                        : "press Sample to open the browser; hold to go back",
-              8, _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
 }
 
 // selector/trigger cycle: none -> CV1..CV8 -> none
@@ -757,6 +783,12 @@ static void pads_adj(int id, int dir){
             p->pitch_semi = (int8_t)ps;
             break;
         }
+        case PR_PITCHCV:
+            p->pitch_src = src_cycle(p->pitch_src, dir);
+            break;
+        case PR_PITCHMODE:
+            p->pitch_mode = (p->pitch_mode == DR_PCV_VOCT) ? DR_PCV_BI : DR_PCV_VOCT;
+            break;
         case PR_ENABLED: p->enabled = !p->enabled; break;
     }
 }
@@ -775,8 +807,13 @@ static int drum_pads_handler(int it_id, int event, void *ev_data){
         case EV_BWD: {
             int dir = (event == EV_FWD) ? +1 : -1;
             if(sel){
-                pads_adj(s_prows[pos], dir);
-                pads_row_redraw(pos, pos, sel);      // value edit: one row only
+                int id = s_prows[pos];
+                pads_adj(id, dir);
+                if (id == PR_PITCHCV){               // none<->assigned adds/removes
+                    pads_build_rows();               // the Pitch Mode row
+                    pads_redraw(pos, sel);
+                } else
+                    pads_row_redraw(pos, pos, sel);  // value edit: one row only
             } else {
                 pos = (pos + dir + s_pnrows) % s_pnrows;
                 pads_redraw(pos, sel);
