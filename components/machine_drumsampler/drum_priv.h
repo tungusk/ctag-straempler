@@ -96,6 +96,14 @@ typedef struct {
                                   // sample's length, DR_REPS_INF = never stop.
                                   // THIS is the retrig control: "4 reps of a 60 ms
                                   // loop" is a fill, INF is a held drone
+    // PITCH (2026-07-20): per-pad chromatic repitch, -12..+12 semitones. The
+    // read cursor is fractional (pos + pos_fr, Q12 step from a semitone LUT,
+    // linear interp) so the buffer plays at 2^(semi/12) rate. Envelopes,
+    // decay, and the stutter loop all live in SAMPLE frames, so pitching
+    // down stretches everything tape-style — that is the intended feel.
+    // Per PAD (both layers), like every other performable value.
+    volatile int8_t pitch_semi;   // -12..+12, 0 = native
+    uint32_t pos_fr;              // engine only: Q12 fraction under pos
     volatile uint8_t vel;         // velocity of the current hit, 0..255
     volatile bool hit;            // set on trigger, cleared by the UI (pad flash)
     volatile uint8_t hit_layer;   // which layer fired it (the dot's shape)
@@ -134,7 +142,10 @@ typedef struct {
 #define DR_CW_START     2         // skip into the sample, up to DR_START_MAX/255
 #define DR_CW_NONE      3         // clockwise does NOTHING: knob7 is a decay-only
                                   // control, and half its travel is a safe zone
-#define DR_CW_MODES     4
+#define DR_CW_PITCH     4         // tune DOWN: noon = native, full CW = -12 semi
+                                  // (the classic drum move; UP is on the Pads row).
+                                  // APPENDED so old presets' cw values keep meaning
+#define DR_CW_MODES     5
 #define DR_ATTACK_MAX   400       // ms at full clockwise
 #define DR_START_MAX    192       // /255 of the sample: 75 % in, still leaves a tail
 // the loop: just past noon it's a long roll, hard right it's a buzz. The pad
