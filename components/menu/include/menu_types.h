@@ -68,6 +68,7 @@ typedef enum{
     M_TAPE_SETUP,
     M_TAPE_LOAD,
     M_TAPE_FX,
+    M_TAPE_CV,
     M_EDITOR_LIVE,
     M_EDITOR_SETUP,
     M_STUB_HOME,

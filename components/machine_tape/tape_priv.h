@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>      // tp_cut_eff's powf
 #include "clock.h"
 #include "svf.h"
 #include "reverb.h"
@@ -22,6 +23,7 @@
 #include "tremolo.h"
 #include "fxfilter.h"
 #include "fxrack.h"
+#include "cvmtx.h"
 
 #define TP_RATE      44100
 #define TP_PEAKS     300              // overview columns
@@ -105,6 +107,19 @@ typedef struct {
     fxfilter_t  band;                 // rack base/width brick
     int8_t      fx_slot[FX_NSLOT_GEN];
     float    level;                   // output volume (post-record-tap)
+    // CV matrix (the shared cvmtx widget, Tape = first host): live OFFSETS,
+    // non-destructive like win_move. IN/OUT move their crop points and WIN
+    // slides the whole window (each as amt * CV, in fractions of len);
+    // LEVEL adds onto the output master (full-negative = VCA-style duck to
+    // silence); CUTOFF offsets the Setup filter in the LOG domain (matches
+    // K6's 30*200^x taper). Values are computed once per block in the audio
+    // task into mx_* and read wherever the base value applies — including
+    // tape_eff_window, which the UI task also calls (aligned float
+    // load/store is atomic on this core, the win_move precedent).
+    cvmtx_t  mtx;
+    volatile float mx_in, mx_out, mx_win;   // -1..+1, fraction of len
+    volatile float mx_lvl;                  // -1..+1, additive on level
+    volatile float mx_cut;                  // -1..+1, log-domain octaves-ish
     // knobs 5..8 with takeover: win move / cutoff / res / drive
     float    knob_capt[4];
     bool     knob_live[4];
@@ -143,10 +158,35 @@ typedef struct {
 extern tape_state_t tp;
 extern fxrack_t     tp_rk;        // pointer-view over tp's effect instances
 
+// CV matrix destination order (tp.mtx rows; labels in tape.c). The FX rows
+// modulate the rack's curated per-slot param pair (fxrack_t.cv1/cv2 — what
+// A/B mean follows the loaded effect; the row label tracks it) + reverb mix.
+enum { TPM_IN = 0, TPM_OUT, TPM_WIN, TPM_LVL, TPM_CUT,
+       TPM_FX1A, TPM_FX1B, TPM_FX2A, TPM_FX2B, TPM_RVMX, TPM_N };
+
+// labels are LIVE (the FX rows rename with the slot's effect): tape.c owns the
+// array; the menu refreshes it on CV-page entry
+extern const char *tape_mtx_labels[TPM_N];
+void tape_mtx_refresh_labels(void);
+
 static inline float tp_clampf(float x, float lo, float hi){ return x < lo ? lo : x > hi ? hi : x; }
 static inline int   tp_clampi(int x, int lo, int hi){ return x < lo ? lo : x > hi ? hi : x; }
 static inline int16_t tp_rd(uint32_t i){ return bank_rd(&tp.tape, i); }
 static inline void    tp_wr(uint32_t i, int16_t v){ bank_wr(&tp.tape, i, v); }
+
+// effective (matrix-offset) output level + filter cutoff — every consumer of
+// tp.level / tp.cutoff in the signal path goes through these
+static inline float tp_lvl_eff(void){ return tp_clampf(tp.level + tp.mx_lvl, 0.0f, 1.2f); }
+static inline float tp_cut_eff(void){
+    float c = tp.cutoff;
+    if (tp.mx_cut != 0.0f) {
+        // squared taper = fine control near zero; full amount sweeps the
+        // whole K6 log range (x200 / /200)
+        float m = tp.mx_cut * tp.mx_cut * (tp.mx_cut < 0 ? -1.0f : 1.0f);
+        c *= powf(200.0f, m);
+    }
+    return tp_clampf(c, 20.0f, 6500.0f);
+}
 
 // effective crop window after the K5 window-move performance offset
 void tape_eff_window(uint32_t *in, uint32_t *out);

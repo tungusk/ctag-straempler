@@ -77,8 +77,12 @@ void tape_eff_window(uint32_t *in, uint32_t *out)
 {
     long i = (long)tp.in_pt, o = (long)tp.out_pt;
     if (tp.len == 0) { *in = *out = 0; return; }
-    long mov = (long)(tp.win_move * (float)tp.len);
-    i += mov; o += mov;
+    // K5 window shift + the CV matrix offsets: WIN slides both points, IN/OUT
+    // move their own point (all fractions of len; the clamps below keep the
+    // window sane whatever the modulation does)
+    long mov = (long)((tp.win_move + tp.mx_win) * (float)tp.len);
+    i += mov + (long)(tp.mx_in  * (float)tp.len);
+    o += mov + (long)(tp.mx_out * (float)tp.len);
     long w = o - i;
     if (w < 64) w = 64;
     if (i < 0) i = 0;
@@ -251,7 +255,7 @@ static void tape_card_process(int32_t out[MACHINE_BLOCK],
 
     float coef = 0, q = 0;
     if (tp.flt_mode != TPF_OFF) {
-        float fc = tp_clampf(tp.cutoff, 20.0f, 6500.0f);
+        float fc = tp_cut_eff();               // Setup cutoff + CV matrix offset
         coef = svf_coef(fc, TP_RATE, 1.0f);
         q = svf_damp(tp.res01, 0.6f, 2.0f);
         if (!(fabsf(tp.flt.lp) < 1e9f) || !(fabsf(tp.flt.bp) < 1e9f)) svf_reset(&tp.flt);
@@ -278,9 +282,10 @@ static void tape_card_process(int32_t out[MACHINE_BLOCK],
 
     if (recording_is_active()) { recording_push(out); tp.pos += (double)frames; }  // pos = elapsed frames
 
+    float lvl = tp_lvl_eff();                     // Level + CV matrix offset
     for (int f = 0; f < frames; f++) {            // monitor output (level applied last)
         int32_t v = out[f * 2] >> 16;
-        float o = (float)v * tp.level;
+        float o = (float)v * lvl;
         if (o > 32000.0f) o = 32000.0f; else if (o < -32000.0f) o = -32000.0f;
         int32_t s = ((int32_t)(int16_t)o) << 16;
         out[f * 2] = s; out[f * 2 + 1] = s;
@@ -310,6 +315,23 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     if (tp.knob_live[1]) tp.cutoff   = 30.0f * powf(200.0f, kn[1]);        // 30 Hz .. 6 kHz
     if (tp.knob_live[2]) tp.res01    = kn[2];
     if (tp.knob_live[3]) tp.drive    = kn[3];
+
+    // CV matrix: one value per destination per block, from the same
+    // conditioned snapshot the knobs use. Written before the card branch so
+    // Level/Cutoff modulation reaches the card-record path too.
+    cvmtx_track(&tp.mtx, cvm);
+    tp.mx_in  = cvmtx_val(&tp.mtx, cvm, TPM_IN);
+    tp.mx_out = cvmtx_val(&tp.mtx, cvm, TPM_OUT);
+    tp.mx_win = cvmtx_val(&tp.mtx, cvm, TPM_WIN);
+    tp.mx_lvl = cvmtx_val(&tp.mtx, cvm, TPM_LVL);
+    tp.mx_cut = cvmtx_val(&tp.mtx, cvm, TPM_CUT);
+    // FX param modulation: hand the rack its per-slot offsets (applied inside
+    // fxrack_process around each stage; base values stay menu/preset-clean)
+    tp_rk.cv1[0] = cvmtx_val(&tp.mtx, cvm, TPM_FX1A);
+    tp_rk.cv2[0] = cvmtx_val(&tp.mtx, cvm, TPM_FX1B);
+    tp_rk.cv1[1] = cvmtx_val(&tp.mtx, cvm, TPM_FX2A);
+    tp_rk.cv2[1] = cvmtx_val(&tp.mtx, cvm, TPM_FX2B);
+    tp_rk.cv_rv  = cvmtx_val(&tp.mtx, cvm, TPM_RVMX);
 
     if (tp.rec_dest == TPD_CARD) { tape_card_process(out, in, io); return; }
 
@@ -368,7 +390,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
 
     float coef = 0, q = 0;
     if (tp.flt_mode != TPF_OFF) {
-        float fc = tp_clampf(tp.cutoff, 20.0f, 6500.0f);
+        float fc = tp_cut_eff();               // Setup cutoff + CV matrix offset
         coef = svf_coef(fc, TP_RATE, 1.0f);
         q = svf_damp(tp.res01, 0.6f, 2.0f);
         if (!(fabsf(tp.flt.lp) < 1e9f) || !(fabsf(tp.flt.bp) < 1e9f)) svf_reset(&tp.flt);
@@ -461,10 +483,11 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // mean) so the whole FX chain is captured to tape. Output level is applied
     // LAST as a master — turning Level down no longer changes what's recorded, and
     // the chain always sees the full-scale reference.
+    float lvl = tp_lvl_eff();                     // Level + CV matrix offset
     for (int f = 0; f < frames; f++) {
         int32_t v = ((out[f * 2] >> 16) + (out[f * 2 + 1] >> 16)) >> 1;   // mono print
         if (wdo[f]) tp_wr(wpos[f], (int16_t)v);
-        float o = (float)v * tp.level * (28000.0f / 32767.0f);
+        float o = (float)v * lvl * (28000.0f / 32767.0f);
         if (o > 32000.0f) o = 32000.0f; else if (o < -32000.0f) o = -32000.0f;
         int32_t s = ((int32_t)(int16_t)o) << 16;
         out[f * 2] = s;
@@ -797,6 +820,25 @@ void tape_rebuild_peaks(bool full)
 // ---- lifecycle / preset ----------------------------------------------------------
 fxrack_t tp_rk;                                // pointer-view over tp's FX instances
 
+// CV matrix destinations (order = the TPM_* enum in tape_priv.h). The FX row
+// labels are LIVE — refreshed from the rack whenever the CV page opens, so
+// "FX1 A" reads as "Dly Mix" when a delay sits in FX1.
+const char *tape_mtx_labels[TPM_N] = { "Crop In", "Crop Out", "Window",
+                                       "Level", "Cutoff",
+                                       "FX1 (off)", "FX1 (off)",
+                                       "FX2 (off)", "FX2 (off)", "Rev Mix" };
+
+void tape_mtx_refresh_labels(void)
+{
+    static const char *const off_lab[2][2] =
+        { { "FX1 (off)", "FX1 (off)" }, { "FX2 (off)", "FX2 (off)" } };
+    for (int s = 0; s < 2; s++)
+        for (int w = 0; w < 2; w++) {
+            const char *l = fxrack_cv_label(&tp_rk, s, w);
+            tape_mtx_labels[TPM_FX1A + s * 2 + w] = l ? l : off_lab[s][w];
+        }
+}
+
 static esp_err_t tape_start(void)
 {
     memset(&tp, 0, sizeof(tp));
@@ -821,6 +863,7 @@ static esp_err_t tape_start(void)
     tp.dly.div = 2; tp.trem.div = 2; tp.flg.div = 4;
     tp_rk = (fxrack_t){ .od = &tp.od, .flg = &tp.flg, .trem = &tp.trem, .dly = &tp.dly,
                         .filt = &tp.filt, .band = &tp.band, .rv = &tp.rv, .slot = tp.fx_slot };
+    cvmtx_init(&tp.mtx, (const char *const *)tape_mtx_labels, TPM_N);
     if (bank_alloc(&tp.tape, TP_LEN_SECS[tp.len_sel] * TP_RATE) < 0) {
         ESP_LOGE(TAG, "tape bank alloc failed");
         return ESP_ERR_NO_MEM;
@@ -862,6 +905,7 @@ static cJSON *tape_preset_save(void)
     cJSON_AddNumberToObject(o, "res", tp.res01);
     cJSON_AddNumberToObject(o, "drv", tp.drive);
     fxrack_save(&tp_rk, o);                     // slots + every effect param (incl. sync/div)
+    cvmtx_save(&tp.mtx, o);                     // CV matrix sources + amounts
     cJSON_AddNumberToObject(o, "lvl", tp.level);
     cJSON_AddNumberToObject(o, "rsrc", tp.rec_src);
     cJSON_AddNumberToObject(o, "rmode", tp.rec_mode);
@@ -887,6 +931,7 @@ static void tape_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "res"))  && cJSON_IsNumber(j)) tp.res01 = tp_clampf((float)j->valuedouble, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "drv"))  && cJSON_IsNumber(j)) tp.drive = tp_clampf((float)j->valuedouble, 0, 1);
     fxrack_load(&tp_rk, node);                  // slots + effect params; migrates legacy on/off bools + divisions
+    cvmtx_load(&tp.mtx, node);                  // CV matrix (absent on old presets = all off)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))  && cJSON_IsNumber(j)) tp.level = tp_clampf((float)j->valuedouble, 0, 1.2f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rsrc")) && cJSON_IsNumber(j)) tp.rec_src = j->valueint == TPS_TAPE ? TPS_TAPE : TPS_INPUT;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rmode")) && cJSON_IsNumber(j)) tp.rec_mode = j->valueint == TPR_MOMENTARY ? TPR_MOMENTARY : TPR_PUNCH;
