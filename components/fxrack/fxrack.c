@@ -113,31 +113,114 @@ static const fx_desc_t gen_desc[FXK_NGEN]={
 };
 
 // ---- process ------------------------------------------------------------------
-void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames)
+// CV push/restore: a host CV offset rides a param for the duration of ONE stage
+// call, then the base value comes back — so menu + preset always see the
+// un-modulated value. Restore is compare-guarded: if the UI wrote the field
+// mid-block, the user's new value wins over our stale base.
+typedef struct { volatile float *p; float base, set; bool on; } cvpush_t;
+
+static inline void cv_push(cvpush_t *u, volatile float *p, float off, float lo, float hi)
 {
-    float fb[FX_SCRATCH_N];
-    fx_unpack_i32(out, fb, frames * 2);
+    u->on = (off != 0.0f);
+    if (!u->on) return;
+    u->p = p;
+    u->base = *p;
+    u->set = clampf(u->base + off, lo, hi);
+    *p = u->set;
+}
+static inline void cv_pop(cvpush_t *u)
+{
+    if (u->on && *u->p == u->set) *u->p = u->base;
+}
+
+static void run_gen_slots(const fxrack_t *rk, float *fb, int frames)
+{
     for (int s = 0; s < FX_NSLOT_GEN; s++) {
+        cvpush_t a = {0}, b = {0};
+        float o1 = rk->cv1[s], o2 = rk->cv2[s];
         switch (rk->slot[s]) {
-            case FXK_OD:   overdrive_block_f(rk->od, fb, frames); break;
+            case FXK_OD:
+                cv_push(&a, &rk->od->drive, o1, 0, 1);
+                cv_push(&b, &rk->od->level, o2, 0, 1);
+                overdrive_block_f(rk->od, fb, frames);
+                break;
             case FXK_FLG:  if (rk->flg->bufL) {
                     if (rk->flg->sync && rk->bpm > 0) flanger_set_rate_beats(rk->flg, fxrack_div_beats[div_clamp(rk->flg->div)], rk->bpm);
+                    cv_push(&a, &rk->flg->depth, o1, 0, 1);
+                    cv_push(&b, &rk->flg->fb, o2 * 0.95f, -0.95f, 0.95f);
                     flanger_block_f(rk->flg, fb, frames);
                 } break;
             case FXK_TREM:
                 if (rk->trem->sync && rk->bpm > 0) tremolo_set_rate_beats(rk->trem, fxrack_div_beats[div_clamp(rk->trem->div)], rk->bpm);
-                tremolo_block_f(rk->trem, fb, frames); break;
+                cv_push(&a, &rk->trem->depth, o1, 0, 1);
+                if (o2 != 0.0f) {              // rate: +/-3 octaves LOG, on top of sync
+                    b.on = true; b.p = &rk->trem->rate; b.base = rk->trem->rate;
+                    b.set = clampf(b.base * exp2f(o2 * 3.0f), 0.05f, 20.0f);
+                    *b.p = b.set;
+                }
+                tremolo_block_f(rk->trem, fb, frames);
+                break;
             case FXK_DLY:  if (rk->dly->bufL) {
                     if (rk->dly->sync && rk->bpm > 0) fxdelay_set_time_beats(rk->dly, fxrack_div_beats[div_clamp(rk->dly->div)], rk->bpm);
+                    cv_push(&a, &rk->dly->wet, o1, 0, 1);
+                    cv_push(&b, &rk->dly->fb, o2 * 0.95f, 0, 0.95f);
                     fxdelay_block_f(rk->dly, fb, frames);
                 } break;
-            case FXK_FILT: fxfilter_block_f(rk->filt, fb, frames); break;
-            case FXK_BAND: fxfilter_band_block_f(rk->band, fb, frames); break;
+            case FXK_FILT:
+                cv_push(&a, &rk->filt->cutoff, o1, 0, 1);
+                cv_push(&b, &rk->filt->reso, o2, 0, 1);
+                fxfilter_block_f(rk->filt, fb, frames);
+                break;
+            case FXK_BAND:
+                cv_push(&a, &rk->band->cutoff, o1, 0, 1);
+                cv_push(&b, &rk->band->reso, o2, 0, 1);
+                fxfilter_band_block_f(rk->band, fb, frames);
+                break;
             default: break;
         }
+        cv_pop(&a);
+        cv_pop(&b);
     }
-    if (rk->rv->mode != RV_OFF && rk->rv->slab) reverb_block_f(rk->rv, fb, frames);
+}
+
+void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames)
+{
+    float fb[FX_SCRATCH_N];
+    fx_unpack_i32(out, fb, frames * 2);
+    run_gen_slots(rk, fb, frames);
+    if (rk->rv->mode != RV_OFF && rk->rv->slab) {
+        cvpush_t r = {0};
+        cv_push(&r, &rk->rv->wet, rk->cv_rv, 0, 1);
+        reverb_block_f(rk->rv, fb, frames);
+        cv_pop(&r);
+    }
     fx_pack_softclip(fb, out, frames * 2);
+}
+
+void fxrack_process_gen_i32(const fxrack_t *rk, int32_t *out, int frames)
+{
+    float fb[FX_SCRATCH_N];
+    fx_unpack_i32(out, fb, frames * 2);
+    run_gen_slots(rk, fb, frames);
+    fx_pack_softclip(fb, out, frames * 2);
+}
+
+// ---- CV param labels ------------------------------------------------------------
+// the curated A/B param each kind exposes to a host CV matrix (see fxrack_t.cv1/2)
+static const char *const fx_cv_names[FXK_NGEN][2] = {
+    [FXK_OFF]  = {NULL, NULL},
+    [FXK_OD]   = {"OD Drive",  "OD Level"},
+    [FXK_FLG]  = {"Flg Depth", "Flg Fdbk"},
+    [FXK_TREM] = {"Trm Depth", "Trm Rate"},
+    [FXK_DLY]  = {"Dly Mix",   "Dly Fdbk"},
+    [FXK_FILT] = {"Flt Cutoff","Flt Reso"},
+    [FXK_BAND] = {"Bnd Base",  "Bnd Width"},
+};
+
+const char *fxrack_cv_label(const fxrack_t *rk, int slot, int which)
+{
+    if (slot == 2) return which == 0 ? "Rev Mix" : NULL;
+    return fx_cv_names[rk->slot[slot]][which & 1];
 }
 
 // ---- menu ---------------------------------------------------------------------

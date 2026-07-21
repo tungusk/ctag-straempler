@@ -2,8 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "svf.h"
-#include "reverb.h"
-#include "fxdelay.h"
+#include "fxrack.h"     // brings reverb/fxdelay/overdrive/flanger/tremolo/fxfilter
 
 // Drum sampler — four one-shot pads, each a mono PSRAM buffer, triggered from the
 // CV inputs. (A pad can carry a second, choking layer, which is what the old
@@ -110,6 +109,12 @@ typedef struct {
     int  fade_step;               // DR_RETRIG_STEP or DR_CHOKE_STEP
     uint8_t vel_next;             // velocity for the queued (re)start
     uint8_t next_layer;           // layer for the queued (re)start
+    // per-pad FX ROUTING (Arlo 2026-07-20): the pad mixes into the FX bus
+    // (through the rack's FX1/FX2 generic slots) or the dry bus. ONE shared
+    // chain — per-pad full inserts would multiply the PSRAM slabs. Defaults
+    // ON so a legacy preset whose master delay migrates into FX1 still hears
+    // it on every pad; with both slots Off the bus is skipped entirely.
+    volatile bool fx_on;
 } dr_pad_t;
 
 // CV6/CV7 perform the SELECTED pad: knob6 = level, knob7 = decay (knobs 6/7 are
@@ -180,10 +185,11 @@ typedef struct {
     float flt_f, flt_q;           // slewed coefficient + damping (engine only)
     svf_t flt_l, flt_r;           // engine only
 
-    // master REVERB (shared util/reverb.h — the FX rack's second brick after
-    // the filter): sits AFTER the filter on the summed mix. Slab is LAZY
-    // (an OFF reverb costs no PSRAM); menu/preset own mode+mix, engine only
-    // calls reverb_block_i32 (self-gating on mode/slab).
+    // master REVERB (shared util/reverb.h): sits AFTER the filter on the
+    // summed mix. Slab is LAZY (an OFF reverb costs no PSRAM). It is the
+    // rack's FX3 slot for menu/persistence, but its PROCESS path stays the
+    // SEND bus below — the rack's insert reverb stage is skipped
+    // (fxrack_process_gen_i32).
     reverb_t rv;
     // the reverb is a SEND bus, not an insert (Arlo, ear test: "we don't want
     // to send a big kick drum through the reverb"). Each pad decides how much
@@ -195,9 +201,15 @@ typedef struct {
                                   // in the filter's shadow, channel-strip
                                   // style). Flip while playing; the tank state
                                   // is continuous either way.
-    fxdelay_t dly;                // master delay (insert on the final mix, post
-                                  // reverb; lazy PSRAM slab). Free-time (ms).
-    bool  dly_on;                 // delay engaged (slab stays allocated once inited)
+    // --- shared FX rack (FX1/FX2 generic slots; dr_rk is the pointer-view) ---
+    // Runs on the FX BUS: only pads with fx_on mix through it (one shared
+    // chain, not per-pad inserts — slab economics). Lazy slabs as everywhere.
+    fxdelay_t   dly;
+    overdrive_t od;
+    flanger_t   flg;
+    tremolo_t   trem;
+    fxfilter_t  filt, band;
+    int8_t      fx_slot[FX_NSLOT_GEN];
 
     // knob take-over state for the PADS (was function-static in drum_process,
     // where it survived stop()/start() and let a machine re-entry inherit the
@@ -207,6 +219,7 @@ typedef struct {
 } dr_state_t;
 
 extern dr_state_t dr;
+extern fxrack_t dr_rk;            // pointer-view over dr's FX instances (drum.c)
 
 // UI-side helpers (drum.c); do SD I/O — call from the UI task only
 int  drum_load_layer(int pad, int ly, const char *name);

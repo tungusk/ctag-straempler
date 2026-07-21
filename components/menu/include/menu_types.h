@@ -34,6 +34,7 @@ typedef enum{
     M_DRUM_PADS,
     M_DRUM_LOAD,
     M_DRUM_SETUP,
+    M_DRUM_FX,
     M_FS_LIVE,
     M_DECK_LIVE,
     M_DECK_SETUP,

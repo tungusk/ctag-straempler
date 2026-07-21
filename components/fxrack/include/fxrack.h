@@ -41,11 +41,31 @@ typedef struct {
     reverb_t    *rv;
     int8_t      *slot;          // [FX_NSLOT_GEN] = FXK_* per generic slot
     float        bpm;           // grid tempo for synced effects (0 = free-running)
+    // CV MODULATION (2026-07-20): per-slot bipolar offsets (-1..+1, 0 = none),
+    // written by the host once per block (its CV matrix), applied INSIDE the
+    // process call as a push around the stage and restored after — so the
+    // menu/preset always see the un-modulated base value. Each effect kind
+    // nominates a curated param pair (A/B — see fxrack_cv_label): OD
+    // drive/level, flanger depth/fdbk, tremolo depth/rate (rate rides ON TOP
+    // of sync, +/-3 octaves log), delay mix/fdbk, filter cutoff/reso, band
+    // base/width; cv_rv offsets the reverb mix.
+    float cv1[FX_NSLOT_GEN];    // param A offset per generic slot
+    float cv2[FX_NSLOT_GEN];    // param B offset per generic slot
+    float cv_rv;                // reverb mix offset (FX3)
 } fxrack_t;
+
+// display name of a slot's CV param ("Dly Mix", "Flg Depth"; slot 2/which 0 =
+// "Rev Mix"); NULL when the slot is Off / has no such param — label it "(off)"
+const char *fxrack_cv_label(const fxrack_t *rk, int slot, int which);
 
 // process the machine buffer in place: unpack -> generic slots in order ->
 // reverb -> soft-clip pack (fxchain.h). No inter-stage clamp.
 void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames);
+
+// generic slots ONLY (FX1/FX2), no reverb stage: for hosts whose reverb is a
+// SEND bus off the rack's process path (Drums). rv must still be wired — the
+// FX3 menu/(de)serializer edit it as usual; the host runs it itself.
+void fxrack_process_gen_i32(const fxrack_t *rk, int32_t *out, int frames);
 
 // display name of a generic slot's effect, for the host's Setup line
 const char *fxrack_slot_name(const fxrack_t *rk, int slot);   // slot 2 -> reverb mode

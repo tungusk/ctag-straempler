@@ -16,6 +16,18 @@ void machine_set_web_cb(void (*cb)(const machine_t *m))
 
 const machine_t *machine_active(void) { return s_active; }
 
+// see machine.h — knob edits flag here, the menu's autosave poll drains it
+static volatile bool s_state_dirty = false;
+
+void machine_state_dirty(void) { s_state_dirty = true; }
+
+bool machine_state_dirty_consume(void)
+{
+    bool d = s_state_dirty;
+    s_state_dirty = false;
+    return d;
+}
+
 const machine_t *machine_by_name(const char *name)
 {
     for (int i = 0; machine_registry[i] != NULL; i++)

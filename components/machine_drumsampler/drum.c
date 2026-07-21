@@ -13,6 +13,7 @@
 #include "drum_priv.h"
 
 dr_state_t dr;
+fxrack_t dr_rk;    // FX rack pointer-view (initialized in drum_start)
 
 // Cubic soft saturation, the classic: y = v - v^3/6.75 over |v| <= 1.5, hard
 // ceiling past it. The knee is tangent to full scale at v = 1.5 (f(1.5) = 1,
@@ -102,6 +103,9 @@ static esp_err_t drum_start(void)
         dr.pad[i].enabled = true;
         dr.pad[i].level = 255;
         dr.pad[i].pan = 128;
+        dr.pad[i].fx_on = true;   // wet by default: FX1/FX2 start Off, so this
+                                  // is silent until an effect is chosen — and a
+                                  // legacy master-delay preset keeps its sound
         for (int l = 0; l < DR_LAYERS; l++) {
             // A fires from the pad's own CV; B fires from NOTHING until it is
             // routed — sharing A's channel would make B choke A on every hit,
@@ -124,6 +128,11 @@ static esp_err_t drum_start(void)
     dr.sel_src[0] = 5;      // knob6/knob7 — the two fully-good CV channels
     dr.sel_src[1] = 6;
     dr.prev_trig = 0x03;    // gates idle high; no phantom edge on boot
+    fxfilter_init(&dr.filt);
+    fxfilter_init(&dr.band);
+    dr.fx_slot[0] = dr.fx_slot[1] = FXK_OFF;
+    dr_rk = (fxrack_t){ .od = &dr.od, .flg = &dr.flg, .trem = &dr.trem, .dly = &dr.dly,
+                        .filt = &dr.filt, .band = &dr.band, .rv = &dr.rv, .slot = dr.fx_slot };
     audio_status_set_voices("drums", "");
     return ESP_OK;
 }
@@ -132,6 +141,7 @@ static void drum_stop(void)
 {
     reverb_free(&dr.rv);
     fxdelay_free(&dr.dly);
+    flanger_free(&dr.flg);
     for (int i = 0; i < DR_PADS; i++)
         for (int l = 0; l < DR_LAYERS; l++) {
             free(dr.pad[i].ly[l].buf);
@@ -190,6 +200,20 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
             if (!dr.flt_take_q && dq > DR_MOD_MOVE) dr.flt_take_q = true;
             if (dr.flt_take_q) dr.flt_res_cv = dc;
         }
+        // autosave: the sweep tracks CONTINUOUSLY once seized, so flag only a
+        // real excursion since the last flag — not the per-block jitter — or
+        // the dirty poll's backstop would fire forever
+        static int s_df_flag = -1, s_dq_flag = -1;
+        if (dr.flt_take_f) {
+            int d2 = dr.flt_cv - s_df_flag;
+            if (d2 < 0) d2 = -d2;
+            if (s_df_flag < 0 || d2 > DR_MOD_MOVE) { s_df_flag = dr.flt_cv; machine_state_dirty(); }
+        }
+        if (dr.flt_take_q) {
+            int d2 = dr.flt_res_cv - s_dq_flag;
+            if (d2 < 0) d2 = -d2;
+            if (s_dq_flag < 0 || d2 > DR_MOD_MOVE) { s_dq_flag = dr.flt_res_cv; machine_state_dirty(); }
+        }
     } else if (dr.cv_mod) {
         int sel = dr.sel_pad;
         if (sel < 0 || sel >= DR_PADS) sel = 0;
@@ -199,6 +223,7 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         if (ddc < 0) ddc = -ddc;
         if (lv_free && dlv > DR_MOD_MOVE) {
             dr.knob_last[0] = lv;
+            machine_state_dirty();          // knob edits never reach the UI queue
             // 12 o'clock = 100 % (unity), CCW fades to silence, CW drives the
             // pad into the soft clipper (Arlo)
             if (lv <= 2048)
@@ -210,6 +235,7 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         }
         if (dc_free && ddc > DR_MOD_MOVE) {
             dr.knob_last[1] = dc;
+            machine_state_dirty();
             // Both knobs are NEUTRAL at 12 o'clock (Arlo). Counter-clockwise from
             // noon chokes the decay — 1.5 s just under centre down to 20 ms hard
             // left. Clockwise drives whichever target the pad selects (attack or
@@ -335,11 +361,17 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
     // ---- mix active pads (mono buffers -> stereo, linear pan, one-shot) ----
     int frames = MACHINE_BLOCK / 2;
     int32_t accL[MACHINE_BLOCK / 2], accR[MACHINE_BLOCK / 2];
+    int32_t fxbL[MACHINE_BLOCK / 2], fxbR[MACHINE_BLOCK / 2];   // FX1/FX2 bus
     int32_t sndL[MACHINE_BLOCK / 2], sndR[MACHINE_BLOCK / 2];   // reverb SEND bus
     memset(accL, 0, sizeof(accL));
     memset(accR, 0, sizeof(accR));
+    memset(fxbL, 0, sizeof(fxbL));
+    memset(fxbR, 0, sizeof(fxbR));
     memset(sndL, 0, sizeof(sndL));
     memset(sndR, 0, sizeof(sndR));
+    // the rack runs whenever a generic slot holds an effect — even over a
+    // silent bus, or a delay/flanger tail would be chopped mid-ring
+    bool fx_live = dr.fx_slot[0] != FXK_OFF || dr.fx_slot[1] != FXK_OFF;
     bool any = false;
     for (int i = 0; i < DR_PADS; i++) {
         dr_pad_t *p = &dr.pad[i];
@@ -348,6 +380,11 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         voice_setup(p, &v);
         if (!v.buf || !v.len) { p->playing = false; continue; }
         any = true;
+        // per-pad routing: wet pads mix into the FX bus (one shared chain),
+        // dry pads straight into the master. The reverb send below is taken
+        // from the pad either way — reverb stays its own send architecture.
+        int32_t *mixL = (fx_live && p->fx_on) ? fxbL : accL;
+        int32_t *mixR = (fx_live && p->fx_on) ? fxbR : accR;
         uint32_t len = v.len, df = v.df, af = v.af, st = v.st, ll = v.ll;
         for (int f = 0; f < frames; f++) {
             if (p->retrig) {
@@ -430,8 +467,8 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
             if (p->level > DR_LEVEL_UNITY) x = soft_clip(x);
             int32_t xl = (x * (255 - p->pan)) >> 8;
             int32_t xr = (x * p->pan) >> 8;
-            accL[f] += xl;
-            accR[f] += xr;
+            mixL[f] += xl;
+            mixR[f] += xr;
             if (p->rv_send) {                 // post-fader, post-pan send
                 sndL[f] += (xl * p->rv_send) >> 8;
                 sndR[f] += (xr * p->rv_send) >> 8;
@@ -440,14 +477,30 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         }
     }
     // ---- master filter + output ------------------------------------------------
-    // The filter must keep running after the last pad dies: its ring is still
-    // decaying, and returning early would chop the tail off.
+    // the filter, reverb AND rack must keep running after the last pad dies:
+    // their rings/tails are still decaying
     bool flt_live = dr.flt_box && dr.flt_on;
     bool rv_live = (dr.rv.mode != RV_OFF) && dr.rv.slab;
-    bool dly_live = dr.dly_on && dr.dly.bufL;
-    // the filter, reverb AND delay must keep running after the last pad dies:
-    // their rings/tails are still decaying
-    if (!any && !flt_live && !rv_live && !dly_live) return;
+    if (!any && !flt_live && !rv_live && !fx_live) return;
+
+    // ---- FX bus through the rack's generic slots (FX1/FX2) ----------------------
+    // pack the wet bus into a machine-format block, run the shared chain, fold
+    // the result into the master sum ahead of the filter/reverb stages
+    if (fx_live) {
+        int32_t fxblk[MACHINE_BLOCK];
+        for (int f = 0; f < frames; f++) {
+            int32_t l = fxbL[f], r = fxbR[f];
+            if (l > 32767) l = 32767; else if (l < -32768) l = -32768;
+            if (r > 32767) r = 32767; else if (r < -32768) r = -32768;
+            fxblk[f * 2]     = l << 16;
+            fxblk[f * 2 + 1] = r << 16;
+        }
+        fxrack_process_gen_i32(&dr_rk, fxblk, frames);
+        for (int f = 0; f < frames; f++) {
+            accL[f] += fxblk[f * 2] >> 16;
+            accR[f] += fxblk[f * 2 + 1] >> 16;
+        }
+    }
 
     // a NaN in an SVF is PERMANENT silence — it would read as dead hardware
     if (!(fabsf(dr.flt_l.lp) < 1e9f) || !(fabsf(dr.flt_r.lp) < 1e9f)) {
@@ -503,9 +556,6 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         }
         reverb_send_i32(&dr.rv, out, send, frames);
     }
-    // master delay on the full mix (post reverb) — insert, in place
-    if (dly_live)
-        fxdelay_block_i32(&dr.dly, out, frames);
 }
 
 // ---- sample I/O (UI task) ---------------------------------------------------
@@ -595,16 +645,12 @@ static cJSON *drum_preset_save(void)
     cJSON_AddBoolToObject(o, "cvsel", dr.cv_select);
     cJSON_AddBoolToObject(o, "vel", dr.velocity);
     cJSON_AddBoolToObject(o, "cvmod", dr.cv_mod);
-    cJSON_AddNumberToObject(o, "rv", dr.rv.mode);     // master reverb mode
-    cJSON_AddNumberToObject(o, "rvmx", (int)(dr.rv.wet * 100 + 0.5f));   // RETURN level
+    // the rack owns the FX serialization (slots + every effect param). It
+    // writes the same "rv"/"rvmx" keys the old preset used, so reverb state
+    // round-trips; a PRE-RACK preset's "dly" bool + params migrate through
+    // fxrack_load's legacy path (dly:true -> FX1 = Delay).
+    fxrack_save(&dr_rk, o);
     cJSON_AddBoolToObject(o, "rvpost", dr.rv_post);   // send tap pre/post filter
-    cJSON_AddNumberToObject(o, "rvus", dr.rv.cost_us); // info only (cost meter)
-    cJSON_AddBoolToObject(o, "dly", dr.dly_on);       // master delay
-    cJSON_AddNumberToObject(o, "dlyt", (int)(fxdelay_time_ms(&dr.dly) + 0.5f));
-    cJSON_AddNumberToObject(o, "dlyfb", (int)(dr.dly.fb * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "dlymx", (int)(dr.dly.wet * 100 + 0.5f));
-    cJSON_AddNumberToObject(o, "dlytn", (int)(dr.dly.damp * 100 + 0.5f));
-    cJSON_AddBoolToObject(o, "dlypp", dr.dly.pingpong);
     cJSON_AddBoolToObject(o, "flt", dr.flt_box);      // master filter box exists
     cJSON_AddBoolToObject(o, "flton", dr.flt_on);     // ...and is engaged
     cJSON_AddNumberToObject(o, "fcv", dr.flt_cv);     // sweep + resonance knob
@@ -628,6 +674,7 @@ static cJSON *drum_preset_save(void)
         cJSON_AddNumberToObject(p, "src2", dr.pad[i].ly[1].trig_src + 1); // (0 = none)
         cJSON_AddNumberToObject(p, "cw", dr.pad[i].cw_mode);         // knob7 clockwise target
         cJSON_AddNumberToObject(p, "reps", dr.pad[i].loop_reps);     // retrig cap (255 = INF)
+        cJSON_AddBoolToObject(p, "fx", dr.pad[i].fx_on);             // FX1/FX2 bus routing
         cJSON_AddItemToArray(pads, p);
     }
     return o;
@@ -646,27 +693,10 @@ static void drum_preset_load(const cJSON *node)
     bool lay_all = false;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lay"))) lay_all = cJSON_IsTrue(j);
     if (lay_all) for (int k = 0; k < DR_PADS; k++) dr.pad[k].layered = true;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rv")) && cJSON_IsNumber(j)) {
-        int m = j->valueint;
-        if (m < 0 || m >= RV_N_MODES) m = RV_OFF;
-        // lazy slab: only a non-OFF mode costs PSRAM; a failed alloc fails soft
-        if (m != RV_OFF && !dr.rv.slab && reverb_init(&dr.rv) != ESP_OK) m = RV_OFF;
-        reverb_set_mode(&dr.rv, m);
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dly")) && cJSON_IsBool(j)) {
-        bool on = cJSON_IsTrue(j);
-        if (on && !dr.dly.bufL && fxdelay_init(&dr.dly) != ESP_OK) on = false;
-        dr.dly_on = on;
-    }
-    if (dr.dly.bufL) {   // params apply once the slab exists (order-independent)
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyt"))  && cJSON_IsNumber(j)) fxdelay_set_time_ms(&dr.dly, (float)j->valueint);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyfb")) && cJSON_IsNumber(j)) fxdelay_set_feedback(&dr.dly, (float)j->valueint / 100.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlymx")) && cJSON_IsNumber(j)) fxdelay_set_mix(&dr.dly, (float)j->valueint / 100.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlytn")) && cJSON_IsNumber(j)) fxdelay_set_damp(&dr.dly, (float)j->valueint / 100.0f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlypp")) && cJSON_IsBool(j))   fxdelay_set_pingpong(&dr.dly, cJSON_IsTrue(j));
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx")) && cJSON_IsNumber(j))
-        reverb_set_mix(&dr.rv, (float)j->valueint / 100.0f);
+    // the rack owns the FX deserialization: slots + params, reverb mode/mix
+    // (same "rv"/"rvmx" keys as before), and the legacy migration — an old
+    // preset's "dly":true lands in FX1 = Delay with its params intact
+    fxrack_load(&dr_rk, node);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvpost"))) dr.rv_post = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flt")))    dr.flt_box = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flton")))  dr.flt_on = cJSON_IsTrue(j);
@@ -731,6 +761,9 @@ static void drum_preset_load(const cJSON *node)
                 if (rp > DR_REPS_INF) rp = DR_REPS_INF;
                 dr.pad[i].loop_reps = (uint8_t)rp;
             }
+            // absent (pre-routing preset) leaves the default: wet
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "fx")) && cJSON_IsBool(j))
+                dr.pad[i].fx_on = cJSON_IsTrue(j);
             // reload the remembered samples. An old preset has no "s2" — absent
             // simply means the pad has no B layer, which is today's behaviour.
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "s")) && cJSON_IsString(j) && j->valuestring[0])

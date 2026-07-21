@@ -95,6 +95,15 @@ const machine_t *machine_active(void);
 esp_err_t machine_activate(const machine_t *m);   // stop old, start new
 const machine_t *machine_by_name(const char *name);
 
+// Autosave dirty flag for edits that never enter the UI event queue — the
+// polled performance knobs (CV6/CV7 take-over, filter sweeps). The engine
+// flags a committed change (plain volatile store, any task); the menu's
+// autosave poll consumes it and arms the same debounced save the encoder
+// path uses. Flag only on an actual value change, not every block, or the
+// backstop saves forever.
+void machine_state_dirty(void);
+bool machine_state_dirty_consume(void);   // read-and-clear (UI side)
+
 // rest-api hookup: the web server installs a callback fired on every
 // activate/deactivate (m = new machine, NULL while switching/stopped).
 // Installing fires immediately with the currently active machine, so the

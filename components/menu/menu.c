@@ -628,6 +628,8 @@ void menuProcessEvent(int ev, void * ev_data){
 }
 
 static esp_timer_handle_t s_autosave_timer = NULL;
+static esp_timer_handle_t s_dirty_timer = NULL;      // 1 s poll of machine_state_dirty
+static int64_t s_autosave_last_us = 0;               // stamped by autosave_now
 
 // esp_timer task stack (2048) is too small for cJSON + SD writes; defer to the UI event loop
 static void autosave_cb(void *arg) {
@@ -635,10 +637,25 @@ static void autosave_cb(void *arg) {
     xQueueSend(s_ev_queue, &ev, 0);
 }
 
+// Knob edits never enter the UI event queue (they're polled CV channels), so
+// the encoder-driven autosave_kick never fires for them — a kit dialed in
+// entirely by knob was lost on power-off. The engine flags committed knob
+// changes via machine_state_dirty(); this poll arms the same debounced save.
+// A continuous gesture re-flags every second and would postpone the debounce
+// forever, so while dirty-kicks keep arriving a save is FORCED every ~10 s.
+static void dirty_poll_cb(void *arg) {
+    if (!machine_state_dirty_consume()) return;
+    if (esp_timer_get_time() - s_autosave_last_us > 10000000LL)
+        autosave_cb(NULL);          // long gesture: checkpoint now
+    else
+        autosave_kick();            // normal case: save 2 s after the last edit
+}
+
 // AUTOSAVE.JSN keeps each machine's state under its own name key, so every
 // machine remembers its settings independently across switches:
 //   { "Sampler": {...}, "Looper": {...}, "Slicer": {...} }
 static void autosave_now(void) {
+    s_autosave_last_us = esp_timer_get_time();   // the backstop paces off this
     const machine_t *m = machine_active();
     if (!m || !m->preset_save) return;
     cJSON *node = m->preset_save();
@@ -754,6 +771,9 @@ void initMenu(xQueueHandle ev_queue){
 
     esp_timer_create_args_t autosave_args = { .callback = autosave_cb, .name = "autosave" };
     esp_timer_create(&autosave_args, &s_autosave_timer);
+    esp_timer_create_args_t dirty_args = { .callback = dirty_poll_cb, .name = "as_dirty" };
+    if (esp_timer_create(&dirty_args, &s_dirty_timer) == ESP_OK)
+        esp_timer_start_periodic(s_dirty_timer, 1000000);   // 1 s knob-edit poll
 
     register_core_pages();
     menusys_set_active_item(_ms, M_MAIN);
