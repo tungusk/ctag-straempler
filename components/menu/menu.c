@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -22,6 +23,8 @@
 #include "menu_types.h"
 #include "menutft_utils.h"
 #include "beatlisten.h"
+#include "tuner.h"
+#include "pitch_detect.h"   // note names for the tuner page
 #include "gpio.h"
 #include "audio.h"
 #include "wifi.h"
@@ -40,8 +43,8 @@ static void autosave_kick(void);
 static xQueueHandle s_ev_queue = NULL;
 
 // core menu labels (machine-independent pages)
-static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "Listen", "ClkOut", "Bounce", "Broadcast", "IP"};
-static const int n_settings_menus = 10;
+static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "Listen", "ClkOut", "Bounce", "Broadcast", "Tuner", "IP"};
+static const int n_settings_menus = 11;
 
 static void incSettingsItem(int *tz, int index){
     if (index == SID_TIMEZONE) { if(*tz + 1 >= 12) *tz = 12; else (*tz)++; }
@@ -333,7 +336,7 @@ static int listen_cycle(int cur, int dir){
 }
 
 static int settings_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE, SID_LISTEN, SID_CLKOUT, SID_BOUNCE, SID_BROADCAST};
+    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE, SID_LISTEN, SID_CLKOUT, SID_BOUNCE, SID_BROADCAST, SID_TUNER};
     const int items = sizeof(menu_items)/sizeof(int);
     static int menu_pos = 0, selected = 0;
     static int remote_on = 1, broadcast_on = 0;
@@ -425,9 +428,10 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 menuTFTPrintBounce(settings_menus, &n_settings_menus);
                 break;
             }
+            if(menu_items[menu_pos] == SID_TUNER) return M_TUNER;   // press-to-open
             if(menu_items[menu_pos] != SID_TIMEZONE && menu_items[menu_pos] != SID_REMOTE &&
                menu_items[menu_pos] != SID_LISTEN && menu_items[menu_pos] != SID_CLKOUT &&
-               menu_items[menu_pos] != SID_BROADCAST){
+               menu_items[menu_pos] != SID_BROADCAST && menu_items[menu_pos] != SID_TUNER){
                 _state_json = (void*) cfgData;
                 _state_data = (void*) &menu_pos;
                 return M_SETTINGS_INPUT;
@@ -697,6 +701,124 @@ void menuBindMachineUI(void){
     xQueueSend(s_ev_queue, &ev, portMAX_DELAY);
 }
 
+// ---- System > Settings > Tuner ---------------------------------------------
+// Live chromatic tuner on the LINE INPUT (components/machine/tuner.c). The
+// service is enabled on entry and disabled on the way out, so it costs one
+// branch per audio block whenever this page is closed. Redraws are PARTIAL and
+// change-gated (the keysui lesson: heavy full-screen repaints starve the PSRAM
+// audio path — a 300 ms tick blindly repainting the screen is exactly that).
+#define TUN_BAR_X0  20
+#define TUN_BAR_W   280
+#define TUN_BAR_Y   150
+#define TUN_BAR_H   16
+#define TUN_MID     (TUN_BAR_X0 + TUN_BAR_W / 2)
+#define TUN_NOTE_Y  50            // big note name band
+#define TUN_INFO_Y  105           // cents + Hz line
+
+static void tuner_frame(void){
+    TFT_resetclipwin();
+    _bg = TFT_BLACK; TFT_fillScreen(TFT_BLACK);
+    TFT_setFont(DEFAULT_FONT, NULL);
+    _fg = TFT_WHITE; TFT_print("Tuner", 6, 3);
+    menuTFTPrintAffordance("Settings", 0);
+    color_t g = {90, 90, 100};
+    TFT_fillRect(TUN_BAR_X0, TUN_BAR_Y + TUN_BAR_H + 2, TUN_BAR_W, 1, g);
+    for(int c = -50; c <= 50; c += 10){                 // cents ruler
+        int x = TUN_MID + (c * TUN_BAR_W) / 100;
+        int h = c ? 5 : 11;
+        TFT_fillRect(x, TUN_BAR_Y + TUN_BAR_H + 2 - h, 1, h, c ? g : TFT_WHITE);
+    }
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    _fg = g;
+    TFT_print("-50c", TUN_BAR_X0 - 2, TUN_BAR_Y + TUN_BAR_H + 6);
+    TFT_print("+50c", TUN_BAR_X0 + TUN_BAR_W - 20, TUN_BAR_Y + TUN_BAR_H + 6);
+    TFT_print("line in    hold: back", 8, _height - TFT_getfontheight() - 1);
+    TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+// green in tune, amber close, white otherwise — the needle and the cents
+// readout share one colour so "is it green yet" is the whole interaction
+static color_t tuner_colour(int cents){
+    int a = cents < 0 ? -cents : cents;
+    if(a <= 5)  return (color_t){40, 200, 90};
+    if(a <= 15) return (color_t){220, 170, 40};
+    return TFT_WHITE;
+}
+
+static void tuner_readout(int force){
+    static int  last_midi = -999, last_cents = -999, last_x = -1;
+    static int  last_have = -1;
+    tuner_status_t st;
+    tuner_get_status(&st);
+    int cents_i = (int)lroundf(st.cents);
+    if(cents_i < -50) cents_i = -50; else if(cents_i > 50) cents_i = 50;
+    int have = st.have ? 1 : 0;
+
+    if(force){ last_midi = -999; last_cents = -999; last_have = -1; last_x = -1; }
+    if(!have){
+        if(last_have != 0){
+            _bg = TFT_BLACK;
+            TFT_fillRect(0, TUN_NOTE_Y, _width, TUN_INFO_Y + 20 - TUN_NOTE_Y, TFT_BLACK);
+            if(last_x >= 0){ TFT_fillRect(last_x, TUN_BAR_Y, 5, TUN_BAR_H, TFT_BLACK); last_x = -1; }
+            TFT_setFont(DEJAVU18_FONT, NULL);
+            _fg = (color_t){120, 120, 130};
+            TFT_print("listening...", CENTER, TUN_NOTE_Y + 8);
+            TFT_setFont(DEFAULT_FONT, NULL);
+            last_have = 0; last_midi = -999; last_cents = -999;
+        }
+        return;
+    }
+    color_t col = tuner_colour(cents_i);
+    if(st.midi != last_midi || last_have != 1){         // the note itself
+        char nm[12];
+        pitch_note_name(st.midi, nm, sizeof(nm));
+        _bg = TFT_BLACK;
+        TFT_fillRect(0, TUN_NOTE_Y, _width, 46, TFT_BLACK);
+        TFT_setFont(DEJAVU24_FONT, NULL);
+        _fg = col;
+        TFT_print(nm, CENTER, TUN_NOTE_Y + 4);
+        TFT_setFont(DEFAULT_FONT, NULL);
+        last_midi = st.midi;
+    }
+    if(cents_i != last_cents || last_have != 1){        // cents + Hz
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%+d cents   %.1f Hz", cents_i, st.hz);
+        _bg = TFT_BLACK;
+        TFT_fillRect(0, TUN_INFO_Y, _width, TFT_getfontheight() + 4, TFT_BLACK);
+        _fg = col;
+        TFT_print(buf, CENTER, TUN_INFO_Y);
+        last_cents = cents_i;
+    }
+    int x = TUN_MID + (cents_i * TUN_BAR_W) / 100 - 2;  // the needle
+    if(x != last_x || last_have != 1){
+        if(last_x >= 0) TFT_fillRect(last_x, TUN_BAR_Y, 5, TUN_BAR_H, TFT_BLACK);
+        TFT_fillRect(x, TUN_BAR_Y, 5, TUN_BAR_H, col);
+        last_x = x;
+    }
+    last_have = 1;
+}
+
+static int tuner_def_handler(int it_id, int event, void* event_data){
+    (void)it_id; (void)event_data;
+    switch(event){
+        case EV_ENTERED_MENU:
+            tuner_set_enabled(true);
+            tuner_frame();
+            tuner_readout(1);
+            break;
+        case EV_TIMER_REPEATING_FAST:
+            tuner_readout(0);
+            break;
+        case EV_LONG_PRESS:
+            tuner_set_enabled(false);      // costs nothing once the page is shut
+            menuTFTFlushMenuDataRect();
+            return M_SETTINGS;
+        default:
+            break;
+    }
+    return 0;
+}
+
 // core pages, machine-agnostic. Rebuilt (together with the machine's pages)
 // on every bind: menusys has no item removal, so a fresh instance is the only
 // way to drop the outgoing machine's pages and avoid duplicate ids.
@@ -715,6 +837,8 @@ static void register_core_pages(void){
         menusys_item_set_default_cb(_ms, M_SETTINGS, settings_def_handler);
             menusys_new_item(_ms, M_SETTINGS_INPUT);
             menusys_item_set_default_cb(_ms, M_SETTINGS_INPUT, settings_input_def_handler);
+            menusys_new_item(_ms, M_TUNER);
+            menusys_item_set_default_cb(_ms, M_TUNER, tuner_def_handler);
 
     menusys_all_set_ev_cb(_ms, EV_TIMER_REPEATING_SLOW, timer_handler);
 }
