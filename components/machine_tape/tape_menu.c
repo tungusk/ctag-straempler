@@ -271,7 +271,10 @@ static void draw_buttons(void)
     _bg = TFT_BLACK; TFT_fillRect(0, y - 2, _width, fh * 2 + 8, _bg);
     if (tp.rec_dest == TPD_CARD) return;
 
-    static const char *const lab[] = { "Rev", "Norm", "Fade", "Clear", "FX1", "FX2", "FX3" };
+    // TB_CLR slot repurposed 2026-07-20 (Arlo): Live gets CROP (save the crop
+    // as a take) — Clear was destructive + rarely wanted here; the full wipe
+    // stays on Setup > Clear Tape
+    static const char *const lab[] = { "Rev", "Norm", "Fade", "Crop", "FX1", "FX2", "FX3" };
     const int NS = 7;
     int bw = W_W / NS;                        // fixed slots (~42), no scroll
     _bg = TFT_BLACK;
@@ -308,7 +311,7 @@ static void draw_hint(void)
         case TB_REV:  h = stopped ? "press: reverse the crop"   : "stop first"; break;
         case TB_NORM: h = stopped ? "press: normalize the crop" : "stop first"; break;
         case TB_FADE: h = stopped ? "press: fade crop edges"    : "stop first"; break;
-        case TB_CLR:  h = stopped ? "press: clear the tape"     : "stop first"; break;
+        case TB_CLR:  h = stopped ? "press: save crop as take"  : "stop first"; break;
         case TB_FX1: case TB_FX2: case TB_FX3: h = "press: cycle FX   long: Setup"; break;
     }
     _fg = (color_t){110, 110, 120};
@@ -418,7 +421,7 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
                 case TB_REV:  tape_reverse(); break;
                 case TB_NORM: tape_norm();    break;
                 case TB_FADE: tape_fade();    break;
-                case TB_CLR:  tape_clear();   break;
+                case TB_CLR:  tape_save_crop(); break;   // the button reads "Crop" now
             }
             draw_header(); draw_wave(); redraw_strip(); s_sig_crop = crop_sig();
             break;
@@ -482,6 +485,7 @@ static const setup_item_t tape_setup_items[] = {
     {"Save Crop",  ST_ACTION}, {"Load Sample", ST_ACTION}, {"Clear Tape", ST_ACTION},
     {"Tape Len",   ST_TOGGLE}, {"Rec Mode",    ST_TOGGLE}, {"Play Mode",   ST_TOGGLE},
     {"Rec Dest",   ST_TOGGLE}, {"Rec Quant",   ST_TOGGLE},
+    {"CV Matrix",  ST_ACTION},   // appended: the index-keyed switches above stay stable
 };
 
 // (FX rack slot editor state s_cur_slot / s_setup_return declared up top)
@@ -536,6 +540,12 @@ static void tape_val(int i, char *v, size_t n)
         case 24: snprintf(v, n, "%s", tp.play_oneshot ? "one-shot" : "loop"); break;
         case 25: snprintf(v, n, "%s", tp.rec_dest == TPD_CARD ? "card (long)" : "tape (loop)"); break;
         case 26: snprintf(v, n, "%s", tp.rec_quant == TPQ_BAR ? "bar" : tp.rec_quant == TPQ_BEAT ? "beat" : "off"); break;
+        case 27: {
+            int on = 0;
+            for (int d = 0; d < tp.mtx.n; d++) if (tp.mtx.src[d] >= 0) on++;
+            if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >");
+            break;
+        }
     }
 }
 
@@ -584,13 +594,14 @@ static int tape_action(int i)
         case 19: tape_save_crop(); break;
         case 20: return M_TAPE_LOAD;
         case 21: tape_clear(); break;
+        case 27: s_setup_return = 27; return M_TAPE_CV;   // CV matrix page
     }
     return 0;
 }
 
 static setup_menu_t tape_setup = {
     .items = tape_setup_items,
-    .n = 27,
+    .n = 28,
     .title = "Tape Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_TAPE_MAIN,
@@ -655,6 +666,16 @@ static int tape_fx_handler(int it_id, int event, void *ev_data)
     return setup_menu_event(&tape_fx, event);
 }
 
+// ---- CV matrix page (the shared cvmtx widget drives everything) -----------------
+static int tape_cv_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    if (event == EV_ENTERED_MENU)
+        tape_mtx_refresh_labels();   // FX rows rename with the loaded effects
+    return cvmtx_menu_event(&tp.mtx, event, "Tape CV Matrix",
+                            M_TAPE_SETUP, M_TAPE_MAIN);
+}
+
 // ---- Load Sample (shared browser) ----------------------------------------------
 static int tape_load_handler(int it_id, int event, void *ev_data)
 {
@@ -679,6 +700,7 @@ static void tape_register_pages(void *menusys)
     menusys_new_item(_ms, M_TAPE_SETUP); menusys_item_set_default_cb(_ms, M_TAPE_SETUP, tape_setup_handler);
     menusys_new_item(_ms, M_TAPE_LOAD);  menusys_item_set_default_cb(_ms, M_TAPE_LOAD, tape_load_handler);
     menusys_new_item(_ms, M_TAPE_FX);    menusys_item_set_default_cb(_ms, M_TAPE_FX, tape_fx_handler);
+    menusys_new_item(_ms, M_TAPE_CV);    menusys_item_set_default_cb(_ms, M_TAPE_CV, tape_cv_handler);
 }
 
 static int tape_main_event(int event, void *ev_data)
