@@ -74,6 +74,7 @@ typedef enum{
     M_STUB_HOME,
     M_SETTINGS,
     M_SETTINGS_INPUT,
+    M_TUNER,           // System > Settings > Tuner (line-in chromatic tuner)
     M_ABOUT,
     M_VOICE,
     M_VOICE0,
@@ -142,7 +143,8 @@ typedef enum{
     SID_LISTEN,        // beatlisten mode (System Settings row)
     SID_CLKOUT,        // beatlisten clock-out channel
     SID_BOUNCE,        // record the active machine's OUTPUT bus (press to toggle)
-    SID_BROADCAST      // :8000 live-stream listener (off by default; frees internal RAM)
+    SID_BROADCAST,     // :8000 live-stream listener (off by default; frees internal RAM)
+    SID_TUNER          // press-to-open: line-in chromatic tuner page
 } submenu_ids_t;
 
 typedef enum{

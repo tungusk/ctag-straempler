@@ -21,6 +21,7 @@
 #include "menu_config.h"
 #include "machine.h"
 #include "beatlisten.h"
+#include "tuner.h"
 #include "strampler_version.h"
 #include "recording.h"
 #include "wifi.h"
@@ -806,13 +807,23 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     bl_status_t bl;
     beatlisten_get_status(&bl);
 
+    // tuner: one extra object, and only while the service is actually on —
+    // this is the 500 ms hot poll, so an idle tuner costs the poll nothing
+    tuner_status_t tu;
+    tuner_get_status(&tu);
+    char tun[80] = "";
+    if (tu.on)
+        snprintf(tun, sizeof(tun), ",\"tun\":{\"hv\":%d,\"hz\":%.2f,\"n\":%d,\"c\":%.1f,\"cf\":%.2f,\"us\":%d}",
+                 tu.have ? 1 : 0, (double)tu.hz, tu.midi, (double)tu.cents,
+                 (double)tu.conf, tu.cost_us);
+
     // build compact JSON by hand to avoid cJSON overhead in hot path
-    char buf[416];
+    char buf[512];
     int n = snprintf(buf, sizeof(buf),
         "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
         "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u,"
         "\"vu\":[%u,%u,%u,%u],"
-        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u}",
+        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u%s}",
         m ? m->name : "",
         rec ? "true" : "false",
         st.v0, st.v1,
@@ -821,7 +832,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
         st.trig,
         st.vu[0], st.vu[1], st.vu[2], st.vu[3],
         bl.mode, bl.state, (double)bl.bpm, (double)bl.conf, bl.cost_us,
-        audio_proc_us());
+        audio_proc_us(), tun);
     (void)n;
     send_json(req, buf);
     return ESP_OK;
@@ -1592,6 +1603,22 @@ static esp_err_t bcast_enable_handler(httpd_req_t *req)
     return send_json(req, buf);
 }
 
+// GET /tuner/enable?on=0|1 — the line-in tuner service. Normally the System >
+// Tuner page owns this (on when open, off when shut); this endpoint is for the
+// web UI and for testing it without standing at the module. NOT persisted: a
+// tuner is a thing you open, not a mode you leave running.
+static esp_err_t tuner_enable_handler(httpd_req_t *req)
+{
+    char v[8];
+    if (!get_query_param(req, "on", v, sizeof(v)))
+        return send_json(req, "{\"err\":\"need ?on=0|1\"}");
+    int on = atoi(v) ? 1 : 0;
+    tuner_set_enabled(on);
+    char buf[48];
+    snprintf(buf, sizeof(buf), "{\"enabled\":%s}", tuner_get_enabled() ? "true" : "false");
+    return send_json(req, buf);
+}
+
 // ─── /ws/midi + /midi/* — the web MIDI bridge (musical typing / WebMIDI) ────
 // WS frames are tiny text: "n <note> [vel]" on, "f <note>" off, "x" all off,
 // "h" heartbeat (liveness while notes are held). POST fallback mirrors them.
@@ -1885,6 +1912,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/ice/stop",      .method = HTTP_POST, .handler = ice_stop_handler },
     { .uri = "/ice/state",     .method = HTTP_GET,  .handler = ice_state_handler },
     { .uri = "/blisten",       .method = HTTP_POST, .handler = blisten_post_handler },
+    { .uri = "/tuner/enable",  .method = HTTP_GET,  .handler = tuner_enable_handler },
     { .uri = "/remote/machine",.method = HTTP_POST, .handler = remote_machine_handler },
     { .uri = "/remote/params", .method = HTTP_GET,  .handler = remote_params_get_handler },
     { .uri = "/remote/params", .method = HTTP_POST, .handler = remote_params_post_handler },

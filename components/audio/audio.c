@@ -19,6 +19,7 @@
 #include "recording.h"
 #include "machine.h"
 #include "beatlisten.h"
+#include "tuner.h"
 #include "spi_per.h"
 #include "i2s_per.h"
 #include "pin_defs.h"
@@ -483,6 +484,8 @@ static void audio_task(void *pvParams)
         // regardless of machine (OFF = one branch). Runs BEFORE the machine so
         // this block's synthesized clock level is what the machine consumes.
         beatlisten_push(in);
+        // chromatic tuner: the same core input tap, OFF by default (one branch)
+        tuner_push(in);
 
         const machine_t *m = machine_active();
         if (m) {

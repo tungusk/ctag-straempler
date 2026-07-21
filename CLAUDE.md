@@ -431,6 +431,22 @@ The machines (all working; archives in `bin/`):
   (channel assignment, not a matrix — don't duplicate); Deck's contextual
   loop knobs ARE its CV interface, no matrix by design. Lives in
   components/menu (the sample_browser precedent — it draws).
+- `components/machine/tuner.{h,c}` — line-in CHROMATIC TUNER, the beatlisten
+  shape: `tuner_push(in)` taps the core input in the audio task beside
+  `beatlisten_push`, an unpinned prio-4 task runs `pitch_detect` over 4096-frame
+  buffers (two whole buffers, not a ring — the detector wants a CONTIGUOUS
+  window). OFF by default and lazily allocated (~16 KB PSRAM + ~8 KB scratch);
+  **System > Settings > Tuner** turns it on when opened and off when left, so
+  it is one branch per block otherwise. Steadiness follows the beatlisten rule:
+  the note changes only after 2 windows agree, the needle slews, a few silent
+  windows are needed to drop out. Detection measured ~35-40 ms/window on
+  hardware, so it is RATE-LIMITED to ~4/s (analysing every 93 ms buffer costs
+  ~40% of a core; `aus` 504 -> ~545-585 with the limit, back to 502 when shut).
+  A tuner-specific LEVEL GATE (~-38 dBFS) + 0.5 confidence floor sit above
+  pitch_detect's own offline-tuned floor — a live Eurorack input always has
+  hum/bleed and will otherwise report a note at 30-60 Hz from noise. Status via
+  `tuner_get_status()`, `/status` "tun" object (only while on), and
+  `GET /tuner/enable?on=` (not persisted — a tuner is opened, not left on).
 - `components/util/pitch_detect.{h,c}` — monophonic PITCH DETECTION (YIN:
   coarse lag sweep on a 4x decimated window, then a native-rate refine +
   parabolic fit; ~6 KB scratch, no SD/globals). Sub-cent on host tests from
