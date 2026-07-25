@@ -21,7 +21,7 @@
 #include "tape_priv.h"
 
 static const color_t WF_DIM   = {70, 70, 80};     // outside the crop
-static const color_t CROP_COL = {70, 200, 235};   // crop edges (cyan)
+static const color_t CROP_COL = {70, 200, 235};   // crop edge ticks (cyan)
 static const color_t GRID_COL = {24, 30, 42};     // beat ticks (dim)
 static const color_t BAR_COL  = {36, 48, 66};     // every 4th beat
 static const color_t PH_COL   = {240, 240, 245};
@@ -40,13 +40,16 @@ static int strip_y(void) { return 176; }         // edit + FX button row
 // on-screen elements the encoder scrolls (turn = move selection, press = act):
 // the NAME title (= the Load affordance, upper-left in the wave), the crop points,
 // then the edit actions. Pressing a crop point grabs it (turn adjusts, press drops).
-enum { TB_NAME = 0, TB_IN, TB_OUT, TB_WIN, TB_REV, TB_NORM, TB_FADE, TB_CLR,
+// CW scroll order through the loop elements is START > WINDOW > END (Arlo
+// 2026-07-25) — the window sits between the two points it slides, so turning
+// right walks the loop left-edge, whole-loop, right-edge.
+enum { TB_NAME = 0, TB_IN, TB_WIN, TB_OUT, TB_REV, TB_NORM, TB_FADE, TB_CLR,
        TB_FX1, TB_FX2, TB_FX3, TB_N };
 static int  s_btn  = 0;               // selected element
 static bool s_grab = false;           // a crop point is grabbed -> turn adjusts it
 static int  s_cur_slot = 0;           // FX slot the sub-page edits (shared with Setup FX rows)
 static int  s_setup_return = -1;      // Setup row to restore on return from a sub-page
-static bool tb_is_crop(int b) { return b >= TB_IN && b <= TB_WIN; }
+static bool tb_is_crop(int b) { return b >= TB_IN && b <= TB_OUT; }
 static bool tb_is_fx(int b)   { return b >= TB_FX1 && b <= TB_FX3; }
 static bool tp_ui_stopped(void) { return !tp.playing && !tp.recording; }
 
@@ -164,12 +167,32 @@ static void wave_col(int x)
                                : (tp.recording && fr < (long)tp.len);
         TFT_drawLine(x, cy - ph, x, cy + ph, inside ? wave_lit() : WF_DIM);
     }
-    if (x == xi || x == xo) TFT_drawLine(x, y0, x, y0 + h, CROP_COL);
+    // LOOP BOX (Arlo 2026-07-25): a thick outline around the loop area, drawn
+    // ONLY while the Window element is selected — green, brighter while grabbed.
+    // The rest of the time the lit-vs-dim waveform already shows the loop, so
+    // the box stays out of the way. Drawn per-column so the playhead erase
+    // (which repaints single columns) can't punch holes in the top/bottom
+    // edges; kept inside y0..y0+h-1, the band wave_col actually clears.
+    // always-on crop edge ticks (1px cyan) — the loop's boundaries stay marked
+    // even when nothing is selected; the box and draw_crop_sel paint over them
+    if (x == xi || x == xo) TFT_drawLine(x, y0, x, y0 + h - 1, CROP_COL);
+    if (s_btn == TB_WIN && x >= xi && x <= xo) {
+        const int BOX_T = 3;                        // outline thickness (px)
+        color_t bc = s_grab ? (color_t){60, 255, 120} : (color_t){30, 215, 90};
+        int yb = y0 + h - 1;
+        if (x < xi + BOX_T || x > xo - BOX_T) TFT_drawLine(x, y0, x, yb, bc);
+        else for (int k = 0; k < BOX_T; k++) {
+            TFT_drawPixel(x, y0 + k, bc, 1);
+            TFT_drawPixel(x, yb - k, bc, 1);
+        }
+    }
     TFT_drawPixel(x, cy, (color_t){200, 206, 218}, 1);   // white origin line (over the wave centre)
 }
 
-// bold the selected crop edge(s) so it's obvious which point you're editing
-// (extra-bold + white while grabbed).
+// bold the selected crop edge so it's obvious which point you're editing
+// (extra-bold + green while grabbed). WIN is deliberately NOT handled here — the
+// whole-loop box in wave_col turns green for it, which is the clearer cue and
+// would otherwise be painted over by these bars.
 static void draw_crop_sel(void)
 {
     if (tp.len == 0 || tp.rec_dest != TPD_TAPE) return;
@@ -178,13 +201,13 @@ static void draw_crop_sel(void)
     color_t hi = s_grab ? (color_t){25, 175, 70}     // grabbed (clicked in to move) = green
                         : (color_t){150, 235, 255};  // selected = bright cyan
     int wdt = s_grab ? 5 : 4;                        // bold selected crop edge
-    if (s_btn == TB_IN || s_btn == TB_WIN) {
+    if (s_btn == TB_IN) {
         int x = frame_x(ein);
-        for (int k = 0; k < wdt && x + k < W_X + W_W; k++) TFT_drawLine(x + k, y0, x + k, y0 + h, hi);
+        for (int k = 0; k < wdt && x + k < W_X + W_W; k++) TFT_drawLine(x + k, y0, x + k, y0 + h - 1, hi);
     }
-    if (s_btn == TB_OUT || s_btn == TB_WIN) {
+    if (s_btn == TB_OUT) {
         int x = frame_x(eout);
-        for (int k = 0; k < wdt && x - k >= W_X; k++) TFT_drawLine(x - k, y0, x - k, y0 + h, hi);
+        for (int k = 0; k < wdt && x - k >= W_X; k++) TFT_drawLine(x - k, y0, x - k, y0 + h - 1, hi);
     }
 }
 
@@ -260,6 +283,16 @@ static void draw_crop_readout(void)
     snprintf(seg, sizeof(seg), "OUT %s", b2); TFT_print(seg, x, y); x += TFT_getStringWidth(seg) + 16;
     _fg = (s_btn == TB_WIN) ? TFT_CYAN : (color_t){110, 112, 124};
     snprintf(seg, sizeof(seg), "%.1f beats", beats); TFT_print(seg, x, y);
+    // crop-drop confirmation, right-justified on the same row (the drop itself
+    // changes nothing on screen, so this is the whole feedback channel)
+    if (tp.drop_ticks > 0 && tp.drop_note[0]) {
+        char d[20];
+        bool bad = tp.drop_spoiled && !tp.save_busy;    // recorded over mid-write
+        snprintf(d, sizeof(d), tp.save_busy ? ">%s..." : bad ? "!%s" : ">%s", tp.drop_note);
+        _fg = bad ? (color_t){235, 165, 60}             // amber = the file is a blend
+                  : (color_t){120, 225, 150};           // green = it went to the card
+        TFT_print(d, _width - 6 - TFT_getStringWidth(d), y);
+    }
 }
 
 // the button row: edit actions + FX slots. Static (no scroll), selected gets a
@@ -271,17 +304,24 @@ static void draw_buttons(void)
     _bg = TFT_BLACK; TFT_fillRect(0, y - 2, _width, fh * 2 + 8, _bg);
     if (tp.rec_dest == TPD_CARD) return;
 
-    // TB_CLR slot repurposed 2026-07-20 (Arlo): Live gets CROP (save the crop
-    // as a take) — Clear was destructive + rarely wanted here; the full wipe
-    // stays on Setup > Clear Tape
+    // TB_CLR slot repurposed 2026-07-20 (Arlo): Live gets the crop — Clear was
+    // destructive + rarely wanted here; the full wipe stays on Setup > Clear
+    // Tape. (Briefly "Drop" on 07-25 while it only copied to disk; back to
+    // "Crop" now that it also loads the loop back as the tape.)
     static const char *const lab[] = { "Rev", "Norm", "Fade", "Crop", "FX1", "FX2", "FX3" };
     const int NS = 7;
     int bw = W_W / NS;                        // fixed slots (~42), no scroll
     _bg = TFT_BLACK;
+    bool stopped = tp_ui_stopped();
     for (int si = 0; si < NS; si++) {
         int b = TB_REV + si, bx = W_X + si * bw;
         bool sel = (b == s_btn);              // highlight = bright text, no box
-        _fg = sel ? (color_t){255, 255, 255} : (color_t){78, 84, 98};
+        // Rev/Norm/Fade mutate the buffer and can't fire while the transport
+        // runs — draw them extra-dim so the row SHOWS what's live. Crop stays
+        // available (read-only drop), which is what makes it findable mid-loop.
+        bool dead = !stopped && b >= TB_REV && b <= TB_FADE;
+        _fg = dead ? (color_t){40, 44, 54}
+            : sel ? (color_t){255, 255, 255} : (color_t){78, 84, 98};
         if (b >= TB_FX1) {                    // FX slot: "FXn" on top, effect name below
             TFT_print((char *)lab[si], bx + 3, y + 1);
             char v[10]; snprintf(v, sizeof(v), "%.6s", fxrack_slot_name(&tp_rk, b - TB_FX1));
@@ -311,7 +351,9 @@ static void draw_hint(void)
         case TB_REV:  h = stopped ? "press: reverse the crop"   : "stop first"; break;
         case TB_NORM: h = stopped ? "press: normalize the crop" : "stop first"; break;
         case TB_FADE: h = stopped ? "press: fade crop edges"    : "stop first"; break;
-        case TB_CLR:  h = stopped ? "press: save crop as take"  : "stop first"; break;
+        case TB_CLR:  h = tp.recording ? "recording"
+                        : tp.save_busy ? "saving..."
+                                       : "press: save the loop + crop to it"; break;
         case TB_FX1: case TB_FX2: case TB_FX3: h = "press: cycle FX   long: Setup"; break;
     }
     _fg = (color_t){110, 110, 120};
@@ -341,6 +383,22 @@ static unsigned crop_sig(void)
 
 static void redraw_strip(void) { draw_crop_readout(); draw_buttons(); draw_hint(); }
 
+// Crop button: save the audible loop as a take, then crop the tape to it. The
+// note names the file that was written and lives ~6 SLOW ticks (~6 s); the crop
+// itself lands a moment later, when tape_drop_adopt_kick() sees the file closed.
+// State only: each caller repaints its OWN page (this runs from the Live button
+// AND the Setup row, so it must not draw Live geometry).
+#define DROP_NOTE_TICKS 6
+static bool s_drop_busy = false;        // last save_busy seen while a note is up
+static void crop_drop(void)
+{
+    if (tape_save_crop() == 0) snprintf(tp.drop_note, sizeof(tp.drop_note), "%s", tp.save_id);
+    else                       snprintf(tp.drop_note, sizeof(tp.drop_note), "%s",
+                                       tp.recording ? "rec" : tp.save_busy ? "busy" : "--");
+    tp.drop_ticks = DROP_NOTE_TICKS;
+    s_drop_busy   = tp.save_busy;
+}
+
 static void main_full_redraw(void)
 {
     TFT_resetclipwin();
@@ -356,17 +414,18 @@ static void main_full_redraw(void)
 static void nudge(int dir)
 {
     if (tp.len == 0) return;
-    int sel = s_btn - TB_IN;            // 0 = IN, 1 = OUT, 2 = WIN
     uint32_t bt = tape_beat_frames();
     long step = (tp.disp_bpm > 0) ? (long)bt : (long)(tp.len / 200 + 1);
     long d = (long)dir * step;
-    if (sel == 0) {                     // IN (grid re-anchors with it)
+    // switch on the element itself, not on its position in the enum — the scroll
+    // order is a UI choice and has been reordered once already
+    if (s_btn == TB_IN) {               // IN (grid re-anchors with it)
         long v = (long)tp.in_pt + d;
         v = v < 0 ? 0 : v;
         if (v > (long)tp.out_pt - 64) v = (long)tp.out_pt - 64;
         if (tp.disp_bpm <= 0) v = (long)tape_snap((uint32_t)(v < 0 ? 0 : v));
         tp.in_pt = (uint32_t)(v < 0 ? 0 : v);
-    } else if (sel == 1) {              // OUT (snaps to the IN-anchored grid)
+    } else if (s_btn == TB_OUT) {       // OUT (snaps to the IN-anchored grid)
         long v = (long)tp.out_pt + d;
         if (v < (long)tp.in_pt + 64) v = (long)tp.in_pt + 64;
         if (v > (long)tp.len) v = (long)tp.len;
@@ -402,11 +461,12 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             int dir = (event == EV_FWD) ? +1 : -1;
             if (s_grab && tb_is_crop(s_btn)) nudge(dir);              // move the grabbed point
             else {
-                // scroll the selection, SKIPPING the edit actions (Rev/Norm/Fade/
-                // Clear) while rolling — they can't fire, so don't make the user
-                // turn past dead buttons. Always ≥1 selectable (name/crop/FX).
+                // scroll the selection, SKIPPING the DESTRUCTIVE edit actions
+                // (Rev/Norm/Fade) while rolling — they can't fire, so don't make
+                // the user turn past dead buttons. Crop is NOT skipped: it is a
+                // read-only drop and is meant to be pressed mid-loop.
                 do { s_btn = (s_btn + dir + TB_N) % TB_N; }
-                while (!tp_ui_stopped() && s_btn >= TB_REV && s_btn <= TB_CLR);
+                while (!tp_ui_stopped() && s_btn >= TB_REV && s_btn <= TB_FADE);
             }
             draw_header(); draw_wave(); redraw_strip(); s_sig_crop = crop_sig();  // header = name-select highlight
             break;
@@ -417,11 +477,14 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             else if (s_btn == TB_NAME) return M_TAPE_LOAD;           // the name IS the load button
             else if (tb_is_fx(s_btn))                               // cycle this slot's effect IN PLACE
                 fxrack_menu_adj(&tp_rk, s_btn - TB_FX1, -1, +1);    //   (params: long-press -> Setup > FX)
-            else if (tp_ui_stopped()) switch (s_btn) {              // edit actions: STOPPED only (enforce the "stop first" hint, don't just show it)
+            // Crop = drop the audible loop to a new take. Read-only, so it fires
+            // WHILE PLAYING too (that's the point); tape_save_crop refuses on its
+            // own while recording.
+            else if (s_btn == TB_CLR) crop_drop();
+            else if (tp_ui_stopped()) switch (s_btn) {              // buffer edits: STOPPED only (enforce the "stop first" hint, don't just show it)
                 case TB_REV:  tape_reverse(); break;
                 case TB_NORM: tape_norm();    break;
                 case TB_FADE: tape_fade();    break;
-                case TB_CLR:  tape_save_crop(); break;   // the button reads "Crop" now
             }
             draw_header(); draw_wave(); redraw_strip(); s_sig_crop = crop_sig();
             break;
@@ -435,6 +498,7 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             // a full-strip redraw and its PSRAM shadow-FB writes contend with the
             // audio path (screen is 2nd priority to audio here).
             tape_autosave_kick();
+            tape_drop_adopt_kick();          // finish a crop once its file is closed
             tape_card_service();
             unsigned hs = head_sig();
             if (hs != s_sig_head) {
@@ -447,6 +511,7 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
         }
         case EV_TIMER_REPEATING_SLOW: {
             tape_autosave_kick();
+            tape_drop_adopt_kick();          // finish a crop once its file is closed
             tape_card_service();
             if (tp.recording && tp.len != s_wave_len) {  // live record growth (throttled to 1 Hz)
                 tape_rebuild_peaks(false);
@@ -458,6 +523,13 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             }
             unsigned cs = crop_sig();
             if (cs != s_sig_crop) { draw_wave(); redraw_strip(); s_sig_crop = cs; }
+            // expire the crop-drop note, repainting when the writer finishes so
+            // ">TCR_0007..." loses its ellipsis the moment the file is closed
+            if (tp.drop_ticks > 0) {
+                bool sb = tp.save_busy;
+                if (--tp.drop_ticks == 0 || sb != s_drop_busy) redraw_strip();
+                s_drop_busy = sb;
+            }
             draw_playhead();
             break;
         }
@@ -482,7 +554,7 @@ static const setup_item_t tape_setup_items[] = {
     {"FX1",        ST_ACTION}, {"FX2",        ST_ACTION}, {"FX3 Reverb", ST_ACTION},
     {"Copy",       ST_ACTION}, {"Cut",        ST_ACTION}, {"Paste",      ST_ACTION},
     {"Normalize",  ST_ACTION}, {"Reverse",    ST_ACTION}, {"Fade Edges", ST_ACTION},
-    {"Save Crop",  ST_ACTION}, {"Load Sample", ST_ACTION}, {"Clear Tape", ST_ACTION},
+    {"Crop Loop",  ST_ACTION}, {"Load Sample", ST_ACTION}, {"Clear Tape", ST_ACTION},
     {"Tape Len",   ST_TOGGLE}, {"Rec Mode",    ST_TOGGLE}, {"Play Mode",   ST_TOGGLE},
     {"Rec Dest",   ST_TOGGLE}, {"Rec Quant",   ST_TOGGLE},
     {"CV Matrix",  ST_ACTION},   // appended: the index-keyed switches above stay stable
@@ -527,10 +599,10 @@ static void tape_val(int i, char *v, size_t n)
         case 16: snprintf(v, n, "%s", stopped_or("crop >")); break;
         case 17: snprintf(v, n, "%s", stopped_or("crop >")); break;
         case 18: snprintf(v, n, "%s", stopped_or("crop >")); break;
-        case 19: {
-            if (tp.save_busy)        snprintf(v, n, "saving...");
+        case 19: {   // save-loop-then-crop — works while playing, so no stopped_or here
+            if (tp.save_busy)       snprintf(v, n, "saving...");
             else if (tp.save_id[0]) snprintf(v, n, "%s", tp.save_id);
-            else                     snprintf(v, n, "%s", stopped_or("take >"));
+            else                    snprintf(v, n, "%s", tp.recording ? "recording" : "crop >");
             break;
         }
         case 20: snprintf(v, n, "%s", stopped_or("browse >")); break;
@@ -591,7 +663,7 @@ static int tape_action(int i)
         case 16: tape_norm(); break;
         case 17: tape_reverse(); break;
         case 18: tape_fade(); break;
-        case 19: tape_save_crop(); break;
+        case 19: crop_drop(); break;   // same drop as the Live button (+ its note)
         case 20: return M_TAPE_LOAD;
         case 21: tape_clear(); break;
         case 27: s_setup_return = 27; return M_TAPE_CV;   // CV matrix page

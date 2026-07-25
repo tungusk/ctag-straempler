@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include "sd_lock.h"
 #include "sampfile_int.h"
+#include "sample_ram.h"   // SAMPLE_DIR_N — the folder count SF_DIRS asserts against
 
 static size_t vfs_read_at(void *ctx, long off, void *buf, size_t n)
 {
@@ -78,6 +79,8 @@ static const char *const SF_EXTS[] = { ".RAW", ".WAV", ".AIF", ".AIFF" };
 static const char *const SF_DIRS[] = { "usr", "usr/REC", "usr/LOOPS", "usr/SLICES",
                                        "usr/DRUMS", "usr/KEYS", "usr/TAPE" };
 #define SF_N_DIRS 7
+_Static_assert(SF_N_DIRS == (int)(sizeof(SF_DIRS)/sizeof(SF_DIRS[0])), "SF_N_DIRS must match SF_DIRS");
+_Static_assert(SF_N_DIRS == SAMPLE_DIR_N, "the resolver must search every pool folder");
 
 int sample_resolve(const char *id, char *path, size_t path_len)
 {

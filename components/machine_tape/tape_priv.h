@@ -136,6 +136,17 @@ typedef struct {
     char     save_id[12];             // last minted take id ("" = none)
     uint32_t save_a, save_b;          // frames [a,b) the writer will emit
     bool     save_crop;              // true = an actively-cropped take (marked TCR_)
+    // The writer reads the bank in the background while the audio task may still
+    // be recording INTO it (an overdub punch during a drop, or a fresh take
+    // rolling over a deferred auto-save). The audio task sets this when it writes
+    // a frame inside [save_a,save_b), so the file is reported as suspect rather
+    // than quietly containing a blend of the old and new material.
+    volatile bool drop_spoiled;
+    // crop-drop ADOPTION: after the writer closes the file, the UI task loads it
+    // back as the tape's content (the "crop" half of the gesture). Deferred
+    // because the load must not race the writer, and it needs UI context (SD).
+    char     adopt_id[12];           // "" = nothing pending
+    bool     adopt_resume;           // transport was rolling -> play the new take
     // auto-save: takes persist to the card when you move on from them (a fresh
     // take overwrites, or you leave Tape). A recorded buffer is never lost.
     bool     take_dirty;             // buffer holds unsaved recorded audio
@@ -150,6 +161,11 @@ typedef struct {
     int      take_num;               // session take counter -> "REC-###" title until saved
     // load progress ("" = idle) for the menu
     char     load_note[24];
+    // Crop-drop confirmation for the Live page: the drop is a background copy
+    // with no visible effect on the tape, so without this it looks like nothing
+    // happened. Holds the dropped id; counts down on the SLOW menu tick.
+    char     drop_note[12];
+    int      drop_ticks;
     // ui hints
     float    disp_bpm;                // effective grid bpm for the header
     bool     disp_clk;                // true = grid comes from the clock
@@ -193,7 +209,9 @@ void tape_eff_window(uint32_t *in, uint32_t *out);
 // grid beat length in frames (clock if locked, else manual bpm)
 uint32_t tape_beat_frames(void);
 
-// ---- UI-context operations (all refuse while playing/recording) ------------
+// ---- UI-context operations -------------------------------------------------
+// All of these MUTATE the buffer and so refuse unless the transport is stopped —
+// except tape_save_crop, which only reads (see its note below).
 int  tape_set_len_sel(int sel);           // realloc tape (clears it). 0 ok
 int  tape_load(const char *name);         // pool sample -> tape. 0 ok
 void tape_clear(void);
@@ -203,7 +221,12 @@ void tape_fade(void);                     // TP_FADE_MS ramps at crop edges
 int  tape_copy(void);                     // crop -> clipboard. 0 ok
 int  tape_cut(void);                      // copy + delete crop (close gap)
 int  tape_paste(void);                    // insert clipboard at IN. 0 ok
-int  tape_save_crop(void);                // background: crop -> usr/TCR_NNNN.WAV (marked)
+// CROP: write the audible loop to usr/TAPE/TCR_NNNN.WAV, then load that file
+// back as the tape's content. Legal WHILE PLAYING (refuses only while
+// recording). Nothing is lost — an unsaved take is persisted whole before the
+// buffer is replaced. 0 = the writer started.
+int  tape_save_crop(void);
+void tape_drop_adopt_kick(void);          // UI task: finish the crop once the writer closes
 void tape_crop_beats(int beats);          // out = in + beats * beat
 uint32_t tape_snap(uint32_t frame);       // grid beat (bpm known) else zero-cross
 void tape_rebuild_peaks(bool full);       // UI task; incremental while recording
