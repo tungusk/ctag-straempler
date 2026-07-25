@@ -15,6 +15,9 @@ static const char *const dirs[] = {"/sdcard/usr", "/sdcard/usr/REC",
                                    "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
                                    "/sdcard/usr/DRUMS", "/sdcard/usr/KEYS",
                                    "/sdcard/usr/TAPE"};
+// indexed BY SAMPLE_DIR_* — a short array is an out-of-bounds read (see the
+// sample_list_recent.c crash), so the count is a build-time invariant
+_Static_assert(sizeof(dirs)/sizeof(dirs[0]) == SAMPLE_DIR_N, "one dir per SAMPLE_DIR_*");
 
 const char *sample_dir_name(int di)
 {

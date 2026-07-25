@@ -24,7 +24,7 @@ tape_state_t tp;
 
 static const uint32_t TP_LEN_SECS[TP_LEN_OPTS] = { 15, 30, 60 };
 
-static int tape_spawn_save(uint32_t a, uint32_t b, bool crop);   // background take writer (below)
+static int tape_spawn_save(uint32_t a, uint32_t b, bool crop, bool adopt);   // background take writer (below)
 static void tape_stash_and_save(void);                          // request async save of the current take
 
 // ---- bank alloc (1 MiB blocks, fail-soft) ---------------------------------------
@@ -302,26 +302,43 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
 
     clockin_block(&tp.ci, clock_source_level(tp.clk_src, io), MACHINE_BLOCK / 2);
 
-    // knobs 5..8 takeover: win move / cutoff / res / drive
+    // knobs 5..8 takeover: win move / cutoff / res / drive.
+    // CV5..CV8 are knob+jack channels, so a CLOCK patched into one of them also
+    // lands on that knob's parameter — and Tape's DEFAULT clock source is CV8,
+    // i.e. clocking the module the obvious way slammed the DRIVE stage with the
+    // pulse train (audible rhythmic distortion with every FX slot Off) and
+    // flagged machine_state_dirty() on every pulse, which then churned
+    // AUTOSAVE.JSN to the card forever. Whichever channel carries the clock is
+    // excluded here (Arlo 2026-07-25). NOTE the CV matrix can still be pointed at
+    // the same channel, but that is an explicit assignment the user made.
+    // CV8 IS NO LONGER WIRED TO DRIVE (Arlo 2026-07-25). CV8 is the channel Tape
+    // clocks from by default, so the pulse train was landing straight on the
+    // drive stage. Drive stays editable on the Setup row; K5/K6/K7 keep their
+    // parameters (K6/K7 are this unit's two fully-good channels anyway, and
+    // CV5/CV8 only reach ~half scale here).
+    const int TP_N_KNOBS = 3;                 // K5 win move, K6 cutoff, K7 reso
+    const int clk_kn = (tp.clk_src >= 4 && tp.clk_src <= 7) ? tp.clk_src - 4 : -1;
     float kn[4] = { (float)cvm[4]/4095.0f, (float)cvm[5]/4095.0f,
                     (float)cvm[6]/4095.0f, (float)cvm[7]/4095.0f };
     if (tp.knob_ctx != 0) {
         tp.knob_ctx = 0;
         for (int i = 0; i < 4; i++) { tp.knob_capt[i] = kn[i]; tp.knob_live[i] = false; }
     }
-    for (int i = 0; i < 4; i++)
-        if (!tp.knob_live[i] && fabsf(kn[i] - tp.knob_capt[i]) > 0.03f) tp.knob_live[i] = true;
+    // the same collision can still be aimed at K5/K6/K7 by choosing CV5/6/7 as
+    // the clock source, so the clocked channel is excluded whichever one it is
+    if (clk_kn >= 0) { tp.knob_live[clk_kn] = false; tp.knob_capt[clk_kn] = kn[clk_kn]; }
+    for (int i = 0; i < TP_N_KNOBS; i++)
+        if (i != clk_kn && !tp.knob_live[i] && fabsf(kn[i] - tp.knob_capt[i]) > 0.03f) tp.knob_live[i] = true;
     if (tp.knob_live[0]) tp.win_move = (kn[0] - 0.5f) * 2.0f;              // K5 noon = home
     if (tp.knob_live[1]) tp.cutoff   = 30.0f * powf(200.0f, kn[1]);        // 30 Hz .. 6 kHz
     if (tp.knob_live[2]) tp.res01    = kn[2];
-    if (tp.knob_live[3]) tp.drive    = kn[3];
     // K6..K8 land in PERSISTED params (cut/res/drv) but never touch the UI
     // event queue — flag committed moves for the autosave (K5's win_move is
     // performance-only, not saved, so it doesn't flag)
     {
         static float s_kdirty[4] = {-1, -1, -1, -1};
-        for (int i = 1; i < 4; i++)
-            if (tp.knob_live[i] &&
+        for (int i = 1; i < TP_N_KNOBS; i++)
+            if (i != clk_kn && tp.knob_live[i] &&
                 (s_kdirty[i] < 0 || fabsf(kn[i] - s_kdirty[i]) > 0.03f)) {
                 s_kdirty[i] = kn[i];
                 machine_state_dirty();
@@ -496,9 +513,15 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // LAST as a master — turning Level down no longer changes what's recorded, and
     // the chain always sees the full-scale reference.
     float lvl = tp_lvl_eff();                     // Level + CV matrix offset
+    bool wr_chk = tp.save_busy;                   // a background writer is reading the bank
     for (int f = 0; f < frames; f++) {
         int32_t v = ((out[f * 2] >> 16) + (out[f * 2 + 1] >> 16)) >> 1;   // mono print
-        if (wdo[f]) tp_wr(wpos[f], (int16_t)v);
+        if (wdo[f]) {
+            tp_wr(wpos[f], (int16_t)v);
+            // recording over the region a drop/auto-save is emitting: the file
+            // will hold a blend, so mark it instead of shipping a silent lie
+            if (wr_chk && wpos[f] >= tp.save_a && wpos[f] < tp.save_b) tp.drop_spoiled = true;
+        }
         float o = (float)v * lvl * (28000.0f / 32767.0f);
         if (o > 32000.0f) o = 32000.0f; else if (o < -32000.0f) o = -32000.0f;
         int32_t s = ((int32_t)(int16_t)o) << 16;
@@ -536,7 +559,7 @@ int tape_load(const char *name)
     char path[64];
     if (sample_resolve(name, path, sizeof(path)) != 0) return -2;
     if (tp.take_dirty && tp.len > 1) {              // persist the current take before replacing it
-        tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped);
+        tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped, true);
         while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));
     }
 
@@ -732,14 +755,22 @@ static void save_task(void *pv)
                                  : "{\"src\":\"tape\",\"crop\":false}", jf); fclose(jf); }
     sd_lock_give();
     heap_caps_free(chunk);
-    ESP_LOGI(TAG, "saved take -> %s", tp.save_id);
+    if (tp.drop_spoiled)
+        ESP_LOGW(TAG, "take %s was recorded over WHILE saving — content is a blend", tp.save_id);
+    else
+        ESP_LOGI(TAG, "saved take -> %s", tp.save_id);
     tp.save_busy = false;
     vTaskDelete(NULL);
 }
 
-// mint a marked id (TCR_ = actively cropped, TAP_ = full take) and spawn the
+// mint a marked id (TCR_ = actively cropped, CUT_ = full take) and spawn the
 // writer for [a,b). Must run in a NON-audio task (SD readdir + xTaskCreate).
-static int tape_spawn_save(uint32_t a, uint32_t b, bool crop)
+// ADOPT = "this file now IS the take": it becomes the restore target, so the
+// buffer reloads as this id on return. The Crop DROP passes adopt=false — it
+// only copies a region out to the card and must leave the take's own identity
+// (and its unsaved-ness) alone, or dropping a loop would silently repoint
+// tapelast at the excerpt and mark the still-unsaved full take clean.
+static int tape_spawn_save(uint32_t a, uint32_t b, bool crop, bool adopt)
 {
     if (b <= a || tp.save_busy) return -1;
     const char *pfx = crop ? "TCR_" : "CUT_";
@@ -747,8 +778,9 @@ static int tape_spawn_save(uint32_t a, uint32_t b, bool crop)
     if (idx < 0) idx = 0;
     if (idx > 9999) idx = 9999;                // 8.3: id stays exactly 8 chars
     snprintf(tp.save_id, sizeof(tp.save_id), "%s%04d", pfx, idx % 10000);
-    snprintf(tp.restore_id, sizeof(tp.restore_id), "%s", tp.save_id);   // this take is now on card
+    if (adopt) snprintf(tp.restore_id, sizeof(tp.restore_id), "%s", tp.save_id);
     tp.save_a = a; tp.save_b = b; tp.save_crop = crop;
+    tp.drop_spoiled = false;          // arm the overwrite detector for THIS write
     tp.save_busy = true;
     if (xTaskCreate(save_task, "tape_sv", 8192, NULL, 4, NULL) != pdPASS) {
         tp.save_busy = false; tp.save_id[0] = 0; return -2;
@@ -756,13 +788,55 @@ static int tape_spawn_save(uint32_t a, uint32_t b, bool crop)
     return 0;
 }
 
+// CROP (Arlo 2026-07-25): write the LOOPED AREA out to a new TCR_ take, then
+// load that file back as the tape's content — so the gesture both banks the loop
+// and crops down to it.
+//
+// Deliberately allowed WHILE PLAYING (the old version required a stopped
+// transport, which is why the button looked dead — auditioning a loop is
+// precisely when you want to keep it). Only RECORDING is refused: the audio task
+// is writing the buffer then, so a read pass would capture a moving target.
+// The region is the EFFECTIVE window (tape_eff_window), not the raw crop points,
+// so K5 window-move and the CV matrix's In/Out/Window modulation are included —
+// what you HEAR looping is what lands in the file.
+//
+// The write itself passes adopt=false so it does not claim the take's identity
+// here; the ADOPTION happens in tape_drop_adopt_kick() once the file is closed,
+// via tape_load(), which persists an unsaved take WHOLE before replacing the
+// buffer. So cropping never costs you the material outside the loop.
 int tape_save_crop(void)
 {
-    if (!tp_stopped() || tp.len == 0 || tp.save_busy) return -1;
+    if (tp.recording || tp.len == 0 || tp.save_busy || tp.adopt_id[0]) return -1;
     crop_clamp();
-    int r = tape_spawn_save(tp.in_pt, tp.out_pt, true);   // manual save = the crop, marked
-    if (r == 0) tp.take_dirty = false;                    // persisted -> don't re-save on leave
+    uint32_t a, b;
+    tape_eff_window(&a, &b);                 // the audible loop, modulation included
+    int r = tape_spawn_save(a, b, true, false);
+    if (r == 0) {
+        snprintf(tp.adopt_id, sizeof(tp.adopt_id), "%s", tp.save_id);
+        tp.adopt_resume = tp.playing;        // rolling before -> keep rolling after
+    }
     return r;
+}
+
+// UI task: the writer has closed the crop file — load it back as the tape. Runs
+// from the menu tick, so it never races the writer or touches SD from audio
+// context. tape_load() needs a stopped transport and auto-saves a dirty take
+// first (that is the "nothing is lost" guarantee); playback resumes from the
+// top of the new take if it was rolling when the crop was pressed.
+void tape_drop_adopt_kick(void)
+{
+    if (!tp.adopt_id[0] || tp.save_busy) return;
+    char id[12];
+    snprintf(id, sizeof(id), "%s", tp.adopt_id);
+    bool resume = tp.adopt_resume;
+    tp.adopt_id[0] = 0;                      // one shot, whatever the outcome
+    if (tp.drop_spoiled) {                   // file is a blend — don't adopt a bad take
+        ESP_LOGW(TAG, "crop %s recorded over mid-write — not adopting", id);
+        return;
+    }
+    tp.playing = false;                      // tape_load refuses unless stopped
+    if (tape_load(id) != 0) { ESP_LOGE(TAG, "crop %s: load-back failed", id); return; }
+    if (resume) { tp.pos = (double)tp.in_pt; tp.playing = true; }
 }
 
 // UI task: spawn the auto-save the audio task requested (buffer is held intact
@@ -771,7 +845,7 @@ void tape_autosave_kick(void)
 {
     if (!tp.autosave_req || tp.save_busy) return;
     tp.autosave_req = false;
-    tape_spawn_save(tp.save_a, tp.save_b, tp.save_crop);
+    tape_spawn_save(tp.save_a, tp.save_b, tp.save_crop, true);
 }
 
 // UI task: reload the take persisted on the last leave (CONFIG "tapelast"), so
@@ -892,7 +966,7 @@ static void tape_stop(void)
     recording_cancel_prepared();                       // drop a parked (empty) writer
     while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));   // let any in-flight save finish
     if (tp.take_dirty && tp.len > 1) {                    // leaving Tape: persist the take first
-        tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped);
+        tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped, true);
         while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));
     }
     // remember what's in the buffer so we can reload it on return (empty = nothing)

@@ -4,6 +4,7 @@
 #include <strings.h>
 #include "sampfile_f.h"
 #include "sampfile_int.h"
+#include "sample_ram.h"   // SAMPLE_DIR_N — the folder count the arrays below assert against
 
 static size_t fat_read_at(void *ctx, long off, void *buf, size_t n)
 {
@@ -35,8 +36,15 @@ size_t sampfile_read_f(FIL *f, const sampfile_t *sf, int16_t *dst, size_t n)
 static const char *const SF_EXTS_F[] = { ".RAW", ".WAV", ".AIF", ".AIFF" };
 // SLICES was historically missing here (the FatFS resolver couldn't find a bare
 // id living in usr/SLICES); added alongside DRUMS. Bound derives from the array.
-static const char *const SF_DIRS_F[] = { "usr", "usr/REC", "usr/LOOPS", "usr/SLICES", "usr/DRUMS" };
+// KEYS + TAPE were then missing for the same reason (2026-07-25) — a streaming
+// reader (deck/dualdeck/sampler3/slicer) could not resolve an id that lives
+// ONLY in a machine home folder, so it fell through to usr/<id>.RAW and failed
+// to open. Keep in lockstep with SF_DIRS in sampfile.c and dirs[] in
+// sample_ram.c / sample_list_recent.c.
+static const char *const SF_DIRS_F[] = { "usr", "usr/REC", "usr/LOOPS", "usr/SLICES",
+                                         "usr/DRUMS", "usr/KEYS", "usr/TAPE" };
 #define SF_N_DIRS_F ((int)(sizeof(SF_DIRS_F)/sizeof(SF_DIRS_F[0])))
+_Static_assert(SF_N_DIRS_F == SAMPLE_DIR_N, "FatFS resolver must search every pool folder");
 
 int sample_resolve_f(const char *id, char *path, size_t path_len)
 {

@@ -23,7 +23,16 @@ int sample_list_recent_dir(int only, char (**out)[24])
     // f_readdir hands over the timestamps in the SAME pass (a per-file stat()
     // would re-scan the directory once per entry). All pool folders feed the
     // one dated list — or just the one folder the browser is inside.
-    static const char *const dirs[] = {"usr", "usr/REC", "usr/LOOPS", "usr/SLICES", "usr/DRUMS"};
+    // ONE entry per SAMPLE_DIR_* (the loop below indexes this array BY di, so a
+    // short array is an out-of-bounds read, not a missing folder): usr/KEYS +
+    // usr/TAPE were absent while the loop already ran to SAMPLE_DIR_N=7, so
+    // pressing the KEYS/ or TAPE/ row in any dated browser handed f_opendir a
+    // wild pointer and crashed. The static assert makes the next folder bump a
+    // build error instead of a crash.
+    static const char *const dirs[] = {"usr", "usr/REC", "usr/LOOPS", "usr/SLICES",
+                                       "usr/DRUMS", "usr/KEYS", "usr/TAPE"};
+    _Static_assert(sizeof(dirs)/sizeof(dirs[0]) == SAMPLE_DIR_N,
+                   "one dir per SAMPLE_DIR_* — the di loop indexes this array");
     for (int di = 0; di < SAMPLE_DIR_N; di++) {
     if (only >= 0 && di != only) continue;
     FF_DIR d;
