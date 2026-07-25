@@ -167,18 +167,19 @@ static void wave_col(int x)
                                : (tp.recording && fr < (long)tp.len);
         TFT_drawLine(x, cy - ph, x, cy + ph, inside ? wave_lit() : WF_DIM);
     }
-    // LOOP BOX (Arlo 2026-07-25): a thick outline around the loop area, drawn
-    // ONLY while the Window element is selected — green, brighter while grabbed.
-    // The rest of the time the lit-vs-dim waveform already shows the loop, so
-    // the box stays out of the way. Drawn per-column so the playhead erase
-    // (which repaints single columns) can't punch holes in the top/bottom
-    // edges; kept inside y0..y0+h-1, the band wave_col actually clears.
     // always-on crop edge ticks (1px cyan) — the loop's boundaries stay marked
     // even when nothing is selected; the box and draw_crop_sel paint over them
     if (x == xi || x == xo) TFT_drawLine(x, y0, x, y0 + h - 1, CROP_COL);
+    // LOOP BOX (Arlo 2026-07-25): a thick outline around the loop area, drawn
+    // ONLY while the Window element is selected — WHITE while merely
+    // highlighted, GREEN once grabbed, so green always means "turning the
+    // encoder moves this". The rest of the time the lit-vs-dim waveform already
+    // shows the loop, so the box stays out of the way. Drawn per-column so the
+    // playhead erase (which repaints single columns) can't punch holes in the
+    // top/bottom edges; kept inside y0..y0+h-1, the band wave_col clears.
     if (s_btn == TB_WIN && x >= xi && x <= xo) {
         const int BOX_T = 3;                        // outline thickness (px)
-        color_t bc = s_grab ? (color_t){60, 255, 120} : (color_t){30, 215, 90};
+        color_t bc = s_grab ? (color_t){30, 215, 90} : (color_t){235, 238, 245};
         int yb = y0 + h - 1;
         if (x < xi + BOX_T || x > xo - BOX_T) TFT_drawLine(x, y0, x, yb, bc);
         else for (int k = 0; k < BOX_T; k++) {
