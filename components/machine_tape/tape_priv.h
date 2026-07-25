@@ -79,7 +79,10 @@ typedef struct {
     uint32_t rec_stop_target;        // frame to finalize a fresh take at (0 = none pending)
     uint32_t tr2_hold;                // frames TR2 gate held (punch: long-hold = erase, arm)
     bool     tr2_armed;               // long-hold erased the tape -> record starts on release
-    bool     tr2_overdub;             // this TR2 press started an overdub (convertible to erase)
+    bool     tr2_recgest;             // this TR2 press STARTED a recording (overdub or fresh take)
+                                      // -> holding it converts the take into an erase + re-arm.
+                                      // Not set by a punch-OUT press, so holding after punching
+                                      // out can never wipe the take you just finished.
     int      rec_src;                 // TPS_INPUT | TPS_TAPE (re-print)
     bool     monitor;                 // hear input through FX while stopped
     bool     play_oneshot;            // crop end: stop (one-shot) vs wrap (loop, default)

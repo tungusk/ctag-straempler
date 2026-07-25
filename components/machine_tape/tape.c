@@ -391,16 +391,18 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     } else {
         if (io->trig_rising & 2) {
             tp.tr2_hold = 0; tp.tr2_armed = false;
-            if (tp.recording)    { tape_rec_stop_request(); tp.tr2_overdub = false; }  // punch out (quantized)
-            else if (tp.playing) { tape_rec_start();   tp.tr2_overdub = true;  }  // overdub (erasable by holding)
-            else                 { tape_begin_fresh(); tp.tr2_overdub = false; }  // stopped: fresh (auto-saves old)
+            if (tp.recording)    { tape_rec_stop_request(); tp.tr2_recgest = false; }  // punch out (quantized)
+            else if (tp.playing) { tape_rec_start();   tp.tr2_recgest = true;  }  // overdub (erasable by holding)
+            else                 { tape_begin_fresh(); tp.tr2_recgest = true;  }  // stopped: fresh (also erasable)
         }
-        // While overdubbing, holding TR2 ~0.7 s erases (armed) and the fresh take
-        // ROLLS on release, so you place the downbeat when you let go. A stopped
-        // TR2 tap already starts a fresh take (saving the old one), so hold-erase
-        // is only for converting an overdub into a start-over.
+        // Holding TR2 ~0.7 s after a press that STARTED a recording erases the
+        // tape (armed) and the fresh take ROLLS ON RELEASE, so you place the
+        // downbeat when you let go. This covers BOTH entry points now (Arlo
+        // 2026-07-25): an overdub started from playing, and a fresh take started
+        // from stopped — previously only the overdub case armed, so holding from
+        // a stopped tape just recorded the hold. A punch-OUT press never arms.
         if (!(io->trig_level & 2)) {                     // gate held (active low)
-            if (tp.tr2_overdub) {
+            if (tp.tr2_recgest) {
                 tp.tr2_hold += (uint32_t)(MACHINE_BLOCK / 2);
                 if (!tp.tr2_armed && tp.tr2_hold >= (uint32_t)(TP_RATE * 7 / 10)) {
                     tp.tr2_armed = true;
@@ -408,8 +410,8 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
                 }
             }
         } else {                                         // released
-            if (tp.tr2_armed) tape_rec_start();          // roll the fresh take immediately (reliable)
-            tp.tr2_hold = 0; tp.tr2_armed = false; tp.tr2_overdub = false;
+            if (tp.tr2_armed) tape_rec_start();          // erased + armed -> the take rolls HERE, on release
+            tp.tr2_hold = 0; tp.tr2_armed = false; tp.tr2_recgest = false;
         }
     }
 
