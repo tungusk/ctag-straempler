@@ -44,12 +44,25 @@ static int strip_y(void) { return 176; }         // edit + FX button row
 // 2026-07-25) — the window sits between the two points it slides, so turning
 // right walks the loop left-edge, whole-loop, right-edge.
 enum { TB_NAME = 0, TB_IN, TB_WIN, TB_OUT, TB_REV, TB_NORM, TB_FADE, TB_CLR,
-       TB_FX1, TB_FX2, TB_FX3, TB_N };
+       TB_FX1, TB_FX2, TB_FX3, TB_ROUTE, TB_N };
 static int  s_btn  = 0;               // selected element
 static bool s_grab = false;           // a crop point is grabbed -> turn adjusts it
 static int  s_cur_slot = 0;           // FX slot the sub-page edits (shared with Setup FX rows)
 static int  s_setup_return = -1;      // Setup row to restore on return from a sub-page
 static bool tb_is_crop(int b) { return b >= TB_IN && b <= TB_OUT; }
+
+// The Live button strip is a fixed GRID, sized for growth (Arlo 2026-07-25:
+// "we'll be making room for more cells tho, prepare for like two rows of six").
+// Cell positions are pinned by this table rather than by scroll order, so a new
+// button is one entry here plus its TB_* id — nothing re-flows. -1 = reserved
+// space. Row 1 = tape edits, row 2 = the FX chain; the spares sit at the end of
+// each row so each group grows into its own gap.
+#define STRIP_COLS 4          // bump to 6 when the new cells land
+#define STRIP_ROWS 2
+static const int8_t strip_cell[STRIP_ROWS][STRIP_COLS] = {
+    { TB_REV, TB_NORM, TB_FADE, TB_CLR   },
+    { TB_FX1, TB_FX2,  TB_FX3,  TB_ROUTE },
+};
 static bool tb_is_fx(int b)   { return b >= TB_FX1 && b <= TB_FX3; }
 static bool tp_ui_stopped(void) { return !tp.playing && !tp.recording; }
 
@@ -64,7 +77,7 @@ static color_t wave_lit(void)
 
 static int s_last_ph = -1;
 static int s_last_state = -1;         // last transport state for the border
-static unsigned s_sig_head = 0, s_sig_crop = 0;
+static unsigned s_sig_head = 0, s_sig_crop = 0, s_sig_name = 0;
 static uint32_t s_wave_len = 0;       // len at last wave draw (record growth)
 
 // view spans the RECORDED length (zoom to content), not the full capacity — a
@@ -84,13 +97,28 @@ static void fmt_secs(uint32_t fr, char *b, size_t n)
 }
 
 // ---- drawing -------------------------------------------------------------------
-// top bar (all on solid black): row A = "Tape" machine name + state/pos/bpm
-// status; row B = the big filename (DejaVu24) which IS the Load affordance
-// (selected = cyan text, no box) with a green check once saved.
-static void draw_header(void)
+// The top bar is TWO independently-repainted bands (split 2026-07-25). Row A
+// (status) ticks with the playhead ~10x/s; row B (the big filename) is static.
+// They used to share one draw_header() that cleared the whole bar, so the name
+// was erased and redrawn 10 times a second during playback — that was the
+// "flashing filename". Each band now clears only its OWN rows.
+#define HDR_A_H 13                                 // row A band: y 0..12 (row B starts at 13)
+
+// the big filename in row B — also the Load affordance
+static const char *header_name(char *buf, size_t n)
 {
-    _bg = TFT_BLACK; TFT_fillRect(0, 0, _width, w_y() - 2, _bg);   // clear fully (no leftover box edge)
-    // row A: machine name (left) + status (right), small
+    if (tp.rec_dest == TPD_CARD) return "Card Record";
+    if (tp.len == 0)             return "Blank Tape";
+    if (tp.restore_id[0])        return tp.restore_id;
+    snprintf(buf, n, "REC-%03d", tp.take_num);
+    return buf;
+}
+
+// row A: machine name (left) + state/pos/bpm (right), small. Repainted on the
+// fast tick — must NOT touch row B's rows.
+static void draw_header_status(void)
+{
+    _bg = TFT_BLACK; TFT_fillRect(0, 0, _width, HDR_A_H, _bg);
     TFT_setFont(DEF_SMALL_FONT, NULL);
     _fg = (color_t){150, 155, 172}; TFT_print("Tape", 6, 2);
     tape_beat_frames();
@@ -102,31 +130,56 @@ static void draw_header(void)
         (float)tp.pos / TP_RATE, (float)tp.cap / TP_RATE, tp.disp_bpm, tp.disp_clk ? "CLK" : "man");
     _fg = tp.recording ? REC_COL : tp.playing ? (color_t){40, 200, 90} : (color_t){140, 145, 160};
     TFT_print(b, _width - 6 - TFT_getStringWidth(b), 2);
-    // row B: big filename, selection via colour (black bg, no box)
-    char nb[24]; const char *nm;
-    if (tp.rec_dest == TPD_CARD)  nm = "Card Record";
-    else if (tp.len == 0)         nm = "Blank Tape";
-    else if (tp.restore_id[0])    nm = tp.restore_id;
-    else { snprintf(nb, sizeof(nb), "REC-%03d", tp.take_num); nm = nb; }
+    TFT_setFont(DEFAULT_FONT, NULL);
+}
+
+// row B: the big filename + saved check + selection box. Repainted only when its
+// CONTENT changes (see name_sig), never on the playhead tick.
+static void draw_header_name(void)
+{
+    // clear to the waveform top (not w_y()-2): the selection box needs the extra
+    // rows, and anything drawn below the cleared band becomes a STALE line that
+    // nothing erases — which is exactly how the thick box left an "underline"
+    _bg = TFT_BLACK; TFT_fillRect(0, HDR_A_H, _width, w_y() - HDR_A_H, _bg);
+    char nb[24];
+    const char *nm = header_name(nb, sizeof(nb));
     bool sel = (s_btn == TB_NAME) && tp.rec_dest == TPD_TAPE;
     bool saved = tp.restore_id[0] != 0 && tp.rec_dest == TPD_TAPE;
     TFT_setFont(DEJAVU24_FONT, NULL);
     int bh = TFT_getfontheight(), nw = TFT_getStringWidth((char *)nm);
     int nx = 8, ny = 16;                           // +1px pad above the title
-    _fg = sel ? (color_t){110, 225, 255} : (color_t){135, 145, 162};   // bright cyan vs dim grey
+    // the name is ALWAYS bright white (Arlo 2026-07-25) — the box carries the
+    // selection on its own, so recolouring the text too was just noise
+    _fg = (color_t){245, 247, 250};
     TFT_print((char *)nm, nx, ny);
     if (saved) {                                   // green check after the name
         int cx = nx + nw + 8, cy = ny + bh / 2; color_t g = {70, 220, 120};
         TFT_drawLine(cx, cy, cx + 4, cy + 5, g);   TFT_drawLine(cx + 1, cy, cx + 5, cy + 5, g);
         TFT_drawLine(cx + 4, cy + 5, cx + 11, cy - 5, g); TFT_drawLine(cx + 5, cy + 5, cx + 12, cy - 5, g);
     }
-    if (sel) {                                     // grey selection outline around the name
+    if (sel) {                                     // selection outline (3px, Arlo 2026-07-25)
         int bw = nw + (saved ? 26 : 12);
         color_t gr = {120, 124, 138};
-        TFT_drawRect(3, ny - 3, bw, bh + 6, gr);
+        // nest INWARD from the original 1px bounds — growing outward pushed the
+        // bottom edge past the cleared band and left it on screen as an underline
+        for (int k = 0; k < 3; k++) TFT_drawRect(3 + k, ny - 3 + k, bw - 2 * k, bh + 6 - 2 * k, gr);
     }
     TFT_setFont(DEFAULT_FONT, NULL);
 }
+
+// changes exactly when row B's pixels would change
+static unsigned name_sig(void)
+{
+    char nb[24];
+    const char *nm = header_name(nb, sizeof(nb));
+    unsigned h = 2166136261u;
+    for (const char *p = nm; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
+    return h ^ ((s_btn == TB_NAME) ? 2u : 0u)
+             ^ (tp.restore_id[0] ? 4u : 0u)
+             ^ ((unsigned)tp.rec_dest << 3);
+}
+
+static void draw_header(void) { draw_header_status(); draw_header_name(); }
 
 // one waveform column (also used to erase the playhead)
 static void wave_col(int x)
@@ -306,31 +359,54 @@ static void draw_buttons(void)
     if (tp.rec_dest == TPD_CARD) return;
 
     // TB_CLR slot repurposed 2026-07-20 (Arlo): Live gets the crop — Clear was
-    // destructive + rarely wanted here; the full wipe stays on Setup > Clear
-    // Tape. (Briefly "Drop" on 07-25 while it only copied to disk; back to
-    // "Crop" now that it also loads the loop back as the tape.)
-    static const char *const lab[] = { "Rev", "Norm", "Fade", "Crop", "FX1", "FX2", "FX3" };
-    const int NS = 7;
-    int bw = W_W / NS;                        // fixed slots (~42), no scroll
+    // destructive + rarely wanted here; the full wipe stays on Setup > Clear Tape.
+    //
+    // TWO ROWS OF FOUR (Arlo 2026-07-25: "the rows are getting crowded... we can
+    // use two rows for menu options and spread it out"). Same vertical space the
+    // old label-over-value strip used, but each cell is ~75px instead of ~37, and
+    // the grouping reads: row 1 = tape edits, row 2 = the FX chain.
+    //
+    // Each cell is ONE line. An FX slot shows its EFFECT NAME, which is self
+    // explanatory, and falls back to "FX1/2/3" only when the slot is empty — so
+    // the slot number appears exactly when the name would otherwise say "Off".
+    static const char *const lab[] = { "Rev", "Norm", "Fade", "Crop", "FX1", "FX2", "FX3", "" };
     _bg = TFT_BLACK;
     bool stopped = tp_ui_stopped();
-    for (int si = 0; si < NS; si++) {
-        int b = TB_REV + si, bx = W_X + si * bw;
+    const color_t C_SEL  = {255, 255, 255};
+    const color_t C_DIM  = {78, 84, 98};
+    const color_t C_DEAD = {45, 49, 60};
+    int bw = W_W / STRIP_COLS;                // ~50 px per cell
+    char tb[12];
+    for (int r = 0; r < STRIP_ROWS; r++)
+    for (int c = 0; c < STRIP_COLS; c++) {
+        int b = strip_cell[r][c];
+        if (b < 0) continue;                  // reserved, nothing here yet
+        int si = b - TB_REV;
+        int bx = W_X + c * bw;
+        int by = y + 1 + r * (fh + 2);
         bool sel = (b == s_btn);              // highlight = bright text, no box
-        // Rev/Norm/Fade mutate the buffer and can't fire while the transport
-        // runs — draw them extra-dim so the row SHOWS what's live. Crop stays
-        // available (read-only drop), which is what makes it findable mid-loop.
-        bool dead = !stopped && b >= TB_REV && b <= TB_FADE;
-        _fg = dead ? (color_t){40, 44, 54}
-            : sel ? (color_t){255, 255, 255} : (color_t){78, 84, 98};
-        if (b >= TB_FX1) {                    // FX slot: "FXn" on top, effect name below
-            TFT_print((char *)lab[si], bx + 3, y + 1);
-            char v[10]; snprintf(v, sizeof(v), "%.6s", fxrack_slot_name(&tp_rk, b - TB_FX1));
-            _fg = sel ? (color_t){170, 230, 245} : (color_t){70, 76, 90};
-            TFT_print(v, bx + 3, y + 1 + fh + 1);
-        } else {                              // edit action: label on the 2nd line (aligns w/ FX types)
-            TFT_print((char *)lab[si], bx + 3, y + 1 + fh + 1);
+        const char *txt;
+        if (b == TB_ROUTE) {                  // FX route: value only, no label
+            txt = TPFX_NAMES[tp.fx_route];
+            _fg = sel  ? C_SEL
+                : tp.fx_route == TPFX_OFF  ? C_DEAD
+                : tp.fx_route == TPFX_POST ? (color_t){150, 200, 120}   // live, tint it
+                                           : C_DIM;
+        } else if (b >= TB_FX1) {             // FX slot: the effect name IS the label
+            const char *nm = fxrack_slot_name(&tp_rk, b - TB_FX1);
+            bool off = (strcmp(nm, "Off") == 0);
+            snprintf(tb, sizeof(tb), "%.9s", off ? lab[si] : nm);   // 9 chars fits a 75px cell
+            txt = tb;
+            _fg = sel ? C_SEL : off ? C_DEAD : (color_t){88, 118, 132};
+        } else {                              // tape edit action
+            // Rev/Norm/Fade mutate the buffer and can't fire while the transport
+            // runs — draw them extra-dim so the row SHOWS what's live. Crop stays
+            // available (read-only), which is what makes it findable mid-loop.
+            bool dead = !stopped && b <= TB_FADE;
+            txt = lab[si];
+            _fg = dead ? C_DEAD : sel ? C_SEL : C_DIM;
         }
+        TFT_print((char *)txt, bx + 3, by);
     }
 }
 
@@ -356,6 +432,10 @@ static void draw_hint(void)
                         : tp.save_busy ? "saving..."
                                        : "press: save the loop + crop to it"; break;
         case TB_FX1: case TB_FX2: case TB_FX3: h = "press: cycle FX   long: Setup"; break;
+        case TB_ROUTE:
+            h = tp.fx_route == TPFX_POST ? "post: FX live, flips to pre on record"
+              : tp.fx_route == TPFX_OFF  ? "off: FX chain bypassed"
+                                         : "pre: FX printed to tape on record"; break;
     }
     _fg = (color_t){110, 110, 120};
     if (h[0]) TFT_print((char *)h, 6, y);
@@ -405,7 +485,7 @@ static void main_full_redraw(void)
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
-    draw_header();  s_sig_head = head_sig();
+    draw_header();  s_sig_head = head_sig(); s_sig_name = name_sig();
     draw_wave();                         // includes the crop highlight
     draw_playhead();
     redraw_strip(); s_sig_crop = crop_sig();
@@ -469,7 +549,7 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
                 do { s_btn = (s_btn + dir + TB_N) % TB_N; }
                 while (!tp_ui_stopped() && s_btn >= TB_REV && s_btn <= TB_FADE);
             }
-            draw_header(); draw_wave(); redraw_strip(); s_sig_crop = crop_sig();  // header = name-select highlight
+            draw_header(); draw_wave(); redraw_strip(); s_sig_crop = crop_sig(); s_sig_name = name_sig();  // header = name-select highlight
             break;
         }
         case EV_SHORT_PRESS:
@@ -481,13 +561,14 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             // Crop = drop the audible loop to a new take. Read-only, so it fires
             // WHILE PLAYING too (that's the point); tape_save_crop refuses on its
             // own while recording.
+            else if (s_btn == TB_ROUTE) tp.fx_route = (tp.fx_route + 1) % TPFX_N;  // pre > post > auto
             else if (s_btn == TB_CLR) crop_drop();
             else if (tp_ui_stopped()) switch (s_btn) {              // buffer edits: STOPPED only (enforce the "stop first" hint, don't just show it)
                 case TB_REV:  tape_reverse(); break;
                 case TB_NORM: tape_norm();    break;
                 case TB_FADE: tape_fade();    break;
             }
-            draw_header(); draw_wave(); redraw_strip(); s_sig_crop = crop_sig();
+            draw_header(); draw_wave(); redraw_strip(); s_sig_crop = crop_sig(); s_sig_name = name_sig();
             break;
         case EV_LONG_PRESS:
             if (s_grab) { s_grab = false; draw_wave(); redraw_strip(); break; }   // escape grab
@@ -503,10 +584,12 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             tape_card_service();
             unsigned hs = head_sig();
             if (hs != s_sig_head) {
-                draw_header();
+                draw_header_status();                    // STATUS row only — repainting the
+                s_sig_head = hs;                         //   name here is what made it flash
                 if (tp.recording) draw_crop_readout();   // live elapsed/beats under the bar
-                s_sig_head = hs;
             }
+            unsigned ns = name_sig();                    // cheap; no TFT writes unless it moved
+            if (ns != s_sig_name) { draw_header_name(); s_sig_name = ns; }
             draw_playhead();
             break;
         }
@@ -559,6 +642,7 @@ static const setup_item_t tape_setup_items[] = {
     {"Tape Len",   ST_TOGGLE}, {"Rec Mode",    ST_TOGGLE}, {"Play Mode",   ST_TOGGLE},
     {"Rec Dest",   ST_TOGGLE}, {"Rec Quant",   ST_TOGGLE},
     {"CV Matrix",  ST_ACTION},   // appended: the index-keyed switches above stay stable
+    {"FX Route",   ST_TOGGLE},   // 28: pre (printed to tape) vs post (output only)
 };
 
 // (FX rack slot editor state s_cur_slot / s_setup_return declared up top)
@@ -583,6 +667,7 @@ static void tape_val(int i, char *v, size_t n)
         case 7: snprintf(v, n, "%.0f%%", tp.level * 100); break;
         case 8: snprintf(v, n, "%s", tp.rec_src == TPS_TAPE ? "tape (print)" : "input"); break;
         case 9: snprintf(v, n, "%s", tp.monitor ? "ON" : "OFF"); break;
+        case 28: snprintf(v, n, "%s", TPFX_NAMES[tp.fx_route]); break;
         case 10: snprintf(v, n, "%s >", fxrack_slot_name(&tp_rk, 0)); break;
         case 11: snprintf(v, n, "%s >", fxrack_slot_name(&tp_rk, 1)); break;
         case 12: snprintf(v, n, "%s >", fxrack_slot_name(&tp_rk, 2)); break;
@@ -641,6 +726,7 @@ static void tape_adj(int i, int dir)
         case 7: tp.level = tp_clampf(tp.level + d * 0.05f, 0, 1.2f); break;
         case 8: tp.rec_src = tp.rec_src == TPS_INPUT ? TPS_TAPE : TPS_INPUT; break;
         case 9: tp.monitor = !tp.monitor; break;
+        case 28: tp.fx_route = (tp.fx_route + (dir > 0 ? 1 : TPFX_N - 1)) % TPFX_N; break;
         case 22: tape_set_len_sel(tp.len_sel + dir < 0 ? TP_LEN_OPTS - 1
                                   : (tp.len_sel + dir) % TP_LEN_OPTS); break;
         case 23: tp.rec_mode = tp.rec_mode == TPR_PUNCH ? TPR_MOMENTARY : TPR_PUNCH; break;
@@ -754,9 +840,11 @@ static int tape_load_handler(int it_id, int event, void *ev_data)
 {
     (void)it_id; (void)ev_data;
     if (event == EV_ENTERED_MENU) {
-        // plain browse (all folders reachable). NOT forced into usr/TAPE — it
-        // starts empty. TAPE is still a folder row + web destination.
-        sample_browser_enter(true, "Load to Tape", "");
+        // open in Tape's home folder (Arlo 2026-07-25), same as Drums/Slicer do.
+        // The old "don't force usr/TAPE, it starts empty" reasoning is stale —
+        // takes and crops land there now. Every other folder is still one scroll
+        // away, and an empty folder just clamps the cursor onto the folder rows.
+        sample_browser_enter_dir(true, "Load to Tape", "", SAMPLE_DIR_TAPE);
         return 0;
     }
     int r = sample_browser_event(event);

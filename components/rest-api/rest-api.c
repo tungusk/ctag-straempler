@@ -17,6 +17,7 @@
 #include "sd_lock.h"
 #include "disp_lock.h"
 #include "tftspi.h"
+#include "esp_heap_caps.h"
 #include "audio.h"
 #include "menu_config.h"
 #include "machine.h"
@@ -1006,14 +1007,26 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
         if (root) cJSON_Delete(root);
     }
 
-    char buf[560];
+    // RAM report (on-demand only — never the hot /status poll). "big" is the
+    // largest single block, which is what actually decides whether a slab-sized
+    // alloc (tape banks, reverb/delay slabs) succeeds or silently fail-softs.
+    unsigned pfree = (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    unsigned pbig  = (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    unsigned ptot  = (unsigned)heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    unsigned ifree = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    unsigned ibig  = (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+
+    char buf[720];
     snprintf(buf, sizeof(buf),
              "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu,\"remote\":%d,"
              "\"version\":\"%s\",\"blisten\":%d,\"blout\":%d,"
+             "\"psram\":{\"free\":%u,\"big\":%u,\"total\":%u},"
+             "\"iram\":{\"free\":%u,\"big\":%u},"
              "\"time\":%ld,\"tz\":%d,\"machines\":[%s]}",
              ip, (unsigned long long)freeb, (unsigned long long)totb,
              s_remote_on ? 1 : 0,
              STRAMPLER_FW_VERSION, beatlisten_get_mode(), beatlisten_get_out(),
+             pfree, pbig, ptot, ifree, ibig,
              (long)time(NULL), tzs, machines);
     send_json(req, buf);
     return ESP_OK;
@@ -1758,18 +1771,23 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     if (esp_ota_begin(upd, OTA_SIZE_UNKNOWN, &h) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_begin failed"); return ESP_FAIL;
     }
+    // Silence the rack for the whole flash (Arlo 2026-07-25): streaming the image
+    // and the reboot itself otherwise dump garbage into the mix. Slewed, so this
+    // is a fade. Every FAILURE path below re-opens it; the success path
+    // deliberately does NOT -- it stays muted straight through esp_restart().
+    audio_output_mute(true);
     char *buf = malloc(4096);
-    if (!buf) { esp_ota_abort(h); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
+    if (!buf) { esp_ota_abort(h); audio_output_mute(false); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
     int remaining = req->content_len, total = 0;
     while (remaining > 0) {
         int r = httpd_req_recv(req, buf, remaining > 4096 ? 4096 : remaining);
         if (r <= 0) {
             if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            free(buf); esp_ota_abort(h);
+            free(buf); esp_ota_abort(h); audio_output_mute(false);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"); return ESP_FAIL;
         }
         if (esp_ota_write(h, buf, r) != ESP_OK) {
-            free(buf); esp_ota_abort(h);
+            free(buf); esp_ota_abort(h); audio_output_mute(false);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_write failed"); return ESP_FAIL;
         }
         total += r; remaining -= r;
@@ -1777,11 +1795,13 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     free(buf);
     esp_err_t err = esp_ota_end(h);
     if (err != ESP_OK) {
+        audio_output_mute(false);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                             err == ESP_ERR_OTA_VALIDATE_FAILED ? "image validation failed" : "ota_end failed");
         return ESP_FAIL;
     }
     if (esp_ota_set_boot_partition(upd) != ESP_OK) {
+        audio_output_mute(false);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set_boot failed"); return ESP_FAIL;
     }
     ESP_LOGI(TAG, "OTA: %d bytes -> %s, rebooting", total, upd->label);

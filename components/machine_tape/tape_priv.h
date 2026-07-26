@@ -32,12 +32,19 @@
 
 // The tape is a BLOCK LIST, not one slab: single PSRAM allocs > ~2.1 MB are
 // refused on this board (slicer lesson — and exactly how tape-v1's first
-// boot failed: the 30 s tape is a 2.65 MB alloc). 1 MiB banks (2^19 frames);
-// the clipboard uses the same shape.
-#define TP_BLK_SHIFT  19
+// boot failed: the 30 s tape is a 2.65 MB alloc). The clipboard uses the same
+// shape.
+//
+// BANKS ARE 128 KB (2^16 frames), down from 1 MiB (2026-07-25). PSRAM on this
+// board totals 4.00 MB — the ESP32 can only map 4 MB of external RAM into its
+// address space, so that is a HARDWARE ceiling, not a config. At 1 MiB
+// granularity a 30 s tape (2.52 MB of audio) rounded up to 3 whole banks and
+// threw away 0.48 MB — a sixth of the entire pool — for nothing. Finer banks
+// hand that back to the tape, which is what buys the extra seconds.
+#define TP_BLK_SHIFT  16
 #define TP_BLK_FRAMES (1u << TP_BLK_SHIFT)
 #define TP_BLK_MASK   (TP_BLK_FRAMES - 1u)
-#define TP_MAX_BLK    6               // 60 s = 2.646 M frames -> 6 banks
+#define TP_MAX_BLK    36              // ceiling is free PSRAM, not this (36 = 52 s)
 
 typedef struct {
     int16_t *blk[TP_MAX_BLK];
@@ -85,6 +92,7 @@ typedef struct {
                                       // out can never wipe the take you just finished.
     int      rec_src;                 // TPS_INPUT | TPS_TAPE (re-print)
     bool     monitor;                 // hear input through FX while stopped
+    int      fx_route;                // TPFX_* — where the chain sits vs the record head
     bool     play_oneshot;            // crop end: stop (one-shot) vs wrap (loop, default)
     // grid
     clockin_t ci;
@@ -150,6 +158,11 @@ typedef struct {
     // because the load must not race the writer, and it needs UI context (SD).
     char     adopt_id[12];           // "" = nothing pending
     bool     adopt_resume;           // transport was rolling -> play the new take
+    // monitor mute while a load streams from the card: without it you sit on the
+    // raw line-in for the whole read (very audible on the crop's load-back, which
+    // happens mid-performance). Slewed, so muting doesn't click.
+    volatile bool loading;           // a tape_load() is in flight
+    float    mute_g;                 // 0..1 smoothed monitor gain
     // auto-save: takes persist to the card when you move on from them (a fresh
     // take overwrites, or you leave Tape). A recorded buffer is never lost.
     bool     take_dirty;             // buffer holds unsaved recorded audio
@@ -192,6 +205,32 @@ static inline float tp_clampf(float x, float lo, float hi){ return x < lo ? lo :
 static inline int   tp_clampi(int x, int lo, int hi){ return x < lo ? lo : x > hi ? hi : x; }
 static inline int16_t tp_rd(uint32_t i){ return bank_rd(&tp.tape, i); }
 static inline void    tp_wr(uint32_t i, int16_t v){ bank_wr(&tp.tape, i, v); }
+
+// FX ROUTE — where the chain sits relative to the RECORD HEAD:
+//   PRE   chain colours incoming audio and is PRINTED to tape; playback dry
+//         (the original Tape behaviour, and what old presets load as)
+//   POST  tape records DRY, chain colours the OUTPUT including playback — audition
+//         and change effects over a take without committing them
+//   OFF   chain bypassed entirely — dry in, dry out, nothing printed
+//
+// POST LATCHES: the first punch-in flips the route to PRE and leaves it there,
+// so you audition effects over a dry take live and the moment you commit, what
+// you were hearing starts being printed. (This began as a separate AUTO mode;
+// Arlo 2026-07-25: "maybe there doesn't need to be an auto, that can just be
+// the post behavior".) Set it back by hand to audition again.
+enum { TPFX_PRE = 0, TPFX_POST, TPFX_OFF, TPFX_N };
+static const char *const TPFX_NAMES[TPFX_N] = { "pre", "post", "off" };
+// the route resolved for THIS block — the one thing the engine actually asks
+static inline bool tp_fx_is_post(void){ return tp.fx_route == TPFX_POST; }
+
+// One mute step per output frame (~2.3 ms time constant, so a fade rather than
+// a click). Call EXACTLY once per frame, in the final output loop.
+#define TP_MUTE_SLEW 0.01f
+static inline float tp_mute_step(void){
+    float t = tp.loading ? 0.0f : 1.0f;
+    tp.mute_g += (t - tp.mute_g) * TP_MUTE_SLEW;
+    return tp.mute_g;
+}
 
 // effective (matrix-offset) output level + filter cutoff — every consumer of
 // tp.level / tp.cutoff in the signal path goes through these

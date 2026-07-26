@@ -3,6 +3,8 @@
 #include "fxrack.h"
 #include "fxchain.h"
 #include "audio.h"       // audio_proc_us() for the cost-guard
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static inline float clampf(float x, float lo, float hi){ return x < lo ? lo : x > hi ? hi : x; }
 
@@ -232,6 +234,31 @@ const char *fxrack_slot_name(const fxrack_t *rk, int slot)
 
 // assign effect `kind` to `slot`: lazy-init buffers + audible defaults, enforce
 // one-effect-per-slot.
+// Release lazy slabs no slot uses any more. These are BIG — delay ~690 KB,
+// flanger ~90 KB — and were allocated on first use but NEVER freed, so a delay
+// auditioned once squatted on 690 KB of a 4.00 MB pool for the rest of the
+// session. That starved the Tape banks (capped at ~32 s instead of 40) and left
+// so little headroom that other lazy allocations silently failed, which is what
+// "we hurt the FX audio quality" turned out to be (Arlo 2026-07-25).
+//
+// UI CONTEXT ONLY (it sleeps). The slot kinds are already updated by the time
+// this runs, so the next audio block will not dispatch into the slab; the delay
+// below lets any block still inside the old pointers finish first.
+static void slot_gc(const fxrack_t *rk)
+{
+    bool dly = false, flg = false;
+    for (int s = 0; s < FX_NSLOT_GEN; s++) {
+        if (rk->slot[s] == FXK_DLY) dly = true;
+        if (rk->slot[s] == FXK_FLG) flg = true;
+    }
+    bool free_dly = !dly && rk->dly->bufL;
+    bool free_flg = !flg && rk->flg->bufL;
+    if (!free_dly && !free_flg) return;
+    vTaskDelay(pdMS_TO_TICKS(20));          // ~14 audio blocks at 1.45 ms
+    if (free_dly) fxdelay_free(rk->dly);
+    if (free_flg) flanger_free(rk->flg);
+}
+
 static void slot_set(const fxrack_t *rk, int slot, int kind)
 {
     if (kind == FXK_DLY) { if (!rk->dly->bufL) fxdelay_init(rk->dly);
@@ -242,6 +269,7 @@ static void slot_set(const fxrack_t *rk, int slot, int kind)
     else if (kind == FXK_TREM) { if (rk->trem->depth < 0.01f) { rk->trem->depth = 0.5f; rk->trem->rate = 5.0f; } }
     for (int s = 0; s < FX_NSLOT_GEN; s++) if (s != slot && rk->slot[s] == kind && kind != FXK_OFF) rk->slot[s] = FXK_OFF;
     rk->slot[slot] = kind;
+    slot_gc(rk);
 }
 
 int fxrack_menu_rows(const fxrack_t *rk, int slot, setup_item_t *items, int8_t *pr)

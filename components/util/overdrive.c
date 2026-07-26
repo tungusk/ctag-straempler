@@ -26,6 +26,15 @@ static inline float fast_tanh(float x)
 // float worker: reads/writes the interleaved float scratch, NO output clamp
 // (the chain's single soft limiter handles the ceiling). buf units are samples
 // (±32768), matching the >>16 machine format.
+// Output trim on the WHOLE stage (Arlo 2026-07-25: "the overdrive level needs to
+// come down"). tanh saturates to +/-1 by construction, so the shaper's output
+// sits near FULL SCALE whatever goes in, while typical program material peaks
+// well below it — switching overdrive in was a big jump in loudness rather than
+// a change in character. Trimming here rather than lowering the default `level`
+// brings EXISTING patches down too (a default only applies to a freshly picked
+// slot), and keeps the Level knob spanning its full 0..1 over a saner range.
+#define OD_OUT_TRIM 0.5f
+
 void overdrive_block_f(overdrive_t *o, float *buf, int frames)
 {
     float drive = o->drive; if (drive < 0) drive = 0; else if (drive > 1) drive = 1;
@@ -44,7 +53,7 @@ void overdrive_block_f(overdrive_t *o, float *buf, int frames)
             float x  = buf[f * 2 + ch] / 32768.0f;
             float sh = fast_tanh(g * (x + bias)) - dc;
             float lp; svf_step(flt, sh, cf, 1.0f, &lp, NULL, NULL);
-            buf[f * 2 + ch] = lp * level * 32767.0f;
+            buf[f * 2 + ch] = lp * level * OD_OUT_TRIM * 32767.0f;
         }
     }
 }

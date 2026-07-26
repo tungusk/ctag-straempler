@@ -434,6 +434,12 @@ static uint8_t trig_rising_bits(void)
     return bits;
 }
 
+// global output mute (OTA): request flag + its slewed gain. Written from the
+// httpd task, read only by the audio task — a plain bool is fine here.
+static volatile bool s_mute_req = false;
+static float s_out_mute_g = 1.0f;
+void audio_output_mute(bool on) { s_mute_req = on; }
+
 static void audio_task(void *pvParams)
 {
     int32_t out[BUF_SZ], in[BUF_SZ];
@@ -532,6 +538,19 @@ static void audio_task(void *pvParams)
         }
 
         broadcast_push(s_bc_src ? in : out, BUF_SZ / 2);   // live stream tap: output bus or line-in
+
+        // GLOBAL OUTPUT MUTE — used by the OTA handler so a flash doesn't dump
+        // garbage/half-processed audio into the rack while the image streams in
+        // and the device reboots (Arlo 2026-07-25). Slewed (~2 ms) so the mute
+        // itself is a fade, not a click. Costs one compare per block when idle.
+        if (s_mute_req || s_out_mute_g < 0.9999f) {
+            float t = s_mute_req ? 0.0f : 1.0f;
+            for (int i = 0; i < BUF_SZ; i += 2) {
+                s_out_mute_g += (t - s_out_mute_g) * 0.01f;
+                out[i]     = ((int32_t)((float)(int16_t)(out[i] >> 16)     * s_out_mute_g)) << 16;
+                out[i + 1] = ((int32_t)((float)(int16_t)(out[i + 1] >> 16) * s_out_mute_g)) << 16;
+            }
+        }
         i2s_write(I2S_NUM_0, out, BUF_SZ * 4, &nb, portMAX_DELAY);
     }
 }

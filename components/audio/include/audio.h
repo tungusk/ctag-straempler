@@ -45,6 +45,11 @@ void audio_remote_cv(int ch, int v, int ms);
 
 // output bounce — record the active machine's OUTPUT bus to a pool REC_ take
 // (any machine). Reuses the recording service, fed `out` instead of line-in.
+// Global output mute, slewed (~2 ms) so it fades rather than clicks. The OTA
+// handler asserts it for the whole flash: the image stream + reboot otherwise
+// dump garbage into the rack. Nothing clears it before the reboot on purpose.
+void audio_output_mute(bool on);
+
 void audio_bounce_start(void);
 void audio_bounce_stop(void);
 bool audio_bounce_active(void);
