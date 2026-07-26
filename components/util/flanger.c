@@ -54,6 +54,15 @@ void flanger_block_f(flanger_t *g, float *buf, int frames)
     float wet   = g->wet;   if (wet < 0) wet = 0; else if (wet > 1) wet = 1;
     float wetg  = sinf(wet * 1.5707963f);
     float dryg  = cosf(wet * 1.5707963f);
+    // FEEDBACK GAIN COMPENSATION (Arlo 2026-07-26: "overdriven sounding audio
+    // when flanger is doubled with overdrive or reverb"). The recirculating ring
+    // accumulates toward x/(1-fb) at the comb's resonant frequencies, and the wet
+    // tap is read straight out of it — so the flanger handed the NEXT stage a
+    // signal well above full scale. Measured NOT to be CPU (aus 678 of 1450) and
+    // NOT output clipping (VU 98 of 255): it is gain staging inside the chain.
+    // Trim the whole stage by the feedback amount so switching feedback up does
+    // not also turn the level up into whatever follows.
+    float outg  = 1.0f / (1.0f + fabsf(fb));
 
     const float mind  = 1.0f * FLG_RATE / 1000.0f;   // 1 ms floor
     const float sweep = depth * ((float)(cap - 2) - mind);
@@ -81,12 +90,19 @@ void flanger_block_f(flanger_t *g, float *buf, int frames)
         lpL += dc * (tl - lpL);
         lpR += dc * (tr - lpR);
         float wl = xl + fb * lpL, wr = xr + fb * lpR;
+        // RUNAWAY GUARD ONLY — deliberately well above full scale. The ring holds
+        // x + fb*feedback, which legitimately exceeds FS on ordinary material
+        // (~1.33x at fb 0.25), so clamping it AT full scale hard-clips inside the
+        // feedback loop and dirties everything downstream — tried 32767 on
+        // 2026-07-26 and Arlo caught it on flanger+reverb at NORMAL level (output
+        // VU only 100/255, so it was never an output-level problem). Level is the
+        // job of outg above; this is purely a divergence backstop.
         if (wl > 60000.0f) wl = 60000.0f; else if (wl < -60000.0f) wl = -60000.0f;
         if (wr > 60000.0f) wr = 60000.0f; else if (wr < -60000.0f) wr = -60000.0f;
         g->bufL[w] = wl;
         g->bufR[w] = wr;
-        buf[f * 2]     = xl * dryg + tl * wetg;   // no clamp (chain soft-limits)
-        buf[f * 2 + 1] = xr * dryg + tr * wetg;
+        buf[f * 2]     = (xl * dryg + tl * wetg) * outg;   // no clamp (chain soft-limits)
+        buf[f * 2 + 1] = (xr * dryg + tr * wetg) * outg;
         ph += inc; if (ph >= 1.0f) ph -= 1.0f;
         if (++w >= cap) w = 0;
     }

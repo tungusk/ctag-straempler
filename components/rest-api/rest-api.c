@@ -824,7 +824,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
         "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
         "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u,"
         "\"vu\":[%u,%u,%u,%u],"
-        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u%s}",
+        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u,\"auspk\":%u%s}",
         m ? m->name : "",
         rec ? "true" : "false",
         st.v0, st.v1,
@@ -833,7 +833,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
         st.trig,
         st.vu[0], st.vu[1], st.vu[2], st.vu[3],
         bl.mode, bl.state, (double)bl.bpm, (double)bl.conf, bl.cost_us,
-        audio_proc_us(), tun);
+        audio_proc_us(), audio_proc_peak_us(true), tun);
     (void)n;
     send_json(req, buf);
     return ESP_OK;

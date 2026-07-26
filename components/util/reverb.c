@@ -129,7 +129,11 @@ static void tank_resize(reverb_t *rv, float size)
         if (nl < 4) nl = 4;
         tank[i]->len = nl;
         tank[i]->w = 0;
-        memset(tank[i]->buf, 0, (size_t)tank[i]->cap * sizeof(float));
+        // NO memset here: these 8 lines are 124 KB and this ran as one unchunked
+        // burst, which is most of what overran the audio block (MEASURED: 2282 us
+        // against a 1450 us budget at the moment of the switch). rv_clear_slab
+        // covers this same memory in bounded chunks and is now the ONLY place
+        // the tank is zeroed.
     }
     for (int i = 0; i < 14; i++) {
         s_tap[i] = (int)((float)TAP_BASE[i] * size);
@@ -149,6 +153,8 @@ static void tank_resize(reverb_t *rv, float size)
 //   the mode's shim_gain is the loop gain for the low/mid band the LP can't
 //   catch; it must keep the whole loop < 1 so a silent tail DECAYS.
 #define SHIM_FB_LP  0.35f
+// ceiling on the shimmer feedback injection (half full scale) — see tank_step
+#define SHIM_CEIL   16000.0f
 
 // The heavy part: swap the parameter set, resize and clear the tank. Callable
 // from AUDIO context (the NaN guard does) because it never sleeps — the fade
@@ -163,7 +169,9 @@ static void rv_clear_slab(reverb_t *rv, bool may_yield)
 {
     const size_t total = (size_t)RV_SLAB * sizeof(float);
     if (!may_yield) { memset(rv->slab, 0, total); return; }
-    const size_t CH = 32768;
+    // 8 KB per chunk ~= 0.5 ms of PSRAM writes, comfortably inside one 1.45 ms
+    // audio block. 32 KB was 2.1 ms — a single chunk blew the deadline by itself.
+    const size_t CH = 8192;
     for (size_t off = 0; off < total; off += CH) {
         size_t n = (total - off < CH) ? (total - off) : CH;
         memset((uint8_t *)rv->slab + off, 0, n);
@@ -251,9 +259,19 @@ static inline float shim_step(reverb_t *rv, float x)
     int p0 = (int)pos;
     int back0 = rv->shim.w - 1 - p0; if (back0 < 0) back0 += n;
     int back1 = back0 - h; if (back1 < 0) back1 += n;
-    // triangle window on head 0's phase; head 1 gets the complement
+    // Crossfade window on head 0's phase; head 1 gets the complement.
+    // SMOOTHSTEPPED (2026-07-26): the bare triangle is continuous but its
+    // DERIVATIVE jumps at the apex and at the wrap, and a kink in an amplitude
+    // envelope splatters spectrally — at this grain rate (~21.5 Hz) that is
+    // heard as periodic clicks. Alone, the tank's diffusion hides it; behind a
+    // FLANGER the two heads read material 46 ms apart at different comb phase,
+    // the mismatch at each boundary is far bigger, and it turns into the "clicky
+    // scratchyness" Arlo heard on flanger+shimmer. smoothstep has zero slope at
+    // both ends, so the boundaries stop being corners. Still complementary
+    // (w0 + w1 == 1) and trig-free — this runs per sample in the audio task.
     float ph = pos / (float)n;               // 0..1
-    float w0 = 2.0f * (ph < 0.5f ? ph : 1.0f - ph);
+    float tri = 2.0f * (ph < 0.5f ? ph : 1.0f - ph);
+    float w0 = tri * tri * (3.0f - 2.0f * tri);
     return line_read(&rv->shim, back0) * w0 +
            line_read(&rv->shim, back1) * (1.0f - w0);
 }
@@ -286,7 +304,19 @@ static inline void tank_step(reverb_t *rv, float x, float decay, float damp,
         float sh = shim_step(rv, rv->damp_a + rv->damp_b);
         rv->shim_lp += SHIM_FB_LP * (sh - rv->shim_lp);        // LP: tame the upward climb
         rv->shim_dc += 0.0007f * (rv->shim_lp - rv->shim_dc);  // track the slow DC
-        x += sg * (rv->shim_lp - rv->shim_dc);                 // inject DC-free
+        // BOUND THE INJECTION. sg is tuned for a broadly flat source; a RESONANT
+        // one (a flanger's comb peaks) raises the effective loop gain at those
+        // frequencies and the octave-up loop blooms — every other reverb mode was
+        // fine behind a flanger and shimmer alone went bad (Arlo 2026-07-26).
+        // Exactly linear below the knee, like fx_pack_softclip: normal shimmer is
+        // untouched, a runaway simply cannot get out of hand.
+        float si = rv->shim_lp - rv->shim_dc;
+        float sa = fabsf(si);
+        if (sa > SHIM_CEIL) {
+            float over = sa - SHIM_CEIL;
+            si = (si < 0 ? -1.0f : 1.0f) * (SHIM_CEIL + over / (1.0f + over / SHIM_CEIL));
+        }
+        x += sg * si;                                          // inject DC-free
     }
 
     line_push(&rv->pre, x);

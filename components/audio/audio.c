@@ -191,6 +191,12 @@ static volatile int  s_bc_src = 0;         // 0 = output bus, 1 = line INPUT ("/
 static const char *s_bc_err = "ok";        // last MP3-path failure, for /bcast/state
 static volatile uint32_t s_bc_enc_us = 0;  // smoothed encode cost per 26.1ms pass
 static volatile uint32_t s_proc_us = 0;    // smoothed machine process() cost (1450us = 100%)
+// PEAK-HOLD of the same measurement, cleared each time it is read. The EMA above
+// smooths a transient stall into nothing, which is exactly the event we care
+// about when chasing clicks: one block that overruns 1450 us IS the dropout.
+// Read it, do the suspect gesture, read it again — a spike is objective evidence
+// where "did that click?" is not (2026-07-25, chasing the reverb mode click).
+static volatile uint32_t s_proc_pk = 0;
 static volatile bool s_bc_srv_run = false; // listener task should keep running (user intent)
 static volatile bool s_bc_srv_alive = false; // listener task currently exists
 
@@ -198,6 +204,12 @@ bool audio_broadcast_active(void) { return s_bc_on; }
 const char *audio_broadcast_diag(void) { return s_bc_err; }
 uint32_t audio_broadcast_enc_us(void) { return s_bc_enc_us; }
 uint32_t audio_proc_us(void) { return s_proc_us; }
+uint32_t audio_proc_peak_us(bool clear)
+{
+    uint32_t v = s_proc_pk;
+    if (clear) s_proc_pk = 0;
+    return v;
+}
 
 // Lazily allocate the ~176 KB PSRAM ring shared by the :8000 listener and the
 // icecast push. Allocated on first streaming use (broadcast is off at boot),
@@ -499,6 +511,7 @@ static void audio_task(void *pvParams)
             m->process(out, in, &io);                    // includes the machine's FX chain
             uint32_t pus = (uint32_t)(esp_timer_get_time() - pt0);
             s_proc_us = s_proc_us ? (s_proc_us * 7 + pus) / 8 : pus;   // EMA; 1450us = 100%
+            if (pus > s_proc_pk) s_proc_pk = pus;                       // peak-hold (see above)
         } else
             memset(out, 0, sizeof(out));
 
