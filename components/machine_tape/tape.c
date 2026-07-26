@@ -830,7 +830,10 @@ static void save_task(void *pv)
 static int tape_spawn_save(uint32_t a, uint32_t b, bool crop, bool adopt)
 {
     if (b <= a || tp.save_busy) return -1;
-    const char *pfx = crop ? "TCR_" : "CUT_";
+    // TLP_ = a saved LOOP (the Crop gesture), CUT_ = a whole take. Was TCR_ until
+    // 2026-07-26 (Arlo) — the file is the loop you were playing, not a "crop".
+    // Existing TCR_ files stay loadable: the resolver keys on the id, not a prefix.
+    const char *pfx = crop ? "TLP_" : "CUT_";
     int idx = sample_next_index(pfx);
     if (idx < 0) idx = 0;
     if (idx > 9999) idx = 9999;                // 8.3: id stays exactly 8 chars
