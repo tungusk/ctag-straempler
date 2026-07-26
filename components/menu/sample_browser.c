@@ -1,8 +1,12 @@
 // The shared sample browser — ONE flat list per open. The folder rows sit at
 // the TOP (each shown with a trailing '/': ALL/ POOL/ REC/ LOOPS/ SLICES/),
-// the current folder's files below them. Turn to scroll the whole thing; press
-// a folder row to switch which files show, press a file to load it, hold to
-// cancel. The browse position (folder + selection) is REMEMBERED across opens
+// the current folder's files below them. The folder you are CURRENTLY IN is not
+// listed — a row that just re-enters where you already are reads as a real
+// destination and is confusing (Arlo 2026-07-26). So the folder-row count is
+// DYNAMIC (b.nfold), and it doubles as the index of the first file.
+//
+// Turn to scroll the whole thing; press a folder row to switch which files show,
+// press a file to load it, hold to cancel. The browse position (folder + selection) is REMEMBERED across opens
 // (Arlo). Replaces the old two-screen folder-picker-then-list widget.
 //
 // Folders are organization, not restriction: "ALL" keeps the flat browse, and
@@ -24,6 +28,10 @@ static struct {
     int  counts[SAMPLE_DIR_N];
     bool recent;
     bool primed;         // seeded a sensible default on the very first open
+    // visible folder rows = every folder EXCEPT the current one. Rebuilt by
+    // list_refresh; nfold is also where the file rows start.
+    int  fold_idx[BR_NFOLD];
+    int  nfold;
     char title[28];
     char (*list)[24];
     int  n;              // files in the current folder
@@ -37,18 +45,22 @@ static const color_t FOLD_FG  = {120, 205, 130};   // folder rows read green-ish
 static const color_t FOLD_DIM = {70, 120, 75};
 
 static int  fold_to_dir(int f){ return f == 0 ? SAMPLE_DIR_ALL : f - 1; }
-static int  br_total(void){ return BR_NFOLD + b.n; }
-static bool is_fold(int i){ return i < BR_NFOLD; }
+static int  br_total(void){ return b.nfold + b.n; }
+static bool is_fold(int i){ return i < b.nfold; }
 
+// rebuild the visible folder rows (all but the current folder) AND the file list
 static void list_refresh(void){
+    b.nfold = 0;
+    for (int f = 0; f < BR_NFOLD; f++)
+        if (fold_to_dir(f) != b.dir) b.fold_idx[b.nfold++] = f;
     b.n = b.recent ? sample_list_recent_dir(b.dir, &b.list)
                    : sample_list_shared_dir(b.dir, &b.list);
 }
 
 // display name for a combined index; folder rows get a trailing '/'
 static const char *entry_name(int i, char *buf, size_t bn){
-    if (is_fold(i)){ snprintf(buf, bn, "%s/", k_fold[i]); return buf; }
-    int fi = i - BR_NFOLD;
+    if (is_fold(i)){ snprintf(buf, bn, "%s/", k_fold[b.fold_idx[i]]); return buf; }
+    int fi = i - b.nfold;
     return (fi >= 0 && fi < b.n) ? b.list[fi] : "";
 }
 
@@ -103,8 +115,10 @@ void sample_browser_enter(bool recent, const char *title, const char *current)
     b.recent = recent;
     snprintf(b.title, sizeof(b.title), "%s", title ? title : "Load");
     sample_folder_counts(b.counts);
-    if (!b.primed){ b.dir = SAMPLE_DIR_POOL; b.sel = BR_NFOLD; b.primed = true; }
-    list_refresh();
+    bool first = !b.primed;
+    if (first){ b.dir = SAMPLE_DIR_POOL; b.primed = true; }
+    list_refresh();                      // sets b.nfold, which b.sel indexes past
+    if (first) b.sel = b.nfold;          // first file, not a folder row
     draw();
 }
 
@@ -115,15 +129,15 @@ void sample_browser_enter_dir(bool recent, const char *title, const char *curren
     snprintf(b.title, sizeof(b.title), "%s", title ? title : "Load");
     sample_folder_counts(b.counts);
     b.dir = (dir >= 0 && dir < SAMPLE_DIR_N) ? dir : SAMPLE_DIR_ALL;
-    b.sel = BR_NFOLD;                    // first file in the folder
     b.primed = true;
-    list_refresh();
+    list_refresh();                      // sets b.nfold first
+    b.sel = b.nfold;                     // first file in the folder
     draw();
 }
 
 const char *sample_browser_selected(void)
 {
-    int fi = b.sel - BR_NFOLD;
+    int fi = b.sel - b.nfold;
     return (fi >= 0 && fi < b.n) ? b.list[fi] : "";
 }
 
@@ -135,9 +149,9 @@ int sample_browser_event(int event)
         case EV_BWD: b.sel = (b.sel + tot - 1) % tot; draw(); break;
         case EV_SHORT_PRESS:
             if (is_fold(b.sel)){             // a folder row: switch which files show
-                b.dir = fold_to_dir(b.sel);
-                list_refresh();
-                if (b.n) b.sel = BR_NFOLD;   // drop onto the folder's first file
+                b.dir = fold_to_dir(b.fold_idx[b.sel]);   // sel indexes the VISIBLE rows
+                list_refresh();                           // rebuilds them around the new dir
+                if (b.n) b.sel = b.nfold;    // drop onto the folder's first file
                 draw();
                 break;
             }
