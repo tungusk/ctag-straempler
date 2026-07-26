@@ -135,8 +135,43 @@ static inline void cv_pop(cvpush_t *u)
     if (u->on && *u->p == u->set) *u->p = u->base;
 }
 
+// ---- per-STAGE meters ---------------------------------------------------------
+// fxpk (below) only sees the END of the chain. That was enough to kill the "the
+// chain rides the limiter" theory (30% of full scale while stacked FX sounded
+// dirty) but says nothing about WHICH stage dirties a combo. These are the same
+// two numbers taken after EVERY stage:
+//   pk = peak level, % of full scale
+//   jp = biggest sample-to-sample step PER CHANNEL, % of full scale — the
+//        signature of a click, and it carries across the block seam (prev), so
+//        a starvation glitch at a block boundary shows up too.
+// Both peak-hold, cleared on read: a rare transient survives until polled.
+// Instrumented inside run_gen_slots, so the Drums SEND-bus path
+// (fxrack_process_gen_i32) is covered as well — it was the uninstrumented gap.
+_Static_assert(FX_NSLOT_GEN == 2, "stage meter indices assume 2 generic slots");
+_Static_assert(FXST_N == AUDIO_FX_STAGES, "stage count must match the audio.c holder");
+static float s_st_prev[FXST_N][2];      // audio task only: last L/R out of each stage
+
+static void stage_meter(int st, const float *fb, int frames)
+{
+    float pk = 0.0f, jp = 0.0f;
+    float pl = s_st_prev[st][0], pr = s_st_prev[st][1];
+    for (int i = 0; i < frames * 2; i += 2) {
+        float l = fb[i], r = fb[i + 1];
+        float al = fabsf(l), ar = fabsf(r);
+        if (al > pk) pk = al;
+        if (ar > pk) pk = ar;
+        float dl = fabsf(l - pl), dr = fabsf(r - pr);
+        if (dl > jp) jp = dl;
+        if (dr > jp) jp = dr;
+        pl = l; pr = r;
+    }
+    s_st_prev[st][0] = pl; s_st_prev[st][1] = pr;
+    audio_fx_report(st, (int)(pk * 100.0f / 32767.0f), (int)(jp * 100.0f / 32767.0f));
+}
+
 static void run_gen_slots(const fxrack_t *rk, float *fb, int frames)
 {
+    stage_meter(FXST_IN, fb, frames);
     for (int s = 0; s < FX_NSLOT_GEN; s++) {
         cvpush_t a = {0}, b = {0};
         float o1 = rk->cv1[s], o2 = rk->cv2[s];
@@ -182,21 +217,8 @@ static void run_gen_slots(const fxrack_t *rk, float *fb, int frames)
         }
         cv_pop(&a);
         cv_pop(&b);
+        stage_meter(FXST_SLOT0 + s, fb, frames);
     }
-}
-
-// PEAK INSIDE THE CHAIN, before the soft limiter, as % of full scale. The output
-// VU cannot see this: fx_pack_softclip squashes overload back down, so a limiter
-// working flat out looks like a MODERATE output level (measured VU 98/255 while
-// stacked FX sounded dirty — I read the wrong side of the limiter). Anything
-// over ~100% means the chain is riding the limiter, which is the "dirty when I
-// stack effects" family. Peak-hold, cleared on read.
-static volatile int s_fx_pk_pct = 0;
-int fxrack_peak_pct(bool clear)
-{
-    int v = s_fx_pk_pct;
-    if (clear) s_fx_pk_pct = 0;
-    return v;
 }
 
 void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames)
@@ -210,10 +232,7 @@ void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames)
         reverb_block_f(rk->rv, fb, frames);
         cv_pop(&r);
     }
-    float pk = 0.0f;                       // measure BEFORE the limiter
-    for (int i = 0; i < frames * 2; i++) { float a = fb[i] < 0 ? -fb[i] : fb[i]; if (a > pk) pk = a; }
-    int pct = (int)(pk * 100.0f / 32767.0f);
-    if (pct > s_fx_pk_pct) s_fx_pk_pct = pct;
+    stage_meter(FXST_END, fb, frames);     // chain end = post-reverb, PRE-limiter
     fx_pack_softclip(fb, out, frames * 2);
 }
 
@@ -222,6 +241,7 @@ void fxrack_process_gen_i32(const fxrack_t *rk, int32_t *out, int frames)
     float fb[FX_SCRATCH_N];
     fx_unpack_i32(out, fb, frames * 2);
     run_gen_slots(rk, fb, frames);
+    stage_meter(FXST_END, fb, frames);     // no insert reverb here: end == after slot 1
     fx_pack_softclip(fb, out, frames * 2);
 }
 

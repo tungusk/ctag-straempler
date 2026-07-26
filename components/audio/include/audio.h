@@ -69,6 +69,19 @@ uint32_t audio_proc_us(void);           // smoothed machine process() cost, us (
 uint32_t audio_proc_peak_us(bool clear);
 uint32_t audio_broadcast_enc_us(void);  // smoothed shine cost per 26.1ms pass
 
+// FX-CHAIN METERS, per stage of the shared rack (components/fxrack measures and
+// reports; the peak-hold storage is here so /status still links in the
+// machine-less proof build). Stage indices are fxrack's FXST_*: 0 rack input,
+// 1 after FX1, 2 after FX2, 3 chain end (post-reverb, pre-limiter).
+//   pk = peak level, % of full scale — >100 means the chain rides the soft
+//        limiter, which the output VU cannot show (it reads the limiter's OUTPUT).
+//   jp = biggest per-channel sample-to-sample step, % of full scale — a click's
+//        signature, and it spans block seams, so a starvation glitch shows too.
+// Both peak-hold, cleared on read: ONE poller owns them (the test rig / web UI).
+#define AUDIO_FX_STAGES 4
+void audio_fx_report(int stage, int pk_pct, int jp_pct);   // audio task only
+void audio_fx_meters(int *pk, int *jp, bool clear);        // pk/jp hold >= 4 ints, either may be NULL
+
 // soft MIDI (web bridge: musical typing / WebMIDI). Machines with pitch read
 // gate()/note() next to their CV1/TR1 inputs; MIDI wins while notes are held.
 void audio_midi_note_on(int note, int vel);

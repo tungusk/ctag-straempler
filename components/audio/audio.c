@@ -211,6 +211,29 @@ uint32_t audio_proc_peak_us(bool clear)
     return v;
 }
 
+// FX-chain meters. The measurement happens in components/fxrack (it owns the
+// float scratch); only the peak-HOLD storage lives here, because /status is CORE
+// and must link with every machine excluded (tools/proof_build.sh) — nothing
+// pulls fxrack into that image. Same reason s_proc_pk lives here.
+static volatile int s_fx_pk[AUDIO_FX_STAGES];
+static volatile int s_fx_jp[AUDIO_FX_STAGES];
+
+void audio_fx_report(int stage, int pk_pct, int jp_pct)
+{
+    if (stage < 0 || stage >= AUDIO_FX_STAGES) return;
+    if (pk_pct > s_fx_pk[stage]) s_fx_pk[stage] = pk_pct;
+    if (jp_pct > s_fx_jp[stage]) s_fx_jp[stage] = jp_pct;
+}
+
+void audio_fx_meters(int *pk, int *jp, bool clear)
+{
+    for (int i = 0; i < AUDIO_FX_STAGES; i++) {
+        if (pk) pk[i] = s_fx_pk[i];
+        if (jp) jp[i] = s_fx_jp[i];
+        if (clear) { s_fx_pk[i] = 0; s_fx_jp[i] = 0; }
+    }
+}
+
 // Lazily allocate the ~176 KB PSRAM ring shared by the :8000 listener and the
 // icecast push. Allocated on first streaming use (broadcast is off at boot),
 // then kept for the session — freeing it would race the audio-task writer, and

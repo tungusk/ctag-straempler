@@ -63,7 +63,14 @@ const char *fxrack_cv_label(const fxrack_t *rk, int slot, int which);
 // Peak level inside the chain BEFORE the soft limiter, as % of full scale
 // (peak-hold, cleared on read). >100 means the chain is riding the limiter --
 // invisible to the output VU, which sees the limiter's output.
-int fxrack_peak_pct(bool clear);
+// TAP POINTS for the per-stage meters. The rack MEASURES at each of these and
+// reports to audio.c (audio_fx_report / audio_fx_meters, which is also where the
+// docs for pk/jp live); the holder is core-side so /status links with every
+// machine excluded. A chain-end-only peak could kill the "the chain rides the
+// limiter" theory but never say WHICH stage dirties a stacked combo.
+// Both process paths fill these, so the Drums SEND bus is covered too — on the
+// gen-only path FXST_END is just after slot 1 (there is no insert reverb there).
+enum { FXST_IN = 0, FXST_SLOT0 = 1, FXST_SLOT1 = 2, FXST_END = 3, FXST_N = 4 };
 
 void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames);
 
