@@ -185,6 +185,20 @@ static void run_gen_slots(const fxrack_t *rk, float *fb, int frames)
     }
 }
 
+// PEAK INSIDE THE CHAIN, before the soft limiter, as % of full scale. The output
+// VU cannot see this: fx_pack_softclip squashes overload back down, so a limiter
+// working flat out looks like a MODERATE output level (measured VU 98/255 while
+// stacked FX sounded dirty — I read the wrong side of the limiter). Anything
+// over ~100% means the chain is riding the limiter, which is the "dirty when I
+// stack effects" family. Peak-hold, cleared on read.
+static volatile int s_fx_pk_pct = 0;
+int fxrack_peak_pct(bool clear)
+{
+    int v = s_fx_pk_pct;
+    if (clear) s_fx_pk_pct = 0;
+    return v;
+}
+
 void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames)
 {
     float fb[FX_SCRATCH_N];
@@ -196,6 +210,10 @@ void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames)
         reverb_block_f(rk->rv, fb, frames);
         cv_pop(&r);
     }
+    float pk = 0.0f;                       // measure BEFORE the limiter
+    for (int i = 0; i < frames * 2; i++) { float a = fb[i] < 0 ? -fb[i] : fb[i]; if (a > pk) pk = a; }
+    int pct = (int)(pk * 100.0f / 32767.0f);
+    if (pct > s_fx_pk_pct) s_fx_pk_pct = pct;
     fx_pack_softclip(fb, out, frames * 2);
 }
 

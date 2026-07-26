@@ -60,6 +60,11 @@ const char *fxrack_cv_label(const fxrack_t *rk, int slot, int which);
 
 // process the machine buffer in place: unpack -> generic slots in order ->
 // reverb -> soft-clip pack (fxchain.h). No inter-stage clamp.
+// Peak level inside the chain BEFORE the soft limiter, as % of full scale
+// (peak-hold, cleared on read). >100 means the chain is riding the limiter --
+// invisible to the output VU, which sees the limiter's output.
+int fxrack_peak_pct(bool clear);
+
 void fxrack_process_i32(const fxrack_t *rk, int32_t *out, int frames);
 
 // generic slots ONLY (FX1/FX2), no reverb stage: for hosts whose reverb is a
