@@ -798,10 +798,6 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
 
 // ─── GET /status ───────────────────────────────────────────────────────────────
 
-// declared locally rather than pulling components/fxrack into this component's
-// REQUIRES for one integer — see fxrack.h for what it measures
-int fxrack_peak_pct(bool clear);
-
 static esp_err_t status_get_handler(httpd_req_t *req)
 {
     audio_status_t st;
@@ -822,13 +818,22 @@ static esp_err_t status_get_handler(httpd_req_t *req)
                  tu.have ? 1 : 0, (double)tu.hz, tu.midi, (double)tu.cents,
                  (double)tu.conf, tu.cost_us);
 
+    // per-stage FX meters: which stage introduces level or a discontinuity.
+    // One read clears the peak-holds, so ONE poller owns this (the test rig).
+    // fxpk stays the chain-end peak it always was — that is stage FXST_END.
+    int fpk[AUDIO_FX_STAGES] = {0}, fjp[AUDIO_FX_STAGES] = {0};
+    audio_fx_meters(fpk, fjp, true);
+    char fxst[96];
+    snprintf(fxst, sizeof(fxst), ",\"fxst\":{\"pk\":[%d,%d,%d,%d],\"jp\":[%d,%d,%d,%d]}",
+             fpk[0], fpk[1], fpk[2], fpk[3], fjp[0], fjp[1], fjp[2], fjp[3]);
+
     // build compact JSON by hand to avoid cJSON overhead in hot path
-    char buf[512];
+    char buf[640];
     int n = snprintf(buf, sizeof(buf),
         "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
         "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u,"
         "\"vu\":[%u,%u,%u,%u],"
-        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u,\"auspk\":%u,\"fxpk\":%d%s}",
+        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u,\"auspk\":%u,\"fxpk\":%d%s%s}",
         m ? m->name : "",
         rec ? "true" : "false",
         st.v0, st.v1,
@@ -837,7 +842,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
         st.trig,
         st.vu[0], st.vu[1], st.vu[2], st.vu[3],
         bl.mode, bl.state, (double)bl.bpm, (double)bl.conf, bl.cost_us,
-        audio_proc_us(), audio_proc_peak_us(true), fxrack_peak_pct(true), tun);
+        audio_proc_us(), audio_proc_peak_us(true), fpk[AUDIO_FX_STAGES - 1], fxst, tun);
     (void)n;
     send_json(req, buf);
     return ESP_OK;
