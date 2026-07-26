@@ -57,7 +57,7 @@ typedef struct {
     // and scales the reverb RETURN by it, so switching modes doesn't cut a
     // ringing tail to zero in one sample (that step was the click). Set by
     // reverb_set_mode, which waits for the ramp-down before clearing the tank.
-    float          fade_g;      // current return gain 0..1
+    volatile float fade_g;      // current return gain 0..1 (UI task polls it, audio task writes)
     volatile float fade_tgt;    // where the kernel is ramping it
     // instrumentation: EMA of process cost, microseconds per block
     volatile int cost_us;
