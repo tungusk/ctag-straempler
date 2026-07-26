@@ -15,7 +15,21 @@ RESP=$(curl -s -m 120 --data-binary @"$BIN" -H "Content-Type: application/octet-
 echo "$RESP"
 # the handler answers {"ok":true,...} on success; anything else (e.g. "oom"
 # while radio plays — internal heap exhausted) means NOTHING was flashed
-case "$RESP" in *'"ok":true'*) ;; *) echo "ABORT: OTA rejected — image NOT flashed (stop radio and retry?)"; exit 1;; esac
+# "ota_begin failed" = internal RAM too fragmented for esp_ota_begin's buffer,
+# the classic end-of-a-long-flash-session failure. A soft reboot reinitialises
+# the heap and fixes it, so recover automatically instead of stalling on a
+# power-cycle. Any OTHER rejection is not retried — "oom" while the radio plays
+# needs the radio stopped, and retrying would just fail twice.
+case "$RESP" in
+  *'"ok":true'*) ;;
+  *ota_begin*)
+    echo "ota_begin failed (internal RAM fragmented) — soft-rebooting and retrying once"
+    "$(dirname "$0")/reboot.sh" "$IP" || { echo "ABORT: reboot failed — power-cycle needed"; exit 1; }
+    sleep 2
+    RESP=$(curl -s -m 120 --data-binary @"$BIN" -H "Content-Type: application/octet-stream" "http://$IP/ota" || true)
+    echo "$RESP"
+    case "$RESP" in *'"ok":true'*) ;; *) echo "ABORT: still rejected after reboot — image NOT flashed"; exit 1;; esac ;;
+  *) echo "ABORT: OTA rejected — image NOT flashed (stop radio and retry?)"; exit 1;; esac
 echo "waiting for reboot into the new slot..."
 for i in $(seq 1 15); do
   sleep 4
