@@ -12,6 +12,8 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "reverb.h"
 #include "fxchain.h"
 
@@ -101,6 +103,7 @@ esp_err_t reverb_init(reverb_t *rv)
     carve(&p, &rv->shim,  L_SHIM);
     rv->mode = RV_OFF;
     rv->wet = 0.35f;
+    rv->fade_g = 1.0f; rv->fade_tgt = 1.0f;   // open; set_mode drives the ramp
     ESP_LOGI(TAG, "slab %u KB PSRAM", (unsigned)(RV_SLAB * sizeof(float) / 1024));
     return ESP_OK;
 }
@@ -147,7 +150,10 @@ static void tank_resize(reverb_t *rv, float size)
 //   catch; it must keep the whole loop < 1 so a silent tail DECAYS.
 #define SHIM_FB_LP  0.35f
 
-void reverb_set_mode(reverb_t *rv, int mode)
+// The heavy part: swap the parameter set, resize and clear the tank. Callable
+// from AUDIO context (the NaN guard does) because it never sleeps — the fade
+// lives in reverb_set_mode() around it.
+static void reverb_apply_mode(reverb_t *rv, int mode)
 {
     if (!rv->slab) { rv->mode = RV_OFF; return; }
     // mute the tank FIRST (the kernel gates on rv->mode) so the audio task
@@ -189,6 +195,25 @@ void reverb_set_mode(reverb_t *rv, int mode)
     rv->mode = mode;                 // set LAST: the kernel gates on it
 }
 
+// FADED mode change (Arlo 2026-07-25: "a beep or a click when changing
+// reverbs"). Clearing the tank cut a ringing tail to zero in ONE sample, and a
+// step that size is a click; the new mode then came in at full return level.
+// So: ask the audio task to ramp the return down, WAIT for it (UI context — a
+// few ticks here is imperceptible), reconfigure into the silence, then ramp
+// back up. The wait is bounded: if the kernel isn't running (stopped machine,
+// mode already OFF) fade_g never moves and we just proceed.
+void reverb_set_mode(reverb_t *rv, int mode)
+{
+    if (!rv->slab) { rv->mode = RV_OFF; return; }
+    if (rv->mode != RV_OFF) {
+        rv->fade_tgt = 0.0f;
+        for (int i = 0; i < 6 && rv->fade_g > 0.01f; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    reverb_apply_mode(rv, mode);
+    rv->fade_g  = 0.0f;              // new tank starts silent...
+    rv->fade_tgt = 1.0f;             // ...and fades in over RV_FADE_MS
+}
+
 void reverb_set_mix(reverb_t *rv, float wet)
 {
     if (wet < 0) wet = 0;
@@ -213,6 +238,20 @@ static inline float shim_step(reverb_t *rv, float x)
     float w0 = 2.0f * (ph < 0.5f ? ph : 1.0f - ph);
     return line_read(&rv->shim, back0) * w0 +
            line_read(&rv->shim, back1) * (1.0f - w0);
+}
+
+// return-level fade, stepped once per frame. ~20 ms end to end: long enough to
+// kill the click, short enough that a mode change still feels instant.
+#define RV_FADE_STEP (1.0f / 882.0f)
+static inline float rv_fade_step(reverb_t *rv)
+{
+    if (rv->fade_g != rv->fade_tgt) {
+        rv->fade_g += (rv->fade_tgt > rv->fade_g) ? RV_FADE_STEP : -RV_FADE_STEP;
+        if (rv->fade_g > 1.0f) rv->fade_g = 1.0f;
+        if (rv->fade_g < 0.0f) rv->fade_g = 0.0f;
+        if (fabsf(rv->fade_g - rv->fade_tgt) < RV_FADE_STEP) rv->fade_g = rv->fade_tgt;
+    }
+    return rv->fade_g;
 }
 
 // one tank sample: feed x in, get the stereo taps out. Shared by the insert
@@ -282,7 +321,7 @@ static inline void tank_nan_guard(reverb_t *rv)
 {
     if (!(rv->damp_a == rv->damp_a) || !(rv->damp_b == rv->damp_b)) {
         tank_resize(rv, 1.0f);
-        reverb_set_mode(rv, rv->mode);
+        reverb_apply_mode(rv, rv->mode);   // audio context: never the sleeping variant
     }
 }
 
@@ -298,8 +337,9 @@ void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames
         float x = 0.5f * (sl + sr) * 0.6f;
         float yl, yr;
         tank_step(rv, x, decay, damp, bw, sg, &yl, &yr);
-        float ol = (float)(dry[f * 2] >> 16)     + ret * yl;
-        float or_ = (float)(dry[f * 2 + 1] >> 16) + ret * yr;
+        float fg = rv_fade_step(rv);
+        float ol = (float)(dry[f * 2] >> 16)     + ret * fg * yl;
+        float or_ = (float)(dry[f * 2 + 1] >> 16) + ret * fg * yr;
         if (ol > 32767.0f) ol = 32767.0f;
         if (ol < -32768.0f) ol = -32768.0f;
         if (or_ > 32767.0f) or_ = 32767.0f;
@@ -333,8 +373,11 @@ void reverb_block_f(reverb_t *rv, float *buf, int frames)
         float yl, yr;
         tank_step(rv, x, decay, damp, bw, sg, &yl, &yr);
 
-        buf[f * 2]     = gd * dl + gw * yl;          // no clamp (chain soft-limits)
-        buf[f * 2 + 1] = gd * dr + gw * yr;
+        // crossfade the whole wet/dry mix toward PURE DRY while fading, so a
+        // mode change never dips the dry signal — only the reverb leaves
+        float fg = rv_fade_step(rv);
+        buf[f * 2]     = dl + fg * (gd * dl + gw * yl - dl);   // no clamp (chain soft-limits)
+        buf[f * 2 + 1] = dr + fg * (gd * dr + gw * yr - dr);
     }
 
     tank_nan_guard(rv);

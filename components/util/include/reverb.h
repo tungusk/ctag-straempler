@@ -53,6 +53,12 @@ typedef struct {
     float in_bw;                // input bandwidth
     float shim_gain;            // pitch-feedback amount (0 = none)
     volatile float wet;         // 0..1 mix, equal-power
+    // mode-change fade: the kernel ramps fade_g toward fade_tgt once per frame
+    // and scales the reverb RETURN by it, so switching modes doesn't cut a
+    // ringing tail to zero in one sample (that step was the click). Set by
+    // reverb_set_mode, which waits for the ramp-down before clearing the tank.
+    float          fade_g;      // current return gain 0..1
+    volatile float fade_tgt;    // where the kernel is ramping it
     // instrumentation: EMA of process cost, microseconds per block
     volatile int cost_us;
 } reverb_t;

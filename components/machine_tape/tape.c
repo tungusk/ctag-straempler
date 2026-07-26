@@ -22,9 +22,27 @@
 static const char *TAG = "TAPE";
 tape_state_t tp;
 
-static const uint32_t TP_LEN_SECS[TP_LEN_OPTS] = { 15, 30, 60 };
+// 60 s was never reachable: it needs 5.05 MB of a 4.00 MB pool, so selecting it
+// just fail-softed down to whatever fit. 40 s (3.53 MB) sits at the real ceiling
+// once bank rounding stopped wasting half a megabyte, and covers 64 beats at
+// 100 bpm (38.4 s) — the ask. If FX slabs are already resident the allocator
+// still trims, and the header shows the capacity actually obtained.
+static const uint32_t TP_LEN_SECS[TP_LEN_OPTS] = { 15, 30, 40 };
 
 static int tape_spawn_save(uint32_t a, uint32_t b, bool crop, bool adopt);   // background take writer (below)
+static int tape_load_inner(const char *name);                                // tape_load minus the monitor mute
+
+// Persist "what is in the buffer" the MOMENT it changes, not only when the
+// machine is left gracefully. tape_stop() writes this on leave, but a REBOOT
+// (OTA, power cut, crash) never runs it — so the tape used to come back holding
+// whatever take was current at the last clean machine switch, i.e. "it keeps
+// loading an old cut" (Arlo 2026-07-25). UI context only: this writes CONFIG.JSN
+// to the card, so never call it from tape_rec_start() or anything else the audio
+// task reaches.
+static void tp_persist_last(void)
+{
+    configSetStringSetting("tapelast", tp.restore_id[0] ? tp.restore_id : "");
+}
 static void tape_stash_and_save(void);                          // request async save of the current take
 
 // ---- bank alloc (1 MiB blocks, fail-soft) ---------------------------------------
@@ -143,6 +161,9 @@ static void tape_rec_start(void)
     } else {
         tp.rec_extend = false;           // overdub within the existing loop
     }
+    // POST latches to PRE on the first punch-in and stays (see TPFX_* notes):
+    // from here on the chain is printed, not just monitored.
+    if (tp.fx_route == TPFX_POST) tp.fx_route = TPFX_PRE;
     tp.recording = true;
     tp.take_dirty = true;                // unsaved recorded audio now in the buffer
 }
@@ -285,7 +306,7 @@ static void tape_card_process(int32_t out[MACHINE_BLOCK],
     float lvl = tp_lvl_eff();                     // Level + CV matrix offset
     for (int f = 0; f < frames; f++) {            // monitor output (level applied last)
         int32_t v = out[f * 2] >> 16;
-        float o = (float)v * lvl;
+        float o = (float)v * lvl * tp_mute_step();
         if (o > 32000.0f) o = 32000.0f; else if (o < -32000.0f) o = -32000.0f;
         int32_t s = ((int32_t)(int16_t)o) << 16;
         out[f * 2] = s; out[f * 2 + 1] = s;
@@ -428,9 +449,25 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     }
 
     bool have_tape = tp.tape.nblk > 0;
-    // FX apply to INCOMING audio only (monitor + what's printed to tape), NOT to
-    // playback — so the chain isn't doubled on top of the already-recorded take.
+    // FX ROUTE — pre/post the RECORD HEAD; see TPFX_* in tape_priv.h. Read once
+    // here and used for BOTH what gets printed and what the chain may touch.
+    bool fx_post = tp_fx_is_post();
+    // fx_apply gates Tape's OWN tone stage (filter + drive); rack_on gates the FX
+    // rack. OFF bypasses only the RACK: filter/drive are separate Setup rows, not
+    // part of the chain, and folding them into the bypass made "off" dump ~10 dB
+    // whenever Drive was up (tp_softclip is ~1.5*(1+drive*3)) — read as a "major
+    // volume drop" rather than as an effects bypass (Arlo 2026-07-25).
+    // The TONE STAGE (filter + drive) is an INPUT-path stage — Tape's preamp —
+    // and is always printed, whatever the route. It is deliberately NOT moved by
+    // POST: routing it onto playback ran drive over the take a second time, and
+    // tp_softclip is ~1.5*(1+drive*3), so at drive 0.5 that was ~4x gain the
+    // moment you hit play ("volume seems to double", Arlo 2026-07-25).
     bool fx_apply = tp.recording || (!tp.playing && tp.monitor);
+    // Only the RACK follows the route: PRE colours the input and is printed,
+    // POST colours the output (playback included) and is not, OFF never runs.
+    bool rack_on = tp.fx_route == TPFX_OFF ? false
+                 : fx_post ? (tp.playing || tp.recording || tp.monitor)
+                           : fx_apply;
     int frames = MACHINE_BLOCK / 2;
 
     // The record head taps the FULL chain's OUTPUT (prints od/flg/trem/dly/reverb,
@@ -442,6 +479,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // value, so deferring the actual store is safe.
     uint32_t wpos[MACHINE_BLOCK / 2];
     bool     wdo[MACHINE_BLOCK / 2];
+    int16_t  dryv[MACHINE_BLOCK / 2];   // pre-FX source per frame — what POST route prints
     for (int f = 0; f < frames; f++) {
         // source: input while recording-from-input or monitoring; else tape
         float src = 0.0f;
@@ -453,8 +491,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
         else if (on_tape)                                 src = (float)tp_rd(p) / 32768.0f;
         else if (!tp.playing && tp.monitor)               src = in_mid;
 
-        // filter -> drive on the INCOMING audio only (playback stays dry so the FX
-        // aren't applied a second time). Stage at UNITY into out[] for the chain.
+        // filter -> drive, staged at UNITY into out[] for the chain
         float y = src;
         if (fx_apply) {
             if (tp.flt_mode != TPF_OFF) {
@@ -466,6 +503,9 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
         }
         float u = y * 32767.0f;
         if (u > 32767.0f) u = 32767.0f; else if (u < -32768.0f) u = -32768.0f;
+        // what the POST route prints: post-tone, PRE-rack. "Dry" here means dry
+        // of EFFECTS — the tone stage is the preamp and always reaches the tape.
+        dryv[f] = (int16_t)u;
         int32_t su = ((int32_t)(int16_t)u) << 16;
         out[f * 2] = su;
         out[f * 2 + 1] = su;
@@ -505,7 +545,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // the rack unpacks->stages->soft-limits once (fxchain.h) internally.
     float bpm = clockin_beat_bpm(&tp.ci);
     if (bpm <= 0.0f) bpm = tp.manual_bpm;
-    if (fx_apply) {
+    if (rack_on) {
         tp_rk.bpm = bpm;
         fxrack_process_i32(&tp_rk, out, frames);
     }
@@ -517,14 +557,16 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     float lvl = tp_lvl_eff();                     // Level + CV matrix offset
     bool wr_chk = tp.save_busy;                   // a background writer is reading the bank
     for (int f = 0; f < frames; f++) {
-        int32_t v = ((out[f * 2] >> 16) + (out[f * 2 + 1] >> 16)) >> 1;   // mono print
+        int32_t v = ((out[f * 2] >> 16) + (out[f * 2 + 1] >> 16)) >> 1;   // mono, post-chain
         if (wdo[f]) {
-            tp_wr(wpos[f], (int16_t)v);
+            // PRE prints the post-chain sample; POST prints the dry snapshot, so
+            // the chain lives after the head and never lands on the tape
+            tp_wr(wpos[f], fx_post ? dryv[f] : (int16_t)v);
             // recording over the region a drop/auto-save is emitting: the file
             // will hold a blend, so mark it instead of shipping a silent lie
             if (wr_chk && wpos[f] >= tp.save_a && wpos[f] < tp.save_b) tp.drop_spoiled = true;
         }
-        float o = (float)v * lvl * (28000.0f / 32767.0f);
+        float o = (float)v * lvl * tp_mute_step() * (28000.0f / 32767.0f);
         if (o > 32000.0f) o = 32000.0f; else if (o < -32000.0f) o = -32000.0f;
         int32_t s = ((int32_t)(int16_t)o) << 16;
         out[f * 2] = s;
@@ -555,7 +597,19 @@ int tape_set_len_sel(int sel)
     return 0;
 }
 
+// The monitor is muted for the whole load (see tp.loading) — this streams from
+// the card and can take a while, and on the crop's load-back it happens
+// mid-performance, where sitting on the raw line-in is glaring. Wrapped so every
+// early-return path re-opens the monitor.
 int tape_load(const char *name)
+{
+    tp.loading = true;
+    int r = tape_load_inner(name);
+    tp.loading = false;
+    return r;
+}
+
+static int tape_load_inner(const char *name)
 {
     if (!tp_stopped() || tp.tape.nblk == 0 || !name || !name[0]) return -1;
     char path[64];
@@ -604,6 +658,7 @@ int tape_load(const char *name)
     tp.in_pt = 0; tp.out_pt = done; tp.pos = 0;
     tp.take_dirty = false; tp.cropped = false;     // loaded content isn't an unsaved recording
     snprintf(tp.restore_id, sizeof(tp.restore_id), "%s", name);   // reload this on return
+    tp_persist_last();                                            // survive a reboot, not just a clean leave
     tape_rebuild_peaks(true);
     return 0;
 }
@@ -780,7 +835,7 @@ static int tape_spawn_save(uint32_t a, uint32_t b, bool crop, bool adopt)
     if (idx < 0) idx = 0;
     if (idx > 9999) idx = 9999;                // 8.3: id stays exactly 8 chars
     snprintf(tp.save_id, sizeof(tp.save_id), "%s%04d", pfx, idx % 10000);
-    if (adopt) snprintf(tp.restore_id, sizeof(tp.restore_id), "%s", tp.save_id);
+    if (adopt) { snprintf(tp.restore_id, sizeof(tp.restore_id), "%s", tp.save_id); tp_persist_last(); }
     tp.save_a = a; tp.save_b = b; tp.save_crop = crop;
     tp.drop_spoiled = false;          // arm the overwrite detector for THIS write
     tp.save_busy = true;
@@ -938,6 +993,7 @@ static esp_err_t tape_start(void)
     tp.res01 = 0.1f;
     tp.flt_mode = TPF_OFF;
     tp.monitor = true;
+    tp.mute_g = 1.0f;                          // monitor open (tp_mute_step ducks it during loads)
     tp.knob_ctx = -1;
     tp.restore_pending = true;                 // reload the persisted take on first screen entry
     clockin_reset(&tp.ci, 1.0f);
@@ -1000,6 +1056,7 @@ static cJSON *tape_preset_save(void)
     cJSON_AddNumberToObject(o, "rdest", tp.rec_dest);
     cJSON_AddNumberToObject(o, "rquant", tp.rec_quant);
     cJSON_AddBoolToObject(o, "mon", tp.monitor);
+    cJSON_AddNumberToObject(o, "fxr2", tp.fx_route);  // FX route; absent in old presets = PRE
     cJSON_AddBoolToObject(o, "osht", tp.play_oneshot);
     return o;
 }
@@ -1026,6 +1083,16 @@ static void tape_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rdest")) && cJSON_IsNumber(j)) tp.rec_dest = j->valueint == TPD_CARD ? TPD_CARD : TPD_TAPE;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rquant")) && cJSON_IsNumber(j)) tp.rec_quant = tp_clampi(j->valueint, 0, TPQ_BAR);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "mon"))  && cJSON_IsBool(j))   tp.monitor = cJSON_IsTrue(j);
+    // route encodings, oldest first — all three shipped the same day, and "fxr"
+    // can NOT be read as "fxr2" because the value 2 means AUTO there and OFF here
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fxp"))  && cJSON_IsBool(j))
+        tp.fx_route = cJSON_IsTrue(j) ? TPFX_POST : TPFX_PRE;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fxr"))  && cJSON_IsNumber(j)) {
+        static const int mig[4] = { TPFX_PRE, TPFX_POST, TPFX_POST, TPFX_OFF };  // 2 was AUTO -> POST
+        tp.fx_route = (j->valueint >= 0 && j->valueint < 4) ? mig[j->valueint] : TPFX_PRE;
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fxr2")) && cJSON_IsNumber(j))
+        tp.fx_route = (j->valueint >= 0 && j->valueint < TPFX_N) ? j->valueint : TPFX_PRE;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "osht")) && cJSON_IsBool(j))   tp.play_oneshot = cJSON_IsTrue(j);
     tp.knob_ctx = -1;
 }
