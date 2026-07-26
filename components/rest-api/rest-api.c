@@ -1820,6 +1820,38 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// POST /reboot — soft restart. Exists for ONE recurring failure: a long OTA
+// session fragments internal RAM until esp_ota_begin cannot get its contiguous
+// buffer ("ota_begin failed"), and the only recovery was walking to the module
+// and pulling power. esp_restart() reinitialises the heap, so this clears it
+// remotely. Reuses the OTA handler's shutdown sequence exactly (queue
+// EV_AUTOSAVE, let it land, then restart) so machine state survives. REFUSES
+// while recording — a reboot destroys the PSRAM take with no trace. Ungated like
+// /ota: gating a reboot more strictly than an endpoint that can replace the
+// firmware would be incoherent, and this is a LAN device. It cannot rescue a
+// genuinely WEDGED device — if the httpd task is starved, nothing answers this
+// either; it is for the fragmentation case.
+static esp_err_t reboot_post_handler(httpd_req_t *req)
+{
+    if (recording_is_active()) {            // a reboot would destroy the take
+        httpd_resp_set_status(req, "409 Conflict");   // IDF 4.3 has no HTTPD_409_* enum
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"recording\"}");
+        return ESP_OK;
+    }
+    ESP_LOGI(TAG, "soft reboot requested");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"ok\":true,\"rebooting\":true}");
+    if (ui_ev_queue) {                       // flush live machine state first
+        ui_ev_ts_t ae = { .event = EV_AUTOSAVE, .event_data = NULL };
+        xQueueSend(ui_ev_queue, &ae, 0);
+    }
+    audio_output_mute(true);                 // don't dump garbage into the rack
+    vTaskDelay(pdMS_TO_TICKS(800));          // response flush + autosave land
+    esp_restart();
+    return ESP_OK;
+}
+
 // GET /ota/state — running partition + which slot the next update lands in
 static esp_err_t ota_state_handler(httpd_req_t *req)
 {
@@ -1896,6 +1928,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/",           .method = HTTP_GET,    .handler = landing_handler },
     { .uri = "/ota",        .method = HTTP_POST,   .handler = ota_post_handler },
     { .uri = "/ota/state",  .method = HTTP_GET,    .handler = ota_state_handler },
+    { .uri = "/reboot",     .method = HTTP_POST,   .handler = reboot_post_handler },
     { .uri = "/sysinfo",    .method = HTTP_GET,    .handler = sysinfo_get_handler },
     { .uri = "/files",      .method = HTTP_GET,    .handler = files_get_handler },
     { .uri = "/files",      .method = HTTP_DELETE, .handler = files_delete_handler },
