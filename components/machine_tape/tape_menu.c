@@ -556,12 +556,22 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             if (s_grab) s_grab = false;                              // drop the crop point
             else if (tb_is_crop(s_btn)) s_grab = true;               // grab it
             else if (s_btn == TB_NAME) return M_TAPE_LOAD;           // the name IS the load button
-            else if (tb_is_fx(s_btn))                               // cycle this slot's effect IN PLACE
+            else if (tb_is_fx(s_btn)) {                             // cycle this slot's effect IN PLACE
                 fxrack_menu_adj(&tp_rk, s_btn - TB_FX1, -1, +1);    //   (params: long-press -> Setup > FX)
+                // the WAVEFORM is unchanged by an effect swap: repaint the strip
+                // only. draw_wave() is 300 columns of PSRAM shadow-FB writes and
+                // starves the audio path — a redraw that clicks for no reason.
+                redraw_strip(); draw_header_status();
+                return 0;
+            }
             // Crop = drop the audible loop to a new take. Read-only, so it fires
             // WHILE PLAYING too (that's the point); tape_save_crop refuses on its
             // own while recording.
-            else if (s_btn == TB_ROUTE) tp.fx_route = (tp.fx_route + 1) % TPFX_N;  // pre > post > auto
+            else if (s_btn == TB_ROUTE) {                           // pre > post > off
+                tp.fx_route = (tp.fx_route + 1) % TPFX_N;
+                redraw_strip();                                     // strip only (see above)
+                return 0;
+            }
             else if (s_btn == TB_CLR) crop_drop();
             else if (tp_ui_stopped()) switch (s_btn) {              // buffer edits: STOPPED only (enforce the "stop first" hint, don't just show it)
                 case TB_REV:  tape_reverse(); break;

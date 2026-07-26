@@ -153,7 +153,25 @@ static void tank_resize(reverb_t *rv, float size)
 // The heavy part: swap the parameter set, resize and clear the tank. Callable
 // from AUDIO context (the NaN guard does) because it never sleeps — the fade
 // lives in reverb_set_mode() around it.
-static void reverb_apply_mode(reverb_t *rv, int mode)
+// Clearing the tank is ~170 KB of PSRAM writes. As ONE memset that saturates the
+// PSRAM bus for 10-15 ms, which starves the audio task's own PSRAM reads (on
+// Tape, the tape banks themselves) and clicks no matter what the reverb signal
+// is doing — a fade cannot mask it because it is not a signal discontinuity.
+// Chunked + yielding when we're in UI context; the NaN guard runs in the audio
+// task and must take the straight path.
+static void rv_clear_slab(reverb_t *rv, bool may_yield)
+{
+    const size_t total = (size_t)RV_SLAB * sizeof(float);
+    if (!may_yield) { memset(rv->slab, 0, total); return; }
+    const size_t CH = 32768;
+    for (size_t off = 0; off < total; off += CH) {
+        size_t n = (total - off < CH) ? (total - off) : CH;
+        memset((uint8_t *)rv->slab + off, 0, n);
+        vTaskDelay(1);                      // let the audio task have the bus back
+    }
+}
+
+static void reverb_apply_mode(reverb_t *rv, int mode, bool may_yield)
 {
     if (!rv->slab) { rv->mode = RV_OFF; return; }
     // mute the tank FIRST (the kernel gates on rv->mode) so the audio task
@@ -187,9 +205,9 @@ static void reverb_apply_mode(reverb_t *rv, int mode)
         tank_resize(rv, size);
         // clear EVERY line (pre + diffusers + tank + shim window) so the switch
         // starts from true silence — no residual energy to detonate under the
-        // new mode's gain. One memset over the contiguous slab; lengths/states
-        // were just reset by tank_resize.
-        memset(rv->slab, 0, (size_t)RV_SLAB * sizeof(float));
+        // new mode's gain. Chunked (see rv_clear_slab); lengths/states were just
+        // reset by tank_resize.
+        rv_clear_slab(rv, may_yield);
     }
     rv->shim_pos = 0;
     rv->mode = mode;                 // set LAST: the kernel gates on it
@@ -209,7 +227,7 @@ void reverb_set_mode(reverb_t *rv, int mode)
         rv->fade_tgt = 0.0f;
         for (int i = 0; i < 6 && rv->fade_g > 0.01f; i++) vTaskDelay(pdMS_TO_TICKS(10));
     }
-    reverb_apply_mode(rv, mode);
+    reverb_apply_mode(rv, mode, true);
     rv->fade_g  = 0.0f;              // new tank starts silent...
     rv->fade_tgt = 1.0f;             // ...and fades in over RV_FADE_MS
 }
@@ -321,7 +339,7 @@ static inline void tank_nan_guard(reverb_t *rv)
 {
     if (!(rv->damp_a == rv->damp_a) || !(rv->damp_b == rv->damp_b)) {
         tank_resize(rv, 1.0f);
-        reverb_apply_mode(rv, rv->mode);   // audio context: never the sleeping variant
+        reverb_apply_mode(rv, rv->mode, false);   // audio context: never the sleeping variant
     }
 }
 
