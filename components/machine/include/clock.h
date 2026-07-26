@@ -87,6 +87,24 @@ static inline float clockin_ppb_eff(const clockin_t *ci)
 #define CLK_SRC_COUNT 13
 
 uint16_t clock_source_level(int src, const machine_io_t *io);
+// True when CV channel `ch` (0-based: 0 = CV1) is being used as the CLOCK SOURCE.
+//
+// CV5-CV8 are knob+jack channels on this hardware, so a clock patched into one
+// is read TWICE: by clockin_block() and by whatever parameter the machine maps
+// to that knob. Tape shipped with clk_src defaulting to CV8 *and* CV8 mapped to
+// Drive, so clocking the module the documented way slammed the drive stage with
+// the pulse train — audible rhythmic distortion with every FX slot off, plus a
+// machine_state_dirty() per pulse churning AUTOSAVE.JSN to the card (2026-07-25).
+//
+// Tape was the only DEFAULT collision; Deck/DoubleDecker/Glitch/Looper/Tracker
+// map CV6/CV7 while defaulting the clock to CV8, so theirs is latent — pick CV6
+// or CV7 as the clock source and the same thing happens. Callers skip the
+// parameter write when this returns true.
+static inline bool clock_src_is_cv(int src, int ch)
+{
+    return src >= 0 && src <= 7 && src == ch;
+}
+
 const char *clock_source_name(int src);   // "CV1".."CV8","TR1","TR2","AUDIO"
 
 // Machines whose trig inputs already have jobs (deck transport, sampler3

@@ -694,8 +694,11 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     // shelved 2026-07-13; the PLL + NUDGE cover the need. Kept in code as the
     // grave marker for a future binding.
     const int nfr = MACHINE_BLOCK / 2;
-    s_cv6 = cvmed_step(&s_m6, io->cv[5]);
-    s_cv7 = cvmed_step(&s_m7, io->cv[6]);
+    // HOLD a channel that is carrying the CLOCK (clock_src_is_cv): these feed the
+    // loop-knob grab detector, so letting a pulse train through would not just
+    // move a parameter, it would fake a knob grab every pulse.
+    if (!clock_src_is_cv(dk.clk_src, 5)) s_cv6 = cvmed_step(&s_m6, io->cv[5]);
+    if (!clock_src_is_cv(dk.clk_src, 6)) s_cv7 = cvmed_step(&s_m7, io->cv[6]);
     bool d1 = !(io->trig_level & 1), d2 = !(io->trig_level & 2);
     tg_event_t e1 = trig_gate_step_ex(&s_tg1, d1, io->trig_rising & 1, nfr);
     tg_event_t e2 = trig_gate_step_ex(&s_tg2, d2, io->trig_rising & 2, nfr);
