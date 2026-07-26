@@ -76,8 +76,11 @@ static void glitch_process(int32_t out[MACHINE_BLOCK],
 
     if (!gl.ring || !gl.win) { memset(out, 0, MACHINE_BLOCK * sizeof(int32_t)); return; }
 
-    gl.win_ms = 20 + (int)((uint32_t)cvm[5] * 480 / 4095);   // knob6 = 20..500 ms
-    gl.pitch_cv = cvm[6];                                    // knob7 = pitch
+    // skip a channel that is carrying the CLOCK — see clock_src_is_cv()
+    if (!clock_src_is_cv(gl.clk_src, 5))
+        gl.win_ms = 20 + (int)((uint32_t)cvm[5] * 480 / 4095);   // knob6 = 20..500 ms
+    if (!clock_src_is_cv(gl.clk_src, 6))
+        gl.pitch_cv = cvm[6];                                    // knob7 = pitch
     uint16_t c1 = cvm[0] > 900 ? cvm[0] - 900 : 0;        // CV1 jack = level
     gl.level = c1 ? (uint16_t)((uint32_t)c1 * 255 / 3195) : 255;
 

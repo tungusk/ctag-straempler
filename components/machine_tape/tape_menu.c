@@ -421,7 +421,7 @@ static void draw_hint(void)
     if (tp.rec_dest == TPD_CARD) h = "";
     else if (s_grab)             h = "turn: move the point    press: drop";
     else switch (s_btn) {
-        case TB_NAME: h = "press: load a sample"; break;
+        case TB_NAME: h = stopped ? "press: load a sample" : "stop first"; break;
         case TB_IN:   h = "press: grab the IN point"; break;
         case TB_OUT:  h = "press: grab the OUT point"; break;
         case TB_WIN:  h = "press: grab & slide the window"; break;
@@ -555,7 +555,12 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
         case EV_SHORT_PRESS:
             if (s_grab) s_grab = false;                              // drop the crop point
             else if (tb_is_crop(s_btn)) s_grab = true;               // grab it
-            else if (s_btn == TB_NAME) return M_TAPE_LOAD;           // the name IS the load button
+            // the name IS the load button — but tape_load() refuses unless the
+            // transport is stopped, and its result was DISCARDED at the browser
+            // callback, so loading while playing silently did nothing and dropped
+            // you back with the old take (Arlo 2026-07-26: "tape may need a 'stop
+            // first' on file load"). Guard it here, like the edit actions do.
+            else if (s_btn == TB_NAME) { if (tp_ui_stopped()) return M_TAPE_LOAD; }
             else if (tb_is_fx(s_btn)) {                             // cycle this slot's effect IN PLACE
                 fxrack_menu_adj(&tp_rk, s_btn - TB_FX1, -1, +1);    //   (params: long-press -> Setup > FX)
                 // the WAVEFORM is unchanged by an effect swap: repaint the strip
@@ -761,7 +766,7 @@ static int tape_action(int i)
         case 17: tape_reverse(); break;
         case 18: tape_fade(); break;
         case 19: crop_drop(); break;   // same drop as the Live button (+ its note)
-        case 20: return M_TAPE_LOAD;
+        case 20: if (tp_ui_stopped()) return M_TAPE_LOAD; break;   // Setup: same stop-first guard
         case 21: tape_clear(); break;
         case 27: s_setup_return = 27; return M_TAPE_CV;   // CV matrix page
     }

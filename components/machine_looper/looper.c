@@ -162,8 +162,9 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     // the two good knobs shape the selected track: CV6 = level, CV7 = pan.
     // (knobs 5/8 are faulty on this unit, so per-track-fixed mapping is out;
     // this is a focus-style control — values persist per track when deselected)
-    lp.tr[lp.sel].vol = cvm[5] >> 4;   // CV6 -> 0..255
-    lp.tr[lp.sel].pan = cvm[6];        // CV7 -> 0..4095
+    // skip a channel that is carrying the CLOCK — see clock_src_is_cv()
+    if (!clock_src_is_cv(lp.clk_src, 5)) lp.tr[lp.sel].vol = cvm[5] >> 4;   // CV6 -> 0..255
+    if (!clock_src_is_cv(lp.clk_src, 6)) lp.tr[lp.sel].pan = cvm[6];        // CV7 -> 0..4095
 
     // filter mod on the jacks: rising CV1 OPENS the selected track's cutoff
     // (patch an envelope/LFO to open it), CV2 raises resonance. The 1V/oct

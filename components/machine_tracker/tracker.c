@@ -712,7 +712,12 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     static const int lad_div[15] = {16, 8, 4, 2, 0, 0, 0, 0,  0,  0,  0,   0,   0,   0,    0};
     #define TRK_LEN_STEPS 15
     static int cv_len_h = -1, cv_pos_h = -1;
-    int cv_len = s_cvm[6], cv_pos = s_cvm[5];   // median: the +/-60 deadband below is a
+    // HOLD a channel carrying the CLOCK (clock_src_is_cv): the deadband below is a
+    // jitter filter, not a gate — a pulse train sails through it and resizes the
+    // loop every pulse.
+    int cv_len = clock_src_is_cv(trk.clk_src, 6) ? (cv_len_h < 0 ? s_cvm[6] : cv_len_h) : s_cvm[6];
+    int cv_pos = clock_src_is_cv(trk.clk_src, 5) ? (cv_pos_h < 0 ? s_cvm[5] : cv_pos_h) : s_cvm[5];
+    // (median: the +/-60 deadband below is a
                                                 // JITTER filter — a 1200-count outlier
                                                 // sails straight through it and resizes
                                                 // the loop for a block

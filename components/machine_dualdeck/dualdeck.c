@@ -1040,7 +1040,9 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // auto/held to manual — the pickup. Handing straight back to manual on
     // fade completion would snap the mix to wherever the knob happens to
     // sit, defeating the takeover entirely (caught on first bench test).
-    dd.xf_cv = c7;                 // knob7 = crossfade (CV6 is the filter, house rule)
+    // HOLD when that channel carries the CLOCK (clock_src_is_cv): xf_cv drives the
+    // crossfade PICKUP, so a pulse train would fake the grab and steal the fade.
+    if (!clock_src_is_cv(dd.clk_src, 6)) dd.xf_cv = c7;   // knob7 = crossfade (CV6 is the filter, house rule)
     if (!dd.manual && xf_live) {       // auto or held: watch for the grab.
         // The move must PERSIST (~12 ms) — a single-block WiFi ADC spike on
         // the knob read faked a grab and killed every takeover fade the
