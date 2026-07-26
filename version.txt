@@ -1,1 +1,1 @@
-tape-drop-v1-20260725 (Tape crop DROP while playing, CV8 clock-vs-knob fix, loop box + scroll reorder, browser KEYS/TAPE crash)
+tape-fxchain-v1-20260726 (FX route pre/post/off, PSRAM recovery + slab GC, reverb/flanger/shimmer click fixes, auspk meter, /reboot)
