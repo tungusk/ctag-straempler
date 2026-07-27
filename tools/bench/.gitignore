@@ -1,0 +1,4 @@
+*.wav
+calib.json
+soak*/
+__pycache__/
