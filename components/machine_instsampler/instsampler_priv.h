@@ -48,6 +48,11 @@ extern const char *const keys_mtx_labels[ISM_N];   // dest names (instsampler.c)
 typedef struct {
     char     sample[24];      // pool id (<=8 chars on disk; 24 for safety)
     int16_t *buf;             // PSRAM-resident audio (mono int16), lazy alloc
+    uint32_t cap;             // frames buf can actually hold — NOT always
+                              // IS_MAX_FRAMES: the alloc walks a ladder down when
+                              // PSRAM is fragmented (see keys_load_zone), so a
+                              // shorter sample loads instead of the machine
+                              // silently refusing to load anything at all
     uint32_t frames;          // valid frames in buf (0 = empty)
     uint8_t  root;            // MIDI note that plays buf at native rate
     float    fine;            // + cents-as-semitones on top of root (-1..+1);
@@ -116,6 +121,10 @@ typedef struct {
     int   cv1_disp;
     float note_disp;          // last played note
     volatile bool loading;    // engine plays silent while a zone (re)loads
+    char  load_err[24];       // why the last load failed, "" when it succeeded.
+                              // A failed load used to be a SILENT no-op, which is
+                              // indistinguishable from a broken browser — Arlo hit
+                              // exactly that ("i can't seem to load a sample").
     uint8_t peaks[IS_PEAKS];  // waveform preview
 } is_state_t;
 

@@ -6,6 +6,7 @@
 #include <string.h>
 #include <math.h>
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "cJSON.h"
 #include "machine.h"
 #include "audio.h"
@@ -46,17 +47,44 @@ const char *const keys_mtx_labels[ISM_N] = {
     "Cutoff", "Reso", "Env>Cut", "Level", "Pitch", "Start", "LoopMov", "LoopLen"
 };
 
+// PSRAM is a 4 MB HARDWARE ceiling shared with the FX slabs (delay ~690 KB,
+// flanger ~90 KB, reverb tank ~170 KB) and with Tape, which wants up to 3.62 MB —
+// so this buffer cannot just be reserved for the session, and keys_stop frees it.
+// But asking for ONE 2 MB block after that hole has been reused is a coin flip:
+// measured 2026-07-26, the largest free block sat at 1,998,848 bytes — **1,152
+// short** — and every load silently returned -1 for the rest of the session
+// (Arlo: "i can't seem to load a sample into keys"; only a power cycle fixed it).
+// So walk a LADDER down. A shorter maximum sample is a far better failure than a
+// machine that cannot load anything, and the achieved size is remembered in
+// z->cap so sample_load never overruns what we actually got.
+static const uint32_t is_cap_ladder[] = { IS_MAX_FRAMES, 750000u, 500000u, 250000u, 120000u };
+
 int keys_load_zone(const char *name)
 {
     is_zone_t *z = &inst.zone[0];
     if (!name || !name[0]) return -1;
+    inst.load_err[0] = 0;
     if (!z->buf) {
-        z->buf = heap_caps_malloc((size_t)IS_MAX_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-        if (!z->buf) return -1;
+        for (int i = 0; i < (int)(sizeof is_cap_ladder / sizeof is_cap_ladder[0]); i++) {
+            z->buf = heap_caps_malloc((size_t)is_cap_ladder[i] * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+            if (z->buf) { z->cap = is_cap_ladder[i]; break; }
+        }
+        if (!z->buf) {
+            z->cap = 0;
+            snprintf(inst.load_err, sizeof(inst.load_err), "no PSRAM");
+            return -1;
+        }
+        if (z->cap < IS_MAX_FRAMES)
+            ESP_LOGW("keys", "sample buffer fell back to %u frames (%.1f s) — PSRAM fragmented",
+                     (unsigned)z->cap, (double)z->cap / IS_RATE);
     }
     inst.loading = true;
-    uint32_t n = sample_load(name, z->buf, IS_MAX_FRAMES, true);   // mono, DMA-staged, sd_lock
-    if (n < 2) { z->frames = 0; z->sample[0] = 0; inst.loading = false; return -1; }
+    uint32_t n = sample_load(name, z->buf, z->cap, true);   // mono, DMA-staged, sd_lock
+    if (n < 2) {
+        z->frames = 0; z->sample[0] = 0; inst.loading = false;
+        snprintf(inst.load_err, sizeof(inst.load_err), "load failed");
+        return -1;
+    }
     z->frames = n;
     strlcpy(z->sample, name, sizeof(z->sample));
     z->root = (uint8_t)inst.base_note;
@@ -181,7 +209,13 @@ static esp_err_t keys_start(void)
 
 static void keys_stop(void)
 {
+    // The buffer IS released here — Tape wants up to 3.62 MB of the 4 MB pool, so
+    // holding 2 MB for a machine that is not running would break long takes. The
+    // cost is that getting it back depends on PSRAM not having fragmented in the
+    // meantime, which is why keys_load_zone walks a ladder instead of demanding
+    // the full size.
     if (inst.zone[0].buf) { heap_caps_free(inst.zone[0].buf); inst.zone[0].buf = NULL; }
+    inst.zone[0].cap = 0;
     inst.zone[0].frames = 0;
     reverb_free(&inst.rv);
     fxdelay_free(&inst.dly);
