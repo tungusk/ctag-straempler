@@ -1,0 +1,60 @@
+input device: Scarlett 2i2 USB @ 48000 Hz
+machine Keys   sample 'FLATA4'   fxsl [2, 0]   rv 2
+soaking for 180 min in 30 s segments -> soak/
+08:42:29  START  patch smp='FLATA4' fxsl=[2, 0] rv=2  sample 2.00 s  loop=off
+08:42:29  trigger offset 0.728 s (from calib.json; recording time of a trigger at seg_t0)
+08:44:01  seg 3 fitted offset 0.650 s, 10/11 events accounted for
+08:44:01  HIT seg 3  t=13.639 in-seg  step 0.1501 (10.3x ceiling)  mid  | ausgap 1486 auspk 1392 sav.n 1
+   [retry 1: <urlopen error [Errno 50] Network is down>]
+   [retry 1: <urlopen error [Errno 50] Network is down>]
+   [retry 1: <urlopen error [Errno 50] Network is down>]
+   [retry 1: <urlopen error [Errno 50] Network is down>]
+   [retry 1: <urlopen error [Errno 50] Network is down>]
+   [retry 1: <urlopen error [Errno 50] Network is down>]
+   [retry 1: <urlopen error [Errno 50] Network is down>]
+   [retry 1: <urlopen error [Errno 50] Network is down>]
+10:34:26  seg 6 fitted offset 0.375 s, 4/10 events accounted for
+10:34:26  HIT seg 6  t=9.989 in-seg  step 0.1187 (7.8x ceiling)  mid  | ausgap 1558 auspk 1462 sav.n 1
+10:34:26  HIT seg 6  t=13.150 in-seg  step 0.2318 (15.2x ceiling)  mid  | ausgap 1558 auspk 1462 sav.n 1
+10:34:26  HIT seg 6  t=19.506 in-seg  step 0.1588 (10.4x ceiling)  mid  | ausgap 1558 auspk 1462 sav.n 1
+10:34:26  HIT seg 6  t=22.675 in-seg  step 0.1739 (11.4x ceiling)  mid  | ausgap 1558 auspk 1462 sav.n 1
+10:34:26  HIT seg 6  t=25.845 in-seg  step 0.2464 (16.2x ceiling)  mid  | ausgap 1558 auspk 1462 sav.n 1
+10:34:26  HIT seg 6  t=29.022 in-seg  step 0.2530 (16.6x ceiling)  mid  | ausgap 1558 auspk 1462 sav.n 1
+10:36:28  seg 10 clean (7 unexplained hits so far, 88 accounted for, 5 min recorded)
+10:36:58  seg 11 fitted offset 0.565 s, 9/10 events accounted for
+10:36:58  HIT seg 11  t=26.376 in-seg  step 0.5363 (35.7x ceiling)  mid  | ausgap 1443 auspk 1348 sav.n 1
+10:37:59  seg 13 fitted offset 0.475 s, 10/11 events accounted for
+10:37:59  HIT seg 13  t=4.169 in-seg  step 0.1940 (12.2x ceiling)  mid  | ausgap 1357 auspk 1277 sav.n 1
+10:39:00  seg 15 fitted offset 0.485 s, 11/12 events accounted for
+10:39:00  HIT seg 15  t=10.408 in-seg  step 0.2876 (16.4x ceiling)  mid  | ausgap 1410 auspk 1334 sav.n 1
+10:40:32  seg 18 fitted offset 0.560 s, 10/11 events accounted for
+10:40:32  HIT seg 18  t=3.992 in-seg  step 0.1591 (7.6x ceiling)  mid  | ausgap 1426 auspk 1314 sav.n 1
+10:41:32  seg 20 clean (11 unexplained hits so far, 188 accounted for, 10 min recorded)
+10:42:33  seg 22 fitted offset 0.635 s, 10/11 events accounted for
+10:42:33  HIT seg 22  t=0.920 in-seg  step 0.1836 (11.4x ceiling)  mid  | ausgap 1473 auspk 1373 sav.n 1
+10:43:34  seg 24 fitted offset 0.505 s, 10/11 events accounted for
+10:43:34  HIT seg 24  t=10.510 in-seg  step 0.4354 (19.6x ceiling)  mid  | ausgap 1320 auspk 1219 sav.n 1
+10:46:37  seg 30 clean (13 unexplained hits so far, 290 accounted for, 15 min recorded)
+10:50:41  seg 38 fitted offset 0.610 s, 10/11 events accounted for
+10:50:41  HIT seg 38  t=4.374 in-seg  step 0.3058 (19.2x ceiling)  mid  | ausgap 1321 auspk 1230 sav.n 1
+10:51:42  seg 40 clean (14 unexplained hits so far, 393 accounted for, 20 min recorded)
+10:52:12  seg 41 fitted offset 0.525 s, 10/11 events accounted for
+10:52:12  HIT seg 41  t=20.054 in-seg  step 0.4002 (18.5x ceiling)  mid  | ausgap 1347 auspk 1244 sav.n 1
+10:56:47  seg 50 clean (15 unexplained hits so far, 493 accounted for, 25 min recorded)
+11:00:50  seg 58 fitted offset 0.535 s, 11/12 events accounted for
+11:00:50  HIT seg 58  t=10.455 in-seg  step 0.1484 (7.3x ceiling)  mid  | ausgap 1381 auspk 1286 sav.n 1
+11:01:21  seg 59 fitted offset 0.610 s, 10/11 events accounted for
+11:01:21  HIT seg 59  t=26.766 in-seg  step 0.1237 (8.0x ceiling)  mid  | ausgap 1381 auspk 1306 sav.n 1
+11:01:51  seg 60 clean (17 unexplained hits so far, 598 accounted for, 30 min recorded)
+11:02:21  seg 61 fitted offset 0.520 s, 10/11 events accounted for
+11:02:21  HIT seg 61  t=20.067 in-seg  step 0.3007 (18.7x ceiling)  mid  | ausgap 1464 auspk 1369 sav.n 1
+11:03:22  seg 63 fitted offset 0.530 s, 9/10 events accounted for
+11:03:22  HIT seg 63  t=17.182 in-seg  step 0.2681 (15.1x ceiling)  mid  | ausgap 1322 auspk 1229 sav.n 1
+11:03:53  seg 64 fitted offset 0.540 s, 11/12 events accounted for
+11:03:53  HIT seg 64  t=13.724 in-seg  step 0.2690 (11.3x ceiling)  mid  | ausgap 1399 auspk 1303 sav.n 1
+11:05:54  seg 68 fitted offset 0.445 s, 10/11 events accounted for
+11:05:54  HIT seg 68  t=16.864 in-seg  step 0.1922 (12.6x ceiling)  mid  | ausgap 1315 auspk 1221 sav.n 1
+11:06:55  seg 70 clean (21 unexplained hits so far, 701 accounted for, 35 min recorded)
+11:08:27  seg 73 fitted offset 0.485 s, 11/12 events accounted for
+11:08:27  HIT seg 73  t=23.203 in-seg  step 0.0772 (3.5x ceiling)  mid  | ausgap 1389 auspk 1299 sav.n 1
+11:12:00  seg 80 clean (22 unexplained hits so far, 807 accounted for, 40 min recorded)

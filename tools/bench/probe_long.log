@@ -1,0 +1,27 @@
+patch: smp 'FLATA4' fxsl [2, 0] rv 2  rel 0.28
+14 min per condition, interleaved in 30 s blocks
+
+  block 1 (gate200): 11 notes so far, hits g200=0 g900=0
+  block 2 (gate900): 22 notes so far, hits g200=0 g900=0
+  block 3 (gate200): 33 notes so far, hits g200=0 g900=0
+  block 4 (gate900): 44 notes so far, hits g200=0 g900=2
+  block 5 (gate200): 55 notes so far, hits g200=1 g900=2
+  block 6 (gate900): 66 notes so far, hits g200=1 g900=3
+  block 7 (gate200): 77 notes so far, hits g200=2 g900=3
+  block 8 (gate900): 88 notes so far, hits g200=2 g900=5
+  block 9 (gate200): 99 notes so far, hits g200=4 g900=5
+  block 10 (gate900): 110 notes so far, hits g200=4 g900=6
+  block 11 (gate200): 121 notes so far, hits g200=4 g900=6
+  block 12 (gate900): 132 notes so far, hits g200=4 g900=7
+  block 13 (gate200): 143 notes so far, hits g200=4 g900=7
+  block 14 (gate900): 154 notes so far, hits g200=4 g900=7
+  block 15 (gate200): 165 notes so far, hits g200=4 g900=7
+  block 16 (gate900): 176 notes so far, hits g200=4 g900=7
+  block 17 (gate200): 187 notes so far, hits g200=5 g900=7
+  block 18 (gate900): 198 notes so far, hits g200=5 g900=9
+  block 19 (gate200): 209 notes so far, hits g200=5 g900=9
+  block 20 (gate900): 220 notes so far, hits g200=5 g900=9
+  block 21 (gate200): 231 notes so far, hits g200=6 g900=9
+  block 22 (gate900): 242 notes so far, hits g200=6 g900=11
+  block 23 (gate200): 253 notes so far, hits g200=7 g900=11
+  block 24 (gate900): 264 notes so far, hits g200=7 g900=12
