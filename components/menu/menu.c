@@ -659,7 +659,8 @@ static void dirty_poll_cb(void *arg) {
 // machine remembers its settings independently across switches:
 //   { "Sampler": {...}, "Looper": {...}, "Slicer": {...} }
 static void autosave_now(void) {
-    s_autosave_last_us = esp_timer_get_time();   // the backstop paces off this
+    int64_t t_save0 = esp_timer_get_time();
+    s_autosave_last_us = t_save0;                // the backstop paces off this
     const machine_t *m = machine_active();
     if (!m || !m->preset_save) return;
     cJSON *node = m->preset_save();
@@ -683,6 +684,12 @@ static void autosave_now(void) {
     char *out = cJSON_PrintUnformatted(root);
     if (out) { writeJSONFile("/sdcard/AUTOSAVE.JSN", out); free(out); }
     cJSON_Delete(root);
+    // TIMED (2026-07-26): Arlo hears one short burst ~1 s after ANY edit gesture —
+    // a knob move with no FX involved does it too, which is this timer's debounce,
+    // not anything in the FX chain. Note that this function is not just a write:
+    // it READS the whole file back first (a DMA-capable internal alloc), parses,
+    // reprints and writes. Compare against audio_loop_gap_us() for the same window.
+    audio_note_save((uint32_t)(esp_timer_get_time() - t_save0));
     ESP_LOGI("AUTOSAVE", "State saved (%s)", m->name);
 }
 

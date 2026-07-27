@@ -818,22 +818,42 @@ static esp_err_t status_get_handler(httpd_req_t *req)
                  tu.have ? 1 : 0, (double)tu.hz, tu.midi, (double)tu.cents,
                  (double)tu.conf, tu.cost_us);
 
-    // per-stage FX meters: which stage introduces level or a discontinuity.
-    // One read clears the peak-holds, so ONE poller owns this (the test rig).
-    // fxpk stays the chain-end peak it always was — that is stage FXST_END.
+    // Per-stage FX meters — OPT IN with ?fx=1. Reading them ARMS the per-sample
+    // measurement in the audio path for a few seconds (see audio.h), so the
+    // 500 ms hot poll must not do it implicitly: the web UI would then hold the
+    // instrumentation on forever, and it is not free. Measured why this matters:
+    // polling at 4 Hz while a Keys note sustained pushed auspk to 1495-1517 us
+    // against a 1450 us budget and Arlo heard it. One read clears the peak-holds,
+    // so ONE poller owns this. fxpk keeps its old meaning (the chain-end peak,
+    // stage FXST_END) and is reported either way, from whatever the last armed
+    // window left behind.
     int fpk[AUDIO_FX_STAGES] = {0}, fjp[AUDIO_FX_STAGES] = {0};
-    audio_fx_meters(fpk, fjp, true);
-    char fxst[96];
-    snprintf(fxst, sizeof(fxst), ",\"fxst\":{\"pk\":[%d,%d,%d,%d],\"jp\":[%d,%d,%d,%d]}",
-             fpk[0], fpk[1], fpk[2], fpk[3], fjp[0], fjp[1], fjp[2], fjp[3]);
+    char fxst[160] = "";
+    char fxq[8];
+    if (get_query_param(req, "fx", fxq, sizeof(fxq)) && fxq[0] == '1') {
+        int rvwpk = 0; uint32_t rvnan = 0;
+        audio_fx_meters(fpk, fjp, true);
+        audio_rv_meters(&rvwpk, &rvnan, true);
+        snprintf(fxst, sizeof(fxst),
+                 ",\"fxst\":{\"pk\":[%d,%d,%d,%d],\"jp\":[%d,%d,%d,%d]}"
+                 ",\"rv\":{\"wpk\":%d,\"nan\":%u}",
+                 fpk[0], fpk[1], fpk[2], fpk[3], fjp[0], fjp[1], fjp[2], fjp[3],
+                 rvwpk, rvnan);
+    } else {
+        audio_fx_meters(fpk, NULL, false);   // fxpk only: no arm, no clear
+    }
+
+    uint32_t sav_us = 0, sav_n = 0;
+    audio_save_stats(&sav_us, &sav_n);
 
     // build compact JSON by hand to avoid cJSON overhead in hot path
-    char buf[640];
+    char buf[720];
     int n = snprintf(buf, sizeof(buf),
         "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
         "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u,"
         "\"vu\":[%u,%u,%u,%u],"
-        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u,\"auspk\":%u,\"fxpk\":%d%s%s}",
+        "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u,\"auspk\":%u,"
+        "\"ausgap\":%u,\"sav\":{\"us\":%u,\"n\":%u},\"fxpk\":%d%s%s}",
         m ? m->name : "",
         rec ? "true" : "false",
         st.v0, st.v1,
@@ -842,7 +862,8 @@ static esp_err_t status_get_handler(httpd_req_t *req)
         st.trig,
         st.vu[0], st.vu[1], st.vu[2], st.vu[3],
         bl.mode, bl.state, (double)bl.bpm, (double)bl.conf, bl.cost_us,
-        audio_proc_us(), audio_proc_peak_us(true), fpk[AUDIO_FX_STAGES - 1], fxst, tun);
+        audio_proc_us(), audio_proc_peak_us(true), audio_loop_gap_us(true),
+        sav_us, sav_n, fpk[AUDIO_FX_STAGES - 1], fxst, tun);
     (void)n;
     send_json(req, buf);
     return ESP_OK;
