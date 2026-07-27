@@ -1,9 +1,11 @@
 // Shared overdrive / saturation — see overdrive.h.
 //
-// Per sample per channel: y = tanh(g*(x + bias)) - tanh(g*bias)  (the second
-// term cancels the DC the asymmetry bias injects), then a one-pole-ish svf
+// Per sample per channel: y = tanh(g*x + b) - tanh(b), where b = 2*bias  (the
+// second term cancels the DC the asymmetry bias injects), then a one-pole-ish svf
 // low-pass "tone" tilt, then the output trim. Float in the middle; the machine
 // format (int32<<16) is converted at the block edges only.
+// NOTE b is deliberately independent of the drive gain g — see the comment in
+// overdrive_block_f; scaling it by g silenced the stage past bias 40%.
 
 #include <math.h>
 #include <stddef.h>
@@ -43,7 +45,15 @@ void overdrive_block_f(overdrive_t *o, float *buf, int frames)
     float level = o->level; if (level < 0) level = 0; else if (level > 1) level = 1;
 
     float g   = 1.0f + drive * 29.0f;             // input gain 1..30
-    float dc  = fast_tanh(g * bias);               // DC the bias injects; subtract it
+    // BIAS IS NOT SCALED BY g (fixed 2026-07-26). It used to enter as
+    // tanh(g*(x+bias)), so at drive 80% (g=24) a bias of 0.8 landed at tanh(19):
+    // the shaper pinned at +1 for every input above about -72% of full scale and
+    // the DC subtraction below left ZERO. Measured silent output at bias >= 40%
+    // for drive 20/50/80 — over half the knob's travel was a dead zone. Offsetting
+    // by up to +/-2 inside the shaper instead keeps the control asymmetric (which
+    // is its job — even harmonics) while always passing signal.
+    const float b = bias * 2.0f;
+    float dc  = fast_tanh(b);                      // DC the bias injects; subtract it
     float fc  = 300.0f * powf(30.0f, tone);        // tone: 300 Hz (dark) .. 9 kHz (bright)
     float cf  = svf_coef(fc, OD_RATE, 1.0f);
 
@@ -51,7 +61,7 @@ void overdrive_block_f(overdrive_t *o, float *buf, int frames)
         for (int ch = 0; ch < 2; ch++) {
             svf_t *flt = ch ? &o->tr : &o->tl;
             float x  = buf[f * 2 + ch] / 32768.0f;
-            float sh = fast_tanh(g * (x + bias)) - dc;
+            float sh = fast_tanh(g * x + b) - dc;
             float lp; svf_step(flt, sh, cf, 1.0f, &lp, NULL, NULL);
             buf[f * 2 + ch] = lp * level * OD_OUT_TRIM * 32767.0f;
         }

@@ -153,6 +153,7 @@ static float s_st_prev[FXST_N][2];      // audio task only: last L/R out of each
 
 static void stage_meter(int st, const float *fb, int frames)
 {
+    if (!audio_fx_meters_armed()) return;   // OFF unless something is polling
     float pk = 0.0f, jp = 0.0f;
     float pl = s_st_prev[st][0], pr = s_st_prev[st][1];
     for (int i = 0; i < frames * 2; i += 2) {
@@ -439,12 +440,16 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "odtn")) && cJSON_IsNumber(j)) rk->od->tone = clampf((float)j->valueint / 100.0f, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "odbs")) && cJSON_IsNumber(j)) rk->od->bias = clampf((float)j->valueint / 100.0f, -1, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "odlv")) && cJSON_IsNumber(j)) rk->od->level = clampf((float)j->valueint / 100.0f, 0, 1);
-    if (rk->flg->bufL) {
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgrt")) && cJSON_IsNumber(j)) rk->flg->rate = clampf((float)j->valueint / 100.0f, 0.01f, 10);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgdp")) && cJSON_IsNumber(j)) rk->flg->depth = clampf((float)j->valueint / 100.0f, 0, 1);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgfb")) && cJSON_IsNumber(j)) rk->flg->fb = clampf((float)j->valueint / 100.0f, -0.95f, 0.95f);
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgmx")) && cJSON_IsNumber(j)) rk->flg->wet = clampf((float)j->valueint / 100.0f, 0, 1);
-    }
+    // NOT gated on bufL. These are plain float fields — writing them without a
+    // slab is harmless, and flanger_block_f is separately guarded (run_gen_slots).
+    // Gated, they were dropped whenever the flanger was not currently in a slot,
+    // so a patch saved with FX1=Off but the flanger dialled in came back with
+    // DEFAULTS the moment you switched the slot on: fxrack_save always writes
+    // them, so the load has to always read them or they do not round-trip.
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgrt")) && cJSON_IsNumber(j)) rk->flg->rate = clampf((float)j->valueint / 100.0f, 0.01f, 10);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgdp")) && cJSON_IsNumber(j)) rk->flg->depth = clampf((float)j->valueint / 100.0f, 0, 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgfb")) && cJSON_IsNumber(j)) rk->flg->fb = clampf((float)j->valueint / 100.0f, -0.95f, 0.95f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgmx")) && cJSON_IsNumber(j)) rk->flg->wet = clampf((float)j->valueint / 100.0f, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgsy")) && cJSON_IsBool(j))   rk->flg->sync = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flgdv")) && cJSON_IsNumber(j)) rk->flg->div = (int8_t)div_clamp(j->valueint);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "trmrt")) && cJSON_IsNumber(j)) rk->trem->rate = clampf((float)j->valueint / 100.0f, 0.05f, 20);
@@ -458,4 +463,11 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fiq")) && cJSON_IsNumber(j)) rk->filt->reso = clampf((float)j->valueint / 100.0f, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "bnb")) && cJSON_IsNumber(j)) rk->band->cutoff = clampf((float)j->valueint / 100.0f, 0, 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "bnw")) && cJSON_IsNumber(j)) rk->band->reso = clampf((float)j->valueint / 100.0f, 0, 1);
+    // RECLAIM slabs no loaded slot uses. slot_gc was only wired to the MENU path
+    // (slot_set), so loading a preset whose slots are Off left the delay's ~690 KB
+    // and the flanger's ~90 KB allocated indefinitely — measured 2026-07-26:
+    // switching Synth's slots off via a preset returned ZERO PSRAM. That squatting
+    // is what starves Keys' 2 MB buffer and Tape's long takes. Safe to sleep here:
+    // this is UI/loader context and reverb_set_mode above already waits on a fade.
+    slot_gc(rk);
 }

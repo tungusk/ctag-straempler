@@ -116,8 +116,29 @@ static void draw_wave(void)
     int wy = L_wy(), cy = wy + L_WH / 2;
     _bg = TFT_BLACK; TFT_fillRect(L_WX, wy, L_WW, L_WH, _bg);
     if (inst.zone[0].frames == 0) {
-        _fg = (color_t){90, 90, 100};
-        TFT_print("no sample - Setup > Load Sample", L_WX + 4, cy - TFT_getfontheight() / 2);
+        // AN EMPTY SLOT STILL NEEDS A CURSOR. The Sample element's only focus cue
+        // is the waveform colour, so with no waveform there was nothing at all to
+        // see (Arlo 2026-07-26: "when the sample is empty there's no selection box
+        // on the empty slot") — the one element you must navigate to in order to
+        // FIX an empty Keys was the one element that could not show it was
+        // selected. Borrow the dials' focus-ring idiom as a rectangle.
+        int hf = klive_focus(0);
+        if (hf) {
+            color_t hc = hf == 2 ? (color_t){130, 255, 150} : (color_t){150, 150, 170};
+            TFT_drawRect(L_WX, wy, L_WW, L_WH, hc);
+            if (hf == 2) TFT_drawRect(L_WX + 1, wy + 1, L_WW - 2, L_WH - 2, hc);
+        }
+        // and SAY WHY if a load actually failed — a silent no-op is
+        // indistinguishable from a browser that does not work
+        char msg[40];   // TFT_print takes char*, not const char*
+        snprintf(msg, sizeof(msg), "%s",
+                 inst.load_err[0] ? inst.load_err : "no sample - Setup > Load Sample");
+        _fg = inst.load_err[0] ? (color_t){240, 140, 120} : (color_t){90, 90, 100};
+        TFT_print(msg, L_WX + 6, cy - TFT_getfontheight() / 2);
+        if (inst.load_err[0]) {
+            _fg = (color_t){150, 110, 100};
+            TFT_print("reboot frees PSRAM", L_WX + 6, cy + TFT_getfontheight() / 2 + 2);
+        }
         s_last_ph = -1;
         return;
     }
