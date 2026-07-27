@@ -197,6 +197,14 @@ static volatile uint32_t s_proc_us = 0;    // smoothed machine process() cost (1
 // Read it, do the suspect gesture, read it again — a spike is objective evidence
 // where "did that click?" is not (2026-07-25, chasing the reverb mode click).
 static volatile uint32_t s_proc_pk = 0;
+// audio-loop block-to-block interval, peak-held (see the comment at the sample
+// site). Always on: it is one timestamp and one compare per block, and the whole
+// point is to catch a stall nobody was watching for.
+static int64_t  s_loop_prev = 0;
+static volatile uint32_t s_loop_gap_pk = 0;
+// last AUTOSAVE write duration + a count, reported so a burst can be lined up
+// against an actual card write rather than guessed at
+static volatile uint32_t s_save_us = 0, s_save_n = 0;
 static volatile bool s_bc_srv_run = false; // listener task should keep running (user intent)
 static volatile bool s_bc_srv_alive = false; // listener task currently exists
 
@@ -211,12 +219,51 @@ uint32_t audio_proc_peak_us(bool clear)
     return v;
 }
 
+uint32_t audio_loop_gap_us(bool clear)
+{
+    uint32_t v = s_loop_gap_pk;
+    if (clear) s_loop_gap_pk = 0;
+    return v;
+}
+
+void audio_note_save(uint32_t us)
+{
+    s_save_us = us;
+    s_save_n++;
+}
+
+void audio_save_stats(uint32_t *us, uint32_t *count)
+{
+    if (us) *us = s_save_us;
+    if (count) *count = s_save_n;
+}
+
 // FX-chain meters. The measurement happens in components/fxrack (it owns the
 // float scratch); only the peak-HOLD storage lives here, because /status is CORE
 // and must link with every machine excluded (tools/proof_build.sh) — nothing
 // pulls fxrack into that image. Same reason s_proc_pk lives here.
+//
+// ARMED ON DEMAND, off by default. The measurement is per-SAMPLE work in the
+// shared audio path (four buffer scans per block for the stage taps, plus the
+// reverb's wet peak) and Keys + FX + reverb already runs near 65% of the block
+// budget — instrumentation must not be what tips it over. So: reading the meters
+// arms them for ARM_MS, a poller keeps them alive, and they go quiet a few
+// seconds after the last read. Same shape as the teleremote CV overrides below
+// and the tuner service (off until opened) — one tick comparison per block when
+// nobody is measuring.
+// 4 s was sized for a script polling in a loop. A HANDS-ON test is slower — read,
+// walk to the module, make the gesture, play a note — so the arm has to outlast a
+// human, or the meters are asleep for the event we are trying to catch.
+#define AUDIO_FX_ARM_MS 20000
+static volatile TickType_t s_fx_arm_until = 0;
 static volatile int s_fx_pk[AUDIO_FX_STAGES];
 static volatile int s_fx_jp[AUDIO_FX_STAGES];
+
+bool audio_fx_meters_armed(void)
+{
+    TickType_t u = s_fx_arm_until;
+    return u != 0 && xTaskGetTickCount() < u;
+}
 
 void audio_fx_report(int stage, int pk_pct, int jp_pct)
 {
@@ -232,6 +279,33 @@ void audio_fx_meters(int *pk, int *jp, bool clear)
         if (jp) jp[i] = s_fx_jp[i];
         if (clear) { s_fx_pk[i] = 0; s_fx_jp[i] = 0; }
     }
+    // A CLEARING read is what an active poller does, so that is what arms the
+    // measurement. A peek (clear=false) must not — /status reports fxpk on every
+    // 500 ms poll and would otherwise hold the instrumentation on forever.
+    if (clear) s_fx_arm_until = xTaskGetTickCount() + pdMS_TO_TICKS(AUDIO_FX_ARM_MS);
+}
+
+// reverb tank diagnostics — see audio.h. The NaN count is CUMULATIVE and never
+// cleared: the question it answers is "did this ever fire", and a poll that
+// cleared it would lose the one event we are hunting.
+static volatile int      s_rv_wet_pk = 0;
+static volatile uint32_t s_rv_nan_n  = 0;
+
+void audio_rv_report(int wet_pk_pct, bool nan_flush)
+{
+    if (wet_pk_pct > s_rv_wet_pk) s_rv_wet_pk = wet_pk_pct;
+    if (nan_flush) s_rv_nan_n++;
+}
+
+void audio_rv_meters(int *wet_pk, uint32_t *nan_count, bool clear_pk)
+{
+    if (wet_pk) *wet_pk = s_rv_wet_pk;
+    if (nan_count) *nan_count = s_rv_nan_n;
+    if (clear_pk) s_rv_wet_pk = 0;
+    // the wet peak rides the same arm as the stage taps; the NaN COUNT does not
+    // (it is one comparison that was already in the guard, and it must catch a
+    // flush that happens when nobody is looking)
+    s_fx_arm_until = xTaskGetTickCount() + pdMS_TO_TICKS(AUDIO_FX_ARM_MS);
 }
 
 // Lazily allocate the ~176 KB PSRAM ring shared by the :8000 listener and the
@@ -527,6 +601,24 @@ static void audio_task(void *pvParams)
         beatlisten_push(in);
         // chromatic tuner: the same core input tap, OFF by default (one branch)
         tuner_push(in);
+
+        // AUDIO-LOOP GAP — the peak interval between consecutive blocks. `aus`
+        // times how long process() TAKES, which cannot see the task being LATE:
+        // when something else blocks the audio task (an SD write under sd_lock, or
+        // an internal-flash write, which disables the instruction cache and halts
+        // every task not in IRAM) process() still measures fast and the audio
+        // still drops out. Measured 2026-07-26 chasing the burst Arlo hears ~1 s
+        // after ANY edit gesture: auspk stayed at 1200 us of a 1450 us budget
+        // while the burst was plainly audible. One block is ~1450 us, so anything
+        // much above that is starvation, and the excess is how long we were gone.
+        {
+            int64_t now = esp_timer_get_time();
+            if (s_loop_prev) {
+                uint32_t gap = (uint32_t)(now - s_loop_prev);
+                if (gap > s_loop_gap_pk) s_loop_gap_pk = gap;
+            }
+            s_loop_prev = now;
+        }
 
         const machine_t *m = machine_active();
         if (m) {

@@ -17,6 +17,13 @@
 #include "reverb.h"
 #include "fxchain.h"
 
+// Declared here rather than by including audio.h: components/audio already
+// REQUIRES util, so util cannot require audio back without a cycle. Safe to
+// resolve at link time — audio is CORE and present in every image, including the
+// machine-less proof build. See audio.h for what these two numbers mean.
+void audio_rv_report(int wet_pk_pct, bool nan_flush);
+bool audio_fx_meters_armed(void);
+
 static const char *TAG = "REVERB";
 
 // base line capacities (samples @44.1k; Dattorro x1.4818, rounded)
@@ -364,10 +371,16 @@ static inline void tank_step(reverb_t *rv, float x, float decay, float damp,
 }
 
 // NaN guard (svf lesson: a NaN in a recursive network is permanent silence
-// that looks like a hardware fault) — flush the tank if poisoned
+// that looks like a hardware fault) — flush the tank if poisoned.
+// COUNTED (audio_rv_report): the flush is an unchunked ~170 KB PSRAM memset in
+// the AUDIO task, i.e. the very stall the chunked UI-context clear exists to
+// avoid, so a firing here is audible. Chasing "a burst of noise 1-2 s into the
+// first play after changing reverb type" (Arlo 2026-07-26) needs to know whether
+// this ever fires, and guessing at that family has been wrong before.
 static inline void tank_nan_guard(reverb_t *rv)
 {
     if (!(rv->damp_a == rv->damp_a) || !(rv->damp_b == rv->damp_b)) {
+        audio_rv_report(0, true);
         tank_resize(rv, 1.0f);
         reverb_apply_mode(rv, rv->mode, false);   // audio context: never the sleeping variant
     }
@@ -380,11 +393,18 @@ void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames
     const float decay = rv->decay, damp = rv->damp, bw = rv->in_bw;
     const float sg = rv->shim_gain;
     const float ret = rv->wet;          // RETURN level: dry stays full
+    const bool meter = audio_fx_meters_armed();   // per-sample cost: opt in only
+    float wpk = 0.0f;                   // WET-only peak, see audio.h
     for (int f = 0; f < frames; f++) {
         float sl = (float)send[f * 2], sr = (float)send[f * 2 + 1];
         float x = 0.5f * (sl + sr) * 0.6f;
         float yl, yr;
         tank_step(rv, x, decay, damp, bw, sg, &yl, &yr);
+        if (meter) {
+            float al = fabsf(yl), ar = fabsf(yr);
+            if (al > wpk) wpk = al;
+            if (ar > wpk) wpk = ar;
+        }
         float fg = rv_fade_step(rv);
         float ol = (float)(dry[f * 2] >> 16)     + ret * fg * yl;
         float or_ = (float)(dry[f * 2 + 1] >> 16) + ret * fg * yr;
@@ -395,6 +415,7 @@ void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames
         dry[f * 2]     = ((int32_t)ol) << 16;
         dry[f * 2 + 1] = ((int32_t)or_) << 16;
     }
+    if (meter) audio_rv_report((int)(wpk * 100.0f / 32767.0f), false);
     tank_nan_guard(rv);
     int us = (int)(esp_timer_get_time() - t0);
     rv->cost_us += (us - rv->cost_us) >> 3;
@@ -412,6 +433,8 @@ void reverb_block_f(reverb_t *rv, float *buf, int frames)
     const float gd = cosf(wet * (float)M_PI_2);
     const float gw = sinf(wet * (float)M_PI_2);
     const float sg = rv->shim_gain;
+    const bool meter = audio_fx_meters_armed();      // per-sample cost: opt in only
+    float wpk = 0.0f;                                // WET-only peak, see audio.h
 
     for (int f = 0; f < frames; f++) {
         float dl = buf[f * 2];
@@ -420,6 +443,11 @@ void reverb_block_f(reverb_t *rv, float *buf, int frames)
 
         float yl, yr;
         tank_step(rv, x, decay, damp, bw, sg, &yl, &yr);
+        if (meter) {
+            float al = fabsf(yl), ar = fabsf(yr);
+            if (al > wpk) wpk = al;
+            if (ar > wpk) wpk = ar;
+        }
 
         // crossfade the whole wet/dry mix toward PURE DRY while fading, so a
         // mode change never dips the dry signal — only the reverb leaves
@@ -428,6 +456,7 @@ void reverb_block_f(reverb_t *rv, float *buf, int frames)
         buf[f * 2 + 1] = dr + fg * (gd * dr + gw * yr - dr);
     }
 
+    if (meter) audio_rv_report((int)(wpk * 100.0f / 32767.0f), false);
     tank_nan_guard(rv);
     int us = (int)(esp_timer_get_time() - t0);
     rv->cost_us += (us - rv->cost_us) >> 3;          // EMA, ~8-block settle

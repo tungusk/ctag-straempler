@@ -67,6 +67,17 @@ uint32_t audio_proc_us(void);           // smoothed machine process() cost, us (
 // Peak block cost since the last read; pass clear=true to arm the next window.
 // Catches the single overrunning block a click actually is — the EMA cannot.
 uint32_t audio_proc_peak_us(bool clear);
+// PEAK BLOCK-TO-BLOCK INTERVAL of the audio loop, us, peak-hold, cleared on read.
+// The counterpart to audio_proc_peak_us: that one catches a block that took too
+// LONG, this one catches the task coming back too LATE (blocked on sd_lock, on
+// I2S, or halted by an internal-flash write disabling the instruction cache).
+// One block is ~1450 us; the excess over that is how long the audio was gone.
+// Cheap and always on — a stall nobody is watching for is the whole point.
+uint32_t audio_loop_gap_us(bool clear);
+// last AUTOSAVE.JSN write duration + how many have happened, so an audible burst
+// can be lined up against a real card write instead of inferred
+void audio_note_save(uint32_t us);      // called by the saver
+void audio_save_stats(uint32_t *us, uint32_t *count);
 uint32_t audio_broadcast_enc_us(void);  // smoothed shine cost per 26.1ms pass
 
 // FX-CHAIN METERS, per stage of the shared rack (components/fxrack measures and
@@ -78,9 +89,29 @@ uint32_t audio_broadcast_enc_us(void);  // smoothed shine cost per 26.1ms pass
 //   jp = biggest per-channel sample-to-sample step, % of full scale — a click's
 //        signature, and it spans block seams, so a starvation glitch shows too.
 // Both peak-hold, cleared on read: ONE poller owns them (the test rig / web UI).
+// ARMED ON DEMAND: measuring is per-sample work in the shared audio path, so it
+// is OFF unless something is actively polling. A CLEARING read (clear=true, what
+// a poller does) arms it for a few seconds; a peek does not. The producers check
+// audio_fx_meters_armed() and skip the scan otherwise. A poll loop keeps it
+// alive and it goes quiet on its own — over REST that is GET /status?fx=1.
+// So the FIRST poll of a run reads zeros: poll continuously, don't sample once.
 #define AUDIO_FX_STAGES 4
+bool audio_fx_meters_armed(void);                          // producers gate on this
 void audio_fx_report(int stage, int pk_pct, int jp_pct);   // audio task only
 void audio_fx_meters(int *pk, int *jp, bool clear);        // pk/jp hold >= 4 ints, either may be NULL
+
+// REVERB TANK diagnostics, for the "burst of noise 1-2 s into the first play
+// after changing reverb type" (Arlo 2026-07-26). The fxst taps see dry+wet
+// mixed, so neither can see the tank alone:
+//   wpk   peak of the tank's WET output, % of full scale, peak-hold. The tank
+//         has no limiter of its own; >100 means it is producing overload that
+//         the chain's soft clipper then hides.
+//   nan   COUNT of NaN-guard flushes since boot (never cleared). Each one is an
+//         unchunked ~170 KB PSRAM memset in the AUDIO task — the exact stall
+//         the chunked clear exists to avoid, and it would sound like a burst.
+//         A non-zero count is the smoking gun; a static count exonerates it.
+void audio_rv_report(int wet_pk_pct, bool nan_flush);      // audio task only
+void audio_rv_meters(int *wet_pk, uint32_t *nan_count, bool clear_pk);
 
 // soft MIDI (web bridge: musical typing / WebMIDI). Machines with pitch read
 // gate()/note() next to their CV1/TR1 inputs; MIDI wins while notes are held.
