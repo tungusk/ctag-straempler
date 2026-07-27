@@ -30,38 +30,57 @@ import os
 import shutil
 import time
 
+import numpy as np
+
 from detect import find_bursts
 from rig import Rig, load_wav, CAPTURE_OPEN_S
 
 
-def fit_offset(events, triggers, sample_secs, lo=0.0, hi=1.6, step=0.005, tol=0.14):
-    """Solve for the ONE unknown: where the recording starts relative to our
-    trigger timestamps.
+def note_onsets(x, sr, hop=0.005, rise=6.0):
+    """When did notes actually SOUND, from the envelope alone.
 
-    A stored constant does not work — sox's device-open time jitters by a couple
-    of hundred milliseconds run to run (measured 0.52 and 0.73 on consecutive
-    calibrations), which is larger than the matching tolerance. But the triggers
-    are a known periodic comb and the offset is a single scalar, so fit it per
-    segment and REPORT it: this is solving for one unknown, not fitting each
-    event to whatever story we prefer. If the fitted offset is unstable across
-    segments, the classification below should not be trusted.
+    Deliberately independent of the discontinuity detector. The previous version
+    fitted the offset by maximising alignment between triggers and DETECTED
+    EVENTS, then measured how far events sat from the nearest trigger — which is
+    circular, and duly produced a beautiful cluster at +0.4 s that was partly an
+    artifact of the fit. Onsets are big, unambiguous, and have nothing to do with
+    the events we are trying to classify.
     """
-    if not events or not triggers:
+    k = max(1, int(hop * sr))
+    m = np.abs(x).mean(axis=1) if x.ndim > 1 else np.abs(x)
+    env = np.sqrt(np.mean((m[:len(m) // k * k].reshape(-1, k)) ** 2, axis=1)) + 1e-12
+    floor = np.percentile(env, 20)
+    out, last = [], -1e9
+    for i in range(2, len(env)):
+        t = i * hop
+        if env[i] > max(rise * floor, 0.01) and env[i] > 3.0 * env[i - 2] and t - last > 0.4:
+            out.append(t)
+            last = t
+    return out
+
+
+def fit_offset(onsets, triggers, lo=-0.5, hi=2.0, step=0.005, tol=0.12):
+    """Solve for the ONE unknown — where the recording starts relative to our
+    trigger timestamps — using ONSETS, not detected events.
+
+    A stored constant cannot work: sox's device-open time jitters by a couple of
+    hundred milliseconds run to run (measured 0.52 and 0.73 on consecutive
+    calibrations), which is larger than the matching tolerance.
+
+    Vectorised. The scalar version did offsets x events x triggers comparisons in
+    pure Python — about 12 million per segment — and was most of why a 3 hour run
+    only recorded 40 minutes of audio.
+    """
+    if not onsets or not triggers:
         return 0.0, 0
-    best = (0.0, -1)
-    off = lo
-    while off <= hi:
-        n = 0
-        for e in events:
-            for tr in triggers:
-                if abs(e["t"] - (tr + off)) <= tol or (
-                        sample_secs and abs(e["t"] - (tr + off + sample_secs)) <= tol):
-                    n += 1
-                    break
-        if n > best[1]:
-            best = (off, n)
-        off += step
-    return best
+    on = np.asarray(onsets)[:, None]
+    tr = np.asarray(triggers)[None, :]
+    offs = np.arange(lo, hi, step)
+    # |onset - (trigger + off)| <= tol, counted per offset
+    diff = on - tr                                   # [n_onsets, n_triggers]
+    counts = np.array([np.any(np.abs(diff - o) <= tol, axis=1).sum() for o in offs])
+    i = int(np.argmax(counts))
+    return float(offs[i]), int(counts[i])
 
 
 def explain(t, triggers, sample_secs, attack_tol=0.12, end_tol=0.12):
@@ -149,9 +168,14 @@ def main():
         # at trigger + sample length. A soak that cannot tell those from the
         # artefact just collects clips of itself.
         triggers = []
+        # HARD wall-clock bound. This loop used to be `while proc.poll() is None`
+        # with nothing else: when sox wedged (it did, ~1 h into a 3 h run, still
+        # "recording" a 30 s file an hour later) the loop span forever and the
+        # whole soak silently stopped making progress.
+        deadline = seg_t0 + args.seg + 10.0
         if not args.no_drive:
             next_note = time.time()
-            while proc.poll() is None:
+            while proc.poll() is None and time.time() < deadline:
                 if time.time() >= next_note:
                     try:
                         # timestamp BEFORE the request: the note starts when the
@@ -162,7 +186,18 @@ def main():
                         log("trigger failed: %s" % exc)
                     next_note = time.time() + args.note_every
                 time.sleep(0.2)
-        proc.wait(timeout=args.seg + 30)
+        try:
+            proc.wait(timeout=max(2.0, deadline - time.time()))
+        except Exception:                             # noqa: BLE001 - TimeoutExpired
+            log("seg %d: sox WEDGED — killing and continuing" % seg_i)
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except Exception:                         # noqa: BLE001
+                pass
+            if os.path.exists(raw):
+                os.remove(raw)
+            continue
         recorded += args.seg
 
         # ONE status read, after the fact — peak-holds cover the whole segment
@@ -177,7 +212,9 @@ def main():
             log("seg %d unreadable: %s" % (seg_i, exc))
             continue
         events, thr, base = find_bursts(x, sr, k=args.k)
-        fitted, matched = fit_offset(events, triggers, sample_secs)
+        # Offset from ONSETS — independent of the events being classified.
+        onsets = note_onsets(x, sr)
+        fitted, matched = fit_offset(onsets, triggers)
         for e in events:
             e["cause"] = explain(e["t"], [t + fitted for t in triggers], sample_secs,
                                  attack_tol=0.14, end_tol=0.14)
@@ -196,10 +233,11 @@ def main():
                 json.dump({"segment": seg_i, "file": os.path.basename(keep),
                            "threshold": thr, "material_ceiling": base,
                            "fitted_offset": fitted, "matched": matched,
+                           "onsets": onsets,
                            "triggers": triggers, "sample_secs": sample_secs,
                            "events": events, "status_after": snap}, fh, indent=2)
-            log("seg %d fitted offset %.3f s, %d/%d events accounted for"
-                % (seg_i, fitted, matched, len(events)))
+            log("seg %d offset %.3f s from %d onsets (%d matched), %d/%d events accounted for"
+                % (seg_i, fitted, len(onsets), matched, len(events) - len(unexplained), len(events)))
             for e in unexplained:
                 log("HIT seg %d  t=%.3f in-seg  step %.4f (%.1fx ceiling)  %s  | ausgap %s auspk %s sav.n %s"
                     % (seg_i, e["t"], e["max_step"], e["over_ceiling"],
