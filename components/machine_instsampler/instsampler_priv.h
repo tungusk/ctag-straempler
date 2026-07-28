@@ -57,6 +57,11 @@ typedef struct {
     uint8_t  root;            // MIDI note that plays buf at native rate
     float    fine;            // + cents-as-semitones on top of root (-1..+1);
                               // auto-tune writes the fractional part here
+    int8_t   tune_src;        // TUNE_* for THIS zone. inst.tune_src only ever
+                              // holds the LAST load's verdict, so in a
+                              // multisample it says nothing about zones 0..n-2 —
+                              // and the verdict is exactly what you need when one
+                              // zone is out of tune and the others are fine.
     uint8_t  loop_mode;       // LOOP_OFF / LOOP_FWD
     uint32_t loop_start, loop_end;
     uint32_t loop_xfade;      // crossfade frames at the wrap seam (0 = hard loop)

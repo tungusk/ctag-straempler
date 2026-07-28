@@ -263,8 +263,21 @@ class Rig:
         if not verify:
             return None
         back = Rig.params()
+
+        def differs(want, got):
+            # The module keeps params as float32 and JSON hands them back at full
+            # double precision, so 0.005 returns as 0.00499999988824129. Comparing
+            # with != flagged five such non-differences on every single call, which
+            # is how a reader learns to ignore this line — and then misses the ones
+            # that matter (a physical knob refusing a remote write).
+            if isinstance(want, bool) or isinstance(got, bool):
+                return bool(want) != bool(got)
+            if isinstance(want, (int, float)) and isinstance(got, (int, float)):
+                return abs(float(want) - float(got)) > max(1e-4, abs(float(want)) * 1e-4)
+            return want != got
+
         bad = {k: (v, back.get(k)) for k, v in patch.items()
-               if isinstance(v, (int, float, str, bool)) and back.get(k) != v}
+               if isinstance(v, (int, float, str, bool)) and differs(v, back.get(k))}
         if bad:
             print("   [params did not apply: %s]" % bad, flush=True)
         return bad
@@ -287,6 +300,35 @@ class Rig:
         while time.time() - t0 < seconds:
             time.sleep(1.2)
             post("/remote/trig?t=%d&ms=2000" % trig)
+
+    # -- MIDI note hold. PREFER THIS over hold_gate for anything whose LEVEL or
+    # continuity is being measured. The soft gate behind /remote/trig releases
+    # early and intermittently (2026-07-27: a 30 s hold survived 8 s once and
+    # 2.3 s another time, with the module's own deadline verifiably set to 3000
+    # ticks) — as a level reference that reads as a signal wandering by 20 dB for
+    # no reason, which is exactly what it did before this existed.
+    #
+    # The MIDI gate has its own 5 s liveness timeout (audio_midi_gate compares
+    # against s_midi_seen), and note_on is what stamps it — so re-posting the
+    # SAME note is the heartbeat. It does not retrigger: the machine sees the
+    # gate stay continuously high, so the voice's env never re-enters attack.
+    @staticmethod
+    def note_on(note=57):
+        post("/midi/on?note=%d" % int(note))
+
+    @staticmethod
+    def notes_off():
+        post("/midi/alloff")
+
+    @staticmethod
+    def hold_note(seconds, note=57):
+        """Hold one MIDI note for `seconds`, refreshing the liveness stamp."""
+        t0 = time.time()
+        Rig.note_on(note)
+        while time.time() - t0 < seconds:
+            time.sleep(1.4)
+            Rig.note_on(note)
+        Rig.notes_off()
 
 
 if __name__ == "__main__":

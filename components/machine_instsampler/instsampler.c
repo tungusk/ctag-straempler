@@ -144,6 +144,7 @@ int keys_load_zone_at(int zi, const char *name)
     strlcpy(z->sample, name, sizeof(z->sample));
     z->root = (uint8_t)inst.base_note;
     z->fine = 0.0f;
+    z->tune_src = TUNE_NONE;
     inst.tune_hz = 0.0f;          // a new sample invalidates the last verdict
     inst.tune_conf = 0.0f;
     inst.tune_src = TUNE_NONE;
@@ -228,8 +229,30 @@ int keys_autotune(void)
         // reads an octave or two down). So a same-pitch-class name hint gets to
         // move the register, and nothing else. A hint that disagrees on pitch
         // class is reported, not obeyed — the recording beats the label.
+        // ...but BOUNDED. The failure this corrects is a sub-harmonic read, which
+        // lands ONE octave low (two at the outside). An unbounded correction also
+        // obeys a name that is simply WRONG, and then reports fine = 0.00 cents,
+        // which reads in the UI as a confident, exact verdict.
+        //
+        // Measured 2026-07-28: the card's TSTC2 actually contains a C4 tone. Auto-
+        // tune heard 261.66 Hz (C4, dead on), matched pitch class C against the
+        // name's "C2", and moved the root DOWN two octaves — so the zone played
+        // 2400 cents sharp, with perfect intervals inside it and no indication
+        // anything was wrong. Note that direction: moving DOWN from what was heard
+        // cannot be fixing a sub-harmonic error, it can only be trusting the label
+        // over the recording, which is the opposite of the rule above.
+        //
+        // So: accept at most one octave, and only report anything further. A rare
+        // genuine two-octave detection error then shows as CONFLICT on the Setup
+        // row instead of being silently "fixed" — a wrong tuning nobody can see is
+        // worse than a right one flagged for a look.
         if (hint >= 0 && ((hint % 12) == (midi % 12))) {
-            if (hint != midi) { midi = hint; inst.tune_src = TUNE_BOTH; }
+            if (hint != midi) {
+                int shift = hint - midi;
+                if (shift < 0) shift = -shift;
+                if (shift <= 12) { midi = hint; inst.tune_src = TUNE_BOTH; }
+                else             { inst.tune_src = TUNE_CONFLICT; }
+            }
         } else if (hint >= 0) {
             inst.tune_src = TUNE_CONFLICT;
         }
@@ -244,6 +267,7 @@ int keys_autotune(void)
 
     z->root = (uint8_t)clampi(midi, 12, 108);
     z->fine = clampf(cents / 100.0f, -1.0f, 1.0f);
+    z->tune_src = inst.tune_src;
     return 0;
 }
 
@@ -524,6 +548,7 @@ static cJSON *keys_preset_save(void)
         cJSON_AddStringToObject(e, "smp", zz->sample);
         cJSON_AddNumberToObject(e, "root", zz->root);
         cJSON_AddNumberToObject(e, "fn", zz->fine);
+        cJSON_AddNumberToObject(e, "ts", zz->tune_src);   // TUNE_* (read-only)
         cJSON_AddNumberToObject(e, "lm", zz->loop_mode);
         cJSON_AddNumberToObject(e, "ls", (double)zz->loop_start);
         cJSON_AddNumberToObject(e, "le", (double)zz->loop_end);
@@ -580,7 +605,9 @@ static void keys_preset_load(const cJSON *node)
     // loads — this is also the path /remote/params uses, which is how the
     // multisample was tested before it had any UI.
     const cJSON *zs = cJSON_GetObjectItemCaseSensitive(node, "zones");
+    bool used_zones = false;
     if (cJSON_IsArray(zs) && cJSON_GetArraySize(zs) > 0) {
+        used_zones = true;
         keys_clear_zones();
         const cJSON *e = NULL;
         cJSON_ArrayForEach(e, zs) {
@@ -608,15 +635,23 @@ static void keys_preset_load(const cJSON *node)
     }
     // load the sample FIRST (it resets loop points), then restore them
     else if ((j = cJSON_GetObjectItemCaseSensitive(node, "smp"))   && cJSON_IsString(j) && j->valuestring[0]) keys_load_zone(j->valuestring);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "root"))  && cJSON_IsNumber(j)) z->root = (uint8_t)j->valueint;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fn"))    && cJSON_IsNumber(j)) z->fine = clampf((float)j->valuedouble, -1.0f, 1.0f);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lm"))    && cJSON_IsNumber(j)) z->loop_mode = (uint8_t)j->valueint;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "ls"))    && cJSON_IsNumber(j)) z->loop_start = (uint32_t)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "le"))    && cJSON_IsNumber(j)) z->loop_end = (uint32_t)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lx"))    && cJSON_IsNumber(j)) z->loop_xfade = (uint32_t)j->valuedouble;
-    if (z->frames) {
-        if (z->loop_end > z->frames) z->loop_end = z->frames;
-        if (z->loop_start >= z->loop_end) z->loop_start = 0;
+    // The flat keys describe ZONE 0 ONLY, and only in the pre-multisample layout.
+    // They must not run after a "zones" array: preset_save writes both, so a
+    // round trip is harmless, but /remote/params is a PARTIAL preset and any
+    // caller sending zones alongside a leftover flat key (a readback edited and
+    // re-posted, which is exactly how the multisample gets driven with no UI yet)
+    // silently loses zone 0's tuning and loop to the legacy copy.
+    if (!used_zones) {
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "root"))  && cJSON_IsNumber(j)) z->root = (uint8_t)j->valueint;
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "fn"))    && cJSON_IsNumber(j)) z->fine = clampf((float)j->valuedouble, -1.0f, 1.0f);
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "lm"))    && cJSON_IsNumber(j)) z->loop_mode = (uint8_t)j->valueint;
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "ls"))    && cJSON_IsNumber(j)) z->loop_start = (uint32_t)j->valuedouble;
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "le"))    && cJSON_IsNumber(j)) z->loop_end = (uint32_t)j->valuedouble;
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "lx"))    && cJSON_IsNumber(j)) z->loop_xfade = (uint32_t)j->valuedouble;
+        if (z->frames) {
+            if (z->loop_end > z->frames) z->loop_end = z->frames;
+            if (z->loop_start >= z->loop_end) z->loop_start = 0;
+        }
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "stf")) && cJSON_IsNumber(j)) {
         float s = (float)j->valuedouble;
