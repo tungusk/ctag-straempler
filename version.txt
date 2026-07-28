@@ -1,1 +1,1 @@
-tape-fxchain-v1-20260726 (FX route pre/post/off, PSRAM recovery + slab GC, reverb/flanger/shimmer click fixes, auspk meter, /reboot)
+dma-glitch-v1-20260727 (I2S DMA 4x96 stops HTTP requests underrunning it, Keys PSRAM ladder, bench capture rig)
