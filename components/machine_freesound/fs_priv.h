@@ -22,6 +22,11 @@ typedef struct {
     char cur_name[24];
     char err[64];
     char last_query[64];         // persisted in the preset
+    volatile unsigned stack_min; // smallest free stack seen in the pipeline task,
+                                 // in BYTES. The pipeline runs two TLS sessions,
+                                 // a cJSON parse and SD writes; when it panicked
+                                 // there was no way to tell a stack overflow from
+                                 // a bad pointer without a serial cable.
 } fs_state_t;
 
 extern fs_state_t fsm;

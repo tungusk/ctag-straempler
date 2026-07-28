@@ -23,6 +23,19 @@
 
 static const char *TAG = "FSND-M";
 #define FS_TMP_RAW "/raw/FSTMP.RAW"
+// THE DOWNLOAD USED TO PANIC THE WHOLE MODULE. This task was 8192*2 = 16384
+// bytes and MEASURED PEAK USAGE IS 28168 — it overflowed its stack every time,
+// took the device down with it, and the reboot made the failure invisible:
+// /fs/state answered "idle" with an empty error because the machine had simply
+// started over (2026-07-28).
+//
+// 40960 leaves ~31% headroom over the measured peak. The peak was identical to
+// the byte across four different sounds, so it is dominated by fixed buffers
+// (TLS session + the MP3 decoder), not by anything the sound controls — but a
+// stack overflow costs a reboot, so the margin is deliberately generous.
+// fs_state.stack_min reports the tightest free stack of the last run, so a
+// change that adds appetite here shows up as a number instead of as a crash.
+#define FS_PIPELINE_STACK (8192 * 5)
 
 fs_state_t fsm;
 
@@ -36,6 +49,15 @@ const char *fs_phase_name(int phase)
         case FS_ERROR:    return "error";
         default:          return "idle";
     }
+}
+
+// Record the tightest the pipeline stack has ever been. uxTaskGetStackHighWaterMark
+// returns the minimum FREE stack in words; a task that reaches 0 does not report
+// it, it dies, so this has to be sampled while things still work.
+static void stack_watch(void)
+{
+    unsigned free_bytes = (unsigned)uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t);
+    if (fsm.stack_min == 0 || free_bytes < fsm.stack_min) fsm.stack_min = free_bytes;
 }
 
 static void set_err(const char *msg)
@@ -59,7 +81,8 @@ int fs_http_get(const char *url, char **out, int max_len)
     if (!client) return -1;
     int len = -1;
     if (esp_http_client_open(client, 0) == ESP_OK) {
-        int content_length = esp_http_client_fetch_headers(client);
+        stack_watch();
+    int content_length = esp_http_client_fetch_headers(client);
         int cap = (content_length > 0 && content_length < max_len) ? content_length : max_len;
         char *buf = heap_caps_malloc(cap + 1, MALLOC_CAP_SPIRAM);
         if (buf) {
@@ -172,6 +195,7 @@ static void fs_pipeline(void *pv)
     bool fmp3_open = false;
 
     fsm.phase = FS_DOWNLOAD;
+    stack_watch();
     fsm.progress = 0;
     wifiWaitForConnected();
 
@@ -235,6 +259,7 @@ static void fs_pipeline(void *pv)
         total += r;
         if (total > FS_MAX_MP3_BYTES) { free(chunk); set_err("mp3 too large"); goto out; }
         if (content_length > 0) fsm.progress = total / (content_length / 100 ? content_length / 100 : 1);
+        stack_watch();
     }
     free(chunk);
     sd_lock_take();
@@ -246,6 +271,7 @@ static void fs_pipeline(void *pv)
     // --- decode to a temp RAW (44.1 kHz only: the decoder does not resample) ---
     fsm.phase = FS_DECODE;
     fsm.progress = 0;
+    stack_watch();
     int channels = 2, samprate = 44100;
     if (decodeMP3FileSync(pool_path, FS_TMP_RAW, &channels, &samprate, decode_progress, NULL) != 0) {
         set_err("decode failed");
@@ -264,6 +290,7 @@ static void fs_pipeline(void *pv)
     // --- install into the library ---
     fsm.phase = FS_INSTALL;
     fsm.progress = 0;
+    stack_watch();
     if (fs_install(FS_TMP_RAW, job->name, channels, root, job->id) != 0) {
         set_err("install failed");
         goto out;
@@ -277,6 +304,7 @@ static void fs_pipeline(void *pv)
              channels == 1 ? "mono>stereo" : "stereo");
 
 out:
+    stack_watch();
     if (fmp3_open) { sd_lock_take(); f_close(&fmp3); sd_lock_give(); }
     if (root) cJSON_Delete(root);
     if (buf) heap_caps_free(buf);
@@ -292,18 +320,23 @@ static int start_job(const char *id, const char *url, const char *name)
     fsm.phase = FS_DOWNLOAD;
     fsm.progress = 0;
     fsm.err[0] = 0;
+    fsm.stack_min = 0;
     strlcpy(fsm.cur_id, id, sizeof(fsm.cur_id));
     strlcpy(fsm.cur_name, name, sizeof(fsm.cur_name));
     fs_job_t *job = calloc(1, sizeof(*job));
-    if (!job) { fsm.busy = false; return -1; }
+    if (!job) { fsm.busy = false; set_err("out of memory"); return -2; }
     strlcpy(job->id, id, sizeof(job->id));
     strlcpy(job->url, url, sizeof(job->url));
     strlcpy(job->name, name, sizeof(job->name));
     // unpinned: file-touching tasks pinned to core 0 cause WiFi audio clicks
-    if (xTaskCreate(fs_pipeline, "fs_pipeline", 8192 * 2, job, 5, NULL) != pdPASS) {
+    if (xTaskCreate(fs_pipeline, "fs_pipeline", FS_PIPELINE_STACK, job, 5, NULL) != pdPASS) {
+        // 40 KB of INTERNAL RAM in one block. Reporting this as "busy" (which is
+        // what a bare -1 becomes at the web layer) would send someone hunting for
+        // a stuck job that does not exist.
         free(job);
         fsm.busy = false;
-        return -1;
+        set_err("no RAM for the download task");
+        return -2;
     }
     return 0;
 }

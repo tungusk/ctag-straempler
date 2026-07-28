@@ -97,8 +97,10 @@ static esp_err_t fs_state_handler(httpd_req_t *req)
 {
     char buf[256];
     snprintf(buf, sizeof(buf),
-             "{\"phase\":\"%s\",\"progress\":%d,\"id\":\"%s\",\"name\":\"%s\",\"err\":\"%s\"}",
-             fs_phase_name(fsm.phase), fsm.progress, fsm.cur_id, fsm.cur_name, fsm.err);
+             "{\"phase\":\"%s\",\"progress\":%d,\"id\":\"%s\",\"name\":\"%s\","
+             "\"err\":\"%s\",\"stack_min\":%u}",
+             fs_phase_name(fsm.phase), fsm.progress, fsm.cur_id, fsm.cur_name,
+             fsm.err, fsm.stack_min);
     return send_json_status(req, "200 OK", buf);
 }
 
@@ -121,8 +123,11 @@ static esp_err_t fs_get_handler(httpd_req_t *req)
     name[w] = 0;
     if (!name[0]) snprintf(name, sizeof(name), "FS%s", id);
 
-    if (fs_get_start(id, name) != 0)
+    int r = fs_get_start(id, name);
+    if (r == -1)
         return send_json_status(req, "409 Conflict", "{\"error\":\"busy\"}");
+    if (r != 0)   // could not start at all — fsm.err says why
+        return send_json_status(req, "503 Service Unavailable", "{\"error\":\"cannot start\"}");
     return send_json_status(req, "200 OK", "{\"ok\":true}");
 }
 
@@ -146,8 +151,11 @@ static esp_err_t fs_fetch_handler(httpd_req_t *req)
     if (!name[0])
         return send_json_status(req, "400 Bad Request", "{\"error\":\"bad name\"}");
 
-    if (fs_fetch_start(url, name) != 0)
+    int r = fs_fetch_start(url, name);
+    if (r == -1)
         return send_json_status(req, "409 Conflict", "{\"error\":\"busy\"}");
+    if (r != 0)
+        return send_json_status(req, "503 Service Unavailable", "{\"error\":\"cannot start\"}");
     return send_json_status(req, "200 OK", "{\"ok\":true}");
 }
 

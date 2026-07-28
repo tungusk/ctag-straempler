@@ -7,6 +7,7 @@
 #include "esp_vfs_fat.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_timer.h"    // esp_timer_get_time() — uptime in /sysinfo
 #include "ff.h"
 #include <esp_http_server.h>
 #include "ui_events.h"
@@ -1046,17 +1047,41 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
     unsigned ifree = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     unsigned ibig  = (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
 
-    char buf[720];
+    // WHY THE MODULE LAST RESET, and how long it has been up. Without this a
+    // crash-and-reboot is INVISIBLE from the network: the device answers again a
+    // few seconds later looking perfectly healthy, and whatever operation killed
+    // it just appears to have quietly done nothing. That is exactly how the
+    // Freesound download hid for so long (2026-07-28) — it panics mid-download,
+    // and /fs/state comes back "idle" with an empty error because the machine
+    // simply started over.
+    const char *rr;
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:  rr = "poweron";  break;
+        case ESP_RST_SW:       rr = "sw";       break;   // esp_restart (our /reboot, OTA)
+        case ESP_RST_PANIC:    rr = "PANIC";    break;   // crash: load/store fault, assert, abort
+        case ESP_RST_INT_WDT:  rr = "INT_WDT";  break;
+        case ESP_RST_TASK_WDT: rr = "TASK_WDT"; break;   // a task hogged the CPU
+        case ESP_RST_WDT:      rr = "WDT";      break;
+        case ESP_RST_BROWNOUT: rr = "BROWNOUT"; break;   // power, not software
+        case ESP_RST_DEEPSLEEP:rr = "deepsleep";break;
+        case ESP_RST_EXT:      rr = "ext";      break;
+        default:               rr = "unknown";  break;
+    }
+    unsigned uptime_s = (unsigned)(esp_timer_get_time() / 1000000ULL);
+
+    char buf[820];
     snprintf(buf, sizeof(buf),
              "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu,\"remote\":%d,"
              "\"version\":\"%s\",\"blisten\":%d,\"blout\":%d,"
              "\"psram\":{\"free\":%u,\"big\":%u,\"total\":%u},"
              "\"iram\":{\"free\":%u,\"big\":%u},"
+             "\"uptime\":%u,\"reset\":\"%s\","
              "\"time\":%ld,\"tz\":%d,\"machines\":[%s]}",
              ip, (unsigned long long)freeb, (unsigned long long)totb,
              s_remote_on ? 1 : 0,
              STRAMPLER_FW_VERSION, beatlisten_get_mode(), beatlisten_get_out(),
              pfree, pbig, ptot, ifree, ibig,
+             uptime_s, rr,
              (long)time(NULL), tzs, machines);
     send_json(req, buf);
     return ESP_OK;
