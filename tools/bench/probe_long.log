@@ -25,3 +25,45 @@ patch: smp 'FLATA4' fxsl [2, 0] rv 2  rel 0.28
   block 22 (gate900): 242 notes so far, hits g200=6 g900=11
   block 23 (gate200): 253 notes so far, hits g200=7 g900=11
   block 24 (gate900): 264 notes so far, hits g200=7 g900=12
+  block 25 (gate200): 275 notes so far, hits g200=9 g900=12
+  block 26 (gate900): 286 notes so far, hits g200=9 g900=13
+  block 27 (gate200): 297 notes so far, hits g200=10 g900=13
+  block 28 (gate900): 308 notes so far, hits g200=10 g900=13
+  block 29 (gate200): 319 notes so far, hits g200=10 g900=13
+  block 30 (gate900): 330 notes so far, hits g200=10 g900=14
+  block 31 (gate200): 341 notes so far, hits g200=10 g900=14
+  block 32 (gate900): 352 notes so far, hits g200=10 g900=15
+  block 33 (gate200): 363 notes so far, hits g200=10 g900=15
+  block 34 (gate900): 374 notes so far, hits g200=10 g900=17
+  block 35 (gate200): 385 notes so far, hits g200=10 g900=17
+  block 36 (gate900): 396 notes so far, hits g200=10 g900=21
+  block 37 (gate200): 407 notes so far, hits g200=10 g900=21
+  block 38 (gate900): 418 notes so far, hits g200=10 g900=24
+  block 39 (gate200): 429 notes so far, hits g200=12 g900=24
+  block 40 (gate900): 440 notes so far, hits g200=12 g900=24
+  block 41 (gate200): 451 notes so far, hits g200=13 g900=24
+  block 42 (gate900): 462 notes so far, hits g200=13 g900=27
+  block 43 (gate200): 473 notes so far, hits g200=14 g900=27
+  block 44 (gate900): 484 notes so far, hits g200=14 g900=29
+  block 45 (gate200): 495 notes so far, hits g200=14 g900=29
+  block 46 (gate900): 506 notes so far, hits g200=14 g900=30
+  block 47 (gate200): 517 notes so far, hits g200=15 g900=30
+  block 48 (gate900): 528 notes so far, hits g200=15 g900=32
+  block 49 (gate200): 539 notes so far, hits g200=16 g900=32
+  block 50 (gate900): 550 notes so far, hits g200=16 g900=33
+  block 51 (gate200): 561 notes so far, hits g200=17 g900=33
+  block 52 (gate900): 572 notes so far, hits g200=17 g900=33
+  block 53 (gate200): 583 notes so far, hits g200=18 g900=33
+  block 54 (gate900): 594 notes so far, hits g200=18 g900=33
+  block 55 (gate200): 605 notes so far, hits g200=18 g900=33
+  block 56 (gate900): 616 notes so far, hits g200=18 g900=36
+
+=== RESULT ===
+gate200  gate 200 ms   308 notes, 18 events (5.8%)
+         t-onset  median 0.233  mean 0.254  min 0.075  max 0.434
+         all: 0.075 0.084 0.090 0.101 0.181 0.182 0.183 0.184 0.200 0.265 0.322 0.336 0.373 0.373 0.390 0.392 0.410 0.434
+gate900  gate 900 ms   308 notes, 36 events (11.7%)
+         t-onset  median 0.607  mean 0.596  min 0.065  max 1.207
+         all: 0.065 0.077 0.100 0.142 0.163 0.180 0.202 0.217 0.229 0.245 0.276 0.308 0.441 0.443 0.474 0.481 0.529 0.593 0.621 0.687
+
+wrote probe_long.json
