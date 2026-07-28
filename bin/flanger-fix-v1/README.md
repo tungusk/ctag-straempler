@@ -96,9 +96,12 @@ dry. Only analog capture sees it.
 
 ## Known open
 
-- **Keys' sustain loop does not loop.** With `lm=1`, `ls=0`, `le=88200` and the
-  gate verifiably held, playback still stops at the end of the sample. Found
-  while trying to sustain a note for measurement; not yet diagnosed.
+- ~~Keys' sustain loop does not loop~~ — **WRONG, retracted.** The loop is fully
+  built (engine wrap, seam crossfade, Setup rows, preset persistence) and works:
+  with `lm=1` the output VU stays alive indefinitely, with `lm=0` it stops after
+  one sample length. The original test was contaminated by the soft-gate bug
+  below — the gate released at ~2 s, so the note stopped and looked like a
+  failed loop.
 - **Keys stops a note dead when the sample runs out** — the voice is zeroed with
   no fade once `pos >= frames`, so any sample not ending at zero clicks.
 - **Long soft gates release early, intermittently** — a 30 s `/remote/trig` held
