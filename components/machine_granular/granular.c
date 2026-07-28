@@ -23,11 +23,44 @@ static inline float rng_uni(void)   // 0..1
     return (float)(gr.rng >> 8) / (float)(1u << 24);
 }
 
+// CUBIC read, matching Keys' cubic_read. Linear interpolation is dull and
+// aliased on pitch-shifted reads and gets worse the further `inc` moves from
+// 1.0 — i.e. exactly when the cloud is played chromatically, which is where
+// this machine is heading (tuned texture, V/oct from a window).
+static inline float gr_cubic(const int16_t *b, uint32_t n, double pos)
+{
+    long i1 = (long)pos;
+    float t = (float)(pos - (double)i1);
+    long i0 = i1 - 1, i2 = i1 + 1, i3 = i1 + 2;
+    if (i0 < 0) i0 = 0;
+    if (i1 >= (long)n) i1 = (long)n - 1;
+    if (i2 >= (long)n) i2 = (long)n - 1;
+    if (i3 >= (long)n) i3 = (long)n - 1;
+    float y0 = b[i0], y1 = b[i1], y2 = b[i2], y3 = b[i3];
+    float a0 = -0.5f * y0 + 1.5f * y1 - 1.5f * y2 + 0.5f * y3;
+    float a1 =        y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+    float a2 = -0.5f * y0            + 0.5f * y2;
+    return ((a0 * t + a1) * t + a2) * t + y1;
+}
+
 static void spawn_grain(void)
 {
     grain_t *g = NULL;
     for (int i = 0; i < GR_GRAINS; i++) if (!gr.grains[i].active) { g = &gr.grains[i]; break; }
-    if (!g) return;   // pool full — drop this grain
+    // POOL FULL: steal the grain nearest the end of its window rather than
+    // dropping this one. Overlap is density x grain length, so 40 grains/s at
+    // 500 ms wants 20 voices against a pool of 16 — past that the old code
+    // silently punched holes in the cloud, which is a large part of why it did
+    // not sound smooth. Stealing the most-finished grain costs the tail of a
+    // grain already fading under its own window, which is the least audible
+    // thing available.
+    if (!g) {
+        float worst = -1.0f;
+        for (int i = 0; i < GR_GRAINS; i++) {
+            if (gr.grains[i].wphase > worst) { worst = gr.grains[i].wphase; g = &gr.grains[i]; }
+        }
+        if (!g) return;
+    }
 
     uint32_t glen = (uint32_t)gr.grain_ms * GR_RATE / 1000;
     if (glen < 32) glen = 32;
@@ -129,10 +162,7 @@ static void granular_process(int32_t out[MACHINE_BLOCK],
         for (int i = 0; i < GR_GRAINS; i++) {
             grain_t *g = &gr.grains[i];
             if (!g->active) continue;
-            uint32_t i0 = (uint32_t)g->pos;
-            uint32_t i1 = i0 + 1; if (i1 >= gr.len) i1 = i0;
-            float frac = (float)(g->pos - (double)i0);
-            float s = (float)gr.buf[i0] + ((float)gr.buf[i1] - (float)gr.buf[i0]) * frac;
+            float s = gr_cubic(gr.buf, gr.len, g->pos);
             float win = s_hann[(int)g->wphase & 0xFF];
             s *= win;
             l += s * g->panL;
