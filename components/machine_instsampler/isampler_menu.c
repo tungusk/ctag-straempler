@@ -67,9 +67,18 @@ static unsigned s_sig_dials = 0, s_sig_adsr = 0, s_sig_wave = 0;
 static int s_last_ph = -1;
 
 // two-level encoder nav (slicer idiom): browse on-screen elements, click in to
-// edit, long-press to escape. Elements: 0=Sample, 1..4 = the four dials
-// (start/cut/res/env>f), 5..8 = ADSR points (A/D/S/R).
-#define KLIVE_N 9
+// edit, long-press to escape. Named rather than numbered for the same reason the
+// Setup rows are — these indices appear in four places and a literal in one of
+// them silently edits the wrong thing.
+enum {
+    KL_SAMPLE = 0,                              // the waveform / file name
+    KL_START, KL_CUT, KL_RES, KL_ENVCUT,        // the four dials
+    KL_ATK, KL_DEC, KL_SUS, KL_REL,             // the ADSR points
+    KL_LOOPS, KL_LOOPE,                         // the loop-window edges
+    KL_N
+};
+#define KLIVE_N KL_N
+static inline bool kl_is_loop(int e) { return e == KL_LOOPS || e == KL_LOOPE; }
 static int  s_live_sel  = 1;      // focused element (start on the first dial)
 static bool s_live_edit = false;  // false = browsing, true = editing the focus
 // focus code for a drawn element: 0 none, 1 selected(browse), 2 editing
@@ -95,7 +104,21 @@ static void draw_header(void)
     // In a multisample the strip below shows ONE zone, so say which — otherwise
     // the waveform and loop box silently belong to something you cannot identify.
     char tag[32];
-    if (inst.nzones > 1)
+    if (kl_is_loop(s_live_sel)) {
+        // placing a loop edge by eye still wants the number, and the file name is
+        // the least useful thing on screen at that moment
+        is_zone_t *lz = ks_z();
+        unsigned a = (unsigned)((uint64_t)lz->loop_start * 1000 / IS_RATE);
+        unsigned b = (unsigned)((uint64_t)lz->loop_end * 1000 / IS_RATE);
+        if (lz->loop_mode != LOOP_FWD)
+            snprintf(tag, sizeof(tag), "loop OFF %u-%u", a, b);
+        else if (s_live_sel == KL_LOOPS)
+            snprintf(tag, sizeof(tag), "loop [%u-%u ms", a, b);
+        else
+            snprintf(tag, sizeof(tag), "loop %u-%u] ms", a, b);
+        _fg = (color_t){160, 240, 255};
+    }
+    else if (inst.nzones > 1)
         snprintf(tag, sizeof(tag), "%d/%d %s", inst.edit_zone + 1, inst.nzones,
                  ks_z()->sample[0] ? ks_z()->sample : "(none)");
     else
@@ -122,9 +145,25 @@ static void wave_col(int x)
     int cy = wy + L_WH / 2;
     if (h > 0) TFT_drawLine(x, cy - h, x, cy + h, wf_color());
     TFT_drawLine(x, cy, x, cy, WF_ORIG);   // keep the origin line continuous under the playhead sweep
-    if (ks_z()->loop_mode == LOOP_FWD && ks_z()->frames) {
-        if (x == loop_x(ks_z()->loop_start) || x == loop_x(ks_z()->loop_end))
-            TFT_drawLine(x, wy, x, wy + L_WH, LOOP_COL);
+    // MUST match draw_wave's edge rule, including the focus colours and the
+    // second handle column — this path repaints one column behind the moving
+    // playhead, so any disagreement shows up as the sweep quietly erasing a bit
+    // of the edge you are currently dragging.
+    bool loop_on = (ks_z()->loop_mode == LOOP_FWD);
+    if ((loop_on || kl_is_loop(s_live_sel)) && ks_z()->frames) {
+        int lsx = loop_x(ks_z()->loop_start), lex = loop_x(ks_z()->loop_end);
+        for (int e = 0; e < 2; e++) {
+            int ex = e ? lex : lsx;
+            int elem = e ? KL_LOOPE : KL_LOOPS;
+            int f = klive_focus(elem);
+            int ex2 = (elem == KL_LOOPS) ? ex + 1 : ex - 1;
+            if (x != ex && !(f && x == ex2)) continue;
+            color_t c = !loop_on ? (color_t){45, 80, 95}
+                      : f == 2  ? (color_t){130, 255, 150}
+                      : f == 1  ? (color_t){160, 240, 255}
+                                : LOOP_COL;
+            TFT_drawLine(x, wy, x, wy + L_WH, c);
+        }
     }
 }
 
@@ -170,10 +209,30 @@ static void draw_wave(void)
     }
     // white zero/origin reference line across the strip
     TFT_drawLine(L_WX, cy, L_WX + L_WW - 1, cy, WF_ORIG);
-    if (ks_z()->loop_mode == LOOP_FWD) {
+    // Loop edges. Drawn when looping is ON, and ALSO while a loop edge is the
+    // encoder focus even if it is off — otherwise browsing to it shows nothing at
+    // all and you would be placing an invisible marker. Off + focused draws dim;
+    // clicking in to edit is what turns looping on (see the handler).
+    bool loop_on = (ks_z()->loop_mode == LOOP_FWD);
+    if (loop_on || kl_is_loop(s_live_sel)) {
         int lsx = loop_x(ks_z()->loop_start), lex = loop_x(ks_z()->loop_end);
-        TFT_drawLine(lsx, wy, lsx, wy + L_WH, LOOP_COL);
-        TFT_drawLine(lex, wy, lex, wy + L_WH, LOOP_COL);
+        for (int e = 0; e < 2; e++) {
+            int ex = e ? lex : lsx;
+            int elem = e ? KL_LOOPE : KL_LOOPS;
+            int f = klive_focus(elem);
+            color_t c = !loop_on ? (color_t){45, 80, 95}          // off: dim
+                      : f == 2  ? (color_t){130, 255, 150}        // editing: green
+                      : f == 1  ? (color_t){160, 240, 255}        // selected: bright
+                                : LOOP_COL;
+            TFT_drawLine(ex, wy, ex, wy + L_WH, c);
+            // a focused edge gets a second column so it reads as a grabbed handle
+            // rather than as one more 1 px line among the waveform
+            if (f) {
+                int ex2 = (elem == KL_LOOPS) ? ex + 1 : ex - 1;
+                if (ex2 >= L_WX && ex2 < L_WX + L_WW)
+                    TFT_drawLine(ex2, wy, ex2, wy + L_WH, c);
+            }
+        }
     }
     s_last_ph = -1;
 }
@@ -342,6 +401,35 @@ static void klive_edit(int dir)
         case 6: inst.dec = clampf(inst.dec + d * 0.01f, 0.001f, 2.0f); break;
         case 7: inst.sus = clampf(inst.sus + d * 0.05f, 0.0f, 1.0f); break;
         case 8: inst.rel = clampf(inst.rel + d * 0.02f, 0.001f, 3.0f); break;
+        case KL_LOOPS: case KL_LOOPE: {
+            is_zone_t *z = ks_z();
+            if (!z->frames) break;
+            // ONE DETENT ~= ONE PIXEL of the strip. This is the by-eye control —
+            // the fixed 10 ms step Setup uses is 0.13 px on a 22 s sample, so the
+            // box would not visibly move however long you turned. Floored at ~5 ms
+            // so a very short sample does not become impossible to place finely.
+            long step = (long)(z->frames / (uint32_t)L_WW);
+            long floor_step = IS_RATE / 200;
+            if (step < floor_step) step = floor_step;
+            if (s_live_sel == KL_LOOPS) {
+                long v = (long)z->loop_start + dir * step;
+                if (v < 0) v = 0;
+                if (v > (long)z->loop_end - 64) v = (long)z->loop_end - 64;
+                if (v < 0) v = 0;
+                v = (long)keys_snap_zero((uint32_t)v);       // declick the seam
+                if (v >= (long)z->loop_end) v = (long)z->loop_end - 64;
+                if (v < 0) v = 0;
+                z->loop_start = (uint32_t)v;
+            } else {
+                long v = (long)z->loop_end + dir * step;
+                if (v < (long)z->loop_start + 64) v = (long)z->loop_start + 64;
+                if (v > (long)z->frames) v = (long)z->frames;
+                v = (long)keys_snap_zero((uint32_t)v);
+                if (v > (long)z->frames) v = (long)z->frames;
+                if (v <= (long)z->loop_start) v = (long)z->loop_start + 64;
+                z->loop_end = (uint32_t)v;
+            }
+        } break;
     }
     if (s_live_sel >= 1 && s_live_sel <= 4) inst.knob_ctx = -1;   // re-arm takeover
 }
@@ -395,7 +483,14 @@ static int keys_live_handler(int it_id, int event, void *ev_data)
             klive_repaint();
             break;
         case EV_SHORT_PRESS:
-            if (s_live_sel == 0) return M_ISMP_LOAD;   // Sample element -> browser
+            if (s_live_sel == KL_SAMPLE) return M_ISMP_LOAD;   // Sample -> browser
+            // Clicking INTO a loop edge turns looping on. Browsing to it only
+            // shows you where the window sits (dim); committing to edit it is an
+            // unambiguous statement that you want a loop, and without this the
+            // control would silently do nothing until you went to Setup to arm it.
+            // Reversible from Setup > Loop Mode, and the box appearing is the cue.
+            if (!s_live_edit && kl_is_loop(s_live_sel) && ks_z()->frames)
+                ks_z()->loop_mode = LOOP_FWD;
             s_live_edit = !s_live_edit;                // click in / out of edit
             klive_repaint();
             break;
