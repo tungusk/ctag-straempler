@@ -42,6 +42,28 @@ Use /screenshot for eye-tests instead of guessing at UI state.
 
 **Audio block size:** 64 samples per I2S DMA block at 44100 Hz (~1.45ms per audio loop tick).
 
+**I2S DMA depth — `dma_buf_len`, NEVER `dma_buf_count` (2026-07-27).** The DMA
+shipped with `4 x 32 = 128 frames = 2.9 ms` of slack, which is less than one HTTP
+request needs: measured on the analog output, **~28% of requests to the module
+produced an audible discontinuity**, and with the web UI polling `/status` twice
+a second that is a glitch every ~1.6 s. A ping flood does NOT do it (so it is not
+the radio, and not the size of the TX burst) — it is httpd's request handling.
+Now `4 x 96 = 8.7 ms`, which cuts the glitch rate under a 2 Hz poll from 0.644/s
+to 0.078/s. **Reaching the same depth as `12 x 32` instead makes KEYS AUDIBLY
+SCRATCHY** (its own slew ceiling goes 0.027 -> 0.142 on a sustained note), so the
+harm is the DESCRIPTOR COUNT, not the buffering; `4 x 192` and `8 x 32` are also
+clean. **Validate any change here ON KEYS** — it streams its sample from PSRAM
+and is the host that shows this. `tools/bench/sweep_dma.py` patches, builds,
+flashes and measures both metrics per configuration in one command.
+
+**`aus` / `auspk` / `ausgap` CANNOT see a DMA underrun.** `i2s_write` uses
+`portMAX_DELAY`, so after the hardware runs dry the DMA is empty, the write
+returns immediately and the audio loop simply catches up — the block-to-block
+interval barely moves even though audio was lost. All three meters looked
+innocent through every one of the glitches above. A meter that times the TASK
+cannot see the HARDWARE running dry; after deepening the buffer `ausgap` reads
+higher, which is lateness being absorbed rather than dropped.
+
 ## Code rules
 
 **Sample pool formats (2026-07-13)** — the pool speaks THREE containers via
@@ -504,7 +526,19 @@ Sampler3 SHIPPED 2026-07-12.
   with `html/convert.sh` (`xxd -i` + sed) or the change won't ship.
 - **Endpoints** (`rest-api.c`): `/status` (hot 500ms poll: machine, rec, v0/v1,
   8 CV, trig bits, `aus` = audio-loop cost in µs — 1450 µs ≈ 100% of the
-  block budget, the load meter), `/screenshot` (shadow-FB BMP — see the TFT
+  block budget, the load meter; `auspk` = peak-hold of the same, cleared on
+  read, which catches the single overrunning block a click actually is; `ausgap`
+  = peak block-to-block INTERVAL, catching the task coming back LATE rather than
+  running long; `sav` = duration + count of AUTOSAVE.JSN writes, which cost
+  ~64 ms each; `fxpk` = peak inside the FX rack BEFORE the soft limiter, since
+  the output VU reads the limiter's OUTPUT and a limiter working flat out looks
+  like a moderate level). **`/status?fx=1` additionally returns per-stage FX
+  meters** (`fxst.pk`/`fxst.jp` at rack input / after FX1 / after FX2 / chain
+  end, plus `rv.wpk` and a NaN-guard count) — these are ARMED ON DEMAND because
+  measuring is per-sample work in the audio path, and a plain `/status` must not
+  arm them or the web UI would hold the instrumentation on forever.
+  **Never poll while judging audio**: 4 Hz polling pushed peak block cost to
+  1495-1517 µs and was audible. `/screenshot` (shadow-FB BMP — see the TFT
   section; first call 503 Warming), `/peaks?name=&n=` (n peak bytes for web
   waveform thumbnails, cost independent of file size), `/bcast/enable?on=` +
   `/bcast/state` (the :8000 broadcast, off by default), `/ws/midi` +
@@ -600,6 +634,26 @@ Sampler3 SHIPPED 2026-07-12.
   (broadcast-lazy RAM fix), `wav-v1`, `looper-v3`, `streaming-slicer-v1`.
   `bin/<name>/flash.sh` returns to any known-good state.
   Matching dated git tags.
+- **Bench capture rig — `tools/bench/`** (2026-07-27). Records the module's
+  ANALOG output through an audio interface (`sox -t coreaudio`) and drives it
+  over REST. Use it in preference to `/bounce` or the `:8000` broadcast, both of
+  which put load INSIDE the thing under test (a bounce's SD writes alone push
+  peak block cost to 1447 µs of a 1450 µs budget on a DRY case).
+  `calib.py` once after patching both outputs (and `--verify` later — it fails if
+  the interface gain moved); `listen.py` to capture while a human plays;
+  `detect.py` to find discontinuities; `soak.py` to hunt unattended;
+  `sweep_dma.py` for I2S geometry. The detector's threshold comes from the
+  material's own slew ceiling, not a guess, and is validated against a labelled
+  capture kept at `~/ctag-straempler-backups/labeled-captures/`.
+  **Gotchas, all learned the hard way:** sox must write `-t wavpcm` (its default
+  coreaudio output is WAVE_FORMAT_EXTENSIBLE and python's `wave` refuses it);
+  opening and closing the device every 30 s for a day WEDGES CoreAudio's link to
+  the interface (sox starts, reports 0% input, records nothing, never exits —
+  only a physical replug clears it), so `capture_blocking` detects that and cools
+  down between opens; long captures wedge more readily than short ones, so work
+  in ~30 s segments; and assert a take is not silent before analysing it, because
+  silence still yields a fundamental, a modulation depth and a click count, all
+  of them garbage.
 - **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
   (complete repo, `git clone`-able) + a copy of `bin/`. Refresh with
   `git bundle create ~/ctag-straempler-backups/ctag-straempler-$(date +%Y%m%d).bundle --all`.
