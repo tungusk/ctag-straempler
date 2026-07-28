@@ -59,32 +59,87 @@ const char *const keys_mtx_labels[ISM_N] = {
 // z->cap so sample_load never overruns what we actually got.
 static const uint32_t is_cap_ladder[] = { IS_MAX_FRAMES, 750000u, 500000u, 250000u, 120000u };
 
-int keys_load_zone(const char *name)
+// Allocate the shared arena once, walking the ladder. Every zone lives inside
+// it (see instsampler_priv.h for why one allocation rather than one per zone).
+static bool arena_ensure(void)
 {
-    is_zone_t *z = &inst.zone[0];
+    if (inst.arena) return true;
+    for (int i = 0; i < (int)(sizeof is_cap_ladder / sizeof is_cap_ladder[0]); i++) {
+        inst.arena = heap_caps_malloc((size_t)is_cap_ladder[i] * sizeof(int16_t),
+                                      MALLOC_CAP_SPIRAM);
+        if (inst.arena) { inst.arena_cap = is_cap_ladder[i]; break; }
+    }
+    if (!inst.arena) {
+        inst.arena_cap = 0;
+        snprintf(inst.load_err, sizeof(inst.load_err), "no PSRAM");
+        return false;
+    }
+    if (inst.arena_cap < IS_MAX_FRAMES)
+        ESP_LOGW("keys", "sample arena fell back to %u frames (%.1f s) — PSRAM fragmented",
+                 (unsigned)inst.arena_cap, (double)inst.arena_cap / IS_RATE);
+    return true;
+}
+
+void keys_clear_zones(void)
+{
+    inst.loading = true;
+    for (int i = 0; i < IS_MAX_ZONES; i++) {
+        inst.zone[i].buf = NULL;
+        inst.zone[i].frames = 0;
+        inst.zone[i].cap = 0;
+        inst.zone[i].sample[0] = 0;
+    }
+    inst.arena_used = 0;
+    inst.nzones = 0;
+    inst.edit_zone = 0;
+    inst.voice[0].active = false;
+    inst.voice[0].env_stage = ENV_IDLE;
+    inst.loading = false;
+}
+
+// Load into zone `zi`, or APPEND when zi < 0. Appending is the multisample
+// path; zi == 0 with nzones <= 1 is the plain sampler and behaves as it always
+// did. Re-loading an EXISTING zone in place is only possible when it is the
+// last one — an arena cannot free its middle — so anything else rebuilds.
+int keys_load_zone_at(int zi, const char *name)
+{
     if (!name || !name[0]) return -1;
     inst.load_err[0] = 0;
-    if (!z->buf) {
-        for (int i = 0; i < (int)(sizeof is_cap_ladder / sizeof is_cap_ladder[0]); i++) {
-            z->buf = heap_caps_malloc((size_t)is_cap_ladder[i] * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-            if (z->buf) { z->cap = is_cap_ladder[i]; break; }
-        }
-        if (!z->buf) {
-            z->cap = 0;
-            snprintf(inst.load_err, sizeof(inst.load_err), "no PSRAM");
+    if (!arena_ensure()) return -1;
+
+    bool append = (zi < 0) || (zi >= inst.nzones);
+    if (append) {
+        if (inst.nzones >= IS_MAX_ZONES) {
+            snprintf(inst.load_err, sizeof(inst.load_err), "8 zones max");
             return -1;
         }
-        if (z->cap < IS_MAX_FRAMES)
-            ESP_LOGW("keys", "sample buffer fell back to %u frames (%.1f s) — PSRAM fragmented",
-                     (unsigned)z->cap, (double)z->cap / IS_RATE);
+        zi = inst.nzones;
+    } else if (zi == inst.nzones - 1) {
+        inst.arena_used -= inst.zone[zi].frames;   // last zone: reuse its space
+    } else {
+        snprintf(inst.load_err, sizeof(inst.load_err), "clear zones first");
+        return -1;
     }
+
+    uint32_t room = (inst.arena_cap > inst.arena_used) ? inst.arena_cap - inst.arena_used : 0;
+    if (room < 4096) {
+        snprintf(inst.load_err, sizeof(inst.load_err), "arena full");
+        return -1;
+    }
+    is_zone_t *z = &inst.zone[zi];
+    z->buf = inst.arena + inst.arena_used;
+    z->cap = room;
+
     inst.loading = true;
     uint32_t n = sample_load(name, z->buf, z->cap, true);   // mono, DMA-staged, sd_lock
     if (n < 2) {
-        z->frames = 0; z->sample[0] = 0; inst.loading = false;
+        z->frames = 0; z->sample[0] = 0; z->buf = NULL; inst.loading = false;
         snprintf(inst.load_err, sizeof(inst.load_err), "load failed");
         return -1;
     }
+    inst.arena_used += n;
+    if (zi >= inst.nzones) inst.nzones = zi + 1;
+    inst.edit_zone = zi;
     z->frames = n;
     strlcpy(z->sample, name, sizeof(z->sample));
     z->root = (uint8_t)inst.base_note;
@@ -111,6 +166,31 @@ int keys_load_zone(const char *name)
     return 0;
 }
 
+// The old single-sample entry point: REPLACE everything with one zone. Kept so
+// the sample browser and every existing preset behave exactly as before —
+// picking a sample from the browser should not quietly build a multisample.
+int keys_load_zone(const char *name)
+{
+    keys_clear_zones();
+    return keys_load_zone_at(-1, name);
+}
+
+// Which zone plays this note: the one whose ROOT is nearest, in semitones.
+// Deliberately no editable key ranges — with auto-tune writing a root per zone
+// the map builds itself, and nearest-root degrades gracefully at the edges
+// instead of leaving silent gaps the way explicit ranges do.
+int keys_zone_for_note(float note)
+{
+    int best = 0;
+    float bestd = 1e9f;
+    for (int i = 0; i < inst.nzones; i++) {
+        if (!inst.zone[i].frames) continue;
+        float d = fabsf(note - ((float)inst.zone[i].root + inst.zone[i].fine));
+        if (d < bestd) { bestd = d; best = i; }
+    }
+    return best;
+}
+
 // Auto-tune: detect the loaded sample's fundamental and write it into the
 // zone's root + fine so the sample plays IN TUNE across the keyboard (root is
 // the whole semitone, fine the cents remainder — root alone can only ever get
@@ -120,7 +200,7 @@ int keys_load_zone(const char *name)
 // DISCARDED rather than applied — a bad auto-tune is worse than none.
 int keys_autotune(void)
 {
-    is_zone_t *z = &inst.zone[0];
+    is_zone_t *z = &inst.zone[inst.edit_zone < inst.nzones ? inst.edit_zone : 0];
     inst.tune_hz = 0.0f;
     inst.tune_conf = 0.0f;
     inst.tune_src = TUNE_NONE;
@@ -195,9 +275,13 @@ static esp_err_t keys_start(void)
     inst.start_frac = 0.0f;
     inst.knob_ctx = -1;           // force a knob recapture on the first block
     cvmtx_init(&inst.mtx, keys_mtx_labels, ISM_N);   // matrix off, floors armed
-    inst.zone[0].root = 48;
-    inst.zone[0].loop_mode = LOOP_FWD;
-    inst.zone[0].loop_xfade = 220;
+    for (int i = 0; i < IS_MAX_ZONES; i++) {
+        inst.zone[i].root = 48;
+        inst.zone[i].loop_mode = LOOP_FWD;
+        inst.zone[i].loop_xfade = 220;
+    }
+    inst.nzones = 0;
+    inst.edit_zone = 0;
     svf_reset(&inst.voice[0].flt);
     fxfilter_init(&inst.filt);     // FX rack filter bricks
     fxfilter_init(&inst.band);
@@ -214,9 +298,14 @@ static void keys_stop(void)
     // cost is that getting it back depends on PSRAM not having fragmented in the
     // meantime, which is why keys_load_zone walks a ladder instead of demanding
     // the full size.
-    if (inst.zone[0].buf) { heap_caps_free(inst.zone[0].buf); inst.zone[0].buf = NULL; }
-    inst.zone[0].cap = 0;
-    inst.zone[0].frames = 0;
+    if (inst.arena) { heap_caps_free(inst.arena); inst.arena = NULL; }
+    inst.arena_cap = inst.arena_used = 0;
+    for (int i = 0; i < IS_MAX_ZONES; i++) {
+        inst.zone[i].buf = NULL;
+        inst.zone[i].cap = 0;
+        inst.zone[i].frames = 0;
+    }
+    inst.nzones = 0;
     reverb_free(&inst.rv);
     fxdelay_free(&inst.dly);
     flanger_free(&inst.flg);
@@ -227,7 +316,6 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
                          const machine_io_t *io)
 {
     (void)in;
-    is_zone_t  *z = &inst.zone[0];
     is_voice_t *v = &inst.voice[0];
 
     static cvmed_t med[8];
@@ -269,6 +357,15 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     }
     if (inst.quantize) note = roundf(note);
     note = clampf(note, 0.0f, 127.0f);
+
+    // GATE FIRST, so a note-on can choose its zone before anything reads one.
+    // The zone is latched for the whole note (see is_voice_t.zone) — glide or a
+    // drifting CV must not swap the buffer under a live read cursor.
+    bool g = !(io->trig_level & 1) || audio_midi_gate();
+    if (g && !v->gate) v->zone = keys_zone_for_note(note);
+    if (v->zone < 0 || v->zone >= IS_MAX_ZONES) v->zone = 0;
+    is_zone_t *z = &inst.zone[v->zone];
+    if (!z->frames && inst.zone[0].frames) z = &inst.zone[0];
     inst.note_disp = note;
 
     cvmtx_track(&inst.mtx, cvm);                      // ch1/2 idle-floor follow
@@ -309,9 +406,8 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
         if (le <= ls) le = ls + 64;
     }
 
-    // gate on TR1 (active low; teleremote soft trigs already merged)
-    bool g = !(io->trig_level & 1) || audio_midi_gate();
-    if (g && !v->gate) {                              // note on (retrigger)
+    // note on (retrigger) — gate was read above, before the zone was chosen
+    if (g && !v->gate) {
         v->env_stage = ENV_ATK;
         v->active = true;
         float sf = clampf(inst.start_frac + m_start, 0.0f, 0.99f);
@@ -417,6 +513,23 @@ static cJSON *keys_preset_save(void)
     cJSON_AddNumberToObject(o, "gld", inst.glide);
     cJSON_AddNumberToObject(o, "lvl", inst.level);
     fxrack_save(&inst_rk, o);   // slots + every effect param (shared FX rack)
+    // ZONES array. The legacy flat keys (smp/root/fn/lm/ls/le/lx) are still
+    // written for zone 0 so an older build — or a patch file read by one — still
+    // loads something sensible instead of silence.
+    cJSON *zs = cJSON_AddArrayToObject(o, "zones");
+    for (int i = 0; i < inst.nzones; i++) {
+        is_zone_t *zz = &inst.zone[i];
+        if (!zz->frames) continue;
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "smp", zz->sample);
+        cJSON_AddNumberToObject(e, "root", zz->root);
+        cJSON_AddNumberToObject(e, "fn", zz->fine);
+        cJSON_AddNumberToObject(e, "lm", zz->loop_mode);
+        cJSON_AddNumberToObject(e, "ls", (double)zz->loop_start);
+        cJSON_AddNumberToObject(e, "le", (double)zz->loop_end);
+        cJSON_AddNumberToObject(e, "lx", (double)zz->loop_xfade);
+        cJSON_AddItemToArray(zs, e);
+    }
     cJSON_AddStringToObject(o, "smp", z->sample);
     cJSON_AddNumberToObject(o, "root", z->root);
     cJSON_AddNumberToObject(o, "fn", z->fine);      // cents-as-semitones (auto-tune)
@@ -452,8 +565,40 @@ static void keys_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) inst.glide = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) inst.level = (float)j->valuedouble;
     fxrack_load(&inst_rk, node);   // slots + every effect param (shared FX rack)
+    // ZONES array wins when present: clear, then append each entry and restore
+    // its tuning and loop after the load (loading resets both). Falls back to
+    // the legacy single "smp" key so every existing patch and autosave still
+    // loads — this is also the path /remote/params uses, which is how the
+    // multisample was tested before it had any UI.
+    const cJSON *zs = cJSON_GetObjectItemCaseSensitive(node, "zones");
+    if (cJSON_IsArray(zs) && cJSON_GetArraySize(zs) > 0) {
+        keys_clear_zones();
+        const cJSON *e = NULL;
+        cJSON_ArrayForEach(e, zs) {
+            const cJSON *sj = cJSON_GetObjectItemCaseSensitive(e, "smp");
+            if (!cJSON_IsString(sj) || !sj->valuestring[0]) continue;
+            if (keys_load_zone_at(-1, sj->valuestring) != 0) continue;
+            is_zone_t *zz = &inst.zone[inst.nzones - 1];
+            const cJSON *q;
+            if ((q = cJSON_GetObjectItemCaseSensitive(e, "root")) && cJSON_IsNumber(q))
+                zz->root = (uint8_t)clampi(q->valueint, 0, 127);
+            if ((q = cJSON_GetObjectItemCaseSensitive(e, "fn"))   && cJSON_IsNumber(q))
+                zz->fine = (float)q->valuedouble;
+            if ((q = cJSON_GetObjectItemCaseSensitive(e, "lm"))   && cJSON_IsNumber(q))
+                zz->loop_mode = (uint8_t)q->valueint;
+            if ((q = cJSON_GetObjectItemCaseSensitive(e, "ls"))   && cJSON_IsNumber(q))
+                zz->loop_start = (uint32_t)q->valuedouble;
+            if ((q = cJSON_GetObjectItemCaseSensitive(e, "le"))   && cJSON_IsNumber(q))
+                zz->loop_end = (uint32_t)q->valuedouble;
+            if ((q = cJSON_GetObjectItemCaseSensitive(e, "lx"))   && cJSON_IsNumber(q))
+                zz->loop_xfade = (uint32_t)q->valuedouble;
+            if (zz->loop_end > zz->frames) zz->loop_end = zz->frames;
+            if (zz->loop_start >= zz->loop_end) zz->loop_start = 0;
+        }
+        inst.edit_zone = 0;
+    }
     // load the sample FIRST (it resets loop points), then restore them
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "smp"))   && cJSON_IsString(j) && j->valuestring[0]) keys_load_zone(j->valuestring);
+    else if ((j = cJSON_GetObjectItemCaseSensitive(node, "smp"))   && cJSON_IsString(j) && j->valuestring[0]) keys_load_zone(j->valuestring);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "root"))  && cJSON_IsNumber(j)) z->root = (uint8_t)j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fn"))    && cJSON_IsNumber(j)) z->fine = clampf((float)j->valuedouble, -1.0f, 1.0f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lm"))    && cJSON_IsNumber(j)) z->loop_mode = (uint8_t)j->valueint;
