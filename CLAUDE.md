@@ -196,6 +196,19 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   `tools/proof_build.sh`'s EXCLUDE list, add `M_<NAME>_*` menu IDs to
   `components/menu/include/menu_types.h`, and bump the selector cap in `menu.c`
   (`names[16]`/`machines[16]`/`n<16`) if the roster exceeds it.
+- **A CRASH IS INVISIBLE OVER THE NETWORK unless you look.** The module reboots
+  in a few seconds and answers again looking healthy, so an operation that panics
+  just appears to have quietly done nothing. `GET /sysinfo` now reports `uptime`
+  (seconds) and `reset` (`poweron`/`sw`/`PANIC`/`INT_WDT`/`TASK_WDT`/`BROWNOUT`);
+  `sw` is normal for OTA and `POST /reboot`. **Read `uptime` before and after any
+  operation that "does nothing"** — that is how the Freesound download was caught
+  (82.2 s -> 12.3 s, `RESET=PANIC`, 2026-07-28). `POST /remote/trig` also echoes
+  the raw tick count, which works as an uptime probe on older builds.
+- **Task stacks: measure, do not guess.** The Freesound pipeline was given 16 KB
+  and MEASURES 28 KB — two TLS sessions plus a cJSON parse plus the MP3 decoder.
+  It overflowed on every run. Anything doing HTTPS wants far more stack than looks
+  reasonable. `uxTaskGetStackHighWaterMark` sampled at phase boundaries turns this
+  into a number (`stack_min` in `/fs/state`) instead of a crash.
 - **Proof invariant**: `tools/proof_build.sh` must pass — the firmware links
   with every real machine excluded and a stub-only registry. Run it after any
   change touching core or the registry. Note it EXCLUDES the machines, so it
