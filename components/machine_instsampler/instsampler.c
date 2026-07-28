@@ -145,6 +145,7 @@ int keys_load_zone_at(int zi, const char *name)
     z->root = (uint8_t)inst.base_note;
     z->fine = 0.0f;
     z->tune_src = TUNE_NONE;
+    z->tune_hint = -1;
     inst.tune_hz = 0.0f;          // a new sample invalidates the last verdict
     inst.tune_conf = 0.0f;
     inst.tune_src = TUNE_NONE;
@@ -152,7 +153,45 @@ int keys_load_zone_at(int zi, const char *name)
     z->loop_start = 0;
     z->loop_end = n;
     if (z->loop_xfade == 0) z->loop_xfade = 220;         // ~5 ms default
-    // waveform preview peaks (rectified max per column)
+    keys_build_peaks();
+    if (inst.autotune_load) keys_autotune();     // sets root+fine, or leaves them
+    inst.loading = false;
+    return 0;
+}
+
+// Drop zones 1..n-1, KEEP zone 0. The arena is bump-allocated and zone 0 sits at
+// its base, so truncating arena_used back to zone 0's frames releases every later
+// zone in one step — no per-zone free, and nothing can be left dangling.
+// Deliberately not a full wipe: a single menu click that leaves Keys silent with
+// no undo is not something to put on a row, and Load Sample already resets.
+void keys_keep_first_zone(void)
+{
+    if (inst.nzones <= 1) return;
+    for (int i = 1; i < IS_MAX_ZONES; i++) {
+        inst.zone[i].frames = 0;
+        inst.zone[i].buf = NULL;
+        inst.zone[i].cap = 0;
+        inst.zone[i].sample[0] = 0;
+        inst.zone[i].tune_src = TUNE_NONE;
+        inst.zone[i].tune_hint = -1;
+    }
+    inst.nzones = 1;
+    inst.edit_zone = 0;
+    inst.arena_used = inst.zone[0].frames;
+    // a voice may be mid-note in a zone that no longer exists
+    for (int v = 0; v < IS_MAX_VOICES; v++) inst.voice[v].zone = 0;
+}
+
+// Waveform preview for the zone the UI is currently EDITING (rectified max per
+// column). One shared strip, not one per zone: it is redrawn whenever edit_zone
+// moves, so the picture always matches the loop box drawn over it. Without that
+// the Live page would show one zone's audio under another zone's loop window —
+// which looks like a loop-point bug and is not one. UI/loader context (~1 ms).
+void keys_build_peaks(void)
+{
+    is_zone_t *z = &inst.zone[inst.edit_zone < inst.nzones ? inst.edit_zone : 0];
+    uint32_t n = z->frames;
+    if (!z->buf || !n) { memset(inst.peaks, 0, sizeof(inst.peaks)); return; }
     for (int c = 0; c < IS_PEAKS; c++) {
         uint32_t a = (uint32_t)((uint64_t)c * n / IS_PEAKS);
         uint32_t b = (uint32_t)((uint64_t)(c + 1) * n / IS_PEAKS);
@@ -162,9 +201,6 @@ int keys_load_zone_at(int zi, const char *name)
         pk >>= 7;
         inst.peaks[c] = (uint8_t)(pk > 255 ? 255 : pk);
     }
-    if (inst.autotune_load) keys_autotune();     // sets root+fine, or leaves them
-    inst.loading = false;
-    return 0;
 }
 
 // The old single-sample entry point: REPLACE everything with one zone. Kept so
@@ -211,6 +247,8 @@ int keys_autotune(void)
     bool hint_iso = false;
     int  hint = pitch_name_hint(z->sample, &hint_iso);
     inst.tune_hint = (int16_t)hint;
+    z->tune_hint = (int16_t)hint;
+    inst.last_tuned_zone = inst.edit_zone < inst.nzones ? inst.edit_zone : 0;
 
     pitch_result_t r = { 0 };     // a failed detect leaves it untouched
     bool heard = (pitch_detect_buf(z->buf, z->frames, (float)IS_RATE, &r) == 0) &&
