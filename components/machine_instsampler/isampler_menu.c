@@ -140,7 +140,8 @@ static void wave_col(int x)
     if (col < 0 || col >= L_WW) return;
     _bg = TFT_BLACK; TFT_fillRect(x, wy, 1, L_WH, _bg);
     int pi = clampi(col * IS_PEAKS / L_WW, 0, IS_PEAKS - 1);
-    int h = inst.peaks[pi] * (L_WH / 2) / 255;
+    int h = inst.peaks[pi] * (L_WH / 2) / (inst.peak_max ? inst.peak_max : 255);
+    if (h > L_WH / 2) h = L_WH / 2;
     if (h < 1 && ks_z()->frames) h = 1;
     int cy = wy + L_WH / 2;
     if (h > 0) TFT_drawLine(x, cy - h, x, cy + h, wf_color());
@@ -203,7 +204,8 @@ static void draw_wave(void)
     color_t wcol = wf_color();
     for (int c = 0; c < L_WW; c++) {
         int pi = c * IS_PEAKS / L_WW;
-        int h = inst.peaks[pi] * (L_WH / 2) / 255;
+        int h = inst.peaks[pi] * (L_WH / 2) / (inst.peak_max ? inst.peak_max : 255);
+        if (h > L_WH / 2) h = L_WH / 2;
         if (h < 1) h = 1;
         TFT_drawLine(L_WX + c, cy - h, L_WX + c, cy + h, wcol);
     }
