@@ -57,6 +57,11 @@ typedef struct {
     uint8_t  root;            // MIDI note that plays buf at native rate
     float    fine;            // + cents-as-semitones on top of root (-1..+1);
                               // auto-tune writes the fractional part here
+    int16_t  tune_hint;       // note parsed from THIS zone's id (-1 = none). Same
+                              // reason as tune_src: the instrument-level one holds
+                              // the last LOAD's hint, so after clearing back to one
+                              // zone the Auto-Tune row cheerfully showed a hint
+                              // belonging to a sample that was no longer loaded.
     int8_t   tune_src;        // TUNE_* for THIS zone. inst.tune_src only ever
                               // holds the LAST load's verdict, so in a
                               // multisample it says nothing about zones 0..n-2 —
@@ -94,6 +99,10 @@ typedef struct {
     float tune_conf;          // its confidence 0..1, UI only
     int8_t tune_src;          // TUNE_* — what the verdict was based on, UI only
     int16_t tune_hint;        // note parsed out of the sample id (-1 = none)
+    int   last_tuned_zone;    // which zone tune_hz/tune_conf actually describe.
+                              // Those two are per-LOAD, not per-zone, so without
+                              // this the "unsure (X?)" readout attaches the last
+                              // load's weak verdict to whatever zone you scroll to.
     float atk, dec, sus, rel; // ADSR (Synth semantics)
     float env_to_cut;         // 0..1
     float cutoff_base;        // Hz (K6)
@@ -168,6 +177,14 @@ int keys_load_zone(const char *name);
 int  keys_load_zone_at(int zi, const char *name);
 void keys_clear_zones(void);
 int  keys_zone_for_note(float note);
+
+// rebuild inst.peaks for the CURRENT edit_zone — call after moving edit_zone,
+// or the waveform strip shows one zone's audio under another's loop box
+void keys_build_peaks(void);
+
+// drop zones 1..n-1, keep zone 0 (the "Clear Zones" row). Never empties the
+// machine — Load Sample is the full reset.
+void keys_keep_first_zone(void);
 
 // AUTO-TUNE zone[0]: detect the loaded sample's fundamental (shared
 // util/pitch_detect, YIN over the resident PSRAM buffer) and set root + fine so
