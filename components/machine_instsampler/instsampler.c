@@ -542,6 +542,15 @@ static cJSON *keys_preset_save(void)
     // sweep made knob edits savable
     cJSON_AddNumberToObject(o, "stf", inst.start_frac);
     cvmtx_save(&inst.mtx, o);                // matrix ("mxs"/"mxa")
+    // DIAGNOSTIC, read-only: how many zones are loaded and which one the last
+    // note actually chose. Inferring zone selection from the outside does not
+    // work — pitch is right from ANY zone because varispeed corrects it, and
+    // duration is set by the gate, not the sample. Three proxy attempts failed
+    // before this went in. It is in the preset rather than /status so the hot
+    // poll stays untouched; preset_load ignores unknown keys.
+    cJSON_AddNumberToObject(o, "nz", inst.nzones);
+    cJSON_AddNumberToObject(o, "vz", inst.voice[0].zone);
+    cJSON_AddNumberToObject(o, "au", (double)inst.arena_used);
     return o;
 }
 
