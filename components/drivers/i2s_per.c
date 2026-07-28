@@ -23,15 +23,25 @@ void init_i2s(){
         // the CPU for longer than the buffer can cover. With the web UI polling
         // /status twice a second that is about one glitch every two seconds.
         //
-        // 12 x 32 = 384 frames = 8.7 ms buys ~6 ms more slack. The cost is
-        // output latency, which for a module played from CV/gate is not
-        // something you can feel at this scale. NOTE `aus`/`ausgap` cannot see
-        // this class of fault: i2s_write uses portMAX_DELAY, so after an
-        // underrun the DMA is empty, the write returns immediately, and the loop
-        // simply catches up — the block-to-block interval barely moves even
-        // though audio was lost.
-        .dma_buf_count = 12,
-        .dma_buf_len = 32,
+        // 384 frames = 8.7 ms buys ~6 ms more slack, and cuts the glitch rate
+        // under a 2 Hz /status poll from 0.644/s to 0.078/s (88%).
+        //
+        // GET THERE VIA dma_buf_len, NOT dma_buf_count. 12 x 32 is the same
+        // depth and made KEYS AUDIBLY SCRATCHY — its own slew ceiling went from
+        // 0.027 to 0.142 with a note sustaining, and Arlo heard it immediately.
+        // 4 x 96 measures clean on Keys (0.026) at identical depth, as do 4 x 192
+        // and 8 x 32, so the harm is the NUMBER OF DESCRIPTORS, not the buffering.
+        // Whatever the mechanism, validate any change here ON KEYS: it streams
+        // its sample from PSRAM and is the host that shows this. Validating on
+        // Synth alone is what let the scratchy build reach the bench.
+        //
+        // NOTE `aus`/`auspk`/`ausgap` cannot see this class of fault at all:
+        // i2s_write uses portMAX_DELAY, so after an underrun the DMA is empty,
+        // the write returns immediately, and the loop simply catches up — the
+        // block-to-block interval barely moves even though audio was lost. A
+        // meter that times the task cannot see the hardware running dry.
+        .dma_buf_count = 4,
+        .dma_buf_len = 96,
         .use_apll = true
     };
 
