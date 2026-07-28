@@ -22,7 +22,7 @@
 #define IS_CV1_ZERO    877         // ch1 idle -> 0 semitones (measured, as Synth)
 #define IS_CTS_PER_ST  49.0f       // ADC counts per semitone (sampler2 LUT scale)
 #define IS_MAX_VOICES  1           // v1 mono; bump to 2 for #28 paraphony
-#define IS_MAX_ZONES   1           // v1 single zone; v2 -> 6/8
+#define IS_MAX_ZONES   8           // multisample: up to 8 mapped samples
 #define IS_MAX_FRAMES  1000000u    // ~22.7 s mono resident (2.0 MB, under the 2.1 MB grant)
 #define IS_PEAKS       160         // waveform-preview columns (built at load)
 
@@ -70,6 +70,10 @@ typedef struct {
     float  env;               // 0..1
     float  cur_note;          // glide-slewed note actually sounding
     bool   gate;              // last gate level
+    int    zone;              // zone LATCHED at note-on. Never re-picked mid-note:
+                              // the read cursor is an index into that zone's
+                              // buffer, so switching underneath it would jump to
+                              // an unrelated point in different audio.
     svf_t  flt;               // per-voice filter (mono)
 } is_voice_t;
 
@@ -120,6 +124,18 @@ typedef struct {
     // live (UI)
     int   cv1_disp;
     float note_disp;          // last played note
+    // MULTISAMPLE. One PSRAM ARENA, bump-allocated, NOT one malloc per zone:
+    // eight separate 2 MB requests is exactly what fragmented the pool on
+    // 2026-07-26 and left Keys unable to load anything at all until a reboot
+    // (largest free block 1,998,848 against a 2,000,000 ask). One allocation
+    // carved up keeps the single-zone case byte-identical and cannot fragment.
+    // Zones are APPEND-ONLY — there is no freeing the middle of an arena — so
+    // building a set means clear-then-add, which is also how you think about it.
+    int16_t  *arena;
+    uint32_t  arena_cap;      // frames the arena can hold
+    uint32_t  arena_used;     // frames handed out so far
+    int       nzones;         // zones loaded (1 = plain sampler, as before)
+    int       edit_zone;      // which zone the Setup rows act on
     volatile bool loading;    // engine plays silent while a zone (re)loads
     char  load_err[24];       // why the last load failed, "" when it succeeded.
                               // A failed load used to be a SILENT no-op, which is
@@ -138,6 +154,15 @@ extern fxrack_t inst_rk;    // FX rack pointer-view over inst's effect instances
 // loop to the whole sample; caller/preset may then set loop points. Sets/clears
 // inst.loading around the SD read.
 int keys_load_zone(const char *name);
+
+// MULTISAMPLE. keys_load_zone_at(-1, name) APPENDS a zone; a zi inside the
+// existing set only works for the LAST zone (an arena cannot free its middle),
+// otherwise it fails with "clear zones first". keys_clear_zones resets the
+// arena. keys_zone_for_note picks by NEAREST ROOT — no editable key ranges, so
+// auto-tune building a root per zone is all the mapping there is.
+int  keys_load_zone_at(int zi, const char *name);
+void keys_clear_zones(void);
+int  keys_zone_for_note(float note);
 
 // AUTO-TUNE zone[0]: detect the loaded sample's fundamental (shared
 // util/pitch_detect, YIN over the resident PSRAM buffer) and set root + fine so
