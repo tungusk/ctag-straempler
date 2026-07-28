@@ -198,7 +198,16 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   (`names[16]`/`machines[16]`/`n<16`) if the roster exceeds it.
 - **Proof invariant**: `tools/proof_build.sh` must pass — the firmware links
   with every real machine excluded and a stub-only registry. Run it after any
-  change touching core or the registry.
+  change touching core or the registry. Note it EXCLUDES the machines, so it
+  never compiles a machine-only change — that needs a plain `idf.py build`.
+  **NEVER run two at once.** It swaps `main/machine_registry.c` and
+  `main/CMakeLists.txt` for stubs and restores them from `/tmp/proof_*.bak` in an
+  EXIT trap, and both copies share `build_proof/`. A second run started while the
+  first is mid-build backs up the ALREADY-STUBBED files, so the traps restore over
+  each other and the working tree is left with a one-machine registry — which
+  builds and boots fine, so nothing complains. Recover with
+  `git checkout -- main/machine_registry.c main/CMakeLists.txt`, NOT from the
+  `/tmp` backups (they are the poisoned copies).
 
 The machines (all working; archives in `bin/`):
 - `machine_sampler3` ("Sampler") — two-voice clock-time LOOP RECORDER
@@ -654,6 +663,24 @@ Sampler3 SHIPPED 2026-07-12.
   in ~30 s segments; and assert a take is not silent before analysing it, because
   silence still yields a fundamental, a modulation depth and a click count, all
   of them garbage.
+  **Setting the interface gain: aim MODULE FULL SCALE at about -6 dBFS**, not
+  whatever tone happens to be playing. `calib.py` divides the module's own `vu`
+  out of the arriving level to extrapolate that. Targeting the reference patch
+  itself put full scale ~8 dB ABOVE 0 dBFS (the patch ran at `lvl 0.30` with FX),
+  and a capture that clips is unrecoverable — no later analysis detects or undoes
+  it. Once set, LEAVE IT: `calib.py --verify` compares the extrapolated
+  full-scale figure, which is the only number that separates "gain moved" from
+  "the patch is quieter".
+  **Hold notes with `rig.hold_note()` (MIDI), not `hold_gate()`** whenever level
+  or continuity is what you are measuring — the soft gate behind `/remote/trig`
+  releases early and intermittently, which reads as a signal wandering by 20 dB
+  for no reason. The MIDI gate self-clears after 5 s; re-posting the same note
+  refreshes it and does NOT retrigger, since the machine sees the gate stay high.
+  **And check nothing is MODULATING what you are measuring.** An LFO patched to
+  CV6 swept the cutoff through an entire calibration run on 2026-07-28 and was
+  indistinguishable from a level fault; `calib.py` now refuses to run while
+  cutoff or resonance is moving. Knob-owned params (`cut` = K6, `res` = K7) also
+  reject a remote write while the knob is live, so always read them back.
 - **Loading the card from a Mac — DELETE THE APPLEDOUBLE FILES.** Copying onto
   the FAT card creates `._NAME.WAV` sidecars, and they are created by the WRITE
   (not by reads), so `cp -X` and even `cat >` produce them. They end in `.WAV`,
@@ -665,7 +692,20 @@ Sampler3 SHIPPED 2026-07-12.
   parses a note out of the id as an octave HINT for auto-tune, so a library that
   numbers octaves the Yamaha way (middle C = C3, e.g. the Moog Voyager set) must
   be CONVERTED on the way in or the hint fights the recording. `tools/curate.py`
-  does this with `--middle-c`.
+  does this with `--middle-c`. The hint is now **capped at one octave** of
+  correction (`keys_autotune`) — it exists to fix a sub-harmonic detection error,
+  and unbounded it equally obeyed a name that was just WRONG: the card's `TSTC2`
+  holds a C4 tone, so the "C2" in its name moved the root two octaves down and the
+  zone played 2400 cents sharp while reporting `fine = 0.00` cents, which looks
+  exactly like a confident correct verdict. A disagreement past one octave is
+  reported as `TUNE_CONFLICT` and the recording wins. `tune_src` is **per zone**
+  (`"ts"` in the zones array) — the instrument-level one only ever holds the LAST
+  load's verdict, which tells you nothing when one zone of eight is out of tune.
+- **Two zones with the same root: the later one is DEAD.** `keys_zone_for_note`
+  takes the nearest root and breaks ties toward the FIRST, so a duplicate root
+  leaves a zone occupying arena and never sounding, with nothing reporting it.
+  Auto-tune produces this readily from a folder holding two samples of the same
+  note. `tools/bench/zone_sweep.py` detects it.
 - **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
   (complete repo, `git clone`-able) + a copy of `bin/`. Refresh with
   `git bundle create ~/ctag-straempler-backups/ctag-straempler-$(date +%Y%m%d).bundle --all`.
