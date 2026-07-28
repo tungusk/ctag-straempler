@@ -151,7 +151,27 @@ int keys_load_zone_at(int zi, const char *name)
     inst.tune_src = TUNE_NONE;
     inst.tune_hint = -1;
     z->loop_start = 0;
-    z->loop_end = n;
+    // LOOP END EXCLUDES TRAILING SILENCE. The default used to be the whole file,
+    // so a looping sample with any digital silence at the tail — extremely common,
+    // and guaranteed for anything exported with a release tail — wrapped from
+    // silence straight back to full amplitude every pass. The crossfade cannot
+    // rescue that: it blends the seam over ~5 ms, but the material it is blending
+    // INTO is silence, so the loop still gapped and thumped once per cycle.
+    // Only the tail is trimmed; picking a loop START means guessing where the
+    // attack ends, which is a judgement the player should make.
+    {
+        uint32_t e = n;
+        while (e > 1) {
+            int s = z->buf[e - 1];
+            if (s < 0) s = -s;
+            if (s > IS_SILENCE_LSB) break;
+            e--;
+        }
+        // Refuse to be clever on material that is quiet throughout (a pad fade,
+        // a very soft take): trimming most of the file away would be far worse
+        // than leaving the old behaviour in place.
+        z->loop_end = (e > n / 4) ? e : n;
+    }
     if (z->loop_xfade == 0) z->loop_xfade = 220;         // ~5 ms default
     keys_build_peaks();
     if (inst.autotune_load) keys_autotune();     // sets root+fine, or leaves them
@@ -532,10 +552,23 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
                     sig = sig * cosf(fr * 1.5707963f) + sig2 * sinf(fr * 1.5707963f);
                 }
             }
+            // DECLICK THE END OF A ONE-SHOT. Running off the end used to zero the
+            // voice in a single sample, so any sample not ending at a zero
+            // crossing — which is most of them, and every truncated one — ended
+            // in an audible click. There is no more audio to fade INTO past the
+            // end, so the ramp has to happen BEFORE it: taper over the last
+            // IS_TAIL_FADE frames, and by the time the cursor runs out the signal
+            // is already silent. Looping zones skip this; their seam is handled
+            // by loop_xfade.
+            if (z->loop_mode != LOOP_FWD) {
+                double left = (double)z->frames - v->pos;
+                if (left < (double)IS_TAIL_FADE)
+                    sig *= left > 0.0 ? (float)(left / (double)IS_TAIL_FADE) : 0.0f;
+            }
             v->pos += inc;
             if (z->loop_mode == LOOP_FWD) {
                 if (v->pos >= (double)le) v->pos -= (double)(le - ls);
-            } else if (v->pos >= (double)z->frames) {   // one-shot ended
+            } else if (v->pos >= (double)z->frames) {   // one-shot ended (already faded)
                 v->env_stage = ENV_IDLE; v->env = 0.0f; v->active = false;
             }
 
