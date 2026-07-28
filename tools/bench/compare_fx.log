@@ -1,0 +1,30 @@
+patch: smp 'FLATA4'  rvmx 65  lvl 0.30  loop 1
+32 min, 24 s blocks, interleaved
+
+  4 blocks — dry 0.00/s  hall 0.00/s  flanger 0.00/s  flg+hall 0.61/s
+  8 blocks — dry 0.00/s  hall 0.00/s  flanger 0.00/s  flg+hall 0.46/s
+  12 blocks — dry 0.00/s  hall 0.00/s  flanger 0.00/s  flg+hall 0.44/s
+  16 blocks — dry 0.00/s  hall 0.00/s  flanger 0.00/s  flg+hall 0.62/s
+  20 blocks — dry 0.00/s  hall 0.00/s  flanger 0.00/s  flg+hall 0.68/s
+  24 blocks — dry 0.00/s  hall 0.00/s  flanger 0.00/s  flg+hall 0.77/s
+  28 blocks — dry 0.00/s  hall 0.00/s  flanger 0.00/s  flg+hall 0.83/s
+  32 blocks — dry 0.00/s  hall 0.00/s  flanger 0.00/s  flg+hall 0.83/s
+  36 blocks — dry 0.00/s  hall 0.02/s  flanger 0.00/s  flg+hall 0.81/s
+  40 blocks — dry 0.00/s  hall 0.02/s  flanger 0.00/s  flg+hall 0.82/s
+  44 blocks — dry 0.00/s  hall 0.01/s  flanger 0.00/s  flg+hall 0.83/s
+  48 blocks — dry 0.00/s  hall 0.01/s  flanger 0.00/s  flg+hall 0.84/s
+  52 blocks — dry 0.00/s  hall 0.01/s  flanger 0.00/s  flg+hall 0.81/s
+  56 blocks — dry 0.00/s  hall 0.01/s  flanger 0.00/s  flg+hall 0.79/s
+  60 blocks — dry 0.00/s  hall 0.01/s  flanger 0.00/s  flg+hall 0.81/s
+  64 blocks — dry 0.00/s  hall 0.01/s  flanger 0.00/s  flg+hall 0.81/s
+  68 blocks — dry 0.00/s  hall 0.01/s  flanger 0.00/s  flg+hall 0.80/s
+
+=== events per second OF SOUND ===
+case       events   sound s   ev/s      ceiling   posts
+dry        0        259.5     0.000     0.0659    153
+hall       3        337.0     0.009     0.0369    153
+flanger    0        256.8     0.000     0.0603    153
+flg+hall   267      331.8     0.805     0.0392    153
+
+flg+hall vs dry: 0.805 vs 0.000 = 804822908.8x
+-> flanger+reverb IS worse than the harness floor

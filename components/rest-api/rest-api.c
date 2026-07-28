@@ -1171,9 +1171,24 @@ static esp_err_t remote_trig_handler(httpd_req_t *req)
     int ms = 40;
     if (get_query_param(req, "ms", ms_s, sizeof(ms_s))) ms = atoi(ms_s);
     if (ms < 5) ms = 5;
-    if (ms > 2000) ms = 2000;
+    // 60 s, not 2 s. Sustaining a note used to need a POST every ~1.9 s, and
+    // since ~28% of HTTP requests glitch the audio (see i2s_per.c) that made the
+    // bench rig's own traffic the dominant source of the events it was trying to
+    // measure — a dry capture's entire event rate was the gate refreshes. One
+    // post per capture instead of sixteen removes almost all of that floor.
+    // Safe to overshoot: a later trig sets an ABSOLUTE deadline, so a short
+    // pulse cancels a long one rather than queueing behind it.
+    if (ms > 60000) ms = 60000;
     audio_remote_trig(ts[0] - '1', ms);
-    send_json(req, "{\"ok\":true}");
+    // echo the ms actually used: a stale flash is otherwise indistinguishable
+    // from a cap somewhere else, and that cost half an hour
+    uint32_t dnow = 0, duntil = 0, dhz = 0;
+    audio_remote_trig_debug(ts[0] - '1', &dnow, &duntil, &dhz);
+    char resp[128];
+    snprintf(resp, sizeof(resp),
+             "{\"ok\":true,\"ms\":%d,\"now\":%u,\"until\":%u,\"hz\":%u}",
+             ms, dnow, duntil, dhz);
+    send_json(req, resp);
     return ESP_OK;
 }
 

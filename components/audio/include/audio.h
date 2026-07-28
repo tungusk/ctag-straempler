@@ -38,6 +38,7 @@ void audio_status_set_voices(const char *v0, const char *v1);
 // teleremote: assert trigger input t (0/1) in software for ms milliseconds —
 // the audio task pulls the bit low (= active) alongside the hardware gate
 void audio_remote_trig(int t, int ms);
+void audio_remote_trig_debug(int t, uint32_t *now, uint32_t *until, uint32_t *hz);
 // teleremote: override CV channel ch (0..7) with v (0..4095) for ms
 // milliseconds — the audio task substitutes it for the ADC reading, then
 // decays back to the physical knob (a stale web value can never pin a knob)
