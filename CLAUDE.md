@@ -654,6 +654,18 @@ Sampler3 SHIPPED 2026-07-12.
   in ~30 s segments; and assert a take is not silent before analysing it, because
   silence still yields a fundamental, a modulation depth and a click count, all
   of them garbage.
+- **Loading the card from a Mac — DELETE THE APPLEDOUBLE FILES.** Copying onto
+  the FAT card creates `._NAME.WAV` sidecars, and they are created by the WRITE
+  (not by reads), so `cp -X` and even `cat >` produce them. They end in `.WAV`,
+  so the module's browser LISTS them as samples — with a 9-character base that
+  FatFS shows as mangled junk like `_MOOGC~1.WAV`. Always finish a card session
+  with `find /Volumes/<card> -name '._*' -delete` and eject cleanly. Worth
+  clearing `.DS_Store` at the same time.
+- **Naming samples for Keys: use SCIENTIFIC note names** (middle C = C4). Keys
+  parses a note out of the id as an octave HINT for auto-tune, so a library that
+  numbers octaves the Yamaha way (middle C = C3, e.g. the Moog Voyager set) must
+  be CONVERTED on the way in or the hint fights the recording. `tools/curate.py`
+  does this with `--middle-c`.
 - **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
   (complete repo, `git clone`-able) + a copy of `bin/`. Refresh with
   `git bundle create ~/ctag-straempler-backups/ctag-straempler-$(date +%Y%m%d).bundle --all`.
