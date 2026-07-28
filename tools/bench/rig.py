@@ -31,6 +31,10 @@ IP = os.environ.get("STRAEMPLER_IP", "192.168.3.227")
 # calibration and the soak MUST wait the same amount, or the wall-clock-to-
 # recording-time offset measured by one does not apply to the other.
 CAPTURE_OPEN_S = 0.6
+# Breathing room between closing one capture and opening the next. Without it,
+# a day of 30 s segments wedges CoreAudio's link to the interface — sox reports
+# 0% input, records nothing, never exits, and only a physical replug clears it.
+CAPTURE_COOLDOWN_S = 0.8
 RATE = 48000
 HERE = os.path.dirname(os.path.abspath(__file__))
 CALIB_PATH = os.path.join(HERE, "calib.json")
@@ -186,10 +190,43 @@ class Rig:
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         return proc
 
-    def capture_blocking(self, seconds, path, channels=2):
-        proc = self.capture(seconds, path, channels)
-        proc.wait(timeout=seconds + 20)
-        return path
+    def capture_blocking(self, seconds, path, channels=2, tries=3):
+        """Capture, detecting a WEDGED device instead of blocking on it.
+
+        Opening and closing the interface hundreds of times in a day wedges
+        CoreAudio's link to it: sox still starts and reports 0% input, records
+        nothing, and never exits. It happened after a few hundred captures and
+        needed the interface physically replugged. So: watch the output file
+        grow, give up early if it does not, and cool down between opens rather
+        than hammering the device.
+        """
+        for attempt in range(tries):
+            proc = self.capture(seconds, path, channels)
+            deadline = time.time() + seconds + 15
+            stalled = False
+            time.sleep(min(2.0, seconds))
+            last = -1
+            while proc.poll() is None and time.time() < deadline:
+                size = os.path.getsize(path) if os.path.exists(path) else 0
+                if size == last and size < 1000:      # open but delivering nothing
+                    stalled = True
+                    break
+                last = size
+                time.sleep(1.0)
+            if proc.poll() is None:
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:                     # noqa: BLE001
+                    pass
+                stalled = True
+            time.sleep(CAPTURE_COOLDOWN_S)            # let CoreAudio settle
+            if not stalled:
+                return path
+            print("   [capture stalled, attempt %d/%d]" % (attempt + 1, tries), flush=True)
+            time.sleep(2.0)
+        raise RuntimeError("the audio interface is WEDGED — unplug and replug it "
+                           "(sox opens the device but receives no samples)")
 
     # -- calibration
     def load_calib(self):
