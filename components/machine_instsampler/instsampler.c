@@ -211,7 +211,12 @@ void keys_build_peaks(void)
 {
     is_zone_t *z = &inst.zone[inst.edit_zone < inst.nzones ? inst.edit_zone : 0];
     uint32_t n = z->frames;
-    if (!z->buf || !n) { memset(inst.peaks, 0, sizeof(inst.peaks)); return; }
+    if (!z->buf || !n) {
+        memset(inst.peaks, 0, sizeof(inst.peaks));
+        inst.peak_max = 0;
+        return;
+    }
+    int hi = 0;
     for (int c = 0; c < IS_PEAKS; c++) {
         uint32_t a = (uint32_t)((uint64_t)c * n / IS_PEAKS);
         uint32_t b = (uint32_t)((uint64_t)(c + 1) * n / IS_PEAKS);
@@ -219,8 +224,17 @@ void keys_build_peaks(void)
         int pk = 0;
         for (uint32_t s = a; s < b; s += step) { int v = z->buf[s]; if (v < 0) v = -v; if (v > pk) pk = v; }
         pk >>= 7;
-        inst.peaks[c] = (uint8_t)(pk > 255 ? 255 : pk);
+        if (pk > 255) pk = 255;
+        inst.peaks[c] = (uint8_t)pk;
+        if (pk > hi) hi = pk;
     }
+    // The strip normalises to THIS sample's own peak, floored at 16 (~-24 dB of
+    // the column scale) so a nearly silent take is not blown up 200x into a wall
+    // of noise. Drawn against absolute full scale instead, anything quiet is a
+    // 1 px line — 808CYM on the card is exactly that, and there is no shape to
+    // place a loop edge against. The strip is a MAP, not a meter; absolute level
+    // lives on the VU and the Level row.
+    inst.peak_max = (uint8_t)(hi < 16 ? 16 : hi);
 }
 
 // The old single-sample entry point: REPLACE everything with one zone. Kept so

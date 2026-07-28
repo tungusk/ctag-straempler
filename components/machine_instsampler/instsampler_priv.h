@@ -160,6 +160,11 @@ typedef struct {
                               // indistinguishable from a broken browser — Arlo hit
                               // exactly that ("i can't seem to load a sample").
     uint8_t peaks[IS_PEAKS];  // waveform preview
+    uint8_t peak_max;         // largest column in peaks[], the strip's full-scale
+                              // reference. The strip is a MAP for placing loop
+                              // points, not a meter — drawn against absolute full
+                              // scale a quiet sample collapses to a 1 px line with
+                              // no shape to aim at (808CYM, 2026-07-28).
 } is_state_t;
 
 static inline float clampf(float x, float lo, float hi) { return x < lo ? lo : x > hi ? hi : x; }
