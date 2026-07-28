@@ -1,1 +1,1 @@
-flanger-fix-v1-20260727 (flanger LFO per block not per sample, I2S DMA 4x96, Keys PSRAM ladder, bench capture rig)
+keys-multisample-v1-20260728 (multisample zones + UI, loop by eye on Live, one-shot declick, loop trims tail silence)
