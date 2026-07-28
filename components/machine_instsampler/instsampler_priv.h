@@ -25,6 +25,10 @@
 #define IS_MAX_ZONES   8           // multisample: up to 8 mapped samples
 #define IS_MAX_FRAMES  1000000u    // ~22.7 s mono resident (2.0 MB, under the 2.1 MB grant)
 #define IS_PEAKS       160         // waveform-preview columns (built at load)
+#define IS_TAIL_FADE   220         // ~5 ms declick ramp at the end of a one-shot
+                                   // (matches the default loop_xfade)
+#define IS_SILENCE_LSB 32          // |int16| at/below this counts as silence when
+                                   // trimming a fresh sample's loop end (~-60 dBFS)
 
 enum { ENV_IDLE = 0, ENV_ATK, ENV_DEC, ENV_SUS, ENV_REL };   // as Synth
 enum { LOOP_OFF = 0, LOOP_FWD };                              // LOOP_PP = v2
