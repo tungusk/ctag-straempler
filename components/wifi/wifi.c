@@ -16,6 +16,7 @@
 #include "mdns.h"
 #include "esp_log.h"
 #include "wifi.h"
+#include "espnow_probe.h"
 #include "fileio.h"
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
@@ -312,3 +313,14 @@ void restartWifi(wifi_config_t *cfg){
     apply_tx_power();
     if (s_wifi_mutex) xSemaphoreGive(s_wifi_mutex);
 }
+// ---- ESP-NOW spike shims ---------------------------------------------------
+// These exist purely so the LINKER pulls espnow_probe.c in. ld takes only the
+// archive members that resolve symbols undefined AT THE MOMENT it scans the
+// archive; libwifi.a is scanned before librest-api.a, so nothing had referenced
+// espnow_probe_* yet and the member was dropped — an undefined-reference link
+// error despite the symbols plainly being in the archive. wifi.c.obj is always
+// pulled in (main calls initWifi), so a reference from HERE closes over the
+// probe within the same scan.
+int  wifiEspnowSetHz(int hz)                                { return espnow_probe_set_hz(hz); }
+void wifiEspnowStats(int *hz, unsigned *sent, unsigned *fl) { espnow_probe_stats(hz, sent, fl); }
+void wifiEspnowResetStats(void)                             { espnow_probe_reset_stats(); }
