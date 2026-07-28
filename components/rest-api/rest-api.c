@@ -8,6 +8,7 @@
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_timer.h"    // esp_timer_get_time() — uptime in /sysinfo
+#include "wifi.h"   // wifiEspnow* — the ESP-NOW spike
 #include "ff.h"
 #include <esp_http_server.h>
 #include "ui_events.h"
@@ -1345,6 +1346,37 @@ static esp_err_t remote_params_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// POST /espnow?hz=N — ESP-NOW COEXISTENCE SPIKE (see wifi/espnow_probe.c).
+// Measurement scaffolding for the ad-hoc unit-to-unit plan, not a feature: it
+// broadcasts N packets/s so the analog output can be measured with the radio busy
+// and idle. hz=0 stops. GET reports what it has sent.
+static esp_err_t espnow_post_handler(httpd_req_t *req)
+{
+    if (remote_gate(req) != ESP_OK) return ESP_OK;
+    char hs[8];
+    int hz = 0;
+    if (get_query_param(req, "hz", hs, sizeof(hs))) hz = atoi(hs);
+    if (wifiEspnowSetHz(hz) != 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "esp-now init failed");
+        return ESP_FAIL;
+    }
+    if (hz == 0) wifiEspnowResetStats();
+    char resp[96];
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"hz\":%d}", hz);
+    send_json(req, resp);
+    return ESP_OK;
+}
+
+static esp_err_t espnow_get_handler(httpd_req_t *req)
+{
+    int hz = 0; unsigned sent = 0, failed = 0;
+    wifiEspnowStats(&hz, &sent, &failed);
+    char resp[128];
+    snprintf(resp, sizeof(resp), "{\"hz\":%d,\"sent\":%u,\"failed\":%u}", hz, sent, failed);
+    send_json(req, resp);
+    return ESP_OK;
+}
+
 static esp_err_t remote_machine_handler(httpd_req_t *req)
 {
     if (remote_gate(req) != ESP_OK) return ESP_OK;
@@ -2036,6 +2068,8 @@ static httpd_uri_t uris[] = {
     { .uri = "/ice/state",     .method = HTTP_GET,  .handler = ice_state_handler },
     { .uri = "/blisten",       .method = HTTP_POST, .handler = blisten_post_handler },
     { .uri = "/tuner/enable",  .method = HTTP_GET,  .handler = tuner_enable_handler },
+    { .uri = "/espnow",       .method = HTTP_POST, .handler = espnow_post_handler },
+    { .uri = "/espnow",       .method = HTTP_GET,  .handler = espnow_get_handler },
     { .uri = "/remote/machine",.method = HTTP_POST, .handler = remote_machine_handler },
     { .uri = "/remote/params", .method = HTTP_GET,  .handler = remote_params_get_handler },
     { .uri = "/remote/params", .method = HTTP_POST, .handler = remote_params_post_handler },
