@@ -1,0 +1,37 @@
+patch: smp 'FLATA4' rvmx 65 lvl 0.30
+3 rounds, 24s blocks, interleaved
+
+  r1 dry              0 events / 15.0 s sound = 0.00/s
+  r1 flg_hall        19 events / 19.2 s sound = 0.99/s
+  r1 flg_mix0_hall   16 events / 19.2 s sound = 0.83/s
+  r1 flg_fb0_hall    27 events / 20.5 s sound = 1.32/s
+  r1 dly_hall         2 events / 19.8 s sound = 0.10/s
+  r1 trem_hall        1 events / 18.8 s sound = 0.05/s
+  r1 flg_room         2 events / 16.2 s sound = 0.12/s
+  r1 flg_plate       10 events / 18.8 s sound = 0.53/s
+  r2 dry              0 events / 15.2 s sound = 0.00/s
+  r2 flg_hall        31 events / 19.5 s sound = 1.59/s
+  r2 flg_mix0_hall   12 events / 19.2 s sound = 0.62/s
+  r2 flg_fb0_hall    17 events / 20.2 s sound = 0.84/s
+  r2 dly_hall         1 events / 19.8 s sound = 0.05/s
+  r2 trem_hall        0 events / 19.0 s sound = 0.00/s
+  r2 flg_room         2 events / 16.2 s sound = 0.12/s
+  r2 flg_plate        4 events / 19.0 s sound = 0.21/s
+  r3 dry              0 events / 15.0 s sound = 0.00/s
+  r3 flg_hall        27 events / 19.2 s sound = 1.40/s
+  r3 flg_mix0_hall   19 events / 19.0 s sound = 1.00/s
+  r3 flg_fb0_hall    26 events / 20.8 s sound = 1.25/s
+  r3 dly_hall         1 events / 20.0 s sound = 0.05/s
+  r3 trem_hall        1 events / 19.0 s sound = 0.05/s
+  r3 flg_room         1 events / 16.0 s sound = 0.06/s
+  r3 flg_plate        3 events / 18.5 s sound = 0.16/s
+
+=== events per second OF SOUND ===
+  dry             0.00/s   (0 events, 45.2 s)
+  flg_hall        1.33/s   (77 events, 58.0 s)
+  flg_mix0_hall   0.82/s   (47 events, 57.5 s)
+  flg_fb0_hall    1.14/s   (70 events, 61.5 s)
+  dly_hall        0.07/s   (4 events, 59.5 s)
+  trem_hall       0.04/s   (2 events, 56.8 s)
+  flg_room        0.10/s   (5 events, 48.5 s)
+  flg_plate       0.30/s   (17 events, 56.2 s)

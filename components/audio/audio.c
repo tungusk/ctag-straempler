@@ -57,6 +57,16 @@ void audio_remote_trig(int t, int ms) {
     s_remote_trig_until[t] = xTaskGetTickCount() + pdMS_TO_TICKS(ms > 0 ? ms : 30);
 }
 
+// DIAGNOSTIC: a 30 s soft trig released after ~2 s even though the handler
+// received ms=30000 and there is no cap in this function. Report the arithmetic
+// so the loss can be located instead of guessed at.
+void audio_remote_trig_debug(int t, uint32_t *now, uint32_t *until, uint32_t *hz)
+{
+    if (now)   *now   = (uint32_t)xTaskGetTickCount();
+    if (until) *until = (uint32_t)s_remote_trig_until[t & 1];
+    if (hz)    *hz    = (uint32_t)configTICK_RATE_HZ;
+}
+
 // teleremote CV overrides — the mirror of the soft trigs: while fresh, the
 // override substitutes for the ADC reading, so a web-driven knob is
 // indistinguishable from a physical one; on timeout the physical knob is

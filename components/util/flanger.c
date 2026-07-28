@@ -75,9 +75,29 @@ void flanger_block_f(flanger_t *g, float *buf, int frames)
     float lpL = g->lpL, lpR = g->lpR;
     int   w   = g->w;
 
+    // LFO ONCE PER BLOCK, linearly interpolated across it — not cosf() per
+    // sample. The LFO runs at 0.01-10 Hz, so over one 1.45 ms block it moves at
+    // most ~1.5% of a cycle and a straight line through it is inaudible.
+    //
+    // This was 64 cosf() calls per block. Measured 2026-07-27 on the analog
+    // output: flanger + a large reverb tank produced 1.33 discontinuities per
+    // second of sound where flanger alone, hall alone, delay+hall and trem+hall
+    // all produced ~0 — and the artefact survived mixing the flanger OUT,
+    // zeroing its feedback and zeroing its sweep depth, so it was never the
+    // signal. It is DMA underrun: deepening the I2S buffer to 17.4 ms cut it 91%
+    // without touching the DSP. `aus`/`auspk`/`ausgap` all read normal
+    // throughout, because i2s_write's portMAX_DELAY lets the loop catch up after
+    // an underrun — no meter on the device can see this.
+    float lfo0 = 0.5f - 0.5f * cosf(6.2831853f * ph);
+    float ph_end = ph + inc * (float)frames;
+    while (ph_end >= 1.0f) ph_end -= 1.0f;
+    float lfo1 = 0.5f - 0.5f * cosf(6.2831853f * ph_end);
+    float lfo_step = frames > 0 ? (lfo1 - lfo0) / (float)frames : 0.0f;
+    float lfo = lfo0;
+
     for (int f = 0; f < frames; f++) {
-        float lfo = 0.5f - 0.5f * cosf(6.2831853f * ph);   // 0..1
         float dl  = mind + sweep * lfo;                    // fractional delay (frames)
+        lfo += lfo_step;
         float rp  = (float)w - dl; while (rp < 0) rp += cap;
         int   i0  = (int)rp; float fr = rp - (float)i0;
         int   i1  = i0 + 1; if (i1 >= cap) i1 -= cap;
