@@ -1,1 +1,1 @@
-dma-glitch-v1-20260727 (I2S DMA 4x96 stops HTTP requests underrunning it, Keys PSRAM ladder, bench capture rig)
+flanger-fix-v1-20260727 (flanger LFO per block not per sample, I2S DMA 4x96, Keys PSRAM ladder, bench capture rig)
