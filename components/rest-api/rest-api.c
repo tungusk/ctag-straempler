@@ -833,14 +833,14 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     char fxst[160] = "";
     char fxq[8];
     if (get_query_param(req, "fx", fxq, sizeof(fxq)) && fxq[0] == '1') {
-        int rvwpk = 0; uint32_t rvnan = 0;
+        int rvwpk = 0, rvus = 0; uint32_t rvnan = 0;
         audio_fx_meters(fpk, fjp, true);
-        audio_rv_meters(&rvwpk, &rvnan, true);
+        audio_rv_meters2(&rvwpk, &rvnan, &rvus, true);
         snprintf(fxst, sizeof(fxst),
                  ",\"fxst\":{\"pk\":[%d,%d,%d,%d],\"jp\":[%d,%d,%d,%d]}"
-                 ",\"rv\":{\"wpk\":%d,\"nan\":%u}",
+                 ",\"rv\":{\"wpk\":%d,\"nan\":%u,\"us\":%d}",
                  fpk[0], fpk[1], fpk[2], fpk[3], fjp[0], fjp[1], fjp[2], fjp[3],
-                 rvwpk, rvnan);
+                 rvwpk, rvnan, rvus);
     } else {
         audio_fx_meters(fpk, NULL, false);   // fxpk only: no arm, no clear
     }

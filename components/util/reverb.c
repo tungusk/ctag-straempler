@@ -22,6 +22,7 @@
 // resolve at link time — audio is CORE and present in every image, including the
 // machine-less proof build. See audio.h for what these two numbers mean.
 void audio_rv_report(int wet_pk_pct, bool nan_flush);
+void audio_rv_cost(int us);
 bool audio_fx_meters_armed(void);
 
 static const char *TAG = "REVERB";
@@ -457,6 +458,7 @@ void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames
     tank_nan_guard(rv);
     int us = (int)(esp_timer_get_time() - t0);
     rv->cost_us += (us - rv->cost_us) >> 3;
+    audio_rv_cost(rv->cost_us);
 }
 
 void reverb_block_f(reverb_t *rv, float *buf, int frames)
@@ -501,7 +503,8 @@ void reverb_block_f(reverb_t *rv, float *buf, int frames)
     if (meter) audio_rv_report((int)(wpk * 100.0f / 32767.0f), false);
     tank_nan_guard(rv);
     int us = (int)(esp_timer_get_time() - t0);
-    rv->cost_us += (us - rv->cost_us) >> 3;          // EMA, ~8-block settle
+    rv->cost_us += (us - rv->cost_us) >> 3;
+    audio_rv_cost(rv->cost_us);          // EMA, ~8-block settle
 }
 
 // int32<<16 wrapper (single-FX callers, e.g. Slicer): unpack -> worker -> clamp.
