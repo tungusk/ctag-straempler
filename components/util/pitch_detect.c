@@ -212,15 +212,63 @@ int pitch_detect_buf(const int16_t *buf, uint32_t frames, float rate, pitch_resu
     if (!sc) return -1;
 
     uint32_t win = frames < PD_WIN ? frames : PD_WIN;
-    // skip the first 5% of a long sample: the attack transient is the one part
-    // of a note that is reliably inharmonic
-    uint32_t start0 = (frames > win * 4) ? frames / 20 : 0;
-    uint32_t span   = (frames > start0 + win) ? frames - start0 - win : 0;
+
+    // WINDOW THE PART THAT SOUNDS, NOT THE WHOLE FILE.
+    //
+    // Spreading windows evenly across the buffer works for a sustained tone and
+    // fails for anything that DECAYS. A struck note — marimba, piano, kalimba,
+    // most of what anyone auto-tunes — is a short burst of tone followed by a
+    // long tail, so most of the windows land in the decay, return nothing, and
+    // then get counted against the result by the agreement term below. Measured
+    // 2026-07-28: marimba notes whose pitch is perfectly clear were rejected
+    // outright, and the SAME note truncated to its first second tuned fine.
+    // The note was being penalised for having a decay.
+    //
+    // So find where the sample is actually above its own noise and confine the
+    // scan to that. The floor is relative to this sample's peak, not absolute:
+    // a quiet recording is still mostly signal, and PD_RMS_MIN alone would call
+    // all of it silence.
+    int32_t peak = 0;
+    for (uint32_t i = 0; i < frames; i += 7) {          // strided: this is only a floor
+        int32_t v = buf[i]; if (v < 0) v = -v;
+        if (v > peak) peak = v;
+    }
+    float floor_amp = (float)peak * 0.02f;              // -34 dB of this sample's own peak
+    if (floor_amp < PD_RMS_MIN) floor_amp = PD_RMS_MIN;
+
+    uint32_t a_first = 0, a_last = frames;
+    {
+        uint32_t i = 0;
+        while (i < frames) { int32_t v = buf[i]; if (v < 0) v = -v; if ((float)v >= floor_amp) break; i += 3; }
+        a_first = (i < frames) ? i : 0;
+        uint32_t j = frames;
+        while (j > a_first + 1) { int32_t v = buf[j - 1]; if (v < 0) v = -v; if ((float)v >= floor_amp) break; j -= 3; }
+        a_last = (j > a_first) ? j : frames;
+    }
+    // skip the attack transient — the one part of a note reliably inharmonic —
+    // but only when there is enough sounding material to afford it
+    uint32_t active = (a_last > a_first) ? a_last - a_first : 0;
+    uint32_t start0 = a_first;
+    if (active > win * 4) start0 = a_first + active / 20;
+    if (start0 + win > frames) start0 = (frames > win) ? frames - win : 0;
+    uint32_t a_end = (a_last > start0 + win) ? a_last : start0 + win;
+    if (a_end > frames) a_end = frames;
+    uint32_t span = (a_end > start0 + win) ? a_end - start0 - win : 0;
 
     float hzs[PD_MAXWIN], cfs[PD_MAXWIN];
     int nres = 0, tries = 0;
     for (int i = 0; i < PD_MAXWIN; i++) {
         uint32_t off = start0 + (span ? (uint32_t)((uint64_t)span * i / (PD_MAXWIN - 1)) : 0);
+        if (off + win > frames) break;
+        // A SILENT window is an ABSENCE, not a disagreement. Counting it in
+        // `tries` is what scaled a confident verdict down below the caller's
+        // threshold. Aperiodic-but-loud windows still count — those are real
+        // evidence the material is not one note.
+        double sum = 0.0;
+        for (uint32_t k = 0; k < win; k += 4) { double v = buf[off + k]; sum += v * v; }
+        float rms = (float)sqrt(sum / (double)((win + 3) / 4));
+        if (rms < floor_amp * 0.5f) { if (!span) break; continue; }
+
         pitch_result_t r;
         tries++;
         if (pitch_detect_window(buf + off, win, rate, sc, &r) == 0) {
@@ -230,6 +278,7 @@ int pitch_detect_buf(const int16_t *buf, uint32_t frames, float rate, pitch_resu
         }
         if (!span) break;                        // short sample: one window is all there is
     }
+    if (!tries) { free(sc); return -1; }
     free(sc);
     if (!nres) return -1;
 
