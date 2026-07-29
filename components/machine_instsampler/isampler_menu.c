@@ -38,6 +38,30 @@ static inline is_zone_t *ks_z(void)
     return &inst.zone[i];
 }
 
+// WHAT THE LIVE PAGE SHOWS. Setup edits one zone (ks_z); Live is a PERFORMANCE
+// view, so while a note is sounding it follows the zone that note actually chose
+// — otherwise a multisample gives no sign it is one, the top row sits on whatever
+// Setup last touched, and (worse) the playhead is drawn from the PLAYING voice's
+// cursor while being SCALED by the EDIT zone's length, so it lands in the wrong
+// place whenever the two differ. Falls back to the edit zone when nothing sounds.
+static int kl_zone_idx(void)
+{
+    is_voice_t *v = &inst.voice[0];
+    if (v->active && v->zone >= 0 && v->zone < inst.nzones && inst.zone[v->zone].frames)
+        return v->zone;
+    int i = inst.edit_zone;
+    if (i < 0 || i >= inst.nzones) i = 0;
+    return i;
+}
+static inline is_zone_t *kl_z(void) { return &inst.zone[kl_zone_idx()]; }
+// inst.peaks holds ONE strip, so it has to be rebuilt when the shown zone moves
+static int s_peaks_zone = -1;
+static void kl_sync_peaks(void)
+{
+    int z = kl_zone_idx();
+    if (z != s_peaks_zone) { keys_build_peaks_for(z); s_peaks_zone = z; }
+}
+
 static const char *const NOTE_NAMES[12] =
     { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
 
@@ -56,13 +80,17 @@ static int L_wy(void) { return TFT_getfontheight() + 16; }
 
 static int loop_x(uint32_t frame)
 {
-    uint32_t fr = ks_z()->frames;
+    uint32_t fr = kl_z()->frames;
     if (fr == 0) return L_WX;
     if (frame > fr) frame = fr;
     return L_WX + (int)((uint64_t)frame * L_WW / fr);
 }
 
 static int s_last_note = -9999;
+// The header shows note, SOUNDING ZONE and gate state, so keying its repaint on
+// the note alone missed a zone change at the same pitch and never un-greened the
+// tag on release.
+static unsigned s_sig_hdr = 0;
 static unsigned s_sig_dials = 0, s_sig_adsr = 0, s_sig_wave = 0;
 static int s_last_ph = -1;
 
@@ -107,7 +135,7 @@ static void draw_header(void)
     if (kl_is_loop(s_live_sel)) {
         // placing a loop edge by eye still wants the number, and the file name is
         // the least useful thing on screen at that moment
-        is_zone_t *lz = ks_z();
+        is_zone_t *lz = kl_z();
         unsigned a = (unsigned)((uint64_t)lz->loop_start * 1000 / IS_RATE);
         unsigned b = (unsigned)((uint64_t)lz->loop_end * 1000 / IS_RATE);
         if (lz->loop_mode != LOOP_FWD)
@@ -118,11 +146,18 @@ static void draw_header(void)
             snprintf(tag, sizeof(tag), "loop %u-%u] ms", a, b);
         _fg = (color_t){160, 240, 255};
     }
-    else if (inst.nzones > 1)
-        snprintf(tag, sizeof(tag), "%d/%d %s", inst.edit_zone + 1, inst.nzones,
-                 ks_z()->sample[0] ? ks_z()->sample : "(none)");
+    else if (inst.nzones > 1) {
+        // WHICH ZONE IS SOUNDING. Arlo, playing the first multisample: "how do i
+        // know its playing multisamples? the top row doesnt change" — because it
+        // showed the zone SETUP was editing, which does not move while you play.
+        // It now tracks the note, and goes green while one is held so the change
+        // reads as live rather than as a label that happens to differ.
+        snprintf(tag, sizeof(tag), "%d/%d %s", kl_zone_idx() + 1, inst.nzones,
+                 kl_z()->sample[0] ? kl_z()->sample : "(none)");
+        if (inst.voice[0].active) _fg = GATE_ON;
+    }
     else
-        snprintf(tag, sizeof(tag), "%s", ks_z()->sample[0] ? ks_z()->sample : "(no sample)");
+        snprintf(tag, sizeof(tag), "%s", kl_z()->sample[0] ? kl_z()->sample : "(no sample)");
     TFT_print(tag, 54, 6);
     TFT_setFont(DEFAULT_FONT, NULL);
     char nm[12]; note_name_midi((int)lroundf(inst.note_disp), nm, sizeof(nm));
@@ -142,7 +177,7 @@ static void wave_col(int x)
     int pi = clampi(col * IS_PEAKS / L_WW, 0, IS_PEAKS - 1);
     int h = inst.peaks[pi] * (L_WH / 2) / (inst.peak_max ? inst.peak_max : 255);
     if (h > L_WH / 2) h = L_WH / 2;
-    if (h < 1 && ks_z()->frames) h = 1;
+    if (h < 1 && kl_z()->frames) h = 1;
     int cy = wy + L_WH / 2;
     if (h > 0) TFT_drawLine(x, cy - h, x, cy + h, wf_color());
     TFT_drawLine(x, cy, x, cy, WF_ORIG);   // keep the origin line continuous under the playhead sweep
@@ -150,9 +185,9 @@ static void wave_col(int x)
     // second handle column — this path repaints one column behind the moving
     // playhead, so any disagreement shows up as the sweep quietly erasing a bit
     // of the edge you are currently dragging.
-    bool loop_on = (ks_z()->loop_mode == LOOP_FWD);
-    if ((loop_on || kl_is_loop(s_live_sel)) && ks_z()->frames) {
-        int lsx = loop_x(ks_z()->loop_start), lex = loop_x(ks_z()->loop_end);
+    bool loop_on = (kl_z()->loop_mode == LOOP_FWD);
+    if ((loop_on || kl_is_loop(s_live_sel)) && kl_z()->frames) {
+        int lsx = loop_x(kl_z()->loop_start), lex = loop_x(kl_z()->loop_end);
         for (int e = 0; e < 2; e++) {
             int ex = e ? lex : lsx;
             int elem = e ? KL_LOOPE : KL_LOOPS;
@@ -173,7 +208,7 @@ static void draw_wave(void)
 {
     int wy = L_wy(), cy = wy + L_WH / 2;
     _bg = TFT_BLACK; TFT_fillRect(L_WX, wy, L_WW, L_WH, _bg);
-    if (ks_z()->frames == 0) {
+    if (kl_z()->frames == 0) {
         // AN EMPTY SLOT STILL NEEDS A CURSOR. The Sample element's only focus cue
         // is the waveform colour, so with no waveform there was nothing at all to
         // see (Arlo 2026-07-26: "when the sample is empty there's no selection box
@@ -215,9 +250,9 @@ static void draw_wave(void)
     // encoder focus even if it is off — otherwise browsing to it shows nothing at
     // all and you would be placing an invisible marker. Off + focused draws dim;
     // clicking in to edit is what turns looping on (see the handler).
-    bool loop_on = (ks_z()->loop_mode == LOOP_FWD);
+    bool loop_on = (kl_z()->loop_mode == LOOP_FWD);
     if (loop_on || kl_is_loop(s_live_sel)) {
-        int lsx = loop_x(ks_z()->loop_start), lex = loop_x(ks_z()->loop_end);
+        int lsx = loop_x(kl_z()->loop_start), lex = loop_x(kl_z()->loop_end);
         for (int e = 0; e < 2; e++) {
             int ex = e ? lex : lsx;
             int elem = e ? KL_LOOPE : KL_LOOPS;
@@ -244,7 +279,7 @@ static void draw_playhead(void)
     int wy = L_wy();
     is_voice_t *v = &inst.voice[0];
     int ph = -1;
-    if (v->active && ks_z()->frames)
+    if (v->active && kl_z()->frames)
         ph = loop_x((uint32_t)v->pos);
     if (ph == s_last_ph) return;
     if (s_last_ph >= 0) wave_col(s_last_ph);
@@ -360,16 +395,16 @@ static unsigned adsr_sig(void)
 }
 static unsigned wave_sig(void)
 {
-    unsigned h = ks_z()->frames * 2654435761u;
-    h ^= ks_z()->loop_start * 40503u;
-    h ^= ks_z()->loop_end * 2246822519u;
-    h ^= (unsigned)ks_z()->loop_mode * 7u;
+    unsigned h = kl_z()->frames * 2654435761u;
+    h ^= kl_z()->loop_start * 40503u;
+    h ^= kl_z()->loop_end * 2246822519u;
+    h ^= (unsigned)kl_z()->loop_mode * 7u;
     // edit_zone explicitly: two zones holding the SAME sample (a duplicate, or a
     // set built from one file) hash identically on every other field, so without
     // this the strip would not repaint when you moved between them
-    h ^= (unsigned)inst.edit_zone * 2654435789u;
+    h ^= (unsigned)kl_zone_idx() * 2654435789u;
     h ^= (unsigned)inst.nzones * 40961u;
-    for (const char *p = ks_z()->sample; *p; p++) h = h * 31u + (unsigned)*p;
+    for (const char *p = kl_z()->sample; *p; p++) h = h * 31u + (unsigned)*p;
     return h;
 }
 
@@ -404,7 +439,7 @@ static void klive_edit(int dir)
         case 7: inst.sus = clampf(inst.sus + d * 0.05f, 0.0f, 1.0f); break;
         case 8: inst.rel = clampf(inst.rel + d * 0.02f, 0.001f, 3.0f); break;
         case KL_LOOPS: case KL_LOOPE: {
-            is_zone_t *z = ks_z();
+            is_zone_t *z = kl_z();
             if (!z->frames) break;
             // ONE DETENT ~= ONE PIXEL of the strip. This is the by-eye control —
             // the fixed 10 ms step Setup uses is 0.13 px on a 22 s sample, so the
@@ -458,13 +493,21 @@ static int keys_live_handler(int it_id, int event, void *ev_data)
             // PSRAM shadow-framebuffer writes contend with the PSRAM audio path
             // (Arlo: "noise and eventual loss of audio on the keys live screen").
             int midi = (int)lroundf(inst.note_disp);
-            if (midi != s_last_note) { draw_header(); s_last_note = midi; }
+            unsigned hs = (unsigned)(midi + 200) * 131u
+                        + (unsigned)kl_zone_idx() * 17u
+                        + (inst.voice[0].active ? 7u : 0u);
+            if (hs != s_sig_hdr) { draw_header(); s_sig_hdr = hs; s_last_note = midi; }
+            kl_sync_peaks();
             draw_playhead();
             break;
         }
         case EV_TIMER_REPEATING_SLOW: {
             int midi = (int)lroundf(inst.note_disp);
-            if (midi != s_last_note) { draw_header(); s_last_note = midi; }
+            unsigned hs2 = (unsigned)(midi + 200) * 131u
+                         + (unsigned)kl_zone_idx() * 17u
+                         + (inst.voice[0].active ? 7u : 0u);
+            if (hs2 != s_sig_hdr) { draw_header(); s_sig_hdr = hs2; s_last_note = midi; }
+            kl_sync_peaks();
             unsigned ws = wave_sig();
             if (ws != s_sig_wave) { draw_wave(); s_sig_wave = ws; }
             draw_playhead();
@@ -491,8 +534,8 @@ static int keys_live_handler(int it_id, int event, void *ev_data)
             // unambiguous statement that you want a loop, and without this the
             // control would silently do nothing until you went to Setup to arm it.
             // Reversible from Setup > Loop Mode, and the box appearing is the cue.
-            if (!s_live_edit && kl_is_loop(s_live_sel) && ks_z()->frames)
-                ks_z()->loop_mode = LOOP_FWD;
+            if (!s_live_edit && kl_is_loop(s_live_sel) && kl_z()->frames)
+                kl_z()->loop_mode = LOOP_FWD;
             s_live_edit = !s_live_edit;                // click in / out of edit
             klive_repaint();
             break;
