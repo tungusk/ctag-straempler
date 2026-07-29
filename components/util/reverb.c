@@ -111,6 +111,7 @@ esp_err_t reverb_init(reverb_t *rv)
     rv->mode = RV_OFF;
     rv->wet = 0.35f;
     rv->fade_g = 1.0f; rv->fade_tgt = 1.0f;   // open; set_mode drives the ramp
+    rv->clear_off = -1;                       // not flushing
     ESP_LOGI(TAG, "slab %u KB PSRAM", (unsigned)(RV_SLAB * sizeof(float) / 1024));
     return ESP_OK;
 }
@@ -170,10 +171,14 @@ static void tank_resize(reverb_t *rv, float size)
 // PSRAM bus for 10-15 ms, which starves the audio task's own PSRAM reads (on
 // Tape, the tape banks themselves) and clicks no matter what the reverb signal
 // is doing — a fade cannot mask it because it is not a signal discontinuity.
-// Chunked + yielding when we're in UI context; the NaN guard runs in the audio
-// task and must take the straight path.
+// Chunked + yielding when we're in UI context. The NaN guard used to take the
+// straight path here because it runs in the audio task with nothing to yield to
+// — which made every firing a guaranteed dropout, since 10-15 ms of held bus is
+// longer than the WHOLE I2S DMA buffer (8.7 ms). It now hands the work to the
+// incremental flush (rv_flush_tick) instead and never calls this.
 static void rv_clear_slab(reverb_t *rv, bool may_yield)
 {
+    rv->clear_off = -1;          // a full clear supersedes any in-flight flush
     const size_t total = (size_t)RV_SLAB * sizeof(float);
     if (!may_yield) { memset(rv->slab, 0, total); return; }
     // 8 KB per chunk ~= 0.5 ms of PSRAM writes, comfortably inside one 1.45 ms
@@ -381,14 +386,47 @@ static inline void tank_nan_guard(reverb_t *rv)
 {
     if (!(rv->damp_a == rv->damp_a) || !(rv->damp_b == rv->damp_b)) {
         audio_rv_report(0, true);
-        tank_resize(rv, 1.0f);
-        reverb_apply_mode(rv, rv->mode, false);   // audio context: never the sleeping variant
+        // Kill the recursive STATES immediately — cheap, and stops the poison
+        // being written back into the lines on the next sample. The LINES
+        // themselves hold NaN too, but zeroing 150 KB here is exactly the
+        // 10-15 ms bus stall documented above, so it is handed to the
+        // incremental flush instead and the reverb passes dry until it finishes
+        // (~19 blocks, about 28 ms of no reverb — a gap, not a click).
+        rv->in_lp = rv->damp_a = rv->damp_b = 0.0f;
+        rv->shim_lp = rv->shim_dc = rv->shim_pos = 0.0f;
+        rv->clear_off = 0;
     }
+}
+
+// One bounded chunk of the flush. 4 KB is ~0.25 ms of PSRAM writes, comfortably
+// inside a 1.45 ms audio block (the UI-context clear uses 8 KB with a yield
+// between; there is nothing to yield to here). Returns true while flushing, in
+// which case the caller must leave the signal DRY — the lines are still poisoned.
+static inline bool rv_flush_tick(reverb_t *rv)
+{
+    if (rv->clear_off < 0) return false;
+    const size_t total = (size_t)RV_SLAB * sizeof(float);
+    size_t off = (size_t)rv->clear_off;
+    if (off >= total) {
+        // done: restart the tank from a known-good zero state
+        for (int i = 0; i < 4; i++) rv->ap_in[i].w = 0;
+        rv->pre.w = rv->ap_a1.w = rv->d_a1.w = rv->ap_a2.w = rv->d_a2.w = 0;
+        rv->ap_b1.w = rv->d_b1.w = rv->ap_b2.w = rv->d_b2.w = rv->shim.w = 0;
+        rv->clear_off = -1;
+        return false;
+    }
+    size_t n = (total - off < 4096) ? (total - off) : 4096;
+    memset((uint8_t *)rv->slab + off, 0, n);
+    rv->clear_off = (int)(off + n);
+    return true;
 }
 
 void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames)
 {
-    if (!rv->slab || rv->mode == RV_OFF) { rv->cost_us = 0; return; }
+    if (!rv->slab) { rv->cost_us = 0; return; }
+    // as reverb_block_f: dry is untouched while the tank is being flushed
+    if (rv_flush_tick(rv)) { rv->cost_us = 0; return; }
+    if (rv->mode == RV_OFF) { rv->cost_us = 0; return; }
     int64_t t0 = esp_timer_get_time();
     const float decay = rv->decay, damp = rv->damp, bw = rv->in_bw;
     const float sg = rv->shim_gain;
@@ -423,7 +461,11 @@ void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames
 
 void reverb_block_f(reverb_t *rv, float *buf, int frames)
 {
-    if (!rv->slab || rv->mode == RV_OFF) { rv->cost_us = 0; return; }
+    if (!rv->slab) { rv->cost_us = 0; return; }
+    // flushing after a NaN: pass DRY (buf is already the dry signal) and chip
+    // away at the tank a chunk at a time, rather than stalling the bus at once
+    if (rv_flush_tick(rv)) { rv->cost_us = 0; return; }
+    if (rv->mode == RV_OFF) { rv->cost_us = 0; return; }
     int64_t t0 = esp_timer_get_time();
     const float decay = rv->decay;
     const float damp = rv->damp;

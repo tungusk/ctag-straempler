@@ -59,6 +59,12 @@ typedef struct {
     // reverb_set_mode, which waits for the ramp-down before clearing the tank.
     volatile float fade_g;      // current return gain 0..1 (UI task polls it, audio task writes)
     volatile float fade_tgt;    // where the kernel is ramping it
+    // INCREMENTAL TANK FLUSH. Byte offset of the next chunk to zero, or -1 when
+    // not flushing. The NaN guard runs in the AUDIO task, where the old straight
+    // memset of ~150 KB held the PSRAM bus for 10-15 ms — longer than the whole
+    // I2S DMA buffer, so it was a guaranteed dropout every time it fired. The
+    // flush now happens a bounded chunk per block with the reverb passing dry.
+    volatile int clear_off;
     // instrumentation: EMA of process cost, microseconds per block
     volatile int cost_us;
 } reverb_t;
