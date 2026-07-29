@@ -400,6 +400,14 @@ The machines (all working; archives in `bin/`):
   `/edit/state`) + an "Editor" web tab; on-device Live is status-only. Output ids
   are short generated `<PFX>NNNN` (see the 8.3 rule in Code rules). v2: crop +
   zero-crossing loop-snap (needs a crop UI), audition-while-tweaking.
+- **Keys is a MULTISAMPLER** (2026-07-28): up to 8 zones in one PSRAM arena,
+  mapped by NEAREST ROOT with auto-tune writing the roots — there are no editable
+  key ranges, the map builds itself. Setup rows: `Zone` retargets every per-zone
+  row and the Live strip; `Add Zone` appends via the browser and stays on Setup;
+  `Clear Zones` drops the extras and KEEPS zone 0 (Load Sample is the full reset).
+  **Live follows the SOUNDING zone**, not the edited one, so playing a note is how
+  you pick which zone to edit — and the loop box on the waveform is draggable
+  (one detent = one pixel; clicking into an edge ARMS looping).
 - `machine_freesound` — silent web-driven utility: freesound search/preview
   download (`/fs/search`, `/fs/get`, `/fs/state`) and direct MP3-URL import
   (`/fs/fetch`), decoding to `usr/` (mono→stereo expand, sidecar). Auth behind
@@ -656,6 +664,16 @@ Sampler3 SHIPPED 2026-07-12.
   (broadcast-lazy RAM fix), `wav-v1`, `looper-v3`, `streaming-slicer-v1`.
   `bin/<name>/flash.sh` returns to any known-good state.
   Matching dated git tags.
+- **A KNOB CAN BE ROUTED TO ITS OWN DESTINATION — check the CV matrix first.**
+  Arlo's Keys patch had `Cutoff <- CV6` at FULL amount, and CV6 *is* knob 6,
+  already the cutoff control: cutoff driven twice from one source. Symptoms that
+  cost hours on 2026-07-28 — remote `cut` writes snapping back to a few hundred
+  Hz, an instrument sounding dead (K6 at 243 Hz with 81% resonance metered VU 1
+  against 216 with the filter open), and an LFO patched to that jack sweeping the
+  filter through an entire calibration run. **Before diagnosing "it sounds quiet
+  or wrong", read `mxs`/`mxa` from `/remote/params` and the knob-owned params
+  back.** Knob takeover also means a remote write to `cut`/`res` holds only until
+  the physical knob MOVES.
 - **Bench capture rig — `tools/bench/`** (2026-07-27). Records the module's
   ANALOG output through an audio interface (`sox -t coreaudio`) and drives it
   over REST. Use it in preference to `/bounce` or the `:8000` broadcast, both of
@@ -714,6 +732,24 @@ Sampler3 SHIPPED 2026-07-12.
   reported as `TUNE_CONFLICT` and the recording wins. `tune_src` is **per zone**
   (`"ts"` in the zones array) — the instrument-level one only ever holds the LAST
   load's verdict, which tells you nothing when one zone of eight is out of tune.
+- **BUILDING A MULTISAMPLE FROM A SAMPLE LIBRARY** (done 2026-07-28 from Arlo's
+  Moog Voyager set; five notes G2-G6 self-tuned 5/5 and he kept the patch). Three
+  things the raw files need on the way in:
+  1. **TRIM.** The arena is ONE PSRAM block from a ladder (1,000,000 frames, then
+     750,000, 500,000...) and in practice lands at ~750,000 = **17 s of mono
+     audio TOTAL**, across all zones. Five 8 s notes is 40 s and simply will not
+     fit — it is SECONDS OF MATERIAL, not zone count, that runs out first. A
+     `/reboot` before building gets the best arena available.
+  2. **GAIN, but the SAME gain for every note.** Per-file normalisation flattens
+     the relative dynamics between zones, which is the one thing a multisample
+     must not do. Find the loudest of the set and apply one fixed dB figure to all.
+  3. **OCTAVE-SHIFT THE NAMES** if the library numbers middle C as C3 (the Moog
+     Voyager set does) — Keys expects scientific, middle C = C4.
+  Upload with `PUT /drop_sample` + a `Name:` header, which writes the bytes
+  verbatim to `usr/<NAME>.RAW`; send raw **int16 stereo 44.1 kHz** (`sox ... -r
+  44100 -c 2 -b 16 -e signed -t raw`). The importer sniffs MAGIC not extension,
+  so a container behind a .RAW name still converts — but note `POST /import`
+  SKIPS any filename starting with `IMP` (its temp-file guard).
 - **Two zones with the same root: the later one is DEAD.** `keys_zone_for_note`
   takes the nearest root and breaks ties toward the FIRST, so a duplicate root
   leaves a zone occupying arena and never sounding, with nothing reporting it.
