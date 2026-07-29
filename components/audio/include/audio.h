@@ -113,6 +113,10 @@ void audio_fx_meters(int *pk, int *jp, bool clear);        // pk/jp hold >= 4 in
 //         A non-zero count is the smoking gun; a static count exonerates it.
 void audio_rv_report(int wet_pk_pct, bool nan_flush);      // audio task only
 void audio_rv_meters(int *wet_pk, uint32_t *nan_count, bool clear_pk);
+void audio_rv_cost(int us);                                // audio task only
+// as audio_rv_meters, plus the reverb's per-block cost in us (1450 = 100% of the
+// audio tick). Cost is NOT gated on the meter arm — see audio.c.
+void audio_rv_meters2(int *wet_pk, uint32_t *nan_count, int *cost_us, bool clear_pk);
 
 // soft MIDI (web bridge: musical typing / WebMIDI). Machines with pitch read
 // gate()/note() next to their CV1/TR1 inputs; MIDI wins while notes are held.

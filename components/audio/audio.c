@@ -300,11 +300,23 @@ void audio_fx_meters(int *pk, int *jp, bool clear)
 // cleared it would lose the one event we are hunting.
 static volatile int      s_rv_wet_pk = 0;
 static volatile uint32_t s_rv_nan_n  = 0;
+// Reverb block cost, microseconds (the reverb's own EMA). Reported UNCONDITIONALLY
+// rather than behind the meter arm: it is one store per block, and the question
+// "how expensive is this mode" should not require arming anything.
+static volatile int      s_rv_cost_us = 0;
 
 void audio_rv_report(int wet_pk_pct, bool nan_flush)
 {
     if (wet_pk_pct > s_rv_wet_pk) s_rv_wet_pk = wet_pk_pct;
     if (nan_flush) s_rv_nan_n++;
+}
+
+void audio_rv_cost(int us) { s_rv_cost_us = us; }
+
+void audio_rv_meters2(int *wet_pk, uint32_t *nan_count, int *cost_us, bool clear_pk)
+{
+    if (cost_us) *cost_us = s_rv_cost_us;
+    audio_rv_meters(wet_pk, nan_count, clear_pk);
 }
 
 void audio_rv_meters(int *wet_pk, uint32_t *nan_count, bool clear_pk)
