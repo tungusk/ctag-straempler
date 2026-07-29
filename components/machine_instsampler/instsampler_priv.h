@@ -190,6 +190,9 @@ int  keys_zone_for_note(float note);
 // rebuild inst.peaks for the CURRENT edit_zone — call after moving edit_zone,
 // or the waveform strip shows one zone's audio under another's loop box
 void keys_build_peaks(void);
+void keys_build_peaks_for(int zi);   // ...or for a specific zone (Live follows
+                                     // the SOUNDING zone, which is not always
+                                     // the one Setup is editing)
 
 // drop zones 1..n-1, keep zone 0 (the "Clear Zones" row). Never empties the
 // machine — Load Sample is the full reset.

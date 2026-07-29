@@ -207,9 +207,12 @@ void keys_keep_first_zone(void)
 // moves, so the picture always matches the loop box drawn over it. Without that
 // the Live page would show one zone's audio under another zone's loop window —
 // which looks like a loop-point bug and is not one. UI/loader context (~1 ms).
-void keys_build_peaks(void)
+void keys_build_peaks(void) { keys_build_peaks_for(inst.edit_zone); }
+
+void keys_build_peaks_for(int zi)
 {
-    is_zone_t *z = &inst.zone[inst.edit_zone < inst.nzones ? inst.edit_zone : 0];
+    if (zi < 0 || zi >= inst.nzones) zi = 0;
+    is_zone_t *z = &inst.zone[zi];
     uint32_t n = z->frames;
     if (!z->buf || !n) {
         memset(inst.peaks, 0, sizeof(inst.peaks));
