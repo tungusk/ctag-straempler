@@ -686,7 +686,6 @@ static void keys_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "res"))   && cJSON_IsNumber(j)) inst.res01 = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) inst.glide = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) inst.level = (float)j->valuedouble;
-    fxrack_load(&inst_rk, node);   // slots + every effect param (shared FX rack)
     // ZONES array wins when present: clear, then append each entry and restore
     // its tuning and loop after the load (loading resets both). Falls back to
     // the legacy single "smp" key so every existing patch and autosave still
@@ -694,6 +693,26 @@ static void keys_preset_load(const cJSON *node)
     // multisample was tested before it had any UI.
     const cJSON *zs = cJSON_GetObjectItemCaseSensitive(node, "zones");
     bool used_zones = false;
+    // Samples load BEFORE the FX rack (fxrack_load moved below the zone
+    // section, 2026-07-31). On the session's FIRST load — the boot autosave,
+    // or a patch recall on a fresh machine — the arena ladder runs here, and
+    // every FX slab allocated ahead of it (reverb tank ~170 KB, delay
+    // ~690 KB, flanger ~90 KB) comes out of the largest PSRAM block the
+    // ladder can win, permanently for the session (arena_ensure never
+    // re-allocates). PAT_001 (5 zones + hall) restored only 4 zones under the
+    // old order. The reverb is also faded OFF across the loads: loading under
+    // a running hall lost the last zone twice on hardware while the OFF-first
+    // sequence restored all 5 both times — that same-boot difference is NOT
+    // explained by the arena ordering alone (the arena is session-sticky), so
+    // the mechanism is not fully pinned; this keeps the sequence that has the
+    // hardware evidence. fxrack_load below restores the preset's mode.
+    bool will_load = (cJSON_IsArray(zs) && cJSON_GetArraySize(zs) > 0);
+    if (!will_load) {
+        const cJSON *sj = cJSON_GetObjectItemCaseSensitive(node, "smp");
+        will_load = cJSON_IsString(sj) && sj->valuestring[0];
+    }
+    if (will_load && inst.rv.slab && inst.rv.mode != RV_OFF)
+        reverb_set_mode(&inst.rv, RV_OFF);
     if (cJSON_IsArray(zs) && cJSON_GetArraySize(zs) > 0) {
         used_zones = true;
         keys_clear_zones();
@@ -745,6 +764,8 @@ static void keys_preset_load(const cJSON *node)
         float s = (float)j->valuedouble;
         inst.start_frac = s < 0 ? 0 : s > 0.99f ? 0.99f : s;
     }
+    fxrack_load(&inst_rk, node);   // slots + every effect param — AFTER the
+                                   // zone loads, see the ordering note above
     cvmtx_load(&inst.mtx, node);   // "mxs"/"mxa", with the legacy "msrc"/"mamt" fallback
     inst.knob_ctx = -1;   // re-arm knob takeover against the loaded values
 }
