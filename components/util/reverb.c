@@ -23,6 +23,7 @@
 // machine-less proof build. See audio.h for what these two numbers mean.
 void audio_rv_report(int wet_pk_pct, bool nan_flush);
 void audio_rv_cost(int us);
+void audio_rv_step(int step_pk, int count);
 bool audio_fx_meters_armed(void);
 
 static const char *TAG = "REVERB";
@@ -111,6 +112,8 @@ esp_err_t reverb_init(reverb_t *rv)
     carve(&p, &rv->shim,  L_SHIM);
     rv->mode = RV_OFF;
     rv->wet = 0.35f;
+    rv->wet_z = 0.35f;
+    rv->yl_z = rv->yr_z = 0.0f;
     rv->fade_g = 1.0f; rv->fade_tgt = 1.0f;   // open; set_mode drives the ramp
     rv->clear_off = -1;                       // not flushing
     ESP_LOGI(TAG, "slab %u KB PSRAM", (unsigned)(RV_SLAB * sizeof(float) / 1024));
@@ -289,6 +292,26 @@ static inline float shim_step(reverb_t *rv, float x)
            line_read(&rv->shim, back1) * (1.0f - w0);
 }
 
+// On-device wet-step detector. The 07-30 soak's unexplained pops are SINGLE-
+// CHANNEL steps in the wet path (one output tap set jumps, the other channel
+// barely moves) that appear only in a state the module enters rarely — so this
+// runs UNCONDITIONALLY, unlike the stage meters. Two fabsf+compares per sample
+// against ~40 PSRAM line reads is noise; rv.us will say so if not.
+//   step peak  reported every block, peak-held/cleared on read (baseline is
+//              whatever the material does; the bad state should stand out)
+//   step count cumulative over an unambiguous bar (~18% FS), never cleared —
+//              the nan-counter idiom: it must catch a step nobody was watching
+#define RV_STEP_CT_THR 6000.0f
+static inline void rv_step_watch(reverb_t *rv, float yl, float yr,
+                                 float *spk, int *sct)
+{
+    float dl = fabsf(yl - rv->yl_z), dr = fabsf(yr - rv->yr_z);
+    float dm = dl > dr ? dl : dr;
+    if (dm > *spk) *spk = dm;
+    if (dm > RV_STEP_CT_THR) (*sct)++;
+    rv->yl_z = yl; rv->yr_z = yr;
+}
+
 // return-level fade, stepped once per frame. ~20 ms end to end: long enough to
 // kill the click, short enough that a mode change still feels instant.
 #define RV_FADE_STEP (1.0f / 882.0f)
@@ -431,14 +454,21 @@ void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames
     int64_t t0 = esp_timer_get_time();
     const float decay = rv->decay, damp = rv->damp, bw = rv->in_bw;
     const float sg = rv->shim_gain;
-    const float ret = rv->wet;          // RETURN level: dry stays full
+    // RETURN level (wet doubles as return gain on the send bus) — slewed and
+    // ramped across the block for the same reason as gd/gw in reverb_block_f
+    const float r0 = rv->wet_z;
+    rv->wet_z += 0.15f * (rv->wet - rv->wet_z);
+    float ret = r0;
+    const float reti = (rv->wet_z - r0) / (float)frames;
     const bool meter = audio_fx_meters_armed();   // per-sample cost: opt in only
     float wpk = 0.0f;                   // WET-only peak, see audio.h
+    float spk = 0.0f; int sct = 0;      // wet-step detector, always on
     for (int f = 0; f < frames; f++) {
         float sl = (float)send[f * 2], sr = (float)send[f * 2 + 1];
         float x = 0.5f * (sl + sr) * 0.6f;
         float yl, yr;
         tank_step(rv, x, decay, damp, bw, sg, &yl, &yr);
+        rv_step_watch(rv, yl, yr, &spk, &sct);
         if (meter) {
             float al = fabsf(yl), ar = fabsf(yr);
             if (al > wpk) wpk = al;
@@ -453,8 +483,10 @@ void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames
         if (or_ < -32768.0f) or_ = -32768.0f;
         dry[f * 2]     = ((int32_t)ol) << 16;
         dry[f * 2 + 1] = ((int32_t)or_) << 16;
+        ret += reti;
     }
     if (meter) audio_rv_report((int)(wpk * 100.0f / 32767.0f), false);
+    audio_rv_step((int)spk, sct);
     tank_nan_guard(rv);
     int us = (int)(esp_timer_get_time() - t0);
     rv->cost_us += (us - rv->cost_us) >> 3;
@@ -472,13 +504,22 @@ void reverb_block_f(reverb_t *rv, float *buf, int frames)
     const float decay = rv->decay;
     const float damp = rv->damp;
     const float bw = rv->in_bw;
-    const float wet = rv->wet;
-    // equal-power dry/wet
-    const float gd = cosf(wet * (float)M_PI_2);
-    const float gw = sinf(wet * (float)M_PI_2);
+    // equal-power dry/wet, SLEWED: wet is a target the UI/CV matrix rewrites
+    // at will; applying it raw steps the ratio once per block (audible as a
+    // click train when the matrix sweeps the mix). One-pole toward the target
+    // (~8 ms), then gd/gw computed at both block ends and interpolated per
+    // sample — the flanger LFO idiom, so the trig cost stays 4 calls/block.
+    const float w0 = rv->wet_z;
+    rv->wet_z += 0.15f * (rv->wet - rv->wet_z);
+    const float w1 = rv->wet_z;
+    float gd = cosf(w0 * (float)M_PI_2);
+    float gw = sinf(w0 * (float)M_PI_2);
+    const float gdi = (cosf(w1 * (float)M_PI_2) - gd) / (float)frames;
+    const float gwi = (sinf(w1 * (float)M_PI_2) - gw) / (float)frames;
     const float sg = rv->shim_gain;
     const bool meter = audio_fx_meters_armed();      // per-sample cost: opt in only
     float wpk = 0.0f;                                // WET-only peak, see audio.h
+    float spk = 0.0f; int sct = 0;                   // wet-step detector, always on
 
     for (int f = 0; f < frames; f++) {
         float dl = buf[f * 2];
@@ -487,6 +528,7 @@ void reverb_block_f(reverb_t *rv, float *buf, int frames)
 
         float yl, yr;
         tank_step(rv, x, decay, damp, bw, sg, &yl, &yr);
+        rv_step_watch(rv, yl, yr, &spk, &sct);
         if (meter) {
             float al = fabsf(yl), ar = fabsf(yr);
             if (al > wpk) wpk = al;
@@ -498,9 +540,12 @@ void reverb_block_f(reverb_t *rv, float *buf, int frames)
         float fg = rv_fade_step(rv);
         buf[f * 2]     = dl + fg * (gd * dl + gw * yl - dl);   // no clamp (chain soft-limits)
         buf[f * 2 + 1] = dr + fg * (gd * dr + gw * yr - dr);
+        gd += gdi;
+        gw += gwi;
     }
 
     if (meter) audio_rv_report((int)(wpk * 100.0f / 32767.0f), false);
+    audio_rv_step((int)spk, sct);
     tank_nan_guard(rv);
     int us = (int)(esp_timer_get_time() - t0);
     rv->cost_us += (us - rv->cost_us) >> 3;

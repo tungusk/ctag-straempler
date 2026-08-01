@@ -313,10 +313,30 @@ void audio_rv_report(int wet_pk_pct, bool nan_flush)
 
 void audio_rv_cost(int us) { s_rv_cost_us = us; }
 
+// Wet-step detector (see reverb.c rv_step_watch). Peak is peak-held and
+// cleared on read; the count is cumulative and never cleared — the NaN-count
+// idiom, because the state that makes the steps cannot be summoned and the
+// counter must catch one that fires while nobody is looking.
+static volatile int      s_rv_step_pk = 0;
+static volatile uint32_t s_rv_step_n  = 0;
+
+void audio_rv_step(int step_pk, int count)
+{
+    if (step_pk > s_rv_step_pk) s_rv_step_pk = step_pk;
+    s_rv_step_n += (uint32_t)count;
+}
+
 void audio_rv_meters2(int *wet_pk, uint32_t *nan_count, int *cost_us, bool clear_pk)
 {
     if (cost_us) *cost_us = s_rv_cost_us;
     audio_rv_meters(wet_pk, nan_count, clear_pk);
+}
+
+void audio_rv_steps(int *step_pk, uint32_t *step_count, bool clear_pk)
+{
+    if (step_pk) *step_pk = s_rv_step_pk;
+    if (step_count) *step_count = s_rv_step_n;
+    if (clear_pk) s_rv_step_pk = 0;
 }
 
 void audio_rv_meters(int *wet_pk, uint32_t *nan_count, bool clear_pk)
