@@ -114,6 +114,11 @@ void audio_fx_meters(int *pk, int *jp, bool clear);        // pk/jp hold >= 4 in
 void audio_rv_report(int wet_pk_pct, bool nan_flush);      // audio task only
 void audio_rv_meters(int *wet_pk, uint32_t *nan_count, bool clear_pk);
 void audio_rv_cost(int us);                                // audio task only
+// wet-step detector (single-channel step hunt, 07-31): per-block peak |Δwet|
+// in int16-scale units and a cumulative count above ~18% FS. Peak clears on
+// read; the count never does (the nan-count idiom).
+void audio_rv_step(int step_pk, int count);                // audio task only
+void audio_rv_steps(int *step_pk, uint32_t *step_count, bool clear_pk);
 // as audio_rv_meters, plus the reverb's per-block cost in us (1450 = 100% of the
 // audio tick). Cost is NOT gated on the meter arm — see audio.c.
 void audio_rv_meters2(int *wet_pk, uint32_t *nan_count, int *cost_us, bool clear_pk);

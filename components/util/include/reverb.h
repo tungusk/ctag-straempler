@@ -52,11 +52,25 @@ typedef struct {
     float damp;                 // damping coefficient (0 = bright)
     float in_bw;                // input bandwidth
     float shim_gain;            // pitch-feedback amount (0 = none)
-    volatile float wet;         // 0..1 mix, equal-power
+    volatile float wet;         // 0..1 mix, equal-power (UI/CV writes the target)
+    float wet_z;                // audio-task slewed copy of wet — the mix the
+                                // kernel actually applies. wet is recomputed
+                                // per block from whatever last wrote it (menu,
+                                // CV matrix), so applying it raw steps the
+                                // dry/wet ratio once per 1.45 ms block; the
+                                // 07-31 mix sweep measured 2x the event rate
+                                // under hard steps vs a static mix.
     // mode-change fade: the kernel ramps fade_g toward fade_tgt once per frame
     // and scales the reverb RETURN by it, so switching modes doesn't cut a
     // ringing tail to zero in one sample (that step was the click). Set by
     // reverb_set_mode, which waits for the ramp-down before clearing the tank.
+    float yl_z, yr_z;           // last wet sample per channel, for the on-device
+                                // step detector: the 07-30 soak caught pops that
+                                // are single-channel steps (L or R alone jumps
+                                // and carries on), which no task meter and no
+                                // NaN guard can see, and the state that makes
+                                // them cannot be summoned — so the detector has
+                                // to already be running when it comes back.
     volatile float fade_g;      // current return gain 0..1 (UI task polls it, audio task writes)
     volatile float fade_tgt;    // where the kernel is ramping it
     // INCREMENTAL TANK FLUSH. Byte offset of the next chunk to zero, or -1 when
