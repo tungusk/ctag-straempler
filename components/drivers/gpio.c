@@ -12,13 +12,18 @@
 
 static xQueueHandle ui_event_queue = NULL;
 
+// Quadrature counts per detent (CONFIG.JSN settings.encres): 2 = prototype
+// encoder resting at BOTH quadrature states (00 and 11), 4 = standard
+// EC11-class part resting at one state (full cycle per detent). Set once in
+// initGPIO() before the ISRs are armed.
+static uint8_t s_enc_cpd = 2;
+
 static void IRAM_ATTR gpio_isr_handler_encoder1(void* arg)
 {
-    // Quadrature state machine, one event per detent. This encoder rests at
-    // BOTH quadrature states (00 and 11), so a detent is half a cycle = two
-    // valid transitions; the old decoder fired only on the 00 arrival and
-    // ate every second click. Invalid/bounce transitions score 0 or cancel,
-    // so the accumulator also debounces.
+    // Quadrature state machine, one event per detent (see s_enc_cpd above);
+    // the old decoder fired only on the 00 arrival and ate every second
+    // click of the half-cycle encoder. Invalid/bounce transitions score 0
+    // or cancel, so the accumulator also debounces.
     static const int8_t qdec[16] = { 0, +1, -1,  0,
                                     -1,  0,  0, +1,
                                     +1,  0,  0, -1,
@@ -30,15 +35,20 @@ static void IRAM_ATTR gpio_isr_handler_encoder1(void* arg)
     uint8_t ab = ((uint8_t)gpio_get_level(ENC_A_PIN) << 1) | (uint8_t)gpio_get_level(ENC_B_PIN);
     accum += qdec[(prev << 2) | ab];
     prev = ab;
-    if(ab == 0 || ab == 3){ // rest state (detent position) reached
-        if(accum >= 2){
+    if(ab == 0 || ab == 3){ // rest state reached
+        if(accum >= (int8_t)s_enc_cpd){
             ev.event = EV_ENC1_FWD;
             xQueueSendFromISR(ui_event_queue, &ev, NULL);
-        }else if(accum <= -2){
+            accum = 0;
+        }else if(accum <= -(int8_t)s_enc_cpd){
             ev.event = EV_ENC1_BWD;
             xQueueSendFromISR(ui_event_queue, &ev, NULL);
+            accum = 0;
+        }else if(s_enc_cpd == 2){
+            accum = 0; // every rest is a detent; discard bounce residue
         }
-        accum = 0;
+        // cpd 4: the mid-cycle rest (accum +/-2) is not a detent — keep
+        // accumulating toward the real one instead of eating the half-turn
     }
     return;
 }
@@ -58,9 +68,10 @@ static void IRAM_ATTR gpio_isr_handler_encoder1_btn1(void* arg)
     xQueueSendFromISR(ui_event_queue, &ev, NULL);
 }
 
-void initGPIO(xQueueHandle queueui){
+void initGPIO(xQueueHandle queueui, int enc_cpd){
     // set queues
     ui_event_queue = queueui;
+    s_enc_cpd = (enc_cpd >= 4) ? 4 : 2;
     
     gpio_config_t io_conf;
 
