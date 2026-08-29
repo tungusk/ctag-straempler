@@ -231,7 +231,10 @@ void initUI(){
 
     mountSDStorage();
     configDisplay();
-    initGPIO(ui_ev_queue);
+    // settings.encres = quadrature counts per detent: 2 = prototype encoder
+    // (rests at both states; default), 4 = the EC11-class parts on new units
+    // (rest at one state — they double-step at 2). AFTER mountSDStorage().
+    initGPIO(ui_ev_queue, configGetIntSetting("encres", 2));
 
     initAudio();
     initMenu(ui_ev_queue);
