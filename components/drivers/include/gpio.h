@@ -4,4 +4,5 @@
 // 2 = prototype half-cycle encoder (default), 4 = standard EC11 full-cycle
 void initGPIO(xQueueHandle, int enc_cpd);
 void gpioSetEncoderResolution(int enc_cpd);   // live re-apply (POST /settings)
+void gpioSetEncoderDirection(int reversed);   // settings.encdir: 1 = reversed lot
 

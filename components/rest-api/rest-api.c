@@ -801,6 +801,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     if ((j = cJSON_GetObjectItem(settings, "tz_shift"))) cJSON_AddNumberToObject(out, "tz_shift", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "txpwr")))   cJSON_AddNumberToObject(out, "txpwr", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "encres")))  cJSON_AddNumberToObject(out, "encres", j->valuedouble);
+    if ((j = cJSON_GetObjectItem(settings, "encdir")))  cJSON_AddNumberToObject(out, "encdir", j->valuedouble);
     // NOTE: password intentionally omitted
 
     char *s = cJSON_PrintUnformatted(out);
@@ -903,6 +904,17 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         else
             cJSON_AddNumberToObject(settings, "encres", j->valueint);
         gpioSetEncoderResolution(j->valueint);
+    }
+    // encoder direction: 1 = reversed lot (new builds), 0 = prototype sense.
+    // Applied live and persisted, same as encres.
+    if ((j = cJSON_GetObjectItem(in, "encdir")) && cJSON_IsNumber(j)) {
+        extern void gpioSetEncoderDirection(int);
+        int rev = j->valueint ? 1 : 0;
+        if (cJSON_GetObjectItem(settings, "encdir"))
+            cJSON_ReplaceItemInObject(settings, "encdir", cJSON_CreateNumber(rev));
+        else
+            cJSON_AddNumberToObject(settings, "encdir", rev);
+        gpioSetEncoderDirection(rev);
     }
 
     // capture the final credentials before cfg is freed (same flow as the menu
