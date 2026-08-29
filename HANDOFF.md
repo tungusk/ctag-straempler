@@ -9,6 +9,49 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-08-29 — SOLDERING-LAB SESSION (hardware build #1) — read this first
+
+Written on a second Mac (`~/claude09`, no ESP-IDF, no GitHub auth) at the
+soldering lab; handing back to the main bench. Both repos have local commits
+to pull (`strampler-build-pack` main: 7 ahead; this repo `v09-machines`: 1).
+
+**Hardware:** first new Antumbra module BUILT and PASSES (boots, makes
+sound). Details + bench notes for units 2–5 in
+`strampler-build-pack/COMPLETION-SHOPPING-5UNITS.md` ("FIRST MODULE BUILT").
+Gain pot (POT1) not fitted yet (wrong part delivered; Mouser sub carted), so
+the audio INPUT path is still untested. Panel run had a conversion bug (LED
+window copper) — fixed in KiCad, re-fab pending.
+
+**Flashing without IDF (worked 2026-08-28):** `python -m venv v && v/bin/pip
+install esptool`; micro-USB → on-board CP2102 (`/dev/cu.usbserial-*`); module
+on rack +12 V; then exactly `bin/<archive>/flash.sh`'s offsets:
+`esptool --chip esp32 -p PORT -b 460800 --before default_reset --after
+hard_reset write_flash --flash_mode dio --flash_size detect --flash_freq 80m
+0x1000 bootloader.bin 0x8000 partition-table.bin 0xf000 ota_data_initial.bin
+0x20000 ctag-straempler.bin` with `bin/keys-multisample-v1` (newest archive,
+= `version.txt`). Boot log on the new unit: PSRAM 64 Mbit OK, display init,
+I2S up, WiFi up; no SD in → `Failed to initialize the card (263)` and it
+tries a garbage SSID from the missing CONFIG.JSN — both harmless.
+
+**THE MISO MYSTERY IS SOLVED (hardware, not firmware).** The panel's SDO
+(P3 pin 9) reaches IO19 = `PIN_NUM_MISO` only through solder jumper **SJ1**
+(bottom side), and SJ1 is OPEN on the test unit (and on unit #1). That is
+the "MISO idles high / GRAM reads 0xFF / find_rd_speed falls back to 1 MHz"
+behaviour documented in CLAUDE.md. Nothing to do unless readback is wanted.
+
+**Shipped UNBUILT (`82f0357`): `GET /tftread`** in `rest-api.c` — ID4
+(0xD3 → `00 93 41`), 4-pixel write/read at (0,0) restored from the shadow,
+read-clock sweep, JSON `verdict`. Desk-checked only — **build it before
+trusting it**; expect possible compile nits. Then: `/tftread` on the test unit
+(expect "MISO stuck HIGH") → bridge SJ1 → `/tftread` again (expect
+"READBACK OK"). Arlo paused this ("hold off for a minute").
+
+**Open queue from the lab, in order:** (1) pull both repos on the main bench;
+(2) build + OTA `82f0357`, run `/tftread` before/after bridging SJ1;
+(3) receive Mouser POT1 (Same Sky PTN092-V100115K1A ×10, log taper, clip the
+tabs), fit, test audio input; (4) re-fab 5 panels from the regenerated
+`gerbers-panel-*.zip`; (5) units 2–5.
+
 ## Active areas (update when you start/stop)
 
 - **sole agent since convergence** (the beatlisten agent carries both halves).
