@@ -1174,3 +1174,7 @@ CONFIG_SPI_FLASH_WRITING_DANGEROUS_REGIONS_ABORTS=y
 CONFIG_SUPPRESS_SELECT_DEBUG_OUTPUT=y
 CONFIG_SUPPORT_TERMIOS=y
 # End of deprecated options
+
+# WebSocket support for /ws/midi (midi-v1). Was only in the gitignored sdkconfig on the
+# main bench; persisted here 2026-08-29 so a fresh checkout builds (CLAUDE.md MIDI bridge note).
+CONFIG_HTTPD_WS_SUPPORT=y
