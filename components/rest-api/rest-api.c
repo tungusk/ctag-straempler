@@ -643,6 +643,127 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── /tftread — ILI9341 readback probe (is the MISO path alive?) ───────────
+// Hardware: the panel's SDO (P3 pin 9) reaches ESP32 IO19 (the SPI MISO the
+// firmware is configured for) ONLY through solder jumper SJ1 on the bottom of
+// the board. SJ1 was found OPEN on the test unit (2026-08-28), which explains
+// the "MISO idles high / GRAM reads 0xFF" note above: the pin is floating on
+// its own pull-up. This endpoint gives a yes/no on the whole path so bridging
+// SJ1 can be verified without guessing:
+//   1. reads ID4 (0xD3) — a fixed answer (00 93 41) independent of GRAM state
+//   2. writes 4 known pixels, reads them back, restores them from the shadow
+//   3. sweeps the read clock to report the fastest speed that still verifies
+// Everything happens under disp_lock with the SPI clock dropped for the read
+// (ILI9341 read timing tops out well below the 26 MHz write clock).
+static esp_err_t tft_read_reg(uint8_t cmd, uint8_t *rx, int n)
+{
+    uint8_t buf[8] = {0};                         // [0] = dummy byte
+    if (n > 7) n = 7;
+    spi_lobo_transaction_t t;
+    memset(&t, 0, sizeof(t));
+    if (disp_select() != ESP_OK) return ESP_FAIL;
+    disp_spi_transfer_cmd((int8_t)cmd);
+    t.length = 0;
+    t.tx_buffer = NULL;
+    t.rxlength = 8 * (n + 1);
+    t.rx_buffer = buf;
+    esp_err_t r = spi_lobo_transfer_data(disp_spi, &t);
+    disp_deselect();
+    memcpy(rx, buf + 1, n);
+    return r;
+}
+
+static int tft_read_px_ok(int x, int y, const color_t *want)
+{
+    uint8_t rb[sizeof(color_t) + 1] = {0};
+    if (read_data(x, y, x + 1, y + 1, 1, rb, 0) != ESP_OK) return 0;
+    return ((rb[1] & 0xFC) == (want->r & 0xFC)) &&
+           ((rb[2] & 0xFC) == (want->g & 0xFC)) &&
+           ((rb[3] & 0xFC) == (want->b & 0xFC));
+}
+
+static esp_err_t tftread_get_handler(httpd_req_t *req)
+{
+    static const color_t test[4] = {
+        {0xEC, 0xA8, 0x74}, {0x00, 0xFC, 0x00}, {0xFC, 0x00, 0x00}, {0x00, 0x00, 0xFC}
+    };
+    const int tx = 0, ty = 0;                     // top-left corner, 4 px wide
+    uint8_t id4[3] = {0}, rddid[3] = {0}, px[4][sizeof(color_t) + 1];
+    color_t saved[4];
+    int have_shadow = (tft_shadow != NULL);
+    uint32_t max_ok = 0;
+
+    disp_lock_take();
+    uint32_t clk = spi_lobo_get_speed(disp_spi);
+    spi_lobo_set_speed(disp_spi, 1000000);       // conservative read clock
+
+    esp_err_t r_id = tft_read_reg(0xD3, id4, 3);  // ID4: 00 93 41 on ILI9341
+    tft_read_reg(0x04, rddid, 3);                 // RDDID: informational
+
+    for (int i = 0; i < 4; i++) {
+        if (have_shadow) saved[i] = tft_shadow[(size_t)ty * _width + tx + i];
+        drawPixel(tx + i, ty, test[i], 1);        // sel=1: handles CS itself
+    }
+    memset(px, 0, sizeof(px));
+    for (int i = 0; i < 4; i++)
+        read_data(tx + i, ty, tx + i + 1, ty + 1, 1, px[i], 0);
+
+    // Clock sweep: highest read clock at which all four pixels still verify.
+    static const uint32_t sweep[] = {1000000, 2000000, 4000000, 6000000, 8000000, 10000000, 13000000, 16000000};
+    for (int s = 0; s < (int)(sizeof(sweep) / sizeof(sweep[0])); s++) {
+        if (spi_lobo_set_speed(disp_spi, sweep[s]) == 0) break;
+        int ok = 1;
+        for (int i = 0; i < 4 && ok; i++) ok = tft_read_px_ok(tx + i, ty, &test[i]);
+        if (!ok) break;
+        max_ok = sweep[s];
+    }
+
+    spi_lobo_set_speed(disp_spi, clk);            // restore write clock
+    if (have_shadow) {
+        for (int i = 0; i < 4; i++) drawPixel(tx + i, ty, saved[i], 1);
+    }
+    disp_lock_give();
+
+    if (!have_shadow) {                           // can't restore — ask the UI to redraw
+        ui_ev_ts_t ev = { .event = EV_ENTERED_MENU, .event_data = NULL };
+        if (ui_ev_queue) xQueueSend(ui_ev_queue, &ev, 0);
+    }
+
+    int id_ok = (r_id == ESP_OK && id4[0] == 0x00 && id4[1] == 0x93 && id4[2] == 0x41);
+    int px_ok = 1, all_ff = 1, all_00 = 1;
+    for (int i = 0; i < 4; i++) {
+        if (((px[i][1] & 0xFC) != (test[i].r & 0xFC)) ||
+            ((px[i][2] & 0xFC) != (test[i].g & 0xFC)) ||
+            ((px[i][3] & 0xFC) != (test[i].b & 0xFC))) px_ok = 0;
+        for (int k = 1; k < 4; k++) { if (px[i][k] != 0xFF) all_ff = 0; if (px[i][k] != 0x00) all_00 = 0; }
+    }
+    for (int k = 0; k < 3; k++) { if (id4[k] != 0xFF) all_ff = 0; if (id4[k] != 0x00) all_00 = 0; }
+
+    const char *verdict =
+        (id_ok && px_ok) ? "READBACK OK" :
+        (id_ok || px_ok) ? "READBACK PARTIAL (one of id/pixel failed — check clock or panel variant)" :
+        all_ff           ? "NO READBACK: MISO stuck HIGH — pin floating on pull-up (SJ1 open, or panel SDO not driven)" :
+        all_00           ? "NO READBACK: MISO stuck LOW — short to GND / wrong pin" :
+                           "NO READBACK: garbage on MISO — bus contention or bad clock";
+
+    char buf[640];
+    snprintf(buf, sizeof(buf),
+        "{\"verdict\":\"%s\",\"miso_gpio\":%d,\"jumper\":\"SJ1 (bottom side, IO19 <-> TFT pin 9 SDO)\","
+        "\"id4\":\"%02X %02X %02X\",\"id4_expect\":\"00 93 41\",\"id_ok\":%s,"
+        "\"rddid\":\"%02X %02X %02X\","
+        "\"pixels\":[{\"wrote\":\"%02X%02X%02X\",\"read\":\"%02X%02X%02X\"},{\"wrote\":\"%02X%02X%02X\",\"read\":\"%02X%02X%02X\"},"
+        "{\"wrote\":\"%02X%02X%02X\",\"read\":\"%02X%02X%02X\"},{\"wrote\":\"%02X%02X%02X\",\"read\":\"%02X%02X%02X\"}],"
+        "\"pixel_ok\":%s,\"max_read_clock_ok_hz\":%u,\"restored_from_shadow\":%s}",
+        verdict, PIN_NUM_MISO, id4[0], id4[1], id4[2], id_ok ? "true" : "false",
+        rddid[0], rddid[1], rddid[2],
+        test[0].r, test[0].g, test[0].b, px[0][1], px[0][2], px[0][3],
+        test[1].r, test[1].g, test[1].b, px[1][1], px[1][2], px[1][3],
+        test[2].r, test[2].g, test[2].b, px[2][1], px[2][2], px[2][3],
+        test[3].r, test[3].g, test[3].b, px[3][1], px[3][2], px[3][3],
+        px_ok ? "true" : "false", (unsigned)max_ok, have_shadow ? "true" : "false");
+    return send_json(req, buf);
+}
+
 // ─── /import — convert-on-import (POST = start scan, GET = progress) ─────────
 
 static esp_err_t import_post_handler(httpd_req_t *req)
@@ -2040,6 +2161,7 @@ static httpd_uri_t uris[] = {
     { .uri = "/files/raw",  .method = HTTP_GET,    .handler = files_raw_handler },
     { .uri = "/peaks",      .method = HTTP_GET,    .handler = peaks_handler },
     { .uri = "/screenshot", .method = HTTP_GET,    .handler = screenshot_get_handler },
+    { .uri = "/tftread",    .method = HTTP_GET,    .handler = tftread_get_handler },
     { .uri = "/import",     .method = HTTP_POST,   .handler = import_post_handler },
     { .uri = "/import",     .method = HTTP_GET,    .handler = import_get_handler },
     { .uri = "/settings",   .method = HTTP_GET,    .handler = settings_get_handler },

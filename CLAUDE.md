@@ -39,6 +39,13 @@ allocates it, kicks a full redraw, and returns **503 Warming** — retry for a
 complete frame. `components/util/disp_lock.{h,c}` (display-bus mutex; UI task
 holds it around each `menuProcessEvent`) is taken per-row against tearing.
 Use /screenshot for eye-tests instead of guessing at UI state.
+**Root cause found 2026-08-28: solder jumper SJ1** (bottom side) is the ONLY
+path from the panel's SDO (P3 pin 9) to IO19 = `PIN_NUM_MISO`, and it is OPEN
+on the test unit — MISO floats on its pull-up, hence 0xFF. **`GET /tftread`**
+(`tftread-v1`) is the yes/no probe: reads ILI9341 ID4 (expects `00 93 41`),
+writes/reads 4 corner pixels (restored from the shadow), sweeps the read clock,
+and returns a JSON `verdict`. Bridge SJ1 → `/tftread` should flip from
+"MISO stuck HIGH" to "READBACK OK"; only then is GRAM readback trustworthy.
 
 **Audio block size:** 64 samples per I2S DMA block at 44100 Hz (~1.45ms per audio loop tick).
 
