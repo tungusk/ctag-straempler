@@ -9,6 +9,34 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-08-29 PM — MAIN BENCH (post-lab pickup) — current state
+
+Both repos pulled and pushed (this repo through `74794d8`, build-pack through
+`48097c8`). Both units on bench WiFi: **unit 1 = 192.168.3.227** (still
+`keys-multisample-v1`, deliberately not flashed), **new unit = 192.168.3.85**,
+OTA'd to **`encoder-config-v2-20260829`**.
+
+- **Encoder lot differs from the prototype — handled in firmware.**
+  `settings.encres` (2 = prototype half-cycle default / 4 = new EC11-class
+  lot) + `settings.encdir` (1 = reversed) in CONFIG.JSN; read at boot,
+  live-appliable via POST /settings. New unit runs 4/1 — Arlo ear-confirmed.
+  Units 2–5 need the same two keys.
+- **CV pots upgraded + ordered** (Mouser, Same Sky PTN091-V10115K1B ×25 —
+  metal shaft, M7 bushing): see build-pack COMPLETION-SHOPPING §POT2–5.
+  **⚠ Panel re-fab is GATED**: current regenerated panel zip still drills the
+  4 CV pot holes 9.2 mm; must be 7.2 mm for M7 bushings (KiCad edit + refill
+  + regen BEFORE ordering panels). Verify POT1's hole too.
+- **SJ1 verified safe to bridge** (schematic: both nets dedicated; original
+  CTAG design wired MISO straight through). `/tftread` still unbuilt-at-
+  desk-check→ now BUILT & shipped in encoder-config-v2 (still unrun; Arlo
+  paused the bridge test).
+- `bin/keys-multisample-v1` archive staleness CONFIRMED (new unit's /sysinfo
+  lacked uptime/reset — archive predates `7b624c6`). Refresh `bin/` at next
+  tag.
+- Working tree still carries the UNCOMMITTED antenna-test changes (20 dBm +
+  RSSI). The gitignored `sdkconfig` was reverted to 10 dBm for the clean
+  OTAs — re-set its two PHY lines to 20 before any antenna-retest build.
+
 ## 2026-08-29 — SOLDERING-LAB SESSION (hardware build #1) — read this first
 
 Written on a second Mac (`~/claude09`, no ESP-IDF, no GitHub auth) at the
