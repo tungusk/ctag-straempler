@@ -800,6 +800,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     if ((j = cJSON_GetObjectItem(settings, "hostname"))) cJSON_AddStringToObject(out, "hostname", j->valuestring);
     if ((j = cJSON_GetObjectItem(settings, "tz_shift"))) cJSON_AddNumberToObject(out, "tz_shift", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "txpwr")))   cJSON_AddNumberToObject(out, "txpwr", j->valuedouble);
+    if ((j = cJSON_GetObjectItem(settings, "encres")))  cJSON_AddNumberToObject(out, "encres", j->valuedouble);
     // NOTE: password intentionally omitted
 
     char *s = cJSON_PrintUnformatted(out);
@@ -890,6 +891,18 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         else
             cJSON_AddNumberToObject(settings, "txpwr", j->valueint);
         wifiApplyTxPower(j->valueint);
+    }
+    // per-unit encoder resolution (quadrature counts per detent): 2 = prototype
+    // half-cycle part, 4 = the EC11-class parts on new builds (double-step at 2).
+    // Applied live and persisted; initGPIO re-reads it on every boot.
+    if ((j = cJSON_GetObjectItem(in, "encres")) && cJSON_IsNumber(j) &&
+        (j->valueint == 2 || j->valueint == 4)) {
+        extern void gpioSetEncoderResolution(int);   // drivers; a REQUIRES edge here would cycle via menu
+        if (cJSON_GetObjectItem(settings, "encres"))
+            cJSON_ReplaceItemInObject(settings, "encres", cJSON_CreateNumber(j->valueint));
+        else
+            cJSON_AddNumberToObject(settings, "encres", j->valueint);
+        gpioSetEncoderResolution(j->valueint);
     }
 
     // capture the final credentials before cfg is freed (same flow as the menu

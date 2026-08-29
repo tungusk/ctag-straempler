@@ -14,9 +14,14 @@ static xQueueHandle ui_event_queue = NULL;
 
 // Quadrature counts per detent (CONFIG.JSN settings.encres): 2 = prototype
 // encoder resting at BOTH quadrature states (00 and 11), 4 = standard
-// EC11-class part resting at one state (full cycle per detent). Set once in
-// initGPIO() before the ISRs are armed.
-static uint8_t s_enc_cpd = 2;
+// EC11-class part resting at one state (full cycle per detent). Set in
+// initGPIO() before the ISRs are armed; POST /settings re-applies it live.
+static volatile uint8_t s_enc_cpd = 2;
+
+void gpioSetEncoderResolution(int enc_cpd)
+{
+    s_enc_cpd = (enc_cpd >= 4) ? 4 : 2;
+}
 
 static void IRAM_ATTR gpio_isr_handler_encoder1(void* arg)
 {
@@ -71,7 +76,7 @@ static void IRAM_ATTR gpio_isr_handler_encoder1_btn1(void* arg)
 void initGPIO(xQueueHandle queueui, int enc_cpd){
     // set queues
     ui_event_queue = queueui;
-    s_enc_cpd = (enc_cpd >= 4) ? 4 : 2;
+    gpioSetEncoderResolution(enc_cpd);
     
     gpio_config_t io_conf;
 

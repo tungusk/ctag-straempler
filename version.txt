@@ -1,1 +1,1 @@
-keys-multisample-v1-20260728 (multisample zones + UI, loop by eye on Live, one-shot declick, loop trims tail silence)
+encoder-config-v1-20260829 (settings.encres 2/4, reverb wet-step trap, keys zones-before-FX fix, /tftread probe)
