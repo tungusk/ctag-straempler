@@ -139,10 +139,12 @@ NEARLY EXHAUSTED WHILE RADIO PLAYS: a 4.6 KB malloc failed, and even the OTA
 handler returns "oom" — stop radio before `tools/ota.sh`, and allocate
 network/codec buffers from PSRAM.
 
-**Encoder resolution is per-unit hardware** (`settings.encres` in CONFIG.JSN,
-read once at boot into initGPIO): 2 = the prototype's half-cycle encoder
-(rests at 00 AND 11; the default), 4 = the EC11-class parts on new-build
-units (rest at one state — on setting 2 they double-step per click).
+**Encoder resolution and direction are per-unit hardware** (CONFIG.JSN,
+read at boot into initGPIO, settable live via POST /settings).
+`settings.encres`: 2 = the prototype's half-cycle encoder (rests at 00 AND
+11; the default), 4 = the EC11-class parts on new-build units (rest at one
+state — on setting 2 they double-step per click). `settings.encdir`: 1 =
+reversed lot (the new-build parts also count backwards; default 0).
 
 **Sleep at least one tick.** `CONFIG_FREERTOS_HZ=100`: one tick is 10 ms, so
 `pdMS_TO_TICKS(n)` for n<10 is ZERO and `vTaskDelay(0)` never yields to

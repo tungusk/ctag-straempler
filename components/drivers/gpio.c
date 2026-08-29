@@ -23,6 +23,15 @@ void gpioSetEncoderResolution(int enc_cpd)
     s_enc_cpd = (enc_cpd >= 4) ? 4 : 2;
 }
 
+// CONFIG.JSN settings.encdir: 1 = the encoder counts backwards vs the
+// prototype (new-build lot) — swap the emitted events.
+static volatile uint8_t s_enc_rev = 0;
+
+void gpioSetEncoderDirection(int reversed)
+{
+    s_enc_rev = reversed ? 1 : 0;
+}
+
 static void IRAM_ATTR gpio_isr_handler_encoder1(void* arg)
 {
     // Quadrature state machine, one event per detent (see s_enc_cpd above);
@@ -42,11 +51,11 @@ static void IRAM_ATTR gpio_isr_handler_encoder1(void* arg)
     prev = ab;
     if(ab == 0 || ab == 3){ // rest state reached
         if(accum >= (int8_t)s_enc_cpd){
-            ev.event = EV_ENC1_FWD;
+            ev.event = s_enc_rev ? EV_ENC1_BWD : EV_ENC1_FWD;
             xQueueSendFromISR(ui_event_queue, &ev, NULL);
             accum = 0;
         }else if(accum <= -(int8_t)s_enc_cpd){
-            ev.event = EV_ENC1_BWD;
+            ev.event = s_enc_rev ? EV_ENC1_FWD : EV_ENC1_BWD;
             xQueueSendFromISR(ui_event_queue, &ev, NULL);
             accum = 0;
         }else if(s_enc_cpd == 2){
