@@ -46,6 +46,16 @@ on the test unit — MISO floats on its pull-up, hence 0xFF. **`GET /tftread`**
 writes/reads 4 corner pixels (restored from the shadow), sweeps the read clock,
 and returns a JSON `verdict`. Bridge SJ1 → `/tftread` should flip from
 "MISO stuck HIGH" to "READBACK OK"; only then is GRAM readback trustworthy.
+**2026-08-29 schematic-verified — SJ1 is safe to bridge:** both nets are
+dedicated (IO19 touches nothing else; neither does SDO), IO19 is not a
+strapping pin, and the ORIGINAL CTAG design wired MISO straight through —
+the jumper is an Antumbra-redesign addition with no documented purpose.
+`/tftread` is BUILT and shipped in `encoder-config-v2` but has never been
+RUN; the fabbed 2026-07 boards lack the mask sliver between SJ1's pads
+(restored in KiCad 08-28), so bridging them takes a blob over a ~0.1 mm
+mask web. Plan: bridge the TEST unit only; leave unit 1 alone. A working
+readback also enables verifying a 26→40 MHz display-SPI write experiment
+by reading pixels back (redraw-speed lever, parked).
 
 **Audio block size:** 64 samples per I2S DMA block at 44100 Hz (~1.45ms per audio loop tick).
 
@@ -676,6 +686,11 @@ Sampler3 SHIPPED 2026-07-12.
   `broadcast-mp3-v1(a)`, `icepush-v1`, `shadow-fb-v1(a)` (/screenshot),
   `midi-v1`, `tape-v1`/`taperack-v1`/`tapeui-v1`, `tracker-ram-v1`
   (broadcast-lazy RAM fix), `wav-v1`, `looper-v3`, `streaming-slicer-v1`.
+  2026-08: `tuner-autotune-v1`, `tape-fxchain-v1`, `keys-multisample-v1`
+  (see the milestone READMEs in `bin/`), `tftread-v1` (desk-built probe),
+  `encoder-config-v1/v2` (per-unit `settings.encres`/`encdir`; first
+  build flashed to the NEW unit — unit 1 deliberately kept on
+  `keys-multisample-v1`).
   `bin/<name>/flash.sh` returns to any known-good state.
   Matching dated git tags.
 - **A KNOB CAN BE ROUTED TO ITS OWN DESTINATION — check the CV matrix first.**
