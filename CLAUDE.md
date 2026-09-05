@@ -50,12 +50,16 @@ and returns a JSON `verdict`. Bridge SJ1 → `/tftread` should flip from
 dedicated (IO19 touches nothing else; neither does SDO), IO19 is not a
 strapping pin, and the ORIGINAL CTAG design wired MISO straight through —
 the jumper is an Antumbra-redesign addition with no documented purpose.
-`/tftread` is BUILT and shipped in `encoder-config-v2` but has never been
-RUN; the fabbed 2026-07 boards lack the mask sliver between SJ1's pads
-(restored in KiCad 08-28), so bridging them takes a blob over a ~0.1 mm
-mask web. Plan: bridge the TEST unit only; leave unit 1 alone. A working
-readback also enables verifying a 26→40 MHz display-SPI write experiment
-by reading pixels back (redraw-speed lever, parked).
+**2026-09-04: SJ1 BRIDGED on the new unit — readback VERIFIED.** First
+`/tftread` run: pixel test 4/4 bit-exact at a 10 MHz read clock. **This
+panel lot's controller never answers ID4** (0xD3 → FF FF FF; RDDID
+nonstandard) so the verdict reads "PARTIAL" forever — **the pass/fail
+criterion is `pixel_ok`, not `id_ok`** (assembly QA for units 2–5). Unit 1
+stays unbridged by choice. The fabbed 2026-07 boards lack the mask sliver
+between SJ1's pads (restored in KiCad 08-28) — bridging takes a blob over
+a ~0.1 mm mask web. Working readback unblocks the 26→40 MHz display-SPI
+write experiment (verify by reading pixels back; redraw-speed lever,
+parked).
 
 **Audio block size:** 64 samples per I2S DMA block at 44100 Hz (~1.45ms per audio loop tick).
 
