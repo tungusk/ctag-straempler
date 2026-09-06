@@ -9,6 +9,18 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-05 — HISTORY REWRITTEN (both repos) — SHAs before this date changed
+
+Author/committer identity on every post-fork commit was rewritten to the
+GitHub noreply identity and home-directory paths became `~`; force-pushed
+to both repos. Upstream (Kiel) commits and `v0.9` keep their SHAs; all 69
+tags survived. **Any SHA you remember from before 2026-09-05 is stale** —
+in-tree docs were re-pointed in the commit right after the rewrite; the
+old→new maps live outside the repo in
+`~/ctag-straempler-backups/*-20260905-commit-map.txt` (pre-rewrite bundles
+alongside). Do not push from a clone that predates this (non-fast-forward;
+re-clone or reset to origin).
+
 ## 2026-08-29 PM — MAIN BENCH (post-lab pickup) — current state
 
 Both repos pulled and pushed (this repo through `c39bb49`, build-pack through
