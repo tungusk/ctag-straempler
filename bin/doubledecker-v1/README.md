@@ -56,13 +56,13 @@ and System->Machine unreachable).
 ## Build caveat (2026-07-13)
 
 These binaries were built from this commit with `components/menu/menu.c` reverted to
-its 25170a1 state. A parallel session's in-progress "beatlisten" work was
-accidentally swept into commit 4d7e3ea by a `git add -A components/menu`; that
+its 544cbca state. A parallel session's in-progress "beatlisten" work was
+accidentally swept into commit 1675921 by a `git add -A components/menu`; that
 menu.c calls `menuTFTPrintListen`/`menuTFTPrintClkOut`, whose definitions
 (menutft.c/h, machine/beatlisten.c) are NOT yet committed. Once that session commits
 its files, HEAD builds as-is again.
 
-## Refreshed at commit ee177ff (post-archive hardware findings)
+## Refreshed at commit 25e3dae (post-archive hardware findings)
 
 - **Trig gates are DEBOUNCED** (shared, trig_gate.h). With NOTHING patched into TR2,
   /status caught a stray low sample on the active-low input — and TR2-press toggles

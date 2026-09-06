@@ -1,7 +1,7 @@
 # tracker-v1
 
 Full firmware snapshot at the tracker de-hub + Live redesign milestone
-(`v09-machines`, commit `5ce91e2`, tag `tracker-v1-20260709`).
+(`v09-machines`, commit `3405dfd`, tag `tracker-v1-20260709`).
 
 Flash: `./flash.sh [PORT]` (default port `/dev/cu.usbserial-3110`,
 `--flash_size detect`).

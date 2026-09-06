@@ -1,6 +1,6 @@
 # sampler2-v1 firmware (2026-07-05)
 
-Snapshot of `v09-machines` at commit `68d4463` (tag `sampler2-v1-20260705`).
+Snapshot of `v09-machines` at commit `a5fcc4b` (tag `sampler2-v1-20260705`).
 Built with IDF 4.3 + xtensa-esp32-elf esp-2021r2-patch3-8.4.0.
 **Approved by Arlo on hardware** — this is the Sampler2 reference build and
 the groundwork baseline for future machines (M2 looper next).

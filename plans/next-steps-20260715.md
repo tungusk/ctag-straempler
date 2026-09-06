@@ -93,7 +93,7 @@ deck (Arlo's constraint); `busy()` covers BOTH decks (a starved ring = phase
 slip); one run at a time (other deck queues); on done, writes the v2 sidecar and
 adopts bpm/grid live only if still loaded + stopped; reset in start(),
 aborted+waited in stop(). VERIFIED on device: SPLITTIN→86.53 BPM, LANDER→79.99,
-both dver 2 + grids, adopted live. Commit f67659f.
+both dver 2 + grids, adopted live. Commit 01f9f98.
 - Watch tonight: confirm a plain single-Deck track still LOCKS well (shared DSP
   was refactored — DSP is byte-identical, but ears are the real check).
 
@@ -108,7 +108,7 @@ rejected; cubic resampler is v2). Web tab "Radio" (station buttons + custom URL 
 state) + `/radio/play|stop|state`; on-device Live page picks a built-in SomaFM
 station. Registered everywhere; proof passes. VERIFIED ON DEVICE: Groove Salad +
 DEF CON connected, helix decoded 128 kbps/44.1k/stereo, PLAYING, zero underruns.
-Commit 3d0f9cb. v2 ideas: auto-reconnect, ICY now-playing metadata, non-44.1k
+Commit b4a70cb. v2 ideas: auto-reconnect, ICY now-playing metadata, non-44.1k
 resample, persistent/editable station list, "sample the radio" (bounce the
 output bus into the pool).
 
@@ -120,7 +120,7 @@ polyBLEP saw↔square osc (shape morph, anti-aliased) → reused `util/svf` low-
 = base note; quantize default). TR1 gates the ADSR. knob6 cutoff / knob7 res.
 Setup: shape/note/quantize/ADSR/env→cut/level (preset-persisted). Registered;
 proof passes. VERIFIED via teleremote: CV1 pitch + TR1 gate → clean
-attack→decay→sustain, released to silence, mono out. Commit 8b9a994. v2: FM +
+attack→decay→sustain, released to silence, mono out. Commit 1e688c1. v2: FM +
 wavetable engines, poly, glide, filter env, pitch calibration by ear.
 
 ## ✅ 9. Audio editor S-core — offline file→file ops
@@ -141,7 +141,7 @@ output lands as a REC_ take. Reuses the recording service verbatim
 (`recording_start(-1)` = no auto-load); only the pushed buffer changes, gated by
 `s_bounce` in audio.c. `audio_bounce_start/stop/active`; REST /bounce/start|stop|
 state; BOUNCE card on the Remote web tab. VERIFIED: bounced 6.46s of a playing
-SomaFM stream → REC take, correct length, real (non-silent) audio. Commit 69f0bad.
+SomaFM stream → REC take, correct length, real (non-silent) audio. Commit 0d4f5a4.
 v2: dedicated BNC_ prefix, bounce→auto-open in Editor.
 POLISH (2026-07-15): on-device bounce toggle ADDED — a "Bounce" row in
 System→Settings (between ClkOut and IP), press-to-act, shows REC/idle, calls the

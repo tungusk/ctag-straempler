@@ -52,7 +52,7 @@ HARDWARE running dry.
 
 ## Also in this build
 
-**Keys could become permanently unloadable** (fixed `f2055c5`). `keys_load_zone`
+**Keys could become permanently unloadable** (fixed `e5386b7`). `keys_load_zone`
 asks for ONE 2,000,000-byte SPIRAM block; `keys_stop` frees it (correctly — Tape
 wants up to 3.62 MB of the 4 MB pool), but re-acquiring it depends on PSRAM not
 having fragmented. Measured largest free block **1,998,848 — 1,152 bytes short**,
@@ -81,7 +81,7 @@ autosave duration + count (a save costs ~64 ms), and per-stage FX meters behind
 `?fx=1` — armed on demand, because measuring is per-sample work in the shared
 audio path and leaving it on was itself audible.
 
-**`tools/proof_build.sh` passes again** — it had been failing since `5b52510`
+**`tools/proof_build.sh` passes again** — it had been failing since `a7d3868`
 (undefined `fxrack_peak_pct`: with every machine excluded nothing pulls fxrack
 into the link, and `/status` is core).
 

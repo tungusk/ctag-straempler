@@ -5,7 +5,7 @@ gate-triggered sampler rebuilt on the deck/tracker architecture (one
 reader task owns all SD I/O; per-voice 1s PSRAM head-cache for instant
 retrigger + 4s ring; request-flag protocol; nothing blocking in the
 audio callback — the crash class that killed the old sampler is
-structurally impossible). Snapshot of commit `dcbd325` (tag
+structurally impossible). Snapshot of commit `3cc0c88` (tag
 `sampler3-v1-20260712`), Arlo-verified on hardware ("work of beauty").
 Flash with `./flash.sh [PORT]`.
 

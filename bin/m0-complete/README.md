@@ -1,6 +1,6 @@
 # m0-complete firmware (2026-07-04)
 
-Snapshot of `v09-machines` at commit `4f35d05` (tag `m0-complete-20260704`).
+Snapshot of `v09-machines` at commit `0bbc4a0` (tag `m0-complete-20260704`).
 Built with IDF 4.3 + xtensa-esp32-elf esp-2021r2-patch3-8.4.0. Hardware-verified
 (RTS soak 15/15, autosave round-trip, encoder + CV mapping checked by ear/hand).
 

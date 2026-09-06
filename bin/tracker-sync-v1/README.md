@@ -2,8 +2,8 @@
 
 The clock-hardening + tracker-sync milestone: every tempo-following machine
 now survives dirty clock signals, and the Tracker locks to the external
-clock for the first time. **v1.1 refresh = commit `a1aa234`** (tag
-`tracker-sync-v1.1-20260712`; originally cut at `cf95860`). Flash with
+clock for the first time. **v1.1 refresh = commit `5a9659f`** (tag
+`tracker-sync-v1.1-20260712`; originally cut at `ae021bd`). Flash with
 `./flash.sh [PORT]`.
 
 ## v1.1 refresh (measurement-session night)

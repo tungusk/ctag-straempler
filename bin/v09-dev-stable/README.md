@@ -1,6 +1,6 @@
 # v09-dev-stable firmware (2026-07-03)
 
-Snapshot of `v09-dev` at commit `bc01b4a` (tag `v09-dev-stable-20260703`).
+Snapshot of `v09-dev` at commit `ecc3996` (tag `v09-dev-stable-20260703`).
 Built with IDF 4.3 + xtensa-esp32-elf esp-2021r2-patch3-8.4.0. Hardware-verified.
 
 Contains everything through the 2026-07-02/03 sessions:

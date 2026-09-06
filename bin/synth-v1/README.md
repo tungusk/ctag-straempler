@@ -34,4 +34,4 @@ This is also the safety-net image for the upcoming OTA partition migration — i
 an OTA layout change bricks the device, `./flash.sh` restores this known-good
 single-app-partition firmware over serial.
 
-Matching git tag: `synth-v1-20260715`. Commit at archive time: `ecbc992`.
+Matching git tag: `synth-v1-20260715`. Commit at archive time: `715e6bb`.

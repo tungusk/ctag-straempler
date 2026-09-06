@@ -11,8 +11,8 @@ another agent's in-progress files into unrelated commits twice).
 
 ## 2026-08-29 PM — MAIN BENCH (post-lab pickup) — current state
 
-Both repos pulled and pushed (this repo through `74794d8`, build-pack through
-`48097c8`). Both units on bench WiFi: **unit 1 = 192.168.3.227** (still
+Both repos pulled and pushed (this repo through `c39bb49`, build-pack through
+`00fb9bb`). Both units on bench WiFi: **unit 1 = 192.168.3.227** (still
 `keys-multisample-v1`, deliberately not flashed), **new unit = 192.168.3.85**,
 OTA'd to **`encoder-config-v2-20260829`**.
 
@@ -31,7 +31,7 @@ OTA'd to **`encoder-config-v2-20260829`**.
   desk-check→ now BUILT & shipped in encoder-config-v2 (still unrun; Arlo
   paused the bridge test).
 - `bin/keys-multisample-v1` archive staleness CONFIRMED (new unit's /sysinfo
-  lacked uptime/reset — archive predates `7b624c6`). Refresh `bin/` at next
+  lacked uptime/reset — archive predates `552e73e`). Refresh `bin/` at next
   tag.
 - Working tree still carries the UNCOMMITTED antenna-test changes (20 dBm +
   RSSI). The gitignored `sdkconfig` was reverted to 10 dBm for the clean
@@ -67,7 +67,7 @@ tries a garbage SSID from the missing CONFIG.JSN — both harmless.
 the "MISO idles high / GRAM reads 0xFF / find_rd_speed falls back to 1 MHz"
 behaviour documented in CLAUDE.md. Nothing to do unless readback is wanted.
 
-**Shipped UNBUILT (`82f0357`): `GET /tftread`** in `rest-api.c` — ID4
+**Shipped UNBUILT (`77ad58f`): `GET /tftread`** in `rest-api.c` — ID4
 (0xD3 → `00 93 41`), 4-pixel write/read at (0,0) restored from the shadow,
 read-clock sweep, JSON `verdict`. Desk-checked only — **build it before
 trusting it**; expect possible compile nits. Then: `/tftread` on the test unit
@@ -75,7 +75,7 @@ trusting it**; expect possible compile nits. Then: `/tftread` on the test unit
 "READBACK OK"). Arlo paused this ("hold off for a minute").
 
 **Open queue from the lab, in order:** (1) pull both repos on the main bench;
-(2) build + OTA `82f0357`, run `/tftread` before/after bridging SJ1;
+(2) build + OTA `77ad58f`, run `/tftread` before/after bridging SJ1;
 (3) receive Mouser POT1 (Same Sky PTN092-V100115K1A ×10, log taper, clip the
 tabs), fit, test audio input; (4) re-fab 5 panels from the regenerated
 `gerbers-panel-*.zip`; (5) units 2–5.
@@ -83,7 +83,7 @@ tabs), fit, test audio input; (4) re-fab 5 panels from the regenerated
 ## Active areas (update when you start/stop)
 
 - **sole agent since convergence** (the beatlisten agent carries both halves).
-  Status through `7bad8e0` (2026-07-14 PM), all flashed+verified:
+  Status through `74b441a` (2026-07-14 PM), all flashed+verified:
   beatlisten soak PASSED (4.5 h, zero octave hops; logs
   `~/claude09/bl_soak_20260714_090042.*`); trig-ISR acquisition + trig_rising
   consumer both in; VU is STEREO end-to-end (`vu:[inL,inR,outL,outR]`) with
@@ -99,7 +99,7 @@ tabs), fit, test audio input; (4) re-fab 5 panels from the regenerated
   `machine/trig_gate.h`, `machine/cvsmooth.h`, `machine_looper/*`,
   `machine_drumsampler/*`, `machine_slicer/*`, `machine_granular/*`,
   `machine_glitch/*`, `machine_sampler3/*` (CV-spike hardening sweep).
-  Status: **all committed through `58d87d5`. See the CONVERGENCE HANDOFF below — it is
+  Status: **all committed through `00b98bb`. See the CONVERGENCE HANDOFF below — it is
   written so a single agent can carry this half cold.**
 
 ---
@@ -111,18 +111,18 @@ done, what is UNVERIFIED, what to do first, and the traps that will bite you.
 
 ## ✅ STATUS UPDATE 2026-07-15 — DoubleDecker is EAR-TESTED (Arlo's call)
 
-Late-night session 2026-07-15 00:54–01:28 (commits `304e66c`, `8ce48bc`, `4d3c21f`)
+Late-night session 2026-07-15 00:54–01:28 (commits `fe0bbb8`, `7d5aca7`, `e239042`)
 loop-tested DoubleDecker on the device and reached a good stopping point. **Arlo:
 "consider doubledecker ear-tested."** What that session verified on hardware:
-- **Loop knobs stable** (`304e66c`): the "loops go wild" symptom got its FINAL diagnosis
+- **Loop knobs stable** (`fe0bbb8`): the "loops go wild" symptom got its FINAL diagnosis
   — the window quantizer compared by POSITION, firing ~20 remaps/sec with the knob dead
   still (it rendered the flickering PENDING window). Now INDEX-based with hysteresis;
   start quantizes to a fixed beat grid and length grows FORWARD from it. "box holds
   steady, length grows forward, knobs pick up cleanly."
-- **Per-deck DJ filters** (`4d3c21f`, "nailed it"): CV6 now sweeps the FOCUSED deck's own
+- **Per-deck DJ filters** (`e239042`, "nailed it"): CV6 now sweeps the FOCUSED deck's own
   filter — **this REVERSES the "master filter only" design intent below.** Fader + both
   filters use pickup (inert until swept back to live) instead of the catch-up slew.
-- **Single-list browser** (`8ce48bc`): folders inline at the top of one list, replacing
+- **Single-list browser** (`7d5aca7`): folders inline at the top of one list, replacing
   the two-level picker; browse position remembered. Shared across all six machines.
 
 **Still UNVERIFIED (the rest of the no-flash convergence batch):** the drums self-fire
@@ -133,11 +133,11 @@ are kept for that residue — item 1 (loop jump) is RESOLVED.
 ## THE ONE THING TO DO FIRST
 
 ~~**Nothing of mine has been hardware-verified.**~~ (DoubleDecker now is — see status
-above.) Everything else from `c50871c` onward was written under the no-flash rule while
+above.) Everything else from `d7ea602` onward was written under the no-flash rule while
 the soak ran: build/proof/reasoning-verified, *never heard*. Residual checks:
 
 1. ~~**Re-test "the loops jump around on their own" in DoubleDecker.**~~ RESOLVED
-   2026-07-15 (`304e66c`, see status above). Earlier diagnoses (floating TR2; loop-length
+   2026-07-15 (`fe0bbb8`, see status above). Earlier diagnoses (floating TR2; loop-length
    knob on CV8 = the clock input) were both real and fixed, but the last-mile cause was
    position-based remap churn. Left here as the diagnostic trail.
 2. **Drums: confirm pads no longer self-fire.** The floor tracker used to adopt a lone ADC
@@ -150,7 +150,7 @@ the soak ran: build/proof/reasoning-verified, *never heard*. Residual checks:
 
 ## WHAT I SHIPPED (and why, briefly)
 
-- **`c50871c` Phase 0 — regressions I had shipped hours earlier**, found by the beatlisten
+- **`d7ea602` Phase 0 — regressions I had shipped hours earlier**, found by the beatlisten
   agent's review. Loop-length CV on the clock channel (above); the RESYNC gesture flipped
   the loop on its way in (TR2 engages on PRESS but the both-trig combo only arms at 0.35 s —
   a TR2 press while TR1 is down is now read as a combo forming); the deck armed its loop
@@ -160,19 +160,19 @@ the soak ran: build/proof/reasoning-verified, *never heard*. Residual checks:
   catch-up fired when nothing was borrowed and ended mid-slew with a step. Also
   `proof_build.sh` never excluded `machine_dualdeck` — the "core links with every machine
   excluded" guarantee had a hole in it.
-- **`7a542d6` Phase 1 — the CV-spike class, everywhere.** `cvsmooth.h` (median-of-5) into
+- **`bfbb034` Phase 1 — the CV-spike class, everywhere.** `cvsmooth.h` (median-of-5) into
   looper (CV6 drove a track's VOLUME raw — the worst in the tree), drums (knobs + the floor
   tracker), tracker (the DJ filter I'd added that morning read raw, and a spike could
   falsely RELEASE its pass-through pickup), glitch/granular/slicer. **Clock inputs stay raw
   on purpose** — `clockin` has its own Schmitt and needs true edge timing.
-- **`dc8f794` Phase 2 — contextual knobs.** Focus picks the deck, loop status picks the
+- **`d8900c7` Phase 2 — contextual knobs.** Focus picks the deck, loop status picks the
   pair (CV6/CV7 = filter/fader, or window/length when the focused deck loops). Fixed CV Map
   survives behind Setup → `Knobs [contextual|fixed]`. `Fader Lock` is the escape hatch when
   both decks loop. Routing lives in ONE place (`dd_eff_*` + `dd_addressed`) so the modes
   cannot drift. Includes a preset MIGRATION (`"cvv":1`) — old presets hold loops on CV6/CV7
   or CV8 and `preset_load` overrides defaults, so without it a fresh flash silently restores
   the behaviour we just removed.
-- **`84358f6` web Tier 0 + the trig_rising consumer.** Import progress + rescan; CV scope
+- **`b8592b9` web Tier 0 + the trig_rising consumer.** Import progress + rescan; CV scope
   with spike detection; beatlisten panel; Files with bpm/duration/newest-first + click-to-
   rename (`POST /files/rename` moves audio + `.JSN` + `.OT` together and rewrites the id
   INSIDE the sidecar — renaming only the audio orphans the bpm/grid stamp and the deck then
@@ -246,7 +246,7 @@ TR2 = loop, everywhere). The CV matrix is the escape: give each deck's loop its 
 channels and both go live at once.
 
 **Rejected, with reasons** — don't "fix" these:
-- ~~*Per-deck filters.*~~ **REVERSED 2026-07-15 (`4d3c21f`, "nailed it").** Per-deck
+- ~~*Per-deck filters.*~~ **REVERSED 2026-07-15 (`e239042`, "nailed it").** Per-deck
   filters shipped and Arlo prefers them: CV6 sweeps the FOCUSED deck's own filter, the
   unfocused deck's freezes. Do NOT restore the single master-on-the-sum filter. (The old
   reasoning was "the master filter on the sum is what a blender wants, and it keeps CV6
@@ -346,7 +346,7 @@ gates, 1 lets a floating TR2 toggle the loop. Fix: ISR-measured pulse width + st
 validated-pulse flag.
 </details>
 
-## ✅ DONE — trig_rising consumed (doubledecker agent, `84358f6`)
+## ✅ DONE — trig_rising consumed (doubledecker agent, `b8592b9`)
 
 Your acquisition side is wired into `trig_gate.h` and all three callers (deck, dualdeck,
 tracker). One deviation from your note, deliberately: **`TG_DEBOUNCE` stays at 2, not 1.**
@@ -374,14 +374,14 @@ items land in your file. Both are small; say if you'd rather I take them.
    settings screen into an instrument. Note it should decay back to the physical knob the
    same way the trig override does (a timeout), so a stale web value cannot pin a knob.
 
-## Review findings for the doubledecker agent (verified 2026-07-14, range 25170a1..ec1ce0f)
+## Review findings for the doubledecker agent (verified 2026-07-14, range 544cbca..365ceb2)
 
 An independent review pass verified these against current file content.
 Arlo wants them worked; ranked by severity.
 
 ### HIGH
 1. **Default loop-length CV collides with the clock input.** `dualdeck.c:555`
-   sets `clk_src = 7` (CV8) and `dualdeck.c:570` (ee177ff) sets
+   sets `clk_src = 7` (CV8) and `dualdeck.c:570` (25e3dae) sets
    `cv_llen[0] = cv_llen[1] = 7` — same channel. With a clock patched on CV8
    and a loop engaged, the loop-length knob logic reads the pulse train:
    pulses grab the ref (>DD_PICKUP), the lows between pulses remap the loop
@@ -393,7 +393,7 @@ Arlo wants them worked; ranked by severity.
 
 ### MEDIUM
 2. **trig_gate debounce imposes ~2 ms minimum trig width** (`trig_gate.h:44-59`,
-   f557120). Logic is correct, but at one sample per 0.726 ms block,
+   467280e). Logic is correct, but at one sample per 0.726 ms block,
    `TG_DEBOUNCE 2` means a standard ~1 ms eurorack trigger registers only
    ~35-40% of the time (tracker TR1 play / TR2 loop, deck, dualdeck).
    Either latch trig edges in the acquisition layer, or document ">=2 ms
@@ -436,5 +436,5 @@ Arlo wants them worked; ranked by severity.
     add-a-machine convention).
 
 ### Clean (verified, no action)
-Stub UI commit (14abb40); preset save/load roundtrip of the matrix fields;
+Stub UI commit (f8f058d); preset save/load roundtrip of the matrix fields;
 audio-path discipline across the whole range (no SD/alloc/log in process()).

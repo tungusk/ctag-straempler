@@ -13,7 +13,7 @@ OTA layout (app @ 0x20000). Flashing an OLD single-app archive (e.g.
 
 ## What's in it
 
-**Pitch detection (this batch, commits 72382fe + 3f9b064)**
+**Pitch detection (this batch, commits ca8f48f + a12b715)**
 - `components/util/pitch_detect.{c,h}` — shared monophonic YIN detector: coarse
   lag sweep on a 4x decimated window, native-rate refine + parabolic fit. Host
   tests: sub-cent 55 Hz..1.3 kHz on sines, 12-harmonic saws, plucks and noisy
@@ -32,7 +32,7 @@ OTA layout (app @ 0x20000). Flashing an OLD single-app archive (e.g.
   (detection is ~35-40 ms/window) with a live-input level gate. `/status`
   "tun" object while on, `GET /tuner/enable?on=`.
 
-**Drums / Tape (commits 15be163..5574da2, was to be `drumsfx-cvmtx-v1`)**
+**Drums / Tape (commits a68a036..c3bb4bd, was to be `drumsfx-cvmtx-v1`)**
 - Drums on the shared FX rack + per-pad wet/dry FX-bus routing, per-pad PITCH
   (±12 semitones) with a Pitch CV source/mode row (+/- and V/oct), scrolling
   Pads page, knob-edit autosave.

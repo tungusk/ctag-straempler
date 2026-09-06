@@ -1,6 +1,6 @@
 # looper-v1 firmware (2026-07-05)
 
-Snapshot of `v09-machines` at commit `755064d` (tag `looper-v1-20260705`).
+Snapshot of `v09-machines` at commit `6919337` (tag `looper-v1-20260705`).
 Built with IDF 4.3 + xtensa-esp32-elf esp-2021r2-patch3-8.4.0.
 **Approved by Arlo on hardware** — M2 looper, the first machine built entirely
 on the machine architecture (validates it end-to-end with a non-sampler).

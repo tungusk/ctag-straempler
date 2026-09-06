@@ -1,6 +1,6 @@
 # glitch-v1 firmware (2026-07-05)
 
-Snapshot of `v09-machines` at commit `2085e46` (tag `glitch-v1-20260705`).
+Snapshot of `v09-machines` at commit `28056d6` (tag `glitch-v1-20260705`).
 Built with IDF 4.3 + xtensa-esp32-elf esp-2021r2-patch3-8.4.0. Hardware-approved.
 Completes the machine roadmap — all seven machines in one firmware.
 

@@ -1,7 +1,7 @@
 # deck-v2
 
 The tempo-precision milestone: the deck now detects track BPM exactly and
-holds a measured-tight lock. Snapshot of commit `38c95f2` (tag
+holds a measured-tight lock. Snapshot of commit `4a6f5cb` (tag
 `deck-v2-20260710`). Flash with `./flash.sh [PORT]` (default
 `/dev/cu.usbserial-3110`, `--flash_size detect`).
 

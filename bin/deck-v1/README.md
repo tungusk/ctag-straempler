@@ -2,7 +2,7 @@
 
 The Deck milestone: tempo-syncing track player, hardware-verified and
 performance-approved 2026-07-08 ("the track deck is tight"). Snapshot of
-commit `b4f9b53` (tag `deck-v1.1-20260708`; originally cut at `83d738d`,
+commit `26112c1` (tag `deck-v1.1-20260708`; originally cut at `70c3219`,
 refreshed same night with the final touch-ups below). Flash with
 `./flash.sh [PORT]` (default `/dev/cu.usbserial-3110`, `--flash_size detect`).
 
