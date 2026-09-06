@@ -9,6 +9,21 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-05 — FIRST PUBLIC BETA: GitHub pre-release `v0.10-beta1`
+
+https://github.com/tungusk/ctag-straempler/releases/tag/v0.10-beta1 — tag at
+`341bfee` (= encoder-config-v2 code + `ac5b756` home-path stripping +
+version.txt bump). Built CLEAN from the tagged commit in a throwaway
+worktree (fresh sdkconfig from defaults; the only delta vs the bench
+sdkconfig was FATFS fast-seek, used solely by the excluded sampler2). Assets:
+the four flash images, a generic `flash.sh` (pip esptool, port arg),
+SHA256SUMS, and a zip. **Release assets are now the home for flashable
+images — do not add another `bin/` archive for this milestone.** The units
+still report the `encoder-config-v2` label in About until their next OTA;
+never flash just to sync the label. `version.txt` rule reconfirmed the hard
+way: NO semicolons (CMake list separator → configure fails with a
+"missing ')'" parse error in build_properties.temp.cmake).
+
 ## 2026-09-05 — HISTORY REWRITTEN (both repos) — SHAs before this date changed
 
 Author/committer identity on every post-fork commit was rewritten to the
