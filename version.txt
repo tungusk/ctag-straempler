@@ -1,1 +1,1 @@
-encoder-config-v2-20260829 (settings.encres 2/4 + encdir reverse, reverb wet-step trap, keys zones-before-FX fix, /tftread)
+v0.10-beta1-20260905 (first public beta: encoder-config-v2 firmware, images free of build-host paths; see GitHub release notes)
