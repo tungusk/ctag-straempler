@@ -1,1 +1,1 @@
-v0.10-beta1-20260905 (first public beta: encoder-config-v2 firmware, images free of build-host paths; see GitHub release notes)
+v0.10-beta1-20260905 (first public beta: encoder-config-v2 firmware, images free of build-host paths, notes on the GitHub release)
