@@ -1074,11 +1074,11 @@ function rpMatrix(d){
       chips+=e.k?mxPick(e):'<div class="mxf" title="fixed in this machine">'+esc(e.l)+'</div>';
     });
     var add=(hasM&&ch<8),nc=0;
-    if(add){   // the loaded assignments, else one off slot — the first line always has a dropdown
+    if(add){   // the loaded assignments; a bare row gets one off slot unless a chip already fills the line
       for(var k=0;k<mxN;k++)if(d.mxs[k]===ch){cells+=mxCell(ch,k,(d.mxa&&typeof d.mxa[k]==='number')?d.mxa[k]:0);nc++;}
-      if(!nc)cells+=mxCell(ch,-1,0);
+      if(!nc&&!chips)cells+=mxCell(ch,-1,0);
     }
-    cells+=chips;   // fixed jobs / picks trail the dropdown so the dropdowns form one column
+    cells+=chips;   // fixed jobs / picks trail any dropdown so the dropdowns form one column
     if(!cells){if(ch===10)continue;cells='<div class="mxf" style="color:#444;border-color:#222;background:none">&#8212;</div>';}
     h+='<tr data-cvrow="'+ch+'"><td style="color:#aaa;vertical-align:top;padding-top:6px;white-space:nowrap">'+name+'</td><td><div class="mxrow" id="mxr'+ch+'">'+cells+'</div></td>'
       +'<td class="mxbtn">'+(add?'<button class="mxadd" title="add a matrix assignment from this CV" onclick="mxAdd('+ch+')">+</button>':'')+'</td></tr>';
