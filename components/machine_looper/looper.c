@@ -446,6 +446,17 @@ static void looper_preset_load(const cJSON *node)
 
 extern const machine_ui_t looper_menu_ui;
 
+static int lp_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    MI_ADD(mi_pick("Clock", "clk_src", lp.clk_src, 7, MI_CV | MI_TR | MI_CLK));
+    if (!clock_src_is_cv(lp.clk_src, 5)) MI_ADD(mi("level (selected track)", 5));
+    if (!clock_src_is_cv(lp.clk_src, 6)) MI_ADD(mi("pan (selected track)", 6));
+    if (lp.clk_src != LP_CLK_TR1) MI_ADD(mi("record / action (selected track)", 8));
+    if (lp.clk_src != LP_CLK_TR2) MI_ADD(mi("play/stop (selected track)", 9));
+    return n;
+}
+
 const machine_t machine_looper = {
     .name = "Looper",
     .start = looper_start,
@@ -453,6 +464,7 @@ const machine_t machine_looper = {
     .process = looper_process,
     .preset_save = looper_preset_save,
     .preset_load = looper_preset_load,
+    .inputs = lp_inputs,
     .ui = &looper_menu_ui,
     // audio loops stay RAM-only (save-to-library is the explicit gesture)
 };

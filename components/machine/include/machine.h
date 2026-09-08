@@ -59,6 +59,7 @@ typedef struct {
     int n_web_uris;
 } machine_ui_t;
 
+struct machine_input_s;
 typedef struct machine_s {
     const char *name;       // shown in the machine selector, <=15 chars
 
@@ -85,7 +86,34 @@ typedef struct machine_s {
     void   (*preset_load)(const cJSON *node);
 
     const machine_ui_t *ui;   // menu integration, optional
+
+    // Optional (2026-09-08): the machine's INPUT MAP — what each front-panel
+    // input does here outside the assignable CV matrix, for the web page's
+    // matrix view. Fill `out` (up to `max` entries), return the count. Called
+    // from the httpd task: read state only, never block. An entry with a
+    // preset `key` is EDITABLE (the page writes the chosen source to that key
+    // and re-applies the preset); without one it is a fixed job.
+    int (*inputs)(struct machine_input_s *out, int max);
 } machine_t;
+
+// Source encoding = clock.h's: 0-7 = CV1-8, 8 = TR1, 9 = TR2, 10 = AUDIO,
+// 11 = INT, 12 = OFF; -1 = none.
+typedef struct machine_input_s {
+    const char *label;   // "Pitch (V/oct)", "K6 cutoff", "Clock" ...
+    const char *key;     // preset key holding the source when editable, else NULL
+    int8_t src;          // current source
+    int8_t def;          // default source (editable entries)
+    uint8_t opts;        // MI_* bits: which sources the key accepts
+} machine_input_t;
+#define MI_CV   1        // CV1-8
+#define MI_TR   2        // TR1 / TR2
+#define MI_CLK  4        // AUDIO / INT / OFF (clock-source extras)
+#define MACHINE_INPUTS_MAX 24
+static inline machine_input_t mi(const char *label, int src)
+{ machine_input_t m = { label, NULL, (int8_t)src, (int8_t)src, 0 }; return m; }
+static inline machine_input_t mi_pick(const char *label, const char *key, int src, int def, uint8_t opts)
+{ machine_input_t m = { label, key, (int8_t)src, (int8_t)def, opts }; return m; }
+#define MI_ADD(x) do { if (n < max) o[n++] = (x); } while (0)
 
 // compile-time registry, terminated by NULL (machine_registry.c)
 extern const machine_t *const machine_registry[];

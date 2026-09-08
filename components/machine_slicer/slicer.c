@@ -594,6 +594,18 @@ static void slicer_preset_load(const cJSON *node)
 
 extern const machine_ui_t slicer_menu_ui;
 
+static int sl_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    MI_ADD(mi("pitch (V/oct)", 0));
+    MI_ADD(mi("level (when patched)", 1));
+    MI_ADD(mi("slice select / FX cutoff", 5));
+    MI_ADD(mi("varispeed / FX resonance", 6));
+    MI_ADD(mi("fire slice", 8));
+    MI_ADD(mi("fire + step", 9));
+    return n;
+}
+
 const machine_t machine_slicer = {
     .name = "Slicer",
     .start = slicer_start,
@@ -601,5 +613,6 @@ const machine_t machine_slicer = {
     .process = slicer_process,
     .preset_save = slicer_preset_save,
     .preset_load = slicer_preset_load,
+    .inputs = sl_inputs,
     .ui = &slicer_menu_ui,
 };

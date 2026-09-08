@@ -852,6 +852,31 @@ static void drum_preset_load(const cJSON *node)
 
 extern const machine_ui_t drum_menu_ui;
 
+static int dr_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    static const char *const pa[] = { "Pad 1 trig", "Pad 2 trig", "Pad 3 trig", "Pad 4 trig" },
+                      *const pb[] = { "Pad 1 B trig", "Pad 2 B trig", "Pad 3 B trig", "Pad 4 B trig" };
+    if (!dr.cv_select) {                       // Direct: each layer watches its own CV
+        for (int i = 0; i < DR_PADS; i++)
+            for (int l = 0; l < DR_LAYERS; l++) {
+                int s = dr.pad[i].ly[l].trig_src;
+                if (s == DR_SRC_NONE || (l && !dr.pad[i].layered)) continue;
+                MI_ADD(mi(l ? pb[i] : pa[i], s & 7));
+            }
+    } else {                                   // CV-select: TR fires the pad a selector CV addresses
+        MI_ADD(mi("fire (A layer)", 8));
+        MI_ADD(mi("fire (B layer)", 9));
+        if (dr.sel_src[0] >= 0) MI_ADD(mi("pad select A", dr.sel_src[0] & 7));
+        if (dr.sel_src[1] >= 0) MI_ADD(mi("pad select B", dr.sel_src[1] & 7));
+    }
+    if (dr.cv_mod) {
+        MI_ADD(mi("level (selected pad)", DR_MOD_LEVEL_CV));
+        MI_ADD(mi("decay / CW target (selected pad)", DR_MOD_DECAY_CV));
+    }
+    return n;
+}
+
 const machine_t machine_drumsampler = {
     .name = "Drums",
     .start = drum_start,
@@ -859,5 +884,6 @@ const machine_t machine_drumsampler = {
     .process = drum_process,
     .preset_save = drum_preset_save,
     .preset_load = drum_preset_load,
+    .inputs = dr_inputs,
     .ui = &drum_menu_ui,
 };

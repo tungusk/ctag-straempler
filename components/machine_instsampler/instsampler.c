@@ -373,6 +373,7 @@ static esp_err_t keys_start(void)
     inst.level = 0.85f;
     inst.start_frac = 0.0f;
     inst.knob_ctx = -1;           // force a knob recapture on the first block
+    inst.pitch_src = 0; inst.gate_src = 8;   // CV1 / TR1 unless the preset says otherwise
     cvmtx_init(&inst.mtx, keys_mtx_labels, ISM_N);   // matrix off, floors armed
     for (int i = 0; i < IS_MAX_ZONES; i++) {
         inst.zone[i].root = 48;
@@ -451,7 +452,7 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     if (audio_midi_gate()) {                          // web MIDI wins while held
         note = (float)audio_midi_note();
     } else {
-        float semis = (float)(cvm[0] - IS_CV1_ZERO) / IS_CTS_PER_ST;
+        float semis = (float)(cvm[inst.pitch_src & 7] - IS_CV1_ZERO) / IS_CTS_PER_ST;
         note = (float)inst.base_note + semis;
     }
     if (inst.quantize) note = roundf(note);
@@ -460,7 +461,7 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     // GATE FIRST, so a note-on can choose its zone before anything reads one.
     // The zone is latched for the whole note (see is_voice_t.zone) — glide or a
     // drifting CV must not swap the buffer under a live read cursor.
-    bool g = !(io->trig_level & 1) || audio_midi_gate();
+    bool g = !(io->trig_level & (1 << (inst.gate_src - 8))) || audio_midi_gate();
     if (g && !v->gate) v->zone = keys_zone_for_note(note);
     if (v->zone < 0 || v->zone >= IS_MAX_ZONES) v->zone = 0;
     is_zone_t *z = &inst.zone[v->zone];
@@ -654,6 +655,8 @@ static cJSON *keys_preset_save(void)
     // K5 start offset was knob-only (never persisted) until the autosave
     // sweep made knob edits savable
     cJSON_AddNumberToObject(o, "stf", inst.start_frac);
+    cJSON_AddNumberToObject(o, "pcv", inst.pitch_src);
+    cJSON_AddNumberToObject(o, "gtr", inst.gate_src);
     cvmtx_save(&inst.mtx, o);                // matrix ("mxs"/"mxa")
     // DIAGNOSTIC, read-only: how many zones are loaded and which one the last
     // note actually chose. Inferring zone selection from the outside does not
@@ -766,6 +769,8 @@ static void keys_preset_load(const cJSON *node)
     }
     fxrack_load(&inst_rk, node);   // slots + every effect param — AFTER the
                                    // zone loads, see the ordering note above
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "pcv")) && cJSON_IsNumber(j)) inst.pitch_src = (int8_t)(j->valueint & 7);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "gtr")) && cJSON_IsNumber(j)) inst.gate_src = (j->valueint == 9) ? 9 : 8;
     cvmtx_load(&inst.mtx, node);   // "mxs"/"mxa", with the legacy "msrc"/"mamt" fallback
     inst.knob_ctx = -1;   // re-arm knob takeover against the loaded values
 }
@@ -796,6 +801,18 @@ int keys_patch_list(char ids[][12], int max)
 
 extern const machine_ui_t keys_menu_ui;
 
+static int keys_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    MI_ADD(mi_pick("Pitch (V/oct)", "pcv", inst.pitch_src, 0, MI_CV));
+    MI_ADD(mi_pick("Gate", "gtr", inst.gate_src, 8, MI_TR));
+    MI_ADD(mi("K5 start offset", 4));
+    MI_ADD(mi("K6 cutoff", 5));
+    MI_ADD(mi("K7 resonance", 6));
+    MI_ADD(mi("K8 env>cutoff", 7));
+    return n;
+}
+
 const machine_t machine_instsampler = {
     .name = "Keys",
     .start = keys_start,
@@ -803,5 +820,6 @@ const machine_t machine_instsampler = {
     .process = keys_process,
     .preset_save = keys_preset_save,
     .preset_load = keys_preset_load,
+    .inputs = keys_inputs,
     .ui = &keys_menu_ui,
 };

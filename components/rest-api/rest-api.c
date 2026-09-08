@@ -1457,6 +1457,22 @@ static esp_err_t remote_params_get_handler(httpd_req_t *req)
     const machine_t *m = machine_active();
     if (!m || !m->preset_save) { send_json(req, "{}"); return ESP_OK; }
     cJSON *o = m->preset_save();
+    if (o && m->inputs) {   // input map: fixed jobs + editable picks (see machine.h)
+        machine_input_t in[MACHINE_INPUTS_MAX];
+        int n = m->inputs(in, MACHINE_INPUTS_MAX);
+        cJSON *a = cJSON_AddArrayToObject(o, "imap");
+        for (int i = 0; i < n; i++) {
+            cJSON *e = cJSON_CreateObject();
+            cJSON_AddStringToObject(e, "l", in[i].label);
+            cJSON_AddNumberToObject(e, "s", in[i].src);
+            if (in[i].key) {
+                cJSON_AddStringToObject(e, "k", in[i].key);
+                cJSON_AddNumberToObject(e, "d", in[i].def);
+                cJSON_AddNumberToObject(e, "o", in[i].opts);
+            }
+            cJSON_AddItemToArray(a, e);
+        }
+    }
     char *s = o ? cJSON_PrintUnformatted(o) : NULL;
     cJSON_Delete(o);
     if (s) { send_json(req, s); free(s); } else send_json(req, "{}");

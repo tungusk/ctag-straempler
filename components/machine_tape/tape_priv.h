@@ -134,6 +134,8 @@ typedef struct {
     // knobs 5..8 with takeover: win move / cutoff / res / drive
     float    knob_capt[4];
     bool     knob_live[4];
+    int8_t   tr_play;                 // transport gate, 8 = TR1 / 9 = TR2 (preset "ptr", default TR1)
+    int8_t   tr_rec;                  // record punch gate, 8 / 9 (preset "rtr", default TR2)
     int      knob_ctx;
     float    win_move;                // K5: -1..1 window shift (0 at noon)
     // clipboard

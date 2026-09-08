@@ -137,6 +137,8 @@ typedef struct {
     // four macro knobs w/ takeover (Synth machinery); knob_ctx = -1 -> recapture
     float knob_capt[4];
     bool  knob_live[4];
+    int8_t pitch_src;             // 1V/oct input, 0-7 = CV1-8 (preset "pcv", default CV1)
+    int8_t gate_src;              // gate input, 8 = TR1 / 9 = TR2 (preset "gtr", default TR1)
     int   knob_ctx;
 
     // live (UI)

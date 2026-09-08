@@ -93,6 +93,8 @@ typedef struct {
     float knob_capt[4];          // captured position per knob at the last (re)capture
     bool  knob_live[4];          // knob has moved past threshold -> it drives its param
     int   knob_engine;           // engine the captures are valid for (-1 = recapture)
+    int8_t pitch_src;            // 1V/oct input, 0-7 = CV1-8 (preset "pcv", default CV1)
+    int8_t gate_src;             // gate input, 8 = TR1 / 9 = TR2 (preset "gtr", default TR1)
 
     // CV matrix (the shared cvmtx widget since 2026-07-20; adds on top of
     // base — dest meanings/scales in synth.c's apply switch). Owns the

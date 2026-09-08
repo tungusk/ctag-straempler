@@ -197,6 +197,19 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   `menu.c`) but stays in the registry as fallback + proof target; the selector
   uses a parallel `machines[18]` array so hidden entries don't desync the
   on-screen index.
+- **Machine INPUT MAP** (2026-09-08): `machine_t.inputs(machine_input_t *out,
+  int max)` describes what each front-panel input does OUTSIDE the assignable
+  CV matrix — `mi("K6 cutoff", 5)` for a fixed job, `mi_pick("Clock", "clk_src",
+  cur, dflt, MI_CV|MI_CLK)` for an EDITABLE pick whose preset key the web page
+  writes back through `POST /remote/params` (opts bits: `MI_CV` CV1-8, `MI_TR`
+  TR1/2, `MI_CLK` AUDIO/INT/OFF; source encoding = clock.h's). `GET
+  /remote/params` appends it as `"imap"`; the Remote tab's CV MATRIX card
+  renders it per input row (fixed = chip, pick = dropdown, Reset = defaults +
+  matrix cleared). Called from httpd — read state only. Editable today: clock
+  source (every clocked machine), Synth/Keys pitch + gate (`pcv`/`gtr`), Tape
+  play/record gates (`ptr`/`rtr`), DoubleDecker's CV map. A new machine
+  should describe its CV/TR reads here or the web page shows them as
+  unassigned.
 - **Machine web URIs**: a machine may publish REST endpoints served only while
   it is active (`machine_ui_t.web_uris` = `const httpd_uri_t[]`); the core
   registers/unregisters them on switch via `machine_set_web_cb()`

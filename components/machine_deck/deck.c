@@ -1086,6 +1086,17 @@ static void deck_preset_load(const cJSON *node)
 
 extern const machine_ui_t deck_menu_ui;
 
+static int dk_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    MI_ADD(mi_pick("Clock", "clk_src", dk.clk_src, 7, MI_CV | MI_CLK));
+    if (!clock_src_is_cv(dk.clk_src, 5)) MI_ADD(mi("loop window", 5));
+    if (!clock_src_is_cv(dk.clk_src, 6)) MI_ADD(mi("loop length", 6));
+    MI_ADD(mi("play/stop (hold: restart)", 8));
+    MI_ADD(mi("loop on/off", 9));
+    return n;
+}
+
 const machine_t machine_deck = {
     .name = "Deck",
     .start = deck_start,
@@ -1093,5 +1104,6 @@ const machine_t machine_deck = {
     .process = deck_process,
     .preset_save = deck_preset_save,
     .preset_load = deck_preset_load,
+    .inputs = dk_inputs,
     .ui = &deck_menu_ui,
 };

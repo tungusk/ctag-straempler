@@ -1292,6 +1292,21 @@ cv_map_done:;
 
 extern const machine_ui_t dualdeck_menu_ui;
 
+static int dd_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    MI_ADD(mi_pick("Clock", "clk_src", dd.clk_src, 7, MI_CV | MI_CLK));
+    MI_ADD(mi_pick("DJ filter", "cvf", dd.cv_filt & 7, 5, MI_CV));
+    MI_ADD(mi_pick("Crossfade", "cvx", dd.cv_fader & 7, 6, MI_CV));
+    MI_ADD(mi_pick("Deck A loop window", "cvp0", dd.cv_lpos[0] & 7, 4, MI_CV));
+    MI_ADD(mi_pick("Deck A loop length", "cvl0", dd.cv_llen[0] & 7, 5, MI_CV));
+    MI_ADD(mi_pick("Deck B loop window", "cvp1", dd.cv_lpos[1] & 7, 4, MI_CV));
+    MI_ADD(mi_pick("Deck B loop length", "cvl1", dd.cv_llen[1] & 7, 5, MI_CV));
+    MI_ADD(mi("start/stop (focused deck)", 8));
+    MI_ADD(mi("loop (focused deck)", 9));
+    return n;
+}
+
 const machine_t machine_dualdeck = {
     .name = "DoubleDecker",
     .start = dualdeck_start,
@@ -1299,5 +1314,6 @@ const machine_t machine_dualdeck = {
     .process = dualdeck_process,
     .preset_save = dualdeck_preset_save,
     .preset_load = dualdeck_preset_load,
+    .inputs = dd_inputs,
     .ui = &dualdeck_menu_ui,
 };

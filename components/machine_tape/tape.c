@@ -18,6 +18,10 @@
 #include "menu_config.h"
 #include "recording.h"
 #include "tape_priv.h"
+// transport gates follow the preset's TR picks (tape_priv.h tr_play / tr_rec)
+#define TP_PLAYBIT (1u << (tp.tr_play - 8))
+#define TP_RECBIT  (1u << (tp.tr_rec - 8))
+
 
 static const char *TAG = "TAPE";
 tape_state_t tp;
@@ -263,7 +267,7 @@ static void tape_card_process(int32_t out[MACHINE_BLOCK],
 {
     bool rec = recording_is_active();
     if (tp.rec_mode == TPR_MOMENTARY) {
-        bool gate = !(io->trig_level & 2);
+        bool gate = !(io->trig_level & TP_RECBIT);
         if (gate && !rec && recording_is_prepared()) { recording_trigger(); tp.pos = 0.0; }
         else if (!gate && rec) recording_finish();
     } else {
@@ -386,7 +390,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     if (tp.rec_dest == TPD_CARD) { tape_card_process(out, in, io); return; }
 
     // transport edges: TR1 play/stop, TR2 record punch
-    if (io->trig_rising & 1) {
+    if (io->trig_rising & TP_PLAYBIT) {
         if (tp.playing) {
             if (tp.recording && tp.rec_extend) {   // stopping a fresh take: finalize + save
                 tp.in_pt = 0; tp.out_pt = tp.len; tp.rec_extend = false;
@@ -403,7 +407,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // TR2 record. PUNCH: each validated gate edge toggles record in/out.
     // MOMENTARY: record only while the gate is HELD (active low -> bit clear).
     if (tp.rec_mode == TPR_MOMENTARY) {
-        bool gate = !(io->trig_level & 2);
+        bool gate = !(io->trig_level & TP_RECBIT);
         if (gate && !tp.recording) {
             if (tp.playing) tape_rec_start();            // overdub while held
             else            tape_begin_fresh();          // fresh take (auto-saves the old one)
@@ -422,7 +426,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
         // 2026-07-25): an overdub started from playing, and a fresh take started
         // from stopped — previously only the overdub case armed, so holding from
         // a stopped tape just recorded the hold. A punch-OUT press never arms.
-        if (!(io->trig_level & 2)) {                     // gate held (active low)
+        if (!(io->trig_level & TP_RECBIT)) {             // gate held (active low)
             if (tp.tr2_recgest) {
                 tp.tr2_hold += (uint32_t)(MACHINE_BLOCK / 2);
                 if (!tp.tr2_armed && tp.tr2_hold >= (uint32_t)(TP_RATE * 7 / 10)) {
@@ -991,6 +995,7 @@ static esp_err_t tape_start(void)
     tp.len_sel = 1;                            // 30 s default
     tp.manual_bpm = 120.0f;
     tp.clk_src = clock_source_clamp_cv_audio(7);
+    tp.tr_play = 8; tp.tr_rec = 9;            // TR1 play, TR2 record unless the preset says otherwise
     tp.level = 0.9f;
     tp.cutoff = 2000.0f;
     tp.res01 = 0.1f;
@@ -1046,6 +1051,8 @@ static cJSON *tape_preset_save(void)
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "lsel", tp.len_sel);
     cJSON_AddNumberToObject(o, "clk", tp.clk_src);
+    cJSON_AddNumberToObject(o, "ptr", tp.tr_play);
+    cJSON_AddNumberToObject(o, "rtr", tp.tr_rec);
     cJSON_AddNumberToObject(o, "mbpm", tp.manual_bpm);
     cJSON_AddNumberToObject(o, "flt", tp.flt_mode);
     cJSON_AddNumberToObject(o, "cut", tp.cutoff);
@@ -1073,6 +1080,8 @@ static void tape_preset_load(const cJSON *node)
         if (s != tp.len_sel) tape_set_len_sel(s);
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk"))  && cJSON_IsNumber(j)) tp.clk_src = clock_source_clamp_cv_audio(j->valueint);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "ptr"))  && cJSON_IsNumber(j)) tp.tr_play = (j->valueint == 9) ? 9 : 8;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rtr"))  && cJSON_IsNumber(j)) tp.tr_rec  = (j->valueint == 8) ? 8 : 9;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "mbpm")) && cJSON_IsNumber(j)) tp.manual_bpm = tp_clampf((float)j->valuedouble, 40, 240);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flt"))  && cJSON_IsNumber(j)) tp.flt_mode = tp_clampi(j->valueint, 0, TPF_N - 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cut"))  && cJSON_IsNumber(j)) tp.cutoff = tp_clampf((float)j->valuedouble, 30, 6000);
@@ -1102,6 +1111,18 @@ static void tape_preset_load(const cJSON *node)
 
 extern const machine_ui_t tape_menu_ui;
 
+static int tape_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    MI_ADD(mi_pick("Clock", "clk", tp.clk_src, 7, MI_CV | MI_CLK));
+    MI_ADD(mi_pick("Play/stop", "ptr", tp.tr_play, 8, MI_TR));
+    MI_ADD(mi_pick("Record punch", "rtr", tp.tr_rec, 9, MI_TR));
+    MI_ADD(mi("K5 window move", 4));
+    MI_ADD(mi("K6 cutoff", 5));
+    MI_ADD(mi("K7 resonance", 6));
+    return n;
+}
+
 const machine_t machine_tape = {
     .name = "Tape",
     .start = tape_start,
@@ -1109,5 +1130,6 @@ const machine_t machine_tape = {
     .process = tape_process,
     .preset_save = tape_preset_save,
     .preset_load = tape_preset_load,
+    .inputs = tape_inputs,
     .ui = &tape_menu_ui,
 };

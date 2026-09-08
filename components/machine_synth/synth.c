@@ -70,6 +70,7 @@ static esp_err_t synth_start(void)
     sy.res01 = 0.2f;
     sy.freq = 261.6f;           // C4-ish until CV read
     sy.knob_engine = -1;        // force a knob recapture on the first block
+    sy.pitch_src = 0; sy.gate_src = 8;   // CV1 / TR1 unless the preset says otherwise
     cvmtx_init(&sy.mtx, synth_mtx_labels, SYM_N);      // matrix off, floors armed
     svf_reset(&sy.flt_l);
     fxfilter_init(&sy.filt);
@@ -141,13 +142,13 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
     sy.cv1_disp = cvm[0];
     // gate on TR1 (active low) or a web/soft MIDI note; computed up here so the
     // pitch holds through the release tail instead of snapping to the C3 fallback
-    bool g = !(io->trig_level & 1) || audio_midi_gate();
+    bool g = !(io->trig_level & (1 << (sy.gate_src - 8))) || audio_midi_gate();
     if (g) {                                          // freeze sy.freq while ungated
         if (audio_midi_gate()) {                      // web MIDI wins while held
             float n = (float)audio_midi_note();
             sy.freq = 440.0f * powf(2.0f, (n - 69.0f) / 12.0f);
         } else
-            note_from_cv(cvm[0]);                     // CV1 = 1V/oct pitch
+            note_from_cv(cvm[sy.pitch_src & 7]);      // 1V/oct pitch (CV1 by default)
     }
 
     // ---- CV matrix: assigned CVs modulate params ON TOP of the knob/Setup base
@@ -316,6 +317,8 @@ static cJSON *synth_preset_save(void)
     cJSON_AddNumberToObject(o, "cut", sy.cutoff_base);
     cJSON_AddNumberToObject(o, "res", sy.res01);
     cJSON_AddNumberToObject(o, "fold", sy.fold);
+    cJSON_AddNumberToObject(o, "pcv", sy.pitch_src);
+    cJSON_AddNumberToObject(o, "gtr", sy.gate_src);
     cvmtx_save(&sy.mtx, o);                  // matrix ("mxs"/"mxa")
     return o;
 }
@@ -354,6 +357,8 @@ static void synth_preset_load(const cJSON *node)
         float f = (float)j->valuedouble;
         sy.fold = f < 0 ? 0 : f > 1 ? 1 : f;
     }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "pcv")) && cJSON_IsNumber(j)) sy.pitch_src = (int8_t)(j->valueint & 7);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "gtr")) && cJSON_IsNumber(j)) sy.gate_src = (j->valueint == 9) ? 9 : 8;
     cvmtx_load(&sy.mtx, node);   // "mxs"/"mxa", with the legacy "msrc"/"mamt" fallback
 }
 
@@ -386,6 +391,18 @@ int synth_patch_list(char ids[][12], int max)
 
 extern const machine_ui_t synth_menu_ui;
 
+static int synth_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    MI_ADD(mi_pick("Pitch (V/oct)", "pcv", sy.pitch_src, 0, MI_CV));
+    MI_ADD(mi_pick("Gate", "gtr", sy.gate_src, 8, MI_TR));
+    MI_ADD(mi("K5 timbre", 4));
+    MI_ADD(mi("K6 cutoff", 5));
+    MI_ADD(mi("K7 resonance", 6));
+    MI_ADD(mi("K8 env>cutoff", 7));
+    return n;
+}
+
 const machine_t machine_synth = {
     .name = "Synth",
     .start = synth_start,
@@ -393,5 +410,6 @@ const machine_t machine_synth = {
     .process = synth_process,
     .preset_save = synth_preset_save,
     .preset_load = synth_preset_load,
+    .inputs = synth_inputs,
     .ui = &synth_menu_ui,
 };

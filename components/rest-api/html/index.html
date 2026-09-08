@@ -63,6 +63,8 @@ body.nosbar .sbar{display:none}
 .pknob{width:34px;height:34px;border-radius:50%;background:#1a1a1a;border:1px solid #2e2e2e;position:relative}
 .pknob:after{content:'';position:absolute;left:50%;top:3px;width:2px;height:9px;margin-left:-1px;background:#444}
 .pbtn{width:44px;height:44px;border-radius:50%;padding:0;font-size:10px}
+.led{position:absolute;left:78px;top:37px;width:28px;height:14px;fill:none;stroke:#5a1a1a;stroke-width:2;stroke-linecap:round}
+.led.on{stroke:#f33;filter:drop-shadow(0 0 3px #f33)}
 .enc{display:flex;gap:2px}
 .enc .btn{padding:3px 5px;font-size:10px}
 .jgrid{display:grid;grid-template-columns:repeat(7,auto);justify-content:center}
@@ -82,10 +84,15 @@ body.nosbar .sbar{display:none}
 .rpcols{columns:2 300px;column-gap:20px;max-width:920px}
 .rpcols>*,.fld{break-inside:avoid}
 .rpcols fieldset{break-inside:avoid}
-.mtx{width:auto;max-width:920px;margin:2px 0 4px}
+.mtx{width:auto;max-width:920px;margin:4px 0 2px}
 .mtx td{padding:2px 6px;border-bottom:1px solid #1a1a1a;white-space:nowrap}
 .mtx select{width:118px}
 .mxc{display:flex;align-items:center;gap:6px;margin:2px 0}
+.mxp{display:flex;align-items:center;gap:6px;margin:3px 0;color:#7fb2cc;font-size:11px}
+.mxp select{width:82px}
+.mxcard .mtx{width:100%}
+.mxcard .mtx input[type=range]{width:120px}
+.mxcard .mtx select{width:110px}
 .mxf{display:inline-block;margin:3px 0;padding:2px 8px;border:1px solid #2e3e4a;border-radius:3px;background:#12181c;color:#7fb2cc;font-size:11px}
 .mtx input[type=range]{-webkit-appearance:none;appearance:none;width:140px;height:18px;vertical-align:middle;background:transparent;border:none}
 .mtx input[type=range]::-webkit-slider-runnable-track{height:6px;border:1px solid #333;border-radius:3px;background:linear-gradient(to right,#1a1a1a 0 49%,#444 49% 51%,#1a1a1a 51%)}
@@ -236,7 +243,8 @@ body.nosbar .sbar{display:none}
     <b class="ph">PERFORM</b>
     <div class="pgrid4">
       <div class="pcell dim" title="input gain &#8212; panel only"><span class="pl">GAIN</span><span class="pknob"></span></div>
-      <div class="pcell"><span class="pl">TR 1</span><button class="btn pbtn" onclick="remTrig(1)">pulse</button></div>
+      <div class="pcell" style="position:relative"><span class="pl">TR 1</span><button class="btn pbtn" onclick="remTrig(1)">pulse</button>
+        <svg class="led" id="recled" viewBox="0 0 28 14" title="REC"><path d="M2 7 Q6 1 10 7 T18 7 T26 7"/></svg></div>
       <div class="pcell"><span class="pl">TR 2</span><button class="btn pbtn" onclick="remTrig(2)">pulse</button></div>
       <div class="pcell"><span class="pl">DATA</span>
         <div class="enc"><button class="btn" onclick="remEv('bwd')">&#8592;</button><button class="btn" onclick="remEv('press')">press</button><button class="btn" onclick="remEv('fwd')">&#8594;</button></div>
@@ -250,10 +258,9 @@ body.nosbar .sbar{display:none}
     <b class="ph">I/O</b>
     <div class="jgrid" id="rmon"></div>
   </div>
-  <div class="card"><b class="ph">MACHINE</b>
-    <div class="row" id="rmach" style="flex-wrap:wrap;margin-top:2px"></div>
+  <div class="card pnl"><b class="ph">MACHINE</b>
+    <div class="row" id="rmach" style="flex-wrap:wrap;margin-top:2px;gap:6px"></div>
   </div>
-  <label>Machine settings (applied live, remembered by the module)</label>
   <div id="rparams"></div>
   <div class="row">
     <button class="btn" onclick="rpLoad()">Reload settings</button>
@@ -1012,14 +1019,18 @@ function rpForm(o,path){
 // "mxa" amounts (-100..100 %), "mxl" destination names (firmware >= 09-08;
 // older builds get numbered rows). Rendered FIRST in the settings; the raw
 // arrays are kept out of the generic form.
-var MTX_KEYS=['mxs','mxa','mxl','cvr'];
-// Shown TRANSPOSED: one row per input (CV 1-8, TR 1-2). A row first shows the
-// channel's FIXED job in this machine ("cvr" from the firmware, e.g. "K6 cutoff",
-// "clock", "gate") — not editable here — then its assignable-matrix cells: one
-// per assignment plus a trailing "off" slot; picking a destination there adds
-// one. The firmware stores one source per destination, so rpApply rebuilds
-// mxs/mxa from the cells (a destination claimed twice: the later row wins).
+var MTX_KEYS=['mxs','mxa','mxl','cvr','imap'];
+// CV MATRIX, transposed: one row per input (CV 1-8, TR 1-2, plus a "no jack" row
+// for clocks on AUDIO/INT/OFF). A row lists the machine's INPUT MAP entries on
+// that channel ("imap" from the firmware): a FIXED job is a plain chip; an
+// EDITABLE pick (it carries a preset key) is a chip with a source dropdown, and
+// Apply writes the choice to that key. Then the assignable-matrix cells: one per
+// assignment plus a trailing "off" slot; picking a destination there adds one.
+// The firmware stores one source per destination, so rpApply rebuilds mxs/mxa
+// from the cells (a destination claimed twice: the later row wins). Reset puts
+// every pick back to its default and clears the assignable matrix.
 var mxLabs=[],mxN=0;
+var SRC_NAMES=['CV1','CV2','CV3','CV4','CV5','CV6','CV7','CV8','TR1','TR2','AUDIO','INT','OFF'];
 function mxCell(cv,dest,amt){
   var o='<option value="-1"'+(dest<0?' selected':'')+'>off</option>';
   for(var k=0;k<mxN;k++)o+='<option value="'+k+'"'+(k===dest?' selected':'')+'>'+esc(mxLabs[k]||('dest '+(k+1)))+'</option>';
@@ -1027,29 +1038,48 @@ function mxCell(cv,dest,amt){
     +'<input type="range" min="-100" max="100" step="1" value="'+amt+'" oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\'">'
     +'<span class="amt">'+(amt>0?'+':'')+amt+'%</span></div>';
 }
-// the trailing slot just got a destination: open a fresh "off" slot after it
-function mxGrow(sel){
+function mxGrow(sel){   // the trailing slot just got a destination: open a fresh "off" slot after it
   var c=sel.parentElement,row=c.parentElement;
   if(+sel.value>=0&&c===row.lastElementChild)row.insertAdjacentHTML('beforeend',mxCell(+c.dataset.cv,-1,0));
 }
+function mxPick(e){   // an editable input-map entry: label + source dropdown
+  var allow=[];
+  if(e.o&1)for(var c=0;c<8;c++)allow.push(c);
+  if(e.o&2)allow.push(8,9);
+  if(e.o&4)allow.push(10,11,12);
+  if(allow.indexOf(e.s)<0)allow.push(e.s);
+  var o='';allow.forEach(function(v){o+='<option value="'+v+'"'+(v===e.s?' selected':'')+'>'+(SRC_NAMES[v]||v)+'</option>';});
+  return '<div class="mxp"><span>'+esc(e.l)+'</span><select data-ik="'+esc(e.k)+'" data-idef="'+e.d+'">'+o+'</select></div>';
+}
 function rpMatrix(d){
-  var hasM=Array.isArray(d.mxs),cvr=Array.isArray(d.cvr)?d.cvr:[];
-  if(!hasM&&!cvr.some(function(x){return x;}))return '';
+  var hasM=Array.isArray(d.mxs),im=Array.isArray(d.imap)?d.imap:[];
+  if(!hasM&&!im.length)return '';
   mxLabs=d.mxl||[];mxN=hasM?d.mxs.length:0;
-  var h='<fieldset style="border:1px solid #2a2a2a;border-radius:3px;padding:4px 8px 6px;margin:6px 0"><legend style="color:#0af;font-size:10px;padding:0 4px">CV matrix</legend><table class="mtx">';
-  for(var ch=0;ch<10;ch++){
-    var name=ch<8?'CV '+(ch+1):'TR '+(ch-7),cells='';
-    if(cvr[ch])cells+='<div class="mxf" title="fixed in this machine">'+esc(cvr[ch])+'</div>';
+  var h='<div class="card pnl mxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">CV MATRIX</b>'
+    +'<button class="btn" style="flex:0 0 auto" title="picks back to their defaults, assignable matrix cleared, applied" onclick="mxReset()">Reset</button></div><table class="mtx">';
+  for(var ch=0;ch<11;ch++){
+    var name=ch<8?'CV '+(ch+1):ch<10?'TR '+(ch-7):'no jack',cells='';
+    im.forEach(function(e){
+      var on=(ch<10)?e.s===ch:(e.s<0||e.s>=10);
+      if(!on)return;
+      cells+=e.k?mxPick(e):'<div class="mxf" title="fixed in this machine">'+esc(e.l)+'</div>';
+    });
     if(hasM&&ch<8){
       for(var k=0;k<mxN;k++)if(d.mxs[k]===ch)cells+=mxCell(ch,k,(d.mxa&&typeof d.mxa[k]==='number')?d.mxa[k]:0);
       cells+=mxCell(ch,-1,0);
     }
-    if(!cells)cells='<div class="mxf" style="color:#444">&#8212;</div>';
-    h+='<tr><td style="color:#aaa;vertical-align:top;padding-top:6px">'+name+'</td><td><div id="mxr'+ch+'">'+cells+'</div></td></tr>';
+    if(!cells){if(ch===10)continue;cells='<div class="mxf" style="color:#444;border-color:#222;background:none">&#8212;</div>';}
+    h+='<tr><td style="color:#aaa;vertical-align:top;padding-top:6px;white-space:nowrap">'+name+'</td><td><div id="mxr'+ch+'">'+cells+'</div></td></tr>';
   }
-  return h+'</table></fieldset>';
+  return h+'</table></div>';
 }
-function rpRest(d){var r={};for(var k in d)if(MTX_KEYS.indexOf(k)<0)r[k]=d[k];return r;}
+function mxReset(){
+  document.querySelectorAll('[data-ik]').forEach(function(s){s.value=s.dataset.idef;});
+  document.querySelectorAll('.mxc select').forEach(function(s){s.value='-1';});
+  document.querySelectorAll('.mxc input').forEach(function(i){i.value=0;});
+  rpApply();
+}
+function rpRest(d){var own={};(Array.isArray(d.imap)?d.imap:[]).forEach(function(e){if(e.k)own[e.k]=1;});var r={};for(var k in d)if(MTX_KEYS.indexOf(k)<0&&!own[k])r[k]=d[k];return r;}
 
 // dedicated pad editor for the Drums machine: sample dropdowns from the
 // library, trig routing, level/pan sliders, decay, enable
@@ -1103,8 +1133,8 @@ function rpLoad(){
     if(curMach==='Drums'&&d.pad){
       fetch('/files').then(function(r){return r.json();}).then(function(fd){
         var names=(fd.files||[]).map(function(f){return f.name;}).sort();
-        el.innerHTML=rpMatrix(d)+'<div class="rpcols">'+rpDrumForm(rpRest(d),names)+'</div>';
-      }).catch(function(){el.innerHTML=rpMatrix(d)+'<div class="rpcols">'+rpDrumForm(rpRest(d),[])+'</div>';});
+        el.innerHTML=rpMatrix(d)+'<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpDrumForm(rpRest(d),names)+'</div></div>';
+      }).catch(function(){el.innerHTML=rpMatrix(d)+'<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpDrumForm(rpRest(d),[])+'</div></div>';});
       return;
     }
     // populate the file-field dropdown: modules for Tracker, samples otherwise
@@ -1113,8 +1143,8 @@ function rpLoad(){
       rpFileOpts=(isMod?(fd.modules||[]).map(function(m){return m.name;})
                        :(fd.files||[]).map(function(f){return f.name;})).sort();
     }).catch(function(){rpFileOpts=[];}).then(function(){
-      var rest=rpRest(d);
-      el.innerHTML=rpMatrix(d)+(Object.keys(rest).length?'<div class="rpcols">'+rpForm(rest,'')+'</div>':(rpMatrix(d)?'':'<div class="msg">this machine has no settings</div>'));
+      var rest=rpRest(d),mx=rpMatrix(d);
+      el.innerHTML=mx+(Object.keys(rest).length?'<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpForm(rest,'')+'</div></div>':(mx?'':'<div class="msg">this machine has no settings</div>'));
     });
   }).catch(function(){});
 }
@@ -1122,6 +1152,7 @@ function rpLoad(){
 function rpApply(){
   if(!rpData)return;
   var d=JSON.parse(JSON.stringify(rpData));
+  document.querySelectorAll('[data-ik]').forEach(function(s){d[s.dataset.ik]=+s.value;});   // input-map picks
   if(Array.isArray(d.mxs)){   // matrix: rebuild per-destination arrays from the CV rows
     for(var k=0;k<d.mxs.length;k++){d.mxs[k]=-1;if(Array.isArray(d.mxa))d.mxa[k]=0;}
     document.querySelectorAll('.mxc').forEach(function(c){
@@ -1142,7 +1173,7 @@ function rpApply(){
       var m=document.getElementById('rm');
       m.className='msg '+(res.error?'er':'ok');
       m.textContent=res.error||'Applied — autosaves in a couple of seconds';
-      if(!res.error)rpData=d;
+      if(!res.error){rpData=d;setTimeout(rpLoad,600);}   // re-render: picks move rows, labels refresh
     }).catch(function(){});
 }
 
@@ -1504,6 +1535,8 @@ function updateRemote(d){
   if(mc)mc.style.display=(d.machine=='Synth'||d.machine=='Keys')?'':'none';
   var cv=d.cv||[];
   knFollow(cv);
+  var led=document.getElementById('recled');
+  if(led)led.setAttribute('class','led'+(d.recording?' on':''));
   for(var i=0;i<cv.length;i++){
     var f=document.getElementById('rf'+i),v=document.getElementById('rv'+i);
     if(f)f.style.setProperty('--v',Math.round(cv[i]/4095*100));

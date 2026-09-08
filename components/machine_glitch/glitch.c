@@ -160,6 +160,17 @@ static void glitch_preset_load(const cJSON *node)
 
 extern const machine_ui_t glitch_menu_ui;
 
+static int gl_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    MI_ADD(mi_pick("Clock", "clk_src", gl.clk_src, 7, MI_CV | MI_CLK));
+    if (!clock_src_is_cv(gl.clk_src, 5)) MI_ADD(mi("window length", 5));
+    if (!clock_src_is_cv(gl.clk_src, 6)) MI_ADD(mi("pitch", 6));
+    MI_ADD(mi("stutter (hold)", 8));
+    MI_ADD(mi("stutter latch", 9));
+    return n;
+}
+
 const machine_t machine_glitch = {
     .name = "Glitch",
     .start = glitch_start,
@@ -167,5 +178,6 @@ const machine_t machine_glitch = {
     .process = glitch_process,
     .preset_save = glitch_preset_save,
     .preset_load = glitch_preset_load,
+    .inputs = gl_inputs,
     .ui = &glitch_menu_ui,
 };

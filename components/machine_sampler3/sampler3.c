@@ -1342,6 +1342,22 @@ static void s3_preset_load(const cJSON *node)
 
 extern const machine_ui_t s3_menu_ui;
 
+static int s3_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    static const char *const sp[] = { "V1 speed", "V2 speed" }, *const st[] = { "V1 start", "V2 start" },
+                      *const ln[] = { "V1 length", "V2 length" }, *const gt[] = { "V1 gate", "V2 gate" };
+    MI_ADD(mi_pick("Clock", "clk_src", s3.clk_src, 7, MI_CV | MI_CLK));
+    for (int i = 0; i < S3_NVOICES && i < 2; i++) {
+        const s3_voice_t *v = &s3.v[i];
+        MI_ADD(mi(gt[i], 8 + i));
+        if (v->src_speed >= 0) MI_ADD(mi(sp[i], v->src_speed));
+        if (v->src_start >= 0) MI_ADD(mi(st[i], v->src_start));
+        if (v->src_len   >= 0) MI_ADD(mi(ln[i], v->src_len));
+    }
+    return n;
+}
+
 const machine_t machine_sampler3 = {
     .name = "Sampler",
     .start = s3_start,
@@ -1349,5 +1365,6 @@ const machine_t machine_sampler3 = {
     .process = s3_process,
     .preset_save = s3_preset_save,
     .preset_load = s3_preset_load,
+    .inputs = s3_inputs,
     .ui = &s3_menu_ui,
 };

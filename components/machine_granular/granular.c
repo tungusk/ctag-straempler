@@ -243,6 +243,16 @@ static void granular_preset_load(const cJSON *node)
 
 extern const machine_ui_t granular_menu_ui;
 
+static int gr_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    MI_ADD(mi("level (when patched)", 0));
+    MI_ADD(mi("position", 5));
+    MI_ADD(mi("pitch", 6));
+    MI_ADD(mi("freeze (hold)", 8));
+    return n;
+}
+
 const machine_t machine_granular = {
     .name = "Granular",
     .start = granular_start,
@@ -250,5 +260,6 @@ const machine_t machine_granular = {
     .process = granular_process,
     .preset_save = granular_preset_save,
     .preset_load = granular_preset_load,
+    .inputs = gr_inputs,
     .ui = &granular_menu_ui,
 };
