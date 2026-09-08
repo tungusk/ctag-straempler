@@ -9,6 +9,19 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-07 — bench + hardware notes
+
+- New unit (.85) OTA'd to the **v0.10-beta1 release image** (clean build
+  from the tag); tick 445 us, encres 4/encdir 1 intact, `/tftread`
+  pixel_ok; **power-cycle rollback check PASSED** (stays on ota_1). Unit 1
+  (.227) untouched, still `keys-multisample-v1`.
+- Hardware side-project: an **E-mu-format front panel** (6"×6", 1/4" jacks,
+  bus-normalled inputs, ±12 V sub-board) lives in the build-pack under
+  `panel-emu/` — see its README. Firmware-relevant facts from that work:
+  E-mu gate/trigger is a positive 0/+5 V TTL signal (fine for the TR
+  inputs), and the board must NOT be fed the E-mu bus's ±15 V (16 V rail
+  caps C36/C38/C39/C42).
+
 ## 2026-09-05 — FIRST PUBLIC BETA: GitHub pre-release `v0.10-beta1`
 
 https://github.com/tungusk/ctag-straempler/releases/tag/v0.10-beta1 — tag at
