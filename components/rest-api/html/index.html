@@ -63,6 +63,8 @@ body.nosbar .sbar{display:none}
 .remtop{align-items:stretch}
 .remtop .rcol{display:flex;flex-direction:column;justify-content:flex-end}
 #panel{flex:1 0 auto;background:#050505;display:flex;flex-direction:column}
+#panel .row .btn{background:#050505;border-color:#2a2a2a;color:#777}
+#panel .row .btn:hover{background:#1a1a1a;color:#aaa}
 .pbody{margin:auto 0}   /* controls centre in whatever height the frame has spare */
 /* everything under the two columns spans them: 502 + 12 + 502 */
 #p3>.card,#p3>.row,#rparams>.card{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
@@ -242,6 +244,7 @@ body.nosbar .sbar{display:none}
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">PANEL</b>
       <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
+      <button class="btn" id="scrzoom" style="flex:0 0 34px;margin-left:6px" title="screenshot size: panel proportion / large" onclick="scrZoom()">&#8982;</button>
       <label style="display:inline-flex;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
       <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
     </div>
@@ -1394,6 +1397,13 @@ function iceToggle(){
 }
 // Screen — live TFT screenshot from the PSRAM shadow framebuffer
 var scrLast=0,scrBusy=false;
+// screenshot size toggle: 60 % (the panel's proportion) <-> 90 %, remembered per browser
+function scrZoom(){
+  var i=document.getElementById('scrimg'),big=i.style.width!=='90%';
+  i.style.width=big?'90%':'60%';
+  try{localStorage.setItem('scrzoom',big?'1':'0');}catch(e){}
+}
+try{if(localStorage.getItem('scrzoom')==='1')document.getElementById('scrimg').style.width='90%';}catch(e){}
 function scrShot(){
   if(scrBusy)return; scrBusy=true;
   var img=document.getElementById('scrimg');
