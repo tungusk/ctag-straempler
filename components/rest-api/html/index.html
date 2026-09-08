@@ -1038,7 +1038,8 @@ function mxCell(cv,dest,amt){
   for(var k=0;k<mxN;k++)o+='<option value="'+k+'"'+(k===dest?' selected':'')+'>'+esc(mxLabs[k]||('dest '+(k+1)))+'</option>';
   return '<div class="mxc" data-cv="'+cv+'"><select>'+o+'</select>'
     +'<input type="range" min="-100" max="100" step="1" value="'+amt+'" oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\'">'
-    +'<span class="amt">'+(amt>0?'+':'')+amt+'%</span></div>';
+    +'<span class="amt">'+(amt>0?'+':'')+amt+'%</span>'
+    +'<button class="mxadd" title="remove this assignment (takes effect on Apply)" onclick="this.parentElement.remove()">&#8722;</button></div>';
 }
 function mxAdd(cv){var r=document.getElementById('mxr'+cv);if(r)r.insertAdjacentHTML('beforeend',mxCell(cv,-1,0));}
 function mxPick(e){   // an editable input-map entry: label + source dropdown
