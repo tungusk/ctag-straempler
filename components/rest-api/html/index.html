@@ -62,15 +62,15 @@ body.nosbar .sbar{display:none}
 .pnl{padding:8px 14px 10px}
 .pnl .msg{text-align:center;margin:4px auto 0}
 .ph{display:block;color:#0af;font-size:11px;letter-spacing:1px;margin-bottom:4px}
-.pgrid4{display:grid;grid-template-columns:repeat(4,92px);justify-content:center}
+.pgrid4{display:grid;grid-template-columns:repeat(4,116px);justify-content:center}
 .pcell,.jcell{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;color:#666;padding:6px 0 4px}
-.jcell{padding:6px 10px 4px}
+.jcell{padding:6px 8px 4px;min-width:62px}
 .pl{color:#999;letter-spacing:1px;font-size:10px}
 .pcell.dim .pl{color:#555}
-.pknob{width:34px;height:34px;border-radius:50%;background:#1a1a1a;border:1px solid #2e2e2e;position:relative}
-.pknob:after{content:'';position:absolute;left:50%;top:3px;width:2px;height:9px;margin-left:-1px;background:#444}
-.pbtn{width:44px;height:44px;border-radius:50%;padding:0;font-size:10px}
-.led{position:absolute;left:78px;top:37px;width:28px;height:14px;fill:none;stroke:#5a1a1a;stroke-width:2;stroke-linecap:round}
+.pknob{width:42px;height:42px;border-radius:50%;background:#1a1a1a;border:1px solid #2e2e2e;position:relative}
+.pknob:after{content:'';position:absolute;left:50%;top:4px;width:2px;height:11px;margin-left:-1px;background:#444}
+.pbtn{width:54px;height:54px;border-radius:50%;padding:0;font-size:11px}
+.led{position:absolute;left:100px;top:42px;width:32px;height:14px;fill:none;stroke:#5a1a1a;stroke-width:2;stroke-linecap:round}
 .led.on{stroke:#f33;filter:drop-shadow(0 0 3px #f33)}
 .enc{display:flex;gap:2px}
 .enc .btn{padding:3px 5px;font-size:10px}
@@ -78,9 +78,9 @@ body.nosbar .sbar{display:none}
 .jcell.sep{border-left:1px dotted #444}
 .jcell.sepr{border-right:1px dotted #444}
 /* jack socket: a ring meter (270-degree sweep, --v = 0..100) around a dark hole */
-.jack{--v:0;--c:#0af;width:32px;height:32px;border-radius:50%;position:relative;margin:4px 0 1px;
+.jack{--v:0;--c:#0af;width:42px;height:42px;border-radius:50%;position:relative;margin:4px 0 1px;
   background:conic-gradient(from 225deg,var(--c) calc(var(--v)*.75%),#2a2a2a calc(var(--v)*.75%) 75%,transparent 75%)}
-.jack:before{content:'';position:absolute;inset:4px;border-radius:50%;background:#0a0a0a;border:1px solid #3a3a3a;box-shadow:inset 0 0 0 3px #1c1c1c}
+.jack:before{content:'';position:absolute;inset:5px;border-radius:50%;background:#0a0a0a;border:1px solid #3a3a3a;box-shadow:inset 0 0 0 3px #1c1c1c}
 .jack.au{--c:#3a7}
 .jack.tr{background:#2a2a2a}
 .jack.tr.on{background:#e33;box-shadow:0 0 8px #e33}
@@ -113,9 +113,9 @@ body.nosbar .sbar{display:none}
 .mtx input[type=range]::-moz-range-thumb{width:10px;height:14px;background:#3a3a3a;border:1px solid #666;border-radius:2px;cursor:pointer}
 .mtx .amt{display:inline-block;width:44px;text-align:right;color:#9ab}
 /* rotary knob: drag up/down or scroll to turn; idle it follows the physical knob */
-.knob{width:46px;height:46px;border-radius:50%;background:radial-gradient(circle at 50% 38%,#2c2c2c,#151515 70%);border:1px solid #3a3a3a;box-shadow:0 2px 4px #000;position:relative;cursor:ns-resize;touch-action:none;user-select:none;margin:6px 0 4px}
+.knob{width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 50% 38%,#2c2c2c,#151515 70%);border:1px solid #3a3a3a;box-shadow:0 2px 4px #000;position:relative;cursor:ns-resize;touch-action:none;user-select:none;margin:6px 0 4px}
 .knob:hover{border-color:#555}
-.knob i{position:absolute;left:50%;top:50%;width:3px;height:22px;margin:-22px 0 0 -1.5px;transform-origin:50% 100%;background:linear-gradient(to bottom,#0af 50%,transparent 50%);border-radius:2px;pointer-events:none}
+.knob i{position:absolute;left:50%;top:50%;width:3px;height:28px;margin:-28px 0 0 -1.5px;transform-origin:50% 100%;background:linear-gradient(to bottom,#0af 50%,transparent 50%);border-radius:2px;pointer-events:none}
 .btn.cur{background:#0af;color:#000;border-color:#0af}
 .ren{cursor:pointer;border-bottom:1px dotted #555}
 .ren:hover{color:#0af;border-bottom-color:#0af}
@@ -283,34 +283,19 @@ body.nosbar .sbar{display:none}
     <button class="btn" onclick="rpApply()">Apply</button>
   </div>
   <div class="msg" id="rm"></div>
-  <div class="card" id="bouncecard">
-    <div class="row tight" style="align-items:center">
-      <b style="flex:1;color:#0af">BOUNCE</b>
+  <div class="remcols">
+  <div class="rcol">
+  <div class="card pnl" id="bouncecard">
+    <div class="row tight" style="align-items:center;margin-top:0">
+      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">BOUNCE</b>
       <span id="bncstate" style="color:#888;margin-right:8px">idle</span>
       <button class="btn" id="bncbtn" style="flex:0 0 84px" onclick="bncToggle()">Record</button>
     </div>
     <div class="msg" style="margin-top:4px">Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.</div>
   </div>
-  <div class="card" id="bcastcard">
-    <div class="row tight" style="align-items:center">
-      <b style="flex:1;color:#0af">BROADCAST</b>
-      <span id="bcstate" style="color:#888;margin-right:8px">off</span>
-      <button class="btn" id="bcenbtn" style="flex:0 0 84px" onclick="bcastToggle()">Enable</button>
-    </div>
-    <div class="row tight" style="align-items:center;margin-top:4px">
-      <span style="flex:1;color:#888">output stream</span>
-      <a class="btn" id="bclinkmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
-      <a class="btn" id="bclink" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
-    </div>
-    <div class="row tight" style="align-items:center;margin-top:4px">
-      <span style="flex:1;color:#888">line input</span>
-      <a class="btn" id="bclinkinmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
-      <a class="btn" id="bclinkin" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
-    </div>
-    <audio id="bcaudio" controls preload="none" style="width:100%;margin-top:6px"></audio>
-    <div class="msg" style="margin-top:4px">Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.</div>
-    <div class="row tight" style="align-items:center;margin-top:10px">
-      <b style="flex:1;color:#0af">PUSH &#8594; ICECAST</b>
+  <div class="card pnl" id="icecard">
+    <div class="row tight" style="align-items:center;margin-top:0">
+      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">PUSH &#8594; ICECAST</b>
       <span id="icestate" style="color:#888;margin-right:8px">off</span>
       <button class="btn" id="icebtn" style="flex:0 0 84px" onclick="iceToggle()">Start</button>
     </div>
@@ -324,6 +309,29 @@ body.nosbar .sbar{display:none}
       <input id="icename" placeholder="stream name" style="flex:1">
     </div>
     <div class="msg" style="margin-top:4px">Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.</div>
+  </div>
+  </div>
+  <div class="rcol">
+  <div class="card pnl" id="bcastcard">
+    <div class="row tight" style="align-items:center;margin-top:0">
+      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">BROADCAST</b>
+      <span id="bcstate" style="color:#888;margin-right:8px">off</span>
+      <button class="btn" id="bcenbtn" style="flex:0 0 84px" onclick="bcastToggle()">Enable</button>
+    </div>
+    <div class="row tight" style="align-items:center;margin-top:4px">
+      <span style="flex:1;color:#888">output stream</span>
+      <a class="btn" id="bclinkmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
+      <a class="btn" id="bclink" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
+    </div>
+    <div class="row tight" style="align-items:center;margin-top:4px">
+      <span style="flex:1;color:#888">line input</span>
+      <a class="btn" id="bclinkinmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
+      <a class="btn" id="bclinkin" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
+    </div>
+    <audio id="bcaudio" controls preload="none" style="width:100%;margin-top:6px;color-scheme:dark;opacity:.8;border-radius:3px"></audio>
+    <div class="msg" style="margin-top:4px">Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.</div>
+  </div>
+  </div>
   </div>
 </div>
 <div class="pane" id="p4">
@@ -1161,14 +1169,14 @@ function rpLoad(retry){
       }).catch(function(){document.getElementById('rmatrix').innerHTML=rpMatrix(d);el.innerHTML='<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpDrumForm(rpRest(d),[])+'</div></div>';});
       return;
     }
+    document.getElementById('rmatrix').innerHTML=rpMatrix(d);   // first: the file list below can take seconds after a boot
     // populate the file-field dropdown: modules for Tracker, samples otherwise
     var isMod=(curMach==='Tracker');
     fetch(isMod?'/trk/list':'/files').then(function(r){return r.json();}).then(function(fd){
       rpFileOpts=(isMod?(fd.modules||[]).map(function(m){return m.name;})
                        :(fd.files||[]).map(function(f){return f.name;})).sort();
     }).catch(function(){rpFileOpts=[];}).then(function(){
-      var rest=rpRest(d),mx=rpMatrix(d);
-      document.getElementById('rmatrix').innerHTML=mx;
+      var rest=rpRest(d),mx=document.getElementById('rmatrix').innerHTML;
       el.innerHTML=Object.keys(rest).length?'<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpForm(rest,'')+'</div></div>':(mx?'':'<div class="msg">this machine has no settings</div>');
     });
   }).catch(function(){if(!retry)setTimeout(function(){rpLoad(true);},1500);});
