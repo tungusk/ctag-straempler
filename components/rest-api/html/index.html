@@ -62,7 +62,8 @@ body.nosbar .sbar{display:none}
    the matrix + machine column keeps its frames on the shared baseline */
 .remtop{align-items:stretch}
 .remtop .rcol{display:flex;flex-direction:column;justify-content:flex-end}
-#panel{flex:1 0 auto;background:#050505}
+#panel{flex:1 0 auto;background:#050505;display:flex;flex-direction:column}
+.pbody{margin:auto 0}   /* controls centre in whatever height the frame has spare */
 /* everything under the two columns spans them: 502 + 12 + 502 */
 #p3>.card,#p3>.row,#rparams>.card{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
 #rparams .rpcols{columns:2 300px;column-gap:12px}
@@ -245,6 +246,7 @@ body.nosbar .sbar{display:none}
       <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
     </div>
     <img id="scrimg" style="width:90%;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
+    <div class="pbody">
     <div class="psec">
     <div class="pgrid4">
       <div class="pcell dim" title="input gain &#8212; panel only"><span class="pl">GAIN</span><span class="pknob"></span></div>
@@ -260,6 +262,7 @@ body.nosbar .sbar{display:none}
     </div>
     <div class="psec">
     <div class="jgrid" id="rmon"></div>
+    </div>
     </div>
   </div>
   <div class="card pnl" id="midicard" style="display:none">
