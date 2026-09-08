@@ -28,6 +28,7 @@ label{display:block;color:#666;font-size:11px;margin:8px 0 2px}
 input{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px 8px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
 select{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
 input[type=range]{padding:0;height:22px;accent-color:#0af}
+input[type=checkbox]{color-scheme:dark;accent-color:#2f5566;opacity:.8}
 .row{display:flex;gap:8px;margin-top:8px}
 .row>*{flex:1}
 .row.tight>*{flex:0 0 auto;padding:3px 14px}   /* natural-width buttons */
@@ -55,6 +56,8 @@ body.nosbar .sbar{display:none}
 /* two panel-width columns side by side when the window allows, one centred column otherwise */
 .remcols{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:0 12px}
 .rcol{flex:0 1 502px;max-width:100%}
+#rmach{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:4px}
+#rmach .btn{padding:4px 2px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* top pair: both columns share one height — the panel frame fills its column,
    the matrix + machine column keeps its frames on the shared baseline */
 .remtop{align-items:stretch}
@@ -238,7 +241,7 @@ body.nosbar .sbar{display:none}
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">PANEL</b>
       <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
-      <label style="color:#888;margin-left:8px"><input type="checkbox" id="scrauto"> auto</label>
+      <label style="display:inline-flex;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
       <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
     </div>
     <img id="scrimg" style="width:90%;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
@@ -278,7 +281,7 @@ body.nosbar .sbar{display:none}
   <div class="rcol">
   <div id="rmatrix"></div>
   <div class="card pnl"><b class="ph">MACHINE</b>
-    <div class="row" id="rmach" style="flex-wrap:wrap;margin-top:2px;gap:6px"></div>
+    <div id="rmach"></div>
   </div>
   </div>
   </div>
@@ -953,7 +956,7 @@ function loadRemote(){
     remMachines=d.machines||[];
     var h='';
     remMachines.forEach(function(m){
-      h+='<button class="btn" style="flex:0 0 auto" id="rmb-'+m+'" onclick="remMach(\''+m+'\')">'+esc(m)+'</button>';
+      h+='<button class="btn" id="rmb-'+m+'" onclick="remMach(\''+m+'\')">'+esc(m)+'</button>';
     });
     document.getElementById('rmach').innerHTML=h;
     // PERFORM knob row: CV5-8 are the panel's knobs — a fader injects a knob value
