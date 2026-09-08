@@ -68,6 +68,13 @@ body.nosbar .sbar{display:none}
 #scrbox .row>:last-child{margin-right:0}
 #scrbox .row #scrclose{padding:3px 0;text-align:center}
 #scrbox .row #scrbtn{flex:0 0 84px}
+/* nothing loaded: the big button sits a little lower, centred in the gap above the controls */
+#scrbox.empty #scrrow{margin:16px 0 8px}
+/* panel dressing beside the small screen: card slot left, antenna + SMA right (hidden at 90 %) */
+.deco{position:absolute;top:50%;transform:translateY(-50%);pointer-events:none}
+.slot{left:8%;width:11px;height:96px;border:1px solid #333;border-radius:3px;background:#000}
+.ant{right:6%;width:34px;height:64px;fill:none;stroke:#555;stroke-width:1.6;stroke-linecap:round}
+#panel.big .deco,#scrarea:has(#scrbox.empty) .deco{display:none}   /* only beside a loaded, small screen */
 #scrbox .row #scrbtn.big{flex:1 1 auto;padding:14px 0;font-size:14px;letter-spacing:1px}   /* nothing loaded: one big Screen button */
 #panel .row .btn:hover{background:#1a1a1a;color:#aaa}
 .pbody{margin:auto 0}   /* controls centre in whatever height the frame has spare */
@@ -247,13 +254,17 @@ body.nosbar .sbar{display:none}
   <div class="remcols remtop">
   <div class="rcol">
   <div class="card pnl" id="panel">
-    <div id="scrbox" style="width:60%;margin:0 auto">
-      <div class="row tight" id="scrrow" style="align-items:center;justify-content:center;margin-top:0">
-        <button class="btn big" id="scrbtn" onclick="scrShot()">Screen</button>
-        <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
-        <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
+    <div id="scrarea" style="position:relative">
+      <div class="deco slot" title="card slot"></div>
+      <svg class="deco ant" viewBox="0 0 34 64" title="antenna"><path d="M6 15 a15.5 15.5 0 0 1 22 0"/><path d="M10.5 20 a9 9 0 0 1 13 0"/><circle cx="17" cy="25" r="1.7" fill="#555" stroke="none"/><circle cx="17" cy="47" r="13"/><circle cx="17" cy="47" r="5"/></svg>
+      <div id="scrbox" class="empty" style="width:60%;margin:0 auto;position:relative">
+        <div class="row tight" id="scrrow" style="align-items:center;justify-content:center;margin-top:0">
+          <button class="btn big" id="scrbtn" onclick="scrShot()">Screen</button>
+          <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
+        </div>
+        <button class="btn" id="scrclose" style="position:absolute;top:0;right:0;width:30px;display:none" onclick="scrClose()">&#10005;</button>
+        <img id="scrimg" title="click: toggle size" onclick="scrZoom()" style="cursor:zoom-in;width:100%;display:none;margin:8px 0 6px;image-rendering:pixelated;border:1px solid #333">
       </div>
-      <img id="scrimg" title="click: toggle size" onclick="scrZoom()" style="cursor:zoom-in;width:100%;display:none;margin:8px 0 6px;image-rendering:pixelated;border:1px solid #333">
     </div>
     <div class="pbody">
     <div class="psec">
@@ -1408,9 +1419,10 @@ function scrZoom(){
   var b=document.getElementById('scrbox'),i=document.getElementById('scrimg'),big=b.style.width!=='90%';
   b.style.width=big?'90%':'60%';i.style.cursor=big?'zoom-out':'zoom-in';
   i.style.margin=big?'6px 0 0':'8px 0 6px';   // the small screen gets a little air above and below
+  document.getElementById('panel').className='card pnl'+(big?' big':'');   // dressing only beside the small screen
   try{localStorage.setItem('scrzoom',big?'1':'0');}catch(e){}
 }
-try{if(localStorage.getItem('scrzoom')==='1'){document.getElementById('scrbox').style.width='90%';var _si=document.getElementById('scrimg');_si.style.margin='6px 0 0';_si.style.cursor='zoom-out';}}catch(e){}
+try{if(localStorage.getItem('scrzoom')==='1'){document.getElementById('scrbox').style.width='90%';document.getElementById('panel').className='card pnl big';var _si=document.getElementById('scrimg');_si.style.margin='6px 0 0';_si.style.cursor='zoom-out';}}catch(e){}
 function scrShot(){
   if(scrBusy)return; scrBusy=true;
   var img=document.getElementById('scrimg');
@@ -1421,7 +1433,7 @@ function scrShot(){
     document.getElementById('scrautol').style.display='inline-flex';
     document.getElementById('scrbtn').textContent='Refresh';
     document.getElementById('scrbtn').className='btn';
-    document.getElementById('scrrow').style.justifyContent='flex-end';
+    document.getElementById('scrbox').className='';
     scrBusy=false;
   };
   next.onerror=function(){scrBusy=false;};
@@ -1433,7 +1445,7 @@ function scrClose(){          // collapse back to the header line; stop auto too
   document.getElementById('scrautol').style.display='none';
   document.getElementById('scrbtn').textContent='Screen';
   document.getElementById('scrbtn').className='btn big';
-  document.getElementById('scrrow').style.justifyContent='center';
+  document.getElementById('scrbox').className='empty';
   document.getElementById('scrauto').checked=false;
 }
 function scrPoll(){
