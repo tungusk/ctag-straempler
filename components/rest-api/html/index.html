@@ -248,7 +248,7 @@ body.nosbar .sbar{display:none}
       <label style="display:inline-flex;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
       <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
     </div>
-    <img id="scrimg" title="click: toggle size" onclick="scrZoom()" style="cursor:zoom-in;width:60%;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
+    <img id="scrimg" title="click: toggle size" onclick="scrZoom()" style="cursor:zoom-in;width:60%;display:none;margin:12px auto 6px;image-rendering:pixelated;border:1px solid #333">
     <div class="pbody">
     <div class="psec">
     <div class="pgrid4">
@@ -1401,9 +1401,10 @@ var scrLast=0,scrBusy=false;
 function scrZoom(){
   var i=document.getElementById('scrimg'),big=i.style.width!=='90%';
   i.style.width=big?'90%':'60%';i.style.cursor=big?'zoom-out':'zoom-in';
+  i.style.margin=big?'6px auto 0':'12px auto 6px';   // the small screen gets a little air above and below
   try{localStorage.setItem('scrzoom',big?'1':'0');}catch(e){}
 }
-try{if(localStorage.getItem('scrzoom')==='1')document.getElementById('scrimg').style.width='90%';}catch(e){}
+try{if(localStorage.getItem('scrzoom')==='1'){var _si=document.getElementById('scrimg');_si.style.width='90%';_si.style.margin='6px auto 0';_si.style.cursor='zoom-out';}}catch(e){}
 function scrShot(){
   if(scrBusy)return; scrBusy=true;
   var img=document.getElementById('scrimg');
