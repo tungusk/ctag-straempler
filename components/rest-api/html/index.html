@@ -52,6 +52,9 @@ body.nosbar .sbar{display:none}
    TR2 / DATA over the CV5-8 knobs) above the two-row jack field
    (IN L/R | TR1/2 | CV1-4 over CV5-8 | OUT L/R, dotted dividers between groups) */
 .card.pnl{width:502px;max-width:calc(100vw - 24px);margin:8px auto}   /* the panel column: 480 px screen + padding, centred */
+/* two panel-width columns side by side when the window allows, one centred column otherwise */
+.remcols{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:0 12px}
+.rcol{flex:0 1 502px;max-width:100%}
 .psec{border-top:1px solid #262626;margin-top:8px;padding-top:8px}
 .pnl{padding:8px 14px 10px}
 .pnl .msg{text-align:center;margin:4px auto 0}
@@ -221,6 +224,8 @@ body.nosbar .sbar{display:none}
 </div>
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
+  <div class="remcols">
+  <div class="rcol">
   <div class="card pnl" id="panel">
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">SCREEN</b>
@@ -229,7 +234,7 @@ body.nosbar .sbar{display:none}
       <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
     </div>
     <img id="scrimg" style="width:100%;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
-    <div class="psec"><b class="ph">PERFORM</b>
+    <div class="psec"><b class="ph">CONTROL</b>
     <div class="pgrid4">
       <div class="pcell dim" title="input gain &#8212; panel only"><span class="pl">GAIN</span><span class="pknob"></span></div>
       <div class="pcell" style="position:relative"><span class="pl">TR 1</span><button class="btn pbtn" onclick="remTrig(1)">pulse</button>
@@ -246,7 +251,7 @@ body.nosbar .sbar{display:none}
     <div class="jgrid" id="rmon"></div>
     </div>
   </div>
-  <div class="card" id="midicard" style="display:none">
+  <div class="card pnl" id="midicard" style="display:none">
     <div class="row tight" style="align-items:center">
       <b style="flex:1;color:#0af">PLAY &#8212; MIDI</b>
       <span id="midist" style="color:#888;margin-right:8px">off</span>
@@ -261,9 +266,13 @@ body.nosbar .sbar{display:none}
     </div>
     <div class="msg" style="margin-top:4px">Plays <b>Synth</b> / <b>Keys</b> (MIDI wins over CV while a note is held). Type on this page, click the keys, or pick a MIDI device (Chrome).</div>
   </div>
+  </div>
+  <div class="rcol">
   <div id="rmatrix"></div>
   <div class="card pnl"><b class="ph">MACHINE</b>
     <div class="row" id="rmach" style="flex-wrap:wrap;margin-top:2px;gap:6px"></div>
+  </div>
+  </div>
   </div>
   <div id="rparams"></div>
   <div class="row">
