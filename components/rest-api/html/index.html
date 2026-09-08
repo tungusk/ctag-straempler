@@ -58,7 +58,7 @@ body.nosbar .sbar{display:none}
 /* everything under the two columns spans them: 502 + 12 + 502 */
 #p3>.card,#p3>.row,#rparams>.card{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
 #rparams .rpcols{columns:2 300px;column-gap:12px}
-.psec{border-top:1px solid #262626;margin-top:8px;padding-top:8px}
+.psec{margin-top:6px}
 .pnl{padding:8px 14px 10px}
 .pnl .msg{text-align:center;margin:4px auto 0}
 .ph{display:block;color:#0af;font-size:11px;letter-spacing:1px;margin-bottom:4px}
@@ -231,13 +231,13 @@ body.nosbar .sbar{display:none}
   <div class="rcol">
   <div class="card pnl" id="panel">
     <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">SCREEN</b>
+      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">PANEL</b>
       <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
       <label style="color:#888;margin-left:8px"><input type="checkbox" id="scrauto"> auto</label>
       <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
     </div>
     <img id="scrimg" style="width:100%;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
-    <div class="psec"><b class="ph">CONTROL</b>
+    <div class="psec">
     <div class="pgrid4">
       <div class="pcell dim" title="input gain &#8212; panel only"><span class="pl">GAIN</span><span class="pknob"></span></div>
       <div class="pcell" style="position:relative"><span class="pl">TR 1</span><button class="btn pbtn" onclick="remTrig(1)">pulse</button>
@@ -250,7 +250,7 @@ body.nosbar .sbar{display:none}
     </div>
     <div class="pgrid4" id="rperf"></div>
     </div>
-    <div class="psec"><b class="ph">I/O</b>
+    <div class="psec">
     <div class="jgrid" id="rmon"></div>
     </div>
   </div>
