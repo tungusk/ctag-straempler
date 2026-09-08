@@ -67,6 +67,8 @@ body.nosbar .sbar{display:none}
 #scrbox .row>*{padding:3px 10px}
 #scrbox .row>:last-child{margin-right:0}
 #scrbox .row #scrclose{padding:3px 0;text-align:center}
+#scrbox .row #scrbtn{flex:0 0 84px}
+#scrbox .row #scrbtn.big{flex:1 1 auto;padding:14px 0;font-size:14px;letter-spacing:1px}   /* nothing loaded: one big Screen button */
 #panel .row .btn:hover{background:#1a1a1a;color:#aaa}
 .pbody{margin:auto 0}   /* controls centre in whatever height the frame has spare */
 /* everything under the two columns spans them: 502 + 12 + 502 */
@@ -247,7 +249,7 @@ body.nosbar .sbar{display:none}
   <div class="card pnl" id="panel">
     <div id="scrbox" style="width:60%;margin:0 auto">
       <div class="row tight" id="scrrow" style="align-items:center;justify-content:center;margin-top:0">
-        <button class="btn" id="scrbtn" style="flex:0 0 84px" onclick="scrShot()">Screen</button>
+        <button class="btn big" id="scrbtn" onclick="scrShot()">Screen</button>
         <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
         <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
       </div>
@@ -1418,6 +1420,7 @@ function scrShot(){
     document.getElementById('scrclose').style.display='block';
     document.getElementById('scrautol').style.display='inline-flex';
     document.getElementById('scrbtn').textContent='Refresh';
+    document.getElementById('scrbtn').className='btn';
     document.getElementById('scrrow').style.justifyContent='flex-end';
     scrBusy=false;
   };
@@ -1429,6 +1432,7 @@ function scrClose(){          // collapse back to the header line; stop auto too
   document.getElementById('scrclose').style.display='none';
   document.getElementById('scrautol').style.display='none';
   document.getElementById('scrbtn').textContent='Screen';
+  document.getElementById('scrbtn').className='btn big';
   document.getElementById('scrrow').style.justifyContent='center';
   document.getElementById('scrauto').checked=false;
 }
