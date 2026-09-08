@@ -1086,7 +1086,7 @@ function rpMatrix(d){
   var h='<div class="card pnl mxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">CV MATRIX</b>'
     +'<button class="btn" style="flex:0 0 auto" title="picks back to their defaults, assignable matrix cleared, applied" onclick="mxReset()">Reset</button></div><table class="mtx">';
   for(var ch=0;ch<11;ch++){
-    var name=ch<8?'CV '+(ch+1):ch<10?'TR '+(ch-7):'no jack',cells='',chips='';
+    var name=ch<8?'CV '+(ch+1):ch<10?'TR '+(ch-7):'clock',cells='',chips='';
     im.forEach(function(e){
       var on=(ch<10)?e.s===ch:(e.s<0||e.s>=10);
       if(!on)return;
