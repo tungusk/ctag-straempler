@@ -245,11 +245,10 @@ body.nosbar .sbar{display:none}
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">PANEL</b>
       <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
-      <button class="btn" id="scrzoom" style="flex:0 0 34px;margin-left:6px" title="screenshot size: panel proportion / large" onclick="scrZoom()">&#8982;</button>
       <label style="display:inline-flex;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
       <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
     </div>
-    <img id="scrimg" style="width:60%;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
+    <img id="scrimg" title="click: toggle size" onclick="scrZoom()" style="cursor:zoom-in;width:60%;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
     <div class="pbody">
     <div class="psec">
     <div class="pgrid4">
@@ -1401,7 +1400,7 @@ var scrLast=0,scrBusy=false;
 // screenshot size toggle: 60 % (the panel's proportion) <-> 90 %, remembered per browser
 function scrZoom(){
   var i=document.getElementById('scrimg'),big=i.style.width!=='90%';
-  i.style.width=big?'90%':'60%';
+  i.style.width=big?'90%':'60%';i.style.cursor=big?'zoom-out':'zoom-in';
   try{localStorage.setItem('scrzoom',big?'1':'0');}catch(e){}
 }
 try{if(localStorage.getItem('scrzoom')==='1')document.getElementById('scrimg').style.width='90%';}catch(e){}
