@@ -245,9 +245,8 @@ body.nosbar .sbar{display:none}
   <div class="remcols remtop">
   <div class="rcol">
   <div class="card pnl" id="panel">
-    <b class="ph" style="padding:0;margin:0">PANEL</b>
     <div id="scrbox" style="width:60%;margin:0 auto">
-      <div class="row tight" style="align-items:center;justify-content:flex-end;margin-top:0">
+      <div class="row tight" id="scrrow" style="align-items:center;justify-content:center;margin-top:0">
         <button class="btn" id="scrbtn" style="flex:0 0 84px" onclick="scrShot()">Screen</button>
         <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
         <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
@@ -1419,6 +1418,7 @@ function scrShot(){
     document.getElementById('scrclose').style.display='block';
     document.getElementById('scrautol').style.display='inline-flex';
     document.getElementById('scrbtn').textContent='Refresh';
+    document.getElementById('scrrow').style.justifyContent='flex-end';
     scrBusy=false;
   };
   next.onerror=function(){scrBusy=false;};
@@ -1429,6 +1429,7 @@ function scrClose(){          // collapse back to the header line; stop auto too
   document.getElementById('scrclose').style.display='none';
   document.getElementById('scrautol').style.display='none';
   document.getElementById('scrbtn').textContent='Screen';
+  document.getElementById('scrrow').style.justifyContent='center';
   document.getElementById('scrauto').checked=false;
 }
 function scrPoll(){
