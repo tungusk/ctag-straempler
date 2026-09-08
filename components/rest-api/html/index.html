@@ -64,6 +64,9 @@ body.nosbar .sbar{display:none}
 .remtop .rcol{display:flex;flex-direction:column;justify-content:flex-end}
 #panel{flex:1 0 auto;background:#050505;display:flex;flex-direction:column}
 #panel .row .btn{background:#050505;border-color:#2a2a2a;color:#777}
+#scrbox .row>*{padding:3px 10px}
+#scrbox .row>:last-child{margin-right:0}
+#scrbox .row #scrclose{padding:3px 0;text-align:center}
 #panel .row .btn:hover{background:#1a1a1a;color:#aaa}
 .pbody{margin:auto 0}   /* controls centre in whatever height the frame has spare */
 /* everything under the two columns spans them: 502 + 12 + 502 */
@@ -242,13 +245,15 @@ body.nosbar .sbar{display:none}
   <div class="remcols remtop">
   <div class="rcol">
   <div class="card pnl" id="panel">
-    <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">PANEL</b>
-      <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
-      <label style="display:inline-flex;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
-      <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
+    <b class="ph" style="padding:0;margin:0">PANEL</b>
+    <div id="scrbox" style="width:60%;margin:0 auto">
+      <div class="row tight" style="align-items:center;justify-content:flex-end;margin-top:0">
+        <button class="btn" id="scrbtn" style="flex:0 0 84px" onclick="scrShot()">Screen</button>
+        <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
+        <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
+      </div>
+      <img id="scrimg" title="click: toggle size" onclick="scrZoom()" style="cursor:zoom-in;width:100%;display:none;margin:8px 0 6px;image-rendering:pixelated;border:1px solid #333">
     </div>
-    <img id="scrimg" title="click: toggle size" onclick="scrZoom()" style="cursor:zoom-in;width:60%;display:none;margin:12px auto 6px;image-rendering:pixelated;border:1px solid #333">
     <div class="pbody">
     <div class="psec">
     <div class="pgrid4">
@@ -1399,12 +1404,12 @@ function iceToggle(){
 var scrLast=0,scrBusy=false;
 // screenshot size toggle: 60 % (the panel's proportion) <-> 90 %, remembered per browser
 function scrZoom(){
-  var i=document.getElementById('scrimg'),big=i.style.width!=='90%';
-  i.style.width=big?'90%':'60%';i.style.cursor=big?'zoom-out':'zoom-in';
-  i.style.margin=big?'6px auto 0':'12px auto 6px';   // the small screen gets a little air above and below
+  var b=document.getElementById('scrbox'),i=document.getElementById('scrimg'),big=b.style.width!=='90%';
+  b.style.width=big?'90%':'60%';i.style.cursor=big?'zoom-out':'zoom-in';
+  i.style.margin=big?'6px 0 0':'8px 0 6px';   // the small screen gets a little air above and below
   try{localStorage.setItem('scrzoom',big?'1':'0');}catch(e){}
 }
-try{if(localStorage.getItem('scrzoom')==='1'){var _si=document.getElementById('scrimg');_si.style.width='90%';_si.style.margin='6px auto 0';_si.style.cursor='zoom-out';}}catch(e){}
+try{if(localStorage.getItem('scrzoom')==='1'){document.getElementById('scrbox').style.width='90%';var _si=document.getElementById('scrimg');_si.style.margin='6px 0 0';_si.style.cursor='zoom-out';}}catch(e){}
 function scrShot(){
   if(scrBusy)return; scrBusy=true;
   var img=document.getElementById('scrimg');
@@ -1412,6 +1417,8 @@ function scrShot(){
   next.onload=function(){
     img.src=next.src;img.style.display='block';                 // card expands on first shot
     document.getElementById('scrclose').style.display='block';
+    document.getElementById('scrautol').style.display='inline-flex';
+    document.getElementById('scrbtn').textContent='Refresh';
     scrBusy=false;
   };
   next.onerror=function(){scrBusy=false;};
@@ -1420,6 +1427,8 @@ function scrShot(){
 function scrClose(){          // collapse back to the header line; stop auto too
   document.getElementById('scrimg').style.display='none';
   document.getElementById('scrclose').style.display='none';
+  document.getElementById('scrautol').style.display='none';
+  document.getElementById('scrbtn').textContent='Screen';
   document.getElementById('scrauto').checked=false;
 }
 function scrPoll(){
