@@ -55,6 +55,7 @@ body.nosbar .sbar{display:none}
 /* two panel-width columns side by side when the window allows, one centred column otherwise */
 .remcols{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:0 12px}
 .rcol{flex:0 1 502px;max-width:100%}
+.remtop{align-items:flex-end}   /* matrix + machine sit on the panel's baseline */
 /* everything under the two columns spans them: 502 + 12 + 502 */
 #p3>.card,#p3>.row,#rparams>.card{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
 #rparams .rpcols{columns:2 300px;column-gap:12px}
@@ -70,8 +71,8 @@ body.nosbar .sbar{display:none}
 .pknob{width:42px;height:42px;border-radius:50%;background:#1a1a1a;border:1px solid #2e2e2e;position:relative}
 .pknob:after{content:'';position:absolute;left:50%;top:4px;width:2px;height:11px;margin-left:-1px;background:#444}
 .pbtn{width:54px;height:54px;border-radius:50%;padding:0;font-size:11px}
-.led{position:absolute;left:100px;top:42px;width:32px;height:14px;fill:none;stroke:#5a1a1a;stroke-width:2;stroke-linecap:round}
-.led.on{stroke:#f33;filter:drop-shadow(0 0 3px #f33)}
+.led{position:absolute;left:100px;top:42px;width:32px;height:14px;fill:none;stroke:#d33;stroke-width:1.8;stroke-linecap:round;filter:drop-shadow(0 0 2px #a22)}
+.led.on{stroke:#f66;filter:drop-shadow(0 0 5px #f33)}
 .enc{display:flex;gap:2px}
 .enc .btn{padding:3px 5px;font-size:10px}
 .jgrid{display:grid;grid-template-columns:repeat(7,auto);justify-content:center}
@@ -227,7 +228,7 @@ body.nosbar .sbar{display:none}
 </div>
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
-  <div class="remcols">
+  <div class="remcols remtop">
   <div class="rcol">
   <div class="card pnl" id="panel">
     <div class="row tight" style="align-items:center;margin-top:0">
@@ -241,7 +242,7 @@ body.nosbar .sbar{display:none}
     <div class="pgrid4">
       <div class="pcell dim" title="input gain &#8212; panel only"><span class="pl">GAIN</span><span class="pknob"></span></div>
       <div class="pcell" style="position:relative"><span class="pl">TR 1</span><button class="btn pbtn" onclick="remTrig(1)">pulse</button>
-        <svg class="led" id="recled" viewBox="0 0 28 14" title="REC"><path d="M2 7 Q6 1 10 7 T18 7 T26 7"/></svg></div>
+        <svg class="led" id="recled" viewBox="0 0 32 14" title="REC"><path d="M1 7 C2.5 1 4.5 1 6 7 S9.5 13 11 7 S14.5 1 16 7 S19.5 13 21 7 S24.5 1 26 7 S29.5 13 31 7"/></svg></div>
       <div class="pcell"><span class="pl">TR 2</span><button class="btn pbtn" onclick="remTrig(2)">pulse</button></div>
       <div class="pcell"><span class="pl">DATA</span>
         <div class="enc"><button class="btn" onclick="remEv('bwd')">&#8592;</button><button class="btn" onclick="remEv('press')">press</button><button class="btn" onclick="remEv('fwd')">&#8594;</button></div>
@@ -1070,14 +1071,14 @@ function mxAdd(cv){
   if(last)last.insertAdjacentHTML('afterend','<tr data-cvrow="'+cv+'"><td></td><td><div class="mxrow">'+mxCell(cv,-1,0)+'</div></td>'
     +'<td class="mxbtn"><button class="mxadd" title="remove this line" onclick="this.closest(\'tr\').remove()">&#8722;</button></td></tr>');
 }
-function mxPick(e){   // an editable input-map entry: label + source dropdown
+function mxPick(e,nolabel){   // an editable input-map entry: label + source dropdown
   var allow=[];
   if(e.o&1)for(var c=0;c<8;c++)allow.push(c);
   if(e.o&2)allow.push(8,9);
   if(e.o&4)allow.push(10,11,12);
   if(allow.indexOf(e.s)<0)allow.push(e.s);
   var o='';allow.forEach(function(v){o+='<option value="'+v+'"'+(v===e.s?' selected':'')+'>'+(SRC_NAMES[v]||v)+'</option>';});
-  return '<div class="mxp"><span>'+esc(e.l)+'</span><select data-ik="'+esc(e.k)+'" data-idef="'+e.d+'">'+o+'</select></div>';
+  return '<div class="mxp">'+(nolabel?'':'<span>'+esc(e.l)+'</span>')+'<select data-ik="'+esc(e.k)+'" data-idef="'+e.d+'">'+o+'</select></div>';
 }
 function rpMatrix(d){
   var hasM=Array.isArray(d.mxs),im=Array.isArray(d.imap)?d.imap:[];
@@ -1090,7 +1091,7 @@ function rpMatrix(d){
     im.forEach(function(e){
       var on=(ch<10)?e.s===ch:(e.s<0||e.s>=10);
       if(!on)return;
-      chips+=e.k?mxPick(e):'<div class="mxf" title="fixed in this machine">'+esc(e.l)+'</div>';
+      chips+=e.k?mxPick(e,ch===10):'<div class="mxf" title="fixed in this machine">'+esc(e.l)+'</div>';   // the clock row already says clock
     });
     var add=(hasM&&ch<8),nc=0;
     if(add){   // the loaded assignments; a bare row gets one off slot unless a chip already fills the line
