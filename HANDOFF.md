@@ -9,6 +9,40 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-08 — WEB REMOTE REWORK (Antumbra-panel layout + CV matrix / input map)
+
+Commits `644b777..9e7e031` on `v09-machines`, all PUSHED; **.85 runs `9e7e031`**
+(About label still says v0.10-beta1 — version.txt deliberately not bumped).
+Unit 1 (.227) untouched.
+
+- **Remote tab** (`components/rest-api/html/index.html`; run `html/convert.sh`
+  after EVERY edit): one 502 px panel frame (near-black bg) = screenshot at
+  60 % (click it → 90 %, remembered per browser; big "Screen" button until
+  loaded; card-slot + antenna dressing only beside a loaded small screen) over
+  GAIN / TR1 / red REC squiggle (lights while recording) / TR2 / DATA encoder
+  cluster, rotary CV5-8 knobs (drag/scroll inject via `/remote/cv`, idle they
+  FOLLOW the panel), and the two-row jack field with ring meters (CV1-4
+  sockets drag to inject). Second column: CV MATRIX + MACHINE (5-col grid);
+  SETTINGS + BOUNCE / ICECAST / BROADCAST span both columns. Hold boxes are
+  gone; the status bar hides on Remote. Live-preview trick: serve the html
+  from a CORS python server and `document.write` it into the .85 tab.
+- **INPUT MAP (firmware, `ffd6cae`)**: `machine_t.inputs()` describes each
+  machine's fixed CV/TR jobs and editable picks; `GET /remote/params` appends
+  `"imap"`; `cvmtx_save` emits `"mxl"` labels. New preset keys: Synth/Keys
+  `pcv`/`gtr`, Tape `ptr`/`rtr`. CLAUDE.md "Machine INPUT MAP" has the
+  contract. proof_build PASSED.
+- **CV MATRIX card**: one row per input (CV1-8, TR1-2, "clock" for
+  AUDIO/INT/OFF): fixed job = chip, editable pick = dropdown (Apply writes
+  the key and re-renders), assignable matrix cells (+ opens a removable
+  line, − aligned under +), Reset = picks to defaults + matrix cleared.
+- **Staging (Arlo's call)**: stage 1 (read-only roles) + stage 2 (editable
+  input picks: clock, pitch, gate, record, DoubleDecker CV map) SHIPPED.
+  **Stage 3 NOT started = knob jobs (K5-K8) and TR gestures as matrix rows
+  with an absolute/takeover mode, Synth/Keys/Tape first.** Open nits: Reset
+  on Tape moves the clock from AUDIO to the CV8 default; page allows play +
+  record on the same TR.
+- Antenna 20 dBm/RSSI experiment still parked in `git stash@{0}`.
+
 ## 2026-09-07 — bench + hardware notes
 
 - New unit (.85) OTA'd to the **v0.10-beta1 release image** (clean build
