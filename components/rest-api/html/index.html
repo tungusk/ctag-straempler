@@ -51,7 +51,8 @@ body.nosbar .sbar{display:none}
 /* Remote tab: the Antumbra panel's geometry — a PERFORM bracket (GAIN / TR1 /
    TR2 / DATA over the CV5-8 knobs) above the two-row jack field
    (IN L/R | TR1/2 | CV1-4 over CV5-8 | OUT L/R, dotted dividers between groups) */
-.card.pnl,#scrcard{width:502px;max-width:calc(100vw - 24px);margin:8px auto}   /* one frame width = the 480 px screen + padding, centred */
+.card.pnl{width:502px;max-width:calc(100vw - 24px);margin:8px auto}   /* the panel column: 480 px screen + padding, centred */
+.psec{border-top:1px solid #262626;margin-top:8px;padding-top:8px}
 .pnl{padding:8px 14px 10px}
 .pnl .msg{text-align:center;margin:4px auto 0}
 .ph{display:block;color:#0af;font-size:11px;letter-spacing:1px;margin-bottom:4px}
@@ -89,6 +90,8 @@ body.nosbar .sbar{display:none}
 .mtx select{width:118px}
 .mxc{display:flex;align-items:center;gap:6px;margin:2px 0}
 .mxp{display:flex;align-items:center;gap:6px;margin:3px 0;color:#7fb2cc;font-size:11px}
+.mxadd{background:none;border:1px solid #262626;color:#4a4a4a;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
+.mxadd:hover{color:#0af;border-color:#3a5a6a}
 .mxp select{width:82px}
 .mxcard .mtx{width:100%}
 .mxcard .mtx input[type=range]{width:120px}
@@ -215,14 +218,31 @@ body.nosbar .sbar{display:none}
 </div>
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
-  <div class="card" id="scrcard">
+  <div class="card pnl" id="panel">
     <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="ph" style="flex:1;padding:0 0 0 4px;margin:0;align-self:flex-start">SCREEN</b>
+      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">SCREEN</b>
       <button class="btn" style="flex:0 0 84px" onclick="scrShot()">Refresh</button>
       <label style="color:#888;margin-left:8px"><input type="checkbox" id="scrauto"> auto</label>
       <button class="btn" id="scrclose" style="flex:0 0 34px;margin-left:8px;display:none" onclick="scrClose()">&#10005;</button>
     </div>
     <img id="scrimg" style="width:100%;display:none;margin:6px auto 0;image-rendering:pixelated;border:1px solid #333">
+    <div class="psec"><b class="ph">PERFORM</b>
+    <div class="pgrid4">
+      <div class="pcell dim" title="input gain &#8212; panel only"><span class="pl">GAIN</span><span class="pknob"></span></div>
+      <div class="pcell" style="position:relative"><span class="pl">TR 1</span><button class="btn pbtn" onclick="remTrig(1)">pulse</button>
+        <svg class="led" id="recled" viewBox="0 0 28 14" title="REC"><path d="M2 7 Q6 1 10 7 T18 7 T26 7"/></svg></div>
+      <div class="pcell"><span class="pl">TR 2</span><button class="btn pbtn" onclick="remTrig(2)">pulse</button></div>
+      <div class="pcell"><span class="pl">DATA</span>
+        <div class="enc"><button class="btn" onclick="remEv('bwd')">&#8592;</button><button class="btn" onclick="remEv('press')">press</button><button class="btn" onclick="remEv('fwd')">&#8594;</button></div>
+        <button class="btn" style="padding:3px 10px;font-size:10px" onclick="remEv('long')">hold</button>
+      </div>
+    </div>
+    <div class="pgrid4" id="rperf"></div>
+    <div class="msg" style="margin-bottom:4px">Drag or scroll a knob to inject a value &#8212; release returns to the physical knob (idle knobs follow the panel). CV 1-4 have no knob: drag their socket below to inject, like patching a cable.</div>
+    </div>
+    <div class="psec"><b class="ph">I/O</b>
+    <div class="jgrid" id="rmon"></div>
+    </div>
   </div>
   <div class="card" id="midicard" style="display:none">
     <div class="row tight" style="align-items:center">
@@ -239,25 +259,7 @@ body.nosbar .sbar{display:none}
     </div>
     <div class="msg" style="margin-top:4px">Plays <b>Synth</b> / <b>Keys</b> (MIDI wins over CV while a note is held). Type on this page, click the keys, or pick a MIDI device (Chrome).</div>
   </div>
-  <div class="card pnl">
-    <b class="ph">PERFORM</b>
-    <div class="pgrid4">
-      <div class="pcell dim" title="input gain &#8212; panel only"><span class="pl">GAIN</span><span class="pknob"></span></div>
-      <div class="pcell" style="position:relative"><span class="pl">TR 1</span><button class="btn pbtn" onclick="remTrig(1)">pulse</button>
-        <svg class="led" id="recled" viewBox="0 0 28 14" title="REC"><path d="M2 7 Q6 1 10 7 T18 7 T26 7"/></svg></div>
-      <div class="pcell"><span class="pl">TR 2</span><button class="btn pbtn" onclick="remTrig(2)">pulse</button></div>
-      <div class="pcell"><span class="pl">DATA</span>
-        <div class="enc"><button class="btn" onclick="remEv('bwd')">&#8592;</button><button class="btn" onclick="remEv('press')">press</button><button class="btn" onclick="remEv('fwd')">&#8594;</button></div>
-        <button class="btn" style="padding:3px 10px;font-size:10px" onclick="remEv('long')">hold</button>
-      </div>
-    </div>
-    <div class="pgrid4" id="rperf"></div>
-    <div class="msg">Drag or scroll a knob to inject a value &#8212; release returns to the physical knob (idle knobs follow the panel). CV 1-4 have no knob: drag their socket below to inject, like patching a cable.</div>
-  </div>
-  <div class="card pnl">
-    <b class="ph">I/O</b>
-    <div class="jgrid" id="rmon"></div>
-  </div>
+  <div id="rmatrix"></div>
   <div class="card pnl"><b class="ph">MACHINE</b>
     <div class="row" id="rmach" style="flex-wrap:wrap;margin-top:2px;gap:6px"></div>
   </div>
@@ -1034,14 +1036,11 @@ var SRC_NAMES=['CV1','CV2','CV3','CV4','CV5','CV6','CV7','CV8','TR1','TR2','AUDI
 function mxCell(cv,dest,amt){
   var o='<option value="-1"'+(dest<0?' selected':'')+'>off</option>';
   for(var k=0;k<mxN;k++)o+='<option value="'+k+'"'+(k===dest?' selected':'')+'>'+esc(mxLabs[k]||('dest '+(k+1)))+'</option>';
-  return '<div class="mxc" data-cv="'+cv+'"><select onchange="mxGrow(this)">'+o+'</select>'
+  return '<div class="mxc" data-cv="'+cv+'"><select>'+o+'</select>'
     +'<input type="range" min="-100" max="100" step="1" value="'+amt+'" oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\'">'
     +'<span class="amt">'+(amt>0?'+':'')+amt+'%</span></div>';
 }
-function mxGrow(sel){   // the trailing slot just got a destination: open a fresh "off" slot after it
-  var c=sel.parentElement,row=c.parentElement;
-  if(+sel.value>=0&&c===row.lastElementChild)row.insertAdjacentHTML('beforeend',mxCell(+c.dataset.cv,-1,0));
-}
+function mxAdd(cv){var r=document.getElementById('mxr'+cv);if(r)r.insertAdjacentHTML('beforeend',mxCell(cv,-1,0));}
 function mxPick(e){   // an editable input-map entry: label + source dropdown
   var allow=[];
   if(e.o&1)for(var c=0;c<8;c++)allow.push(c);
@@ -1064,12 +1063,11 @@ function rpMatrix(d){
       if(!on)return;
       cells+=e.k?mxPick(e):'<div class="mxf" title="fixed in this machine">'+esc(e.l)+'</div>';
     });
-    if(hasM&&ch<8){
-      for(var k=0;k<mxN;k++)if(d.mxs[k]===ch)cells+=mxCell(ch,k,(d.mxa&&typeof d.mxa[k]==='number')?d.mxa[k]:0);
-      cells+=mxCell(ch,-1,0);
-    }
-    if(!cells){if(ch===10)continue;cells='<div class="mxf" style="color:#444;border-color:#222;background:none">&#8212;</div>';}
-    h+='<tr><td style="color:#aaa;vertical-align:top;padding-top:6px;white-space:nowrap">'+name+'</td><td><div id="mxr'+ch+'">'+cells+'</div></td></tr>';
+    var add=(hasM&&ch<8);
+    if(add)for(var k=0;k<mxN;k++)if(d.mxs[k]===ch)cells+=mxCell(ch,k,(d.mxa&&typeof d.mxa[k]==='number')?d.mxa[k]:0);
+    if(!cells&&!add){if(ch===10)continue;cells='<div class="mxf" style="color:#444;border-color:#222;background:none">&#8212;</div>';}
+    h+='<tr><td style="color:#aaa;vertical-align:top;padding-top:6px;white-space:nowrap">'+name+'</td><td><div id="mxr'+ch+'">'+cells+'</div></td>'
+      +'<td style="vertical-align:top;padding-top:4px;width:22px">'+(add?'<button class="mxadd" title="add a matrix assignment from this CV" onclick="mxAdd('+ch+')">+</button>':'')+'</td></tr>';
   }
   return h+'</table></div>';
 }
@@ -1126,15 +1124,16 @@ function rpStep(i,d){
 
 function rpLoad(){
   fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
-    if(d.error){document.getElementById('rparams').innerHTML='<div class="msg er">'+esc(d.error)+'</div>';return;}
+    if(d.error){document.getElementById('rmatrix').innerHTML='';document.getElementById('rparams').innerHTML='<div class="msg er">'+esc(d.error)+'</div>';return;}
     rpData=d;
     updateClkTag();
     var el=document.getElementById('rparams');
     if(curMach==='Drums'&&d.pad){
       fetch('/files').then(function(r){return r.json();}).then(function(fd){
         var names=(fd.files||[]).map(function(f){return f.name;}).sort();
-        el.innerHTML=rpMatrix(d)+'<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpDrumForm(rpRest(d),names)+'</div></div>';
-      }).catch(function(){el.innerHTML=rpMatrix(d)+'<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpDrumForm(rpRest(d),[])+'</div></div>';});
+        document.getElementById('rmatrix').innerHTML=rpMatrix(d);
+        el.innerHTML='<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpDrumForm(rpRest(d),names)+'</div></div>';
+      }).catch(function(){document.getElementById('rmatrix').innerHTML=rpMatrix(d);el.innerHTML='<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpDrumForm(rpRest(d),[])+'</div></div>';});
       return;
     }
     // populate the file-field dropdown: modules for Tracker, samples otherwise
@@ -1144,7 +1143,8 @@ function rpLoad(){
                        :(fd.files||[]).map(function(f){return f.name;})).sort();
     }).catch(function(){rpFileOpts=[];}).then(function(){
       var rest=rpRest(d),mx=rpMatrix(d);
-      el.innerHTML=mx+(Object.keys(rest).length?'<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpForm(rest,'')+'</div></div>':(mx?'':'<div class="msg">this machine has no settings</div>'));
+      document.getElementById('rmatrix').innerHTML=mx;
+      el.innerHTML=Object.keys(rest).length?'<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpForm(rest,'')+'</div></div>':(mx?'':'<div class="msg">this machine has no settings</div>');
     });
   }).catch(function(){});
 }
