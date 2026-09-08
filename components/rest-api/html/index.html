@@ -55,6 +55,9 @@ body.nosbar .sbar{display:none}
 /* two panel-width columns side by side when the window allows, one centred column otherwise */
 .remcols{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:0 12px}
 .rcol{flex:0 1 502px;max-width:100%}
+/* everything under the two columns spans them: 502 + 12 + 502 */
+#p3>.card,#p3>.row,#rparams>.card{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
+#rparams .rpcols{columns:2 300px;column-gap:12px}
 .psec{border-top:1px solid #262626;margin-top:8px;padding-top:8px}
 .pnl{padding:8px 14px 10px}
 .pnl .msg{text-align:center;margin:4px auto 0}
@@ -85,7 +88,7 @@ body.nosbar .sbar{display:none}
 .jack.inj:hover{box-shadow:0 0 0 1px #555}
 .jcell .pl{margin-bottom:1px}
 /* machine settings: two columns when the window is wide enough, fields never split */
-.rpcols{columns:2 300px;column-gap:20px;max-width:920px}
+.rpcols{columns:2 300px;column-gap:20px}
 .rpcols>*,.fld{break-inside:avoid}
 .rpcols fieldset{break-inside:avoid}
 .mtx{width:auto;max-width:920px;margin:4px 0 2px}
@@ -1144,7 +1147,7 @@ function rpStep(i,d){
 }
 
 
-function rpLoad(){
+function rpLoad(retry){
   fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
     if(d.error){document.getElementById('rmatrix').innerHTML='';document.getElementById('rparams').innerHTML='<div class="msg er">'+esc(d.error)+'</div>';return;}
     rpData=d;
@@ -1168,7 +1171,7 @@ function rpLoad(){
       document.getElementById('rmatrix').innerHTML=mx;
       el.innerHTML=Object.keys(rest).length?'<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpForm(rest,'')+'</div></div>':(mx?'':'<div class="msg">this machine has no settings</div>');
     });
-  }).catch(function(){});
+  }).catch(function(){if(!retry)setTimeout(function(){rpLoad(true);},1500);});
 }
 
 function rpApply(){
