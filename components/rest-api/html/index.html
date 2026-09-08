@@ -55,7 +55,11 @@ body.nosbar .sbar{display:none}
 /* two panel-width columns side by side when the window allows, one centred column otherwise */
 .remcols{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:0 12px}
 .rcol{flex:0 1 502px;max-width:100%}
-.remtop{align-items:flex-end}   /* matrix + machine sit on the panel's baseline */
+/* top pair: both columns share one height — the panel frame fills its column,
+   the matrix + machine column keeps its frames on the shared baseline */
+.remtop{align-items:stretch}
+.remtop .rcol{display:flex;flex-direction:column;justify-content:flex-end}
+#panel{flex:1 0 auto;background:#050505}
 /* everything under the two columns spans them: 502 + 12 + 502 */
 #p3>.card,#p3>.row,#rparams>.card{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
 #rparams .rpcols{columns:2 300px;column-gap:12px}
