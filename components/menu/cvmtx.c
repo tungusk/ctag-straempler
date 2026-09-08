@@ -130,10 +130,12 @@ void cvmtx_save(const cvmtx_t *m, cJSON *o)
 {
     cJSON *ms = cJSON_AddArrayToObject(o, "mxs");
     cJSON *ma = cJSON_AddArrayToObject(o, "mxa");
-    for (int d = 0; d < m->n; d++) {
+    cJSON *ml = cJSON_AddArrayToObject(o, "mxl");   // destination names, so the web
+    for (int d = 0; d < m->n; d++) {                //   matrix editor can label its rows
         cJSON_AddItemToArray(ms, cJSON_CreateNumber(m->src[d]));
         cJSON_AddItemToArray(ma, cJSON_CreateNumber(
             (int)(m->amt[d] * 100.0f + (m->amt[d] < 0 ? -0.5f : 0.5f))));
+        cJSON_AddItemToArray(ml, cJSON_CreateString(m->labels && m->labels[d] ? m->labels[d] : ""));
     }
 }
 
