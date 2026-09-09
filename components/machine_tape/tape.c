@@ -323,66 +323,38 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     int cvm[8];
     for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&med[k], io->cv[k]);
 
-    // knobs 5..8 takeover: win move / cutoff / res / drive.
-    // CV5..CV8 are knob+jack channels, so a CLOCK patched into one of them also
-    // lands on that knob's parameter — and Tape's DEFAULT clock source is CV8,
-    // i.e. clocking the module the obvious way slammed the DRIVE stage with the
-    // pulse train (audible rhythmic distortion with every FX slot Off) and
-    // flagged machine_state_dirty() on every pulse, which then churned
-    // AUTOSAVE.JSN to the card forever. Whichever channel carries the clock is
-    // excluded here (Arlo 2026-07-25). NOTE the CV matrix can still be pointed at
-    // the same channel, but that is an explicit assignment the user made.
-    // CV8 IS NO LONGER WIRED TO DRIVE (Arlo 2026-07-25). CV8 is the channel Tape
-    // clocks from by default, so the pulse train was landing straight on the
-    // drive stage. Drive stays editable on the Setup row; K5/K6/K7 keep their
-    // parameters (K6/K7 are this unit's two fully-good channels anyway, and
-    // CV5/CV8 only reach ~half scale here).
-    const int TP_N_KNOBS = 3;                 // K5 win move, K6 cutoff, K7 reso
-    const int clk_src = clock_core_src();
-    const int clk_kn = (clk_src >= 4 && clk_src <= 7) ? clk_src - 4 : -1;
-    float kn[4] = { (float)cvm[4]/4095.0f, (float)cvm[5]/4095.0f,
-                    (float)cvm[6]/4095.0f, (float)cvm[7]/4095.0f };
-    if (tp.knob_ctx != 0) {
-        tp.knob_ctx = 0;
-        for (int i = 0; i < 4; i++) { tp.knob_capt[i] = kn[i]; tp.knob_live[i] = false; }
-    }
-    // the same collision can still be aimed at K5/K6/K7 by choosing CV5/6/7 as
-    // the clock source, so the clocked channel is excluded whichever one it is
-    if (clk_kn >= 0) { tp.knob_live[clk_kn] = false; tp.knob_capt[clk_kn] = kn[clk_kn]; }
-    for (int i = 0; i < TP_N_KNOBS; i++)
-        if (i != clk_kn && !tp.knob_live[i] && fabsf(kn[i] - tp.knob_capt[i]) > 0.03f) tp.knob_live[i] = true;
-    if (tp.knob_live[0]) tp.win_move = (kn[0] - 0.5f) * 2.0f;              // K5 noon = home
-    if (tp.knob_live[1]) tp.cutoff   = 30.0f * powf(200.0f, kn[1]);        // 30 Hz .. 6 kHz
-    if (tp.knob_live[2]) tp.res01    = kn[2];
-    // K6..K8 land in PERSISTED params (cut/res/drv) but never touch the UI
-    // event queue — flag committed moves for the autosave (K5's win_move is
-    // performance-only, not saved, so it doesn't flag)
-    {
-        static float s_kdirty[4] = {-1, -1, -1, -1};
-        for (int i = 1; i < TP_N_KNOBS; i++)
-            if (i != clk_kn && tp.knob_live[i] &&
-                (s_kdirty[i] < 0 || fabsf(kn[i] - s_kdirty[i]) > 0.03f)) {
-                s_kdirty[i] = kn[i];
-                machine_state_dirty();
-            }
-    }
+    // The knobs (K5 window move / K6 cutoff / K7 reso) are ABSOLUTE entries of
+    // the CV matrix (tape_mtx_defaults). CV5..CV8 are knob+jack channels, so
+    // the CLOCK's channel must never take over a destination — clocking the
+    // module the documented way once slammed Drive with the pulse train and
+    // churned the autosave per pulse (2026-07-25); cvmtx holds any entry on
+    // skip_src. K8 is deliberately unwired (Drive is Setup-only).
+    { int cs = clock_core_src(); tp.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
 
     // CV matrix: one value per destination per block, from the same
     // conditioned snapshot the knobs use. Written before the card branch so
     // Level/Cutoff modulation reaches the card-record path too.
     cvmtx_track(&tp.mtx, cvm);
-    tp.mx_in  = cvmtx_val(&tp.mtx, cvm, TPM_IN);
-    tp.mx_out = cvmtx_val(&tp.mtx, cvm, TPM_OUT);
-    tp.mx_win = cvmtx_val(&tp.mtx, cvm, TPM_WIN);
-    tp.mx_lvl = cvmtx_val(&tp.mtx, cvm, TPM_LVL);
-    tp.mx_cut = cvmtx_val(&tp.mtx, cvm, TPM_CUT);
+    float kk;   // ABSOLUTE entries: the source REPLACES the base once moved (old knob curves)
+    if (cvmtx_abs(&tp.mtx, TPM_WIN, &kk)) tp.win_move = (kk - 0.5f) * 2.0f;     // K5 noon = home
+    if (cvmtx_abs(&tp.mtx, TPM_CUT, &kk)) tp.cutoff   = 30.0f * powf(200.0f, kk); // 30 Hz .. 6 kHz
+    if (cvmtx_abs(&tp.mtx, TPM_RES, &kk)) tp.res01    = kk;
+    // offset reads; an ABS source on a dest with no absolute meaning (crop
+    // points, level, FX rows) acts as a bipolar knob around centre
+    #define TP_MX(d) (cvmtx_abs(&tp.mtx, (d), &kk) ? (kk - 0.5f) * 2.0f : cvmtx_val(&tp.mtx, cvm, (d)))
+    tp.mx_in  = TP_MX(TPM_IN);
+    tp.mx_out = TP_MX(TPM_OUT);
+    tp.mx_win = cvmtx_val(&tp.mtx, cvm, TPM_WIN);   // ABS Window is win_move above
+    tp.mx_lvl = TP_MX(TPM_LVL);
+    tp.mx_cut = cvmtx_val(&tp.mtx, cvm, TPM_CUT);   // ABS Cutoff is the base above
     // FX param modulation: hand the rack its per-slot offsets (applied inside
     // fxrack_process around each stage; base values stay menu/preset-clean)
-    tp_rk.cv1[0] = cvmtx_val(&tp.mtx, cvm, TPM_FX1A);
-    tp_rk.cv2[0] = cvmtx_val(&tp.mtx, cvm, TPM_FX1B);
-    tp_rk.cv1[1] = cvmtx_val(&tp.mtx, cvm, TPM_FX2A);
-    tp_rk.cv2[1] = cvmtx_val(&tp.mtx, cvm, TPM_FX2B);
-    tp_rk.cv_rv  = cvmtx_val(&tp.mtx, cvm, TPM_RVMX);
+    tp_rk.cv1[0] = TP_MX(TPM_FX1A);
+    tp_rk.cv2[0] = TP_MX(TPM_FX1B);
+    tp_rk.cv1[1] = TP_MX(TPM_FX2A);
+    tp_rk.cv2[1] = TP_MX(TPM_FX2B);
+    tp_rk.cv_rv  = TP_MX(TPM_RVMX);
+    #undef TP_MX
 
     if (tp.rec_dest == TPD_CARD) { tape_card_process(out, in, io); return; }
 
@@ -973,7 +945,11 @@ fxrack_t tp_rk;                                // pointer-view over tp's FX inst
 const char *tape_mtx_labels[TPM_N] = { "Crop In", "Crop Out", "Window",
                                        "Level", "Cutoff",
                                        "FX1 (off)", "FX1 (off)",
-                                       "FX2 (off)", "FX2 (off)", "Rev Mix" };
+                                       "FX2 (off)", "FX2 (off)", "Rev Mix",
+                                       "Reso" };
+// the panel knobs as ABSOLUTE matrix entries: K5 window move, K6 cutoff,
+// K7 reso (CV5..7 = 4..6); no K8 — Drive stays Setup-only (Arlo 2026-07-25)
+const int8_t tape_mtx_defaults[TPM_N] = { -1, -1, 4, -1, 5, -1, -1, -1, -1, -1, 6 };
 
 void tape_mtx_refresh_labels(void)
 {
@@ -997,7 +973,6 @@ static esp_err_t tape_start(void)
     tp.flt_mode = TPF_OFF;
     tp.monitor = true;
     tp.mute_g = 1.0f;                          // monitor open (tp_mute_step ducks it during loads)
-    tp.knob_ctx = -1;
     tp.restore_pending = true;                 // reload the persisted take on first screen entry
     svf_reset(&tp.flt);
     fxfilter_init(&tp.filt);
@@ -1009,7 +984,8 @@ static esp_err_t tape_start(void)
     tp.dly.div = 2; tp.trem.div = 2; tp.flg.div = 4;
     tp_rk = (fxrack_t){ .od = &tp.od, .flg = &tp.flg, .trem = &tp.trem, .dly = &tp.dly,
                         .filt = &tp.filt, .band = &tp.band, .rv = &tp.rv, .slot = tp.fx_slot };
-    cvmtx_init(&tp.mtx, (const char *const *)tape_mtx_labels, TPM_N, NULL);
+    cvmtx_init(&tp.mtx, (const char *const *)tape_mtx_labels, TPM_N, tape_mtx_defaults);
+    tp.mtx.nodirty = 1u << TPM_WIN;            // K5 window move is performance-only, never autosaved
     if (bank_alloc(&tp.tape, TP_LEN_SECS[tp.len_sel] * TP_RATE) < 0) {
         ESP_LOGE(TAG, "tape bank alloc failed");
         return ESP_ERR_NO_MEM;
@@ -1098,7 +1074,6 @@ static void tape_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fxr2")) && cJSON_IsNumber(j))
         tp.fx_route = (j->valueint >= 0 && j->valueint < TPFX_N) ? j->valueint : TPFX_PRE;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "osht")) && cJSON_IsBool(j))   tp.play_oneshot = cJSON_IsTrue(j);
-    tp.knob_ctx = -1;
 }
 
 extern const machine_ui_t tape_menu_ui;
@@ -1108,9 +1083,7 @@ static int tape_inputs(machine_input_t *o, int max)
     int n = 0;
     MI_ADD(mi_pick("Play/stop", "ptr", tp.tr_play, 8, MI_TR));
     MI_ADD(mi_pick("Record punch", "rtr", tp.tr_rec, 9, MI_TR));
-    MI_ADD(mi("K5 window move", 4));
-    MI_ADD(mi("K6 cutoff", 5));
-    MI_ADD(mi("K7 resonance", 6));
+    // K5..K7 are ABSOLUTE matrix entries (mxs/mxm), not fixed jobs
     return n;
 }
 

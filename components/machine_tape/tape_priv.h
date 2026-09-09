@@ -130,12 +130,11 @@ typedef struct {
     volatile float mx_in, mx_out, mx_win;   // -1..+1, fraction of len
     volatile float mx_lvl;                  // -1..+1, additive on level
     volatile float mx_cut;                  // -1..+1, log-domain octaves-ish
-    // knobs 5..8 with takeover: win move / cutoff / res / drive
-    float    knob_capt[4];
-    bool     knob_live[4];
+    // K5 window move / K6 cutoff / K7 reso are ABSOLUTE entries of the CV
+    // matrix since 2026-09-08 (tape_mtx_defaults); K8 stays unwired (Drive is
+    // Setup-only, Arlo 2026-07-25)
     int8_t   tr_play;                 // transport gate, 8 = TR1 / 9 = TR2 (preset "ptr", default TR1)
     int8_t   tr_rec;                  // record punch gate, 8 / 9 (preset "rtr", default TR2)
-    int      knob_ctx;
     float    win_move;                // K5: -1..1 window shift (0 at noon)
     // clipboard
     tp_bank_t clip;                   // PSRAM banks, lazy
@@ -195,11 +194,14 @@ extern fxrack_t     tp_rk;        // pointer-view over tp's effect instances
 // modulate the rack's curated per-slot param pair (fxrack_t.cv1/cv2 — what
 // A/B mean follows the loaded effect; the row label tracks it) + reverb mix.
 enum { TPM_IN = 0, TPM_OUT, TPM_WIN, TPM_LVL, TPM_CUT,
-       TPM_FX1A, TPM_FX1B, TPM_FX2A, TPM_FX2B, TPM_RVMX, TPM_N };
+       TPM_FX1A, TPM_FX1B, TPM_FX2A, TPM_FX2B, TPM_RVMX,
+       TPM_RES,   // appended 2026-09-08 (K7's home) — after RVMX so old mxs indices hold
+       TPM_N };
 
 // labels are LIVE (the FX rows rename with the slot's effect): tape.c owns the
 // array; the menu refreshes it on CV-page entry
 extern const char *tape_mtx_labels[TPM_N];
+extern const int8_t tape_mtx_defaults[TPM_N];   // default knob wiring (ABS entries)
 void tape_mtx_refresh_labels(void);
 
 static inline float tp_clampf(float x, float lo, float hi){ return x < lo ? lo : x > hi ? hi : x; }
