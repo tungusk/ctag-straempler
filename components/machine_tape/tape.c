@@ -77,18 +77,16 @@ static int bank_alloc(tp_bank_t *b, uint32_t frames)
 // ---- helpers -----------------------------------------------------------------
 uint32_t tape_beat_frames(void)
 {
-    if (tp.clk_src == CLK_SRC_OFF) {        // un-clocked: no beat grid at all
+    int src = clock_core_src();
+    if (src == CLK_SRC_OFF) {               // un-clocked: no beat grid at all
         tp.disp_bpm = 0.0f; tp.disp_clk = false;
         return 0;
     }
-    float bpm; bool clk;
-    if (tp.clk_src == CLK_SRC_INT) {        // internal: manual BPM, no external in
-        bpm = tp.manual_bpm; clk = false;
-    } else {
-        bpm = clockin_beat_bpm(&tp.ci);
-        clk = bpm > 0;
-        if (!clk) bpm = tp.manual_bpm;
-    }
+    // the core clock: INT (and the auto-fallback) lock like an external source;
+    // "CLK" in the header means the grid follows a jack/AUDIO source
+    float bpm = clock_core_beat_bpm();
+    bool clk = bpm > 0 && src != CLK_SRC_INT && !clock_core_fallback();
+    if (bpm <= 0) bpm = clock_core_int_bpm();
     tp.disp_bpm = bpm;
     tp.disp_clk = clk;
     if (bpm < 20.0f) bpm = 20.0f;
@@ -119,7 +117,7 @@ uint32_t tape_snap(uint32_t frame)
 {
     if (tp.len == 0) return 0;
     if (frame > tp.len) frame = tp.len;
-    if (tp.disp_bpm > 0 || clockin_beat_bpm(&tp.ci) > 0) {   // grid snap, IN = beat 0
+    if (tp.disp_bpm > 0 || clock_core_beat_bpm() > 0) {   // grid snap, IN = beat 0
         uint32_t b = tape_beat_frames();
         long rel = (long)frame - (long)tp.in_pt;
         long snapped = (long)tp.in_pt + ((rel + (long)b / 2) / (long)b) * (long)b;
@@ -300,8 +298,8 @@ static void tape_card_process(int32_t out[MACHINE_BLOCK],
         int32_t su = ((int32_t)(int16_t)u) << 16;
         out[f * 2] = su; out[f * 2 + 1] = su;
     }
-    float bpm = clockin_beat_bpm(&tp.ci);
-    if (bpm <= 0.0f) bpm = tp.manual_bpm;
+    float bpm = clock_core_beat_bpm();
+    if (bpm <= 0.0f) bpm = clock_core_int_bpm();
     tp_rk.bpm = bpm;
     fxrack_process_i32(&tp_rk, out, frames);      // print the chain into the stream too
 
@@ -325,8 +323,6 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     int cvm[8];
     for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&med[k], io->cv[k]);
 
-    clockin_block(&tp.ci, clock_source_level(tp.clk_src, io), MACHINE_BLOCK / 2);
-
     // knobs 5..8 takeover: win move / cutoff / res / drive.
     // CV5..CV8 are knob+jack channels, so a CLOCK patched into one of them also
     // lands on that knob's parameter — and Tape's DEFAULT clock source is CV8,
@@ -342,7 +338,8 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // parameters (K6/K7 are this unit's two fully-good channels anyway, and
     // CV5/CV8 only reach ~half scale here).
     const int TP_N_KNOBS = 3;                 // K5 win move, K6 cutoff, K7 reso
-    const int clk_kn = (tp.clk_src >= 4 && tp.clk_src <= 7) ? tp.clk_src - 4 : -1;
+    const int clk_src = clock_core_src();
+    const int clk_kn = (clk_src >= 4 && clk_src <= 7) ? clk_src - 4 : -1;
     float kn[4] = { (float)cvm[4]/4095.0f, (float)cvm[5]/4095.0f,
                     (float)cvm[6]/4095.0f, (float)cvm[7]/4095.0f };
     if (tp.knob_ctx != 0) {
@@ -547,8 +544,8 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // effects (delay/flanger/tremolo) lock to the grid when their Sync is on —
     // Tape feeds the current beat BPM in. INCOMING audio only (dry on playback);
     // the rack unpacks->stages->soft-limits once (fxchain.h) internally.
-    float bpm = clockin_beat_bpm(&tp.ci);
-    if (bpm <= 0.0f) bpm = tp.manual_bpm;
+    float bpm = clock_core_beat_bpm();
+    if (bpm <= 0.0f) bpm = clock_core_int_bpm();
     if (rack_on) {
         tp_rk.bpm = bpm;
         fxrack_process_i32(&tp_rk, out, frames);
@@ -993,8 +990,6 @@ static esp_err_t tape_start(void)
 {
     memset(&tp, 0, sizeof(tp));
     tp.len_sel = 1;                            // 30 s default
-    tp.manual_bpm = 120.0f;
-    tp.clk_src = clock_source_clamp_cv_audio(7);
     tp.tr_play = 8; tp.tr_rec = 9;            // TR1 play, TR2 record unless the preset says otherwise
     tp.level = 0.9f;
     tp.cutoff = 2000.0f;
@@ -1004,7 +999,6 @@ static esp_err_t tape_start(void)
     tp.mute_g = 1.0f;                          // monitor open (tp_mute_step ducks it during loads)
     tp.knob_ctx = -1;
     tp.restore_pending = true;                 // reload the persisted take on first screen entry
-    clockin_reset(&tp.ci, 1.0f);
     svf_reset(&tp.flt);
     fxfilter_init(&tp.filt);
     fxfilter_init(&tp.band);
@@ -1050,10 +1044,8 @@ static cJSON *tape_preset_save(void)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "lsel", tp.len_sel);
-    cJSON_AddNumberToObject(o, "clk", tp.clk_src);
     cJSON_AddNumberToObject(o, "ptr", tp.tr_play);
     cJSON_AddNumberToObject(o, "rtr", tp.tr_rec);
-    cJSON_AddNumberToObject(o, "mbpm", tp.manual_bpm);
     cJSON_AddNumberToObject(o, "flt", tp.flt_mode);
     cJSON_AddNumberToObject(o, "cut", tp.cutoff);
     cJSON_AddNumberToObject(o, "res", tp.res01);
@@ -1079,10 +1071,10 @@ static void tape_preset_load(const cJSON *node)
         int s = tp_clampi(j->valueint, 0, TP_LEN_OPTS - 1);
         if (s != tp.len_sel) tape_set_len_sel(s);
     }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk"))  && cJSON_IsNumber(j)) tp.clk_src = clock_source_clamp_cv_audio(j->valueint);
+    // "clk" / "mbpm" (pre-core-clock presets) are ignored: the clock is a
+    // module-wide setting now and a preset must not silently repoint it
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "ptr"))  && cJSON_IsNumber(j)) tp.tr_play = (j->valueint == 9) ? 9 : 8;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rtr"))  && cJSON_IsNumber(j)) tp.tr_rec  = (j->valueint == 8) ? 8 : 9;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "mbpm")) && cJSON_IsNumber(j)) tp.manual_bpm = tp_clampf((float)j->valuedouble, 40, 240);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "flt"))  && cJSON_IsNumber(j)) tp.flt_mode = tp_clampi(j->valueint, 0, TPF_N - 1);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cut"))  && cJSON_IsNumber(j)) tp.cutoff = tp_clampf((float)j->valuedouble, 30, 6000);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "res"))  && cJSON_IsNumber(j)) tp.res01 = tp_clampf((float)j->valuedouble, 0, 1);
@@ -1114,7 +1106,6 @@ extern const machine_ui_t tape_menu_ui;
 static int tape_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    MI_ADD(mi_pick("Clock", "clk", tp.clk_src, 7, MI_CV | MI_CLK));
     MI_ADD(mi_pick("Play/stop", "ptr", tp.tr_play, 8, MI_TR));
     MI_ADD(mi_pick("Record punch", "rtr", tp.tr_rec, 9, MI_TR));
     MI_ADD(mi("K5 window move", 4));

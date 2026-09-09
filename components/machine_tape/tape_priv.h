@@ -95,9 +95,8 @@ typedef struct {
     int      fx_route;                // TPFX_* — where the chain sits vs the record head
     bool     play_oneshot;            // crop end: stop (one-shot) vs wrap (loop, default)
     // grid
-    clockin_t ci;
-    int      clk_src;                 // CV1..8 / AUDIO (clock.h encoding)
-    float    manual_bpm;              // used when the clock is unlocked
+    // clock: the CORE clock (clock_core(), clock.h) — source / ppq / internal
+    // BPM are module-wide settings now; Tape's Setup rows write through
     // Setup filter + drive: a per-sample svf + cubic soft-clip on the INCOMING
     // audio, AHEAD of the FX rack (printed to tape). Distinct from the rack's
     // FILT/BAND bricks — this is Tape's own always-there tone stage.

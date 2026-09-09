@@ -33,6 +33,7 @@
 #include "esp_timer.h"
 #include "rest-api.h"
 #include "menu_config.h"
+#include "clock_ui.h"
 #include "menu_nav.h"
 #include "machine.h"
 
@@ -661,6 +662,7 @@ static void dirty_poll_cb(void *arg) {
 static void autosave_now(void) {
     int64_t t_save0 = esp_timer_get_time();
     s_autosave_last_us = t_save0;                // the backstop paces off this
+    clock_ui_flush();                            // core-clock Setup-row edits ride the same debounce
     const machine_t *m = machine_active();
     if (!m || !m->preset_save) return;
     cJSON *node = m->preset_save();

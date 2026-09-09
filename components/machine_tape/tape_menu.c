@@ -19,6 +19,7 @@
 #include "sample_browser.h"
 #include "sample_ram.h"
 #include "tape_priv.h"
+#include "clock_ui.h"
 
 static const color_t WF_DIM   = {70, 70, 80};     // outside the crop
 static const color_t CROP_COL = {70, 200, 235};   // crop edge ticks (cyan)
@@ -668,8 +669,8 @@ static void tape_val(int i, char *v, size_t n)
 {
     switch (i) {
         case 0: snprintf(v, n, "%d", BEAT_LADDER[s_beats_idx]); break;
-        case 1: snprintf(v, n, "%s", clock_source_name(tp.clk_src)); break;
-        case 2: snprintf(v, n, "%.0f", tp.manual_bpm); break;
+        case 1: snprintf(v, n, "%s", clock_source_name(clock_core_src())); break;   // core clock
+        case 2: snprintf(v, n, "%.0f", clock_core_int_bpm()); break;                 // INT / fallback tempo
         case 3: snprintf(v, n, "%s", tp.flt_mode == TPF_LP ? "LP" : tp.flt_mode == TPF_BP ? "BP" :
                                      tp.flt_mode == TPF_HP ? "HP" : "off"); break;
         case 4: {
@@ -730,9 +731,8 @@ static void tape_adj(int i, int dir)
             s_beats_idx = tp_clampi(s_beats_idx + dir, 0, BEAT_LADDER_N - 1);
             tape_crop_beats(BEAT_LADDER[s_beats_idx]);
             break;
-        case 1: tp.clk_src = clock_source_cycle_cv_audio(tp.clk_src, dir);
-                clockin_reset(&tp.ci, 1.0f); break;
-        case 2: tp.manual_bpm = tp_clampf(tp.manual_bpm + d, 40, 240); break;
+        case 1: clock_ui_cycle_src(dir); break;           // write-through to the core clock
+        case 2: clock_ui_adj_bpm(d); break;
         case 3: { int m = tp.flt_mode + dir; if (m < 0) m = TPF_N - 1; if (m >= TPF_N) m = 0;
                   tp.flt_mode = m; } break;
         case 4: tp.cutoff = tp_clampf(tp.cutoff * (dir > 0 ? 1.12f : 0.893f), 30, 6000); break;
