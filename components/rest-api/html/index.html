@@ -1053,6 +1053,10 @@ function loadRemote(){
     document.getElementById('rmon').innerHTML=mh;
     knInit();   // the CV1-4 sockets drag like the knobs
     clkLoad();  // the CLOCK card (+ the ·CLK tag on the clock's channel)
+    // a SMALL screenshot at launch by default (Arlo); click it to zoom. Costs the
+    // module its lazy 230 KB shadow framebuffer as soon as the page opens.
+    if(document.getElementById('scrbox').style.width==='90%')scrZoom();
+    scrShot(4);
     rpLoad();   // auto-load the machine params
   }).catch(function(){});
 }
@@ -1575,7 +1579,7 @@ function scrZoom(){
   try{localStorage.setItem('scrzoom',big?'1':'0');}catch(e){}
 }
 try{if(localStorage.getItem('scrzoom')==='1'){document.getElementById('scrbox').style.width='90%';document.getElementById('panel').className='card pnl big';var _si=document.getElementById('scrimg');_si.style.margin='6px 0 0';_si.style.cursor='zoom-out';}}catch(e){}
-function scrShot(){
+function scrShot(retry){   // retry: the first call after a boot answers 503 Warming (lazy shadow FB)
   if(scrBusy)return; scrBusy=true;
   var img=document.getElementById('scrimg');
   var next=new Image();
@@ -1588,7 +1592,7 @@ function scrShot(){
     document.getElementById('scrbox').className='';
     scrBusy=false;
   };
-  next.onerror=function(){scrBusy=false;};
+  next.onerror=function(){scrBusy=false;if(retry>0)setTimeout(function(){scrShot(retry-1);},1500);};
   next.src='/screenshot?t='+Date.now();
 }
 function scrClose(){          // collapse back to the header line; stop auto too
