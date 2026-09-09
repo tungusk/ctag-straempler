@@ -127,6 +127,12 @@ body.nosbar .sbar{display:none}
 .mxbtn{vertical-align:top;padding-top:4px;width:22px;text-align:right}
 .mxadd{background:none;border:1px solid #262626;color:#4a4a4a;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
 .mxadd:hover{color:#0af;border-color:#3a5a6a}
+.mxmode{background:none;border:1px solid #262626;color:#666;border-radius:2px;height:18px;padding:0 5px;font-family:monospace;font-size:10px;line-height:16px;cursor:pointer;white-space:nowrap}
+.mxmode.on{color:#0af;border-color:#3a5a6a}
+.mxdef{color:#4a4a4a;font-size:10px;border:1px dashed #262626;border-radius:2px;padding:1px 5px;white-space:nowrap}
+.mxrev{background:none;border:1px solid #2e3e4a;color:#7fb2cc;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
+.mxrev:hover{color:#0af;border-color:#0af}
+.mxf.ghost{opacity:.55;border-style:dashed;display:inline-flex;align-items:center;gap:6px}
 .mxp select{width:82px}
 .mxcard .mtx{width:100%}
 .mxcard .mtx input[type=range]{width:96px}
@@ -1094,7 +1100,7 @@ function rpForm(o,path){
 // "mxa" amounts (-100..100 %), "mxl" destination names (firmware >= 09-08;
 // older builds get numbered rows). Rendered FIRST in the settings; the raw
 // arrays are kept out of the generic form.
-var MTX_KEYS=['mxs','mxa','mxl','cvr','imap'];
+var MTX_KEYS=['mxs','mxa','mxl','mxm','mxd','cvr','imap'];
 // CV MATRIX, transposed: one row per input (CV 1-8, TR 1-2, plus a "no jack" row
 // for clocks on AUDIO/INT/OFF). A row lists the machine's INPUT MAP entries on
 // that channel ("imap" from the firmware): a FIXED job is a plain chip; an
@@ -1104,15 +1110,66 @@ var MTX_KEYS=['mxs','mxa','mxl','cvr','imap'];
 // The firmware stores one source per destination, so rpApply rebuilds mxs/mxa
 // from the cells (a destination claimed twice: the later row wins). Reset puts
 // every pick back to its default and clears the assignable matrix.
-var mxLabs=[],mxN=0;
+// STAGE 3 (2026-09-08): an entry is either an OFFSET (± amount) or a KNOB
+// (absolute takeover — "mxm" 1). The firmware's defaults ("mxd": the panel
+// knobs K5-K8) are marked: a cell still matching its default wears a dim
+// "default" badge; once overridden (moved, mode flipped, amount set) the badge
+// becomes a revert arrow, and a default that was cleared shows as a ghost on
+// its default CV row with the same arrow. Revert re-renders a working copy —
+// nothing posts until Apply.
+var mxLabs=[],mxN=0,mxDef=[];
 var SRC_NAMES=['CV1','CV2','CV3','CV4','CV5','CV6','CV7','CV8','TR1','TR2','AUDIO','INT','OFF'];
-function mxCell(cv,dest,amt){
+function mxCell(cv,dest,amt,mode){
+  mode=mode?1:0;
   var o='<option value="-1"'+(dest<0?' selected':'')+'>off</option>';
   for(var k=0;k<mxN;k++)o+='<option value="'+k+'"'+(k===dest?' selected':'')+'>'+esc(mxLabs[k]||('dest '+(k+1)))+'</option>';
-  return '<div class="mxc" data-cv="'+cv+'"><select>'+o+'</select>'
-    +'<input type="range" min="-100" max="100" step="1" value="'+amt+'" oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\'">'
-    +'<span class="amt">'+(amt>0?'+':'')+amt+'%</span>'
+  return '<div class="mxc" data-cv="'+cv+'" data-mode="'+mode+'"><select onchange="mxTail(this.parentNode)">'+o+'</select>'
+    +'<button class="mxmode'+(mode?' on':'')+'" title="offset (± amount) or knob (absolute: takes over once moved)" onclick="mxModeTog(this)">'+(mode?'knob':'&#177;')+'</button>'
+    +'<input type="range" min="-100" max="100" step="1" value="'+amt+'"'+(mode?' hidden':'')+' oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\';mxTail(this.parentNode)">'
+    +'<span class="amt"'+(mode?' hidden':'')+'>'+(amt>0?'+':'')+amt+'%</span>'
+    +'<span class="mxtail">'+mxTailHtml(cv,dest,amt,mode)+'</span>'
 +'</div>';
+}
+// the trailing badge: "default" while a defaulted dest matches its default,
+// the revert arrow once it differs
+function mxTailHtml(cv,dest,amt,mode){
+  if(dest<0||!(mxDef[dest]>=0))return '';
+  if(mxDef[dest]===cv&&mode===1&&(+amt)===0)return '<span class="mxdef" title="the panel knob\'s default job">default</span>';
+  return '<button class="mxrev" title="back to the default: '+SRC_NAMES[mxDef[dest]]+', knob" onclick="mxRevert('+dest+')">&#8634;</button>';
+}
+function mxTail(c){
+  c.querySelector('.mxtail').innerHTML=mxTailHtml(+c.dataset.cv,+c.querySelector('select').value,parseInt(c.querySelector('input').value)||0,+c.dataset.mode);
+}
+function mxModeTog(b){
+  var c=b.parentNode,m=c.dataset.mode==='1'?0:1;
+  c.dataset.mode=String(m);b.className='mxmode'+(m?' on':'');b.innerHTML=m?'knob':'&#177;';
+  c.querySelector('input').hidden=!!m;c.querySelector('.amt').hidden=!!m;
+  mxTail(c);
+}
+// the matrix as the firmware stores it, read back from the cells (a dest
+// claimed twice: the later row wins)
+function mxCollect(){
+  var mxs=[],mxa=[],mxm=[];
+  for(var k=0;k<mxN;k++){mxs.push(-1);mxa.push(0);mxm.push(0);}
+  document.querySelectorAll('.mxc').forEach(function(c){
+    var cv=+c.dataset.cv,dest=+c.querySelector('select').value,amt=parseInt(c.querySelector('input').value)||0,mode=+c.dataset.mode;
+    if(dest>=0&&dest<mxN){mxs[dest]=cv;mxa[dest]=mode?0:amt;mxm[dest]=mode;}
+  });
+  return {mxs:mxs,mxa:mxa,mxm:mxm};
+}
+// re-render from a working copy: current cells + current picks, with the
+// given matrix arrays swapped in (revert / reset). Nothing posts here.
+function mxRerender(arr){
+  var d=JSON.parse(JSON.stringify(rpData));
+  d.mxs=arr.mxs;d.mxa=arr.mxa;d.mxm=arr.mxm;
+  var picks={};document.querySelectorAll('[data-ik]').forEach(function(s){picks[s.dataset.ik]=+s.value;});
+  (d.imap||[]).forEach(function(e){if(e.k&&picks[e.k]!==undefined)e.s=picks[e.k];});
+  document.getElementById('rmatrix').innerHTML=rpMatrix(d);
+}
+function mxRevert(dest){
+  var a=mxCollect();
+  a.mxs[dest]=mxDef[dest];a.mxm[dest]=1;a.mxa[dest]=0;
+  mxRerender(a);
 }
 // "+" opens an extra LINE for that CV: its own table row (label blank), whose
 // "-" sits in the same right-hand column as the "+" and removes just that line
@@ -1133,7 +1190,8 @@ function mxPick(e,nolabel){   // an editable input-map entry: label + source dro
 function rpMatrix(d){
   var hasM=Array.isArray(d.mxs),im=Array.isArray(d.imap)?d.imap:[];
   if(!hasM&&!im.length)return '';
-  mxLabs=d.mxl||[];mxN=hasM?d.mxs.length:0;
+  mxLabs=d.mxl||[];mxN=hasM?d.mxs.length:0;mxDef=Array.isArray(d.mxd)?d.mxd:[];
+  var mxm=Array.isArray(d.mxm)?d.mxm:[];
   var h='<div class="card pnl mxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">CV MATRIX</b>'
     +'<button class="btn" style="flex:0 0 auto" title="picks back to their defaults, assignable matrix cleared, applied" onclick="mxReset()">Reset</button></div><table class="mtx">';
   for(var ch=0;ch<11;ch++){
@@ -1145,8 +1203,12 @@ function rpMatrix(d){
     });
     var add=(hasM&&ch<8),nc=0;
     if(add){   // the loaded assignments; a bare row gets one off slot unless a chip already fills the line
-      for(var k=0;k<mxN;k++)if(d.mxs[k]===ch){cells+=mxCell(ch,k,(d.mxa&&typeof d.mxa[k]==='number')?d.mxa[k]:0);nc++;}
-      if(!nc&&!chips)cells+=mxCell(ch,-1,0);
+      for(var k=0;k<mxN;k++)if(d.mxs[k]===ch){cells+=mxCell(ch,k,(d.mxa&&typeof d.mxa[k]==='number')?d.mxa[k]:0,mxm[k]===1);nc++;}
+      // a default (panel knob) that has been cleared: a ghost with the revert arrow
+      for(var g=0;g<mxN;g++)if(mxDef[g]===ch&&d.mxs[g]<0)
+        cells+='<div class="mxf ghost" title="this panel knob\'s default job is unassigned">'+esc(mxLabs[g]||('dest '+(g+1)))
+          +'<button class="mxrev" title="back to the default: '+SRC_NAMES[ch]+', knob" onclick="mxRevert('+g+')">&#8634;</button></div>';
+      if(!nc&&!chips&&!cells)cells+=mxCell(ch,-1,0,0);
     }
     cells+=chips;   // fixed jobs / picks trail any dropdown so the dropdowns form one column
     if(!cells){if(ch===10)continue;cells='<div class="mxf" style="color:#444;border-color:#222;background:none">&#8212;</div>';}
@@ -1155,10 +1217,11 @@ function rpMatrix(d){
   }
   return h+'</table></div>';
 }
-function mxReset(){
+function mxReset(){   // picks to their defaults, matrix = the panel-knob defaults only, applied
   document.querySelectorAll('[data-ik]').forEach(function(s){s.value=s.dataset.idef;});
-  document.querySelectorAll('.mxc select').forEach(function(s){s.value='-1';});
-  document.querySelectorAll('.mxc input').forEach(function(i){i.value=0;});
+  var a={mxs:[],mxa:[],mxm:[]};
+  for(var k=0;k<mxN;k++){var df=(mxDef[k]>=0)?mxDef[k]:-1;a.mxs.push(df);a.mxa.push(0);a.mxm.push(df>=0?1:0);}
+  mxRerender(a);
   rpApply();
 }
 function rpRest(d){var own={};(Array.isArray(d.imap)?d.imap:[]).forEach(function(e){if(e.k)own[e.k]=1;});var r={};for(var k in d)if(MTX_KEYS.indexOf(k)<0&&!own[k])r[k]=d[k];return r;}
@@ -1241,12 +1304,8 @@ function rpApply(){
     else d[s.dataset.ik]=+s.value;
   });
   if(Object.keys(glob).length)fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(glob)}).then(function(){clkLoad();}).catch(function(){});
-  if(Array.isArray(d.mxs)){   // matrix: rebuild per-destination arrays from the CV rows
-    for(var k=0;k<d.mxs.length;k++){d.mxs[k]=-1;if(Array.isArray(d.mxa))d.mxa[k]=0;}
-    document.querySelectorAll('.mxc').forEach(function(c){
-      var cv=+c.dataset.cv,dest=+c.querySelector('select').value,amt=parseInt(c.querySelector('input').value)||0;
-      if(dest>=0&&dest<d.mxs.length){d.mxs[dest]=cv;if(Array.isArray(d.mxa))d.mxa[dest]=amt;}
-    });
+  if(Array.isArray(d.mxs)){   // matrix: rebuild per-destination arrays (src / amount / mode) from the CV rows
+    var a=mxCollect();d.mxs=a.mxs;d.mxa=a.mxa;d.mxm=a.mxm;
   }
   document.querySelectorAll('[data-rp]').forEach(function(inp){
     var path=inp.getAttribute('data-rp').split('.'),o=d;
