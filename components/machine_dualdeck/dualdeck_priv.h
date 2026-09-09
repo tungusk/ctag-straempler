@@ -125,9 +125,8 @@ typedef struct {
     volatile int focus;            // encoder lane focus (0 = A, 1 = B)
 
     // shared conditioned clock (the whole point of this machine)
-    clockin_t ci;
-    volatile int clk_src;          // CV channel (default CV8)
-    volatile int ppb_idx;          // into dd_ppb[] (mult/div)
+    // clock: the CORE clock (clock_core(), clock.h) — source / ppq are
+    // module-wide settings; the Setup rows write through
     volatile uint32_t pulses;      // accepted pulses since lock (bar phase ref)
 
     // crossfade: knob6 manual + takeover automation. xf 0 = full A, 1 = full B.
@@ -199,16 +198,14 @@ typedef struct {
 } dd_state_t;
 
 extern dd_state_t dd;
-extern const float dd_ppb[6];
-extern const char *const dd_ppb_names[6];
 // RAW pulses-per-beat: the mult/div setting. This is what the DETECTOR gets
 // (clockin_set_ppb) — its sanity gates scale from it, and feeding the octave
 // fold back in here creates a relock loop (fold -> gates move -> lock drops ->
 // fold resets -> ...; bench-caught on the deck).
-#define DD_PPB_RAW() (dd_ppb[dd.ppb_idx])
+#define DD_PPB_RAW() (clock_core_ppb())
 // EFFECTIVE: the setting x the detector's octave fold. TEMPO MATH uses this —
 // mixing the two puts the rate target (and so the beat) in the wrong place.
-#define DD_PPB_EFF() (DD_PPB_RAW() * (dd.ci.oct > 0 ? dd.ci.oct : 1.0f))
+#define DD_PPB_EFF() (clockin_ppb_eff(clock_core()))
 // loop-length ladder in QUARTER-beats (the deck's, verbatim): 1/4 .. 256 beats
 #define DD_LOOP_STEPS 11
 extern const int dd_loop_q[DD_LOOP_STEPS];

@@ -21,6 +21,7 @@
 #include "beatlisten.h"
 #include "menu_config.h"
 #include "dualdeck_priv.h"
+#include "clock_ui.h"
 
 static const color_t COL_ARM  = {230, 170, 0};
 static const color_t WF_GREY  = {125, 125, 135};
@@ -112,7 +113,7 @@ static void deck_info_str(int i, char *out, size_t n, bool rev){
 static float ext_bpm_disp(void){
     static float ema = 0;
     static uint32_t last_tk = 0;
-    float x = clockin_beat_bpm(&dd.ci);
+    float x = clock_core_beat_bpm();
     if (x <= 0) { ema = 0; return 0; }
     float d = x - ema;
     if (ema <= 0 || d > 2.0f || d < -2.0f) { ema = x; return ema; }
@@ -134,7 +135,7 @@ static void draw_big_bpm(void){
     int bw = 120, bh = TFT_getfontheight() + 4;
     _bg = TFT_BLACK;
     TFT_fillRect(_width - bw, 2, bw, bh, _bg);
-    _fg = dd.ci.clk.locked ? (color_t){40, 200, 90} : TFT_WHITE;
+    _fg = clock_core()->clk.locked ? (color_t){40, 200, 90} : TFT_WHITE;
     TFT_print(s, _width - TFT_getStringWidth(s) - 8, 4);
     cfont = f;
 }
@@ -500,8 +501,8 @@ static int dd_live_handler(int it_id, int event, void *ev_data){
                          (unsigned long)dd.d[1].dbg_starve,
                          (int)(dd.d[1].phase_err * 100),
                          (int)(dd.xf * 100),
-                         (unsigned long)(dd.ci.clk.period / 44),
-                         (int)dd.ci.clk.locked);
+                         (unsigned long)(clock_core()->clk.period / 44),
+                         (int)clock_core()->clk.locked);
                 audio_status_set_voices("doubledecker", dbg);
             }
             break;
@@ -557,8 +558,8 @@ static const setup_item_t dd_setup_items[] = {
 
 static void setup_value_str(int i, char *v, size_t n){
     switch(i){
-        case 0: snprintf(v, n, "%s", clock_source_name(dd.clk_src)); break;
-        case 1: snprintf(v, n, "%s", dd_ppb_names[dd.ppb_idx]); break;
+        case 0: snprintf(v, n, "%s", clock_source_name(clock_core_src())); break;   // core clock
+        case 1: snprintf(v, n, "%s", clock_ui_ppq_name()); break;
         case 2:                          // -1 = the fader never moves itself
             if (dd.fade_beats < 0) snprintf(v, n, "off");
             else if (dd.fade_beats == 0) snprintf(v, n, "cut");
@@ -587,17 +588,10 @@ static void setup_value_str(int i, char *v, size_t n){
 static void setup_adj(int i, int dir){
     switch(i){
         case 0:
-            // CV1..8 + AUDIO (the trigs are the transport); AUDIO wakes the ear
-            dd.clk_src = clock_source_cycle_cv_audio(dd.clk_src, dir);
-            if (dd.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
-                beatlisten_set_mode(BL_GROOVE);
-                configSetIntSetting("blisten", BL_GROOVE);
-            }
+            clock_ui_cycle_src(dir);   // the CORE clock's source (write-through, wakes the ear on AUDIO)
             break;
         case 1:
-            dd.ppb_idx += dir;
-            if (dd.ppb_idx < 0) dd.ppb_idx = 0;
-            if (dd.ppb_idx > 5) dd.ppb_idx = 5;
+            clock_ui_cycle_ppq(dir);   // core clock pulses-per-beat
             break;
         case 2: {
             static const int steps[5] = {-1, 0, 1, 4, 8};   // off, cut, N beats
@@ -694,7 +688,7 @@ static void cv_row_redraw(int i, int pos, int sel){
     // reference and the gaps between them remap the loop, which collapses it to a
     // stutter within milliseconds. The engine ignores such a control outright; the
     // page has to say so rather than let it look assigned.
-    bool on_clock = (dd.clk_src <= 7 && ch == dd.clk_src);
+    bool on_clock = clock_src_is_cv(clock_core_src(), ch);
     bool shares = (i >= 2) && (ch == (dd.cv_filt & 7) || ch == (dd.cv_fader & 7));
     _fg = editing ? TFT_CYAN
                   : on_clock ? (color_t){230, 70, 70}

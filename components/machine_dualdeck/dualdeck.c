@@ -22,9 +22,6 @@
 static const char *TAG = "DDECK";
 
 dd_state_t dd;
-const float dd_ppb[6] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
-const char *const dd_ppb_names[6] = {"1 per 4 beats", "1 per 2 beats", "1 per beat",
-                                     "2 per beat", "4 per beat", "8 per beat"};
 
 // fixed-TIME lock lead: the output chain lands beats a constant few ms late
 // (I2S/DAC latency + block-quantized edge capture + grid-anchor bias), so the
@@ -630,10 +627,10 @@ void dualdeck_resync(int deck)
     if (off < 0) off += beat_tf;
     // nearer beat: the pull is never more than half a beat, so the bend is inaudible
     v->sync_slew = (off <= beat_tf / 2) ? -(float)off : (float)(beat_tf - off);
-    if (dd.ci.clk.locked && dd.ci.clk.period > 0) {
-        float p_ext = (float)dd.ci.clk.since / (float)dd.ci.clk.period;
+    if (clock_core()->clk.locked && clock_core()->clk.period > 0) {
+        float p_ext = (float)clock_core()->clk.since / (float)clock_core()->clk.period;
         if (p_ext > 1.0f) p_ext = 1.0f;
-        float po = p_ext + DD_LAG_LEAD_FR / (float)dd.ci.clk.period;
+        float po = p_ext + DD_LAG_LEAD_FR / (float)clock_core()->clk.period;
         po -= floorf(po);
         v->phase_offset = po;          // the release instant IS the beat
     }
@@ -679,8 +676,8 @@ static void deck_fire(int i)
         // like that") — at fade_beats < 0 a deck start never touches the fader;
         // the mix is yours and starting a deck is purely a transport act.
         if (dd.fade_beats < 0) { /* off: the fader stays exactly where you left it */ }
-        else if (dd.fade_beats > 0 && dd.ci.clk.locked && dd.ci.clk.period > 0) {
-            float fade_frames = (float)dd.ci.clk.period * DD_PPB_EFF() * (float)dd.fade_beats;
+        else if (dd.fade_beats > 0 && clock_core()->clk.locked && clock_core()->clk.period > 0) {
+            float fade_frames = (float)clock_core()->clk.period * DD_PPB_EFF() * (float)dd.fade_beats;
             dd.auto_target = (i == 0) ? 0.0f : 1.0f;
             dd.auto_step = (fade_frames > 1) ? (float)(MACHINE_BLOCK / 2) / fade_frames : 1.0f;
             dd.auto_active = true;
@@ -703,11 +700,11 @@ static void deck_fire(int i)
 static float deck_rate(dd_deck_t *v)
 {
     float rate = 1.0f;
-    if (v->track_bpm > 20.0f && dd.ci.clk.locked && dd.ci.clk.period > 0) {
+    if (v->track_bpm > 20.0f && clock_core()->clk.locked && clock_core()->clk.period > 0) {
         uint32_t beat_tf = (uint32_t)(60.0f * DD_RATE / v->track_bpm);
         float seg_tf = (float)beat_tf / DD_PPB_EFF();   // EFFECTIVE: the fold counts here
-        float base = seg_tf / (float)dd.ci.clk.period;
-        float p_ext = (float)dd.ci.clk.since / (float)dd.ci.clk.period;
+        float base = seg_tf / (float)clock_core()->clk.period;
+        float p_ext = (float)clock_core()->clk.since / (float)clock_core()->clk.period;
         if (p_ext > 1.0f) p_ext = 1.0f;
         // FILE position, not the playback counter: the counter carries a
         // seek/loop skew, and locking against it puts the beat grid on a
@@ -716,7 +713,7 @@ static float deck_rate(dd_deck_t *v)
         float p_trk = fmodf((float)((int64_t)dd_map(v, v->rpos_i) - (int64_t)v->grid_offset),
                             seg_tf) / seg_tf;
         if (p_trk < 0) p_trk += 1.0f;
-        float lead = DD_LAG_LEAD_FR / (float)dd.ci.clk.period;
+        float lead = DD_LAG_LEAD_FR / (float)clock_core()->clk.period;
         float err = p_ext - p_trk - v->phase_offset + lead;   // RESYNC moves the lock point
         err -= floorf(err);
         if (err > 0.5f) err -= 1.0f;
@@ -758,8 +755,6 @@ static esp_err_t dualdeck_start(void)
         dd.d[i].rate = 1.0f;
         dd.d[i].rate_sm = 1.0f;
     }
-    dd.clk_src = 7;                 // CV8, house convention
-    dd.ppb_idx = 4;                 // 4 PPQN, the modular norm
     dd.fade_beats = -1;             // takeover OFF by default
     dd.loop_len_beats = 16;         // QUARTER-beats = 4 beats (ladder v2)
     dd.layout = DD_LAY_V;           // stacked single-decks
@@ -784,7 +779,6 @@ static esp_err_t dualdeck_start(void)
     dd.filt_cv[0] = dd.filt_cv[1] = 2048;   // both filters start CENTRE (off), not a heavy LP at 0
     dd.manual = true;
     dd.an_deck = -1; dd.an_pending = -1;    // memset zeroed these to 0, a valid deck idx
-    clockin_reset(&dd.ci, dd_ppb[dd.ppb_idx]);
     s_run = true;
     xTaskCreate(reader_task, "dd_reader", 4096, NULL, 6, NULL);
     audio_status_set_voices("doubledecker", "");
@@ -843,16 +837,17 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // ---- shared clock + bar phase. An accepted pulse advances the counter;
     // the bar boundary is every 4 beats' worth of pulses. With no lock, armed
     // ops fire immediately (free-run behaviour).
-    clockin_set_ppb(&dd.ci, DD_PPB_RAW());          // gates take the RAW setting
-    uint32_t rn_pre = dd.ci.clk.ring_n;
-    clockin_block(&dd.ci, clock_source_level(dd.clk_src, io), frames);
-    bool pulse = (dd.ci.clk.ring_n != rn_pre);
+    // the CORE clock is ticked before process() (clock.h); an ACCEPTED pulse
+    // is a ring_n change since the previous block, exactly as before
+    static uint32_t s_rn_prev = 0;
+    bool pulse = (clock_core()->clk.ring_n != (int)s_rn_prev);
+    s_rn_prev = (uint32_t)clock_core()->clk.ring_n;
     uint32_t per_bar = (uint32_t)(DD_PPB_EFF() * 4.0f + 0.5f);
     if (per_bar < 1) per_bar = 1;
-    if (!dd.ci.clk.locked) dd.pulses = 0;
+    if (!clock_core()->clk.locked) dd.pulses = 0;
     else if (pulse) dd.pulses++;
-    bool bar_edge = pulse && dd.ci.clk.locked && (dd.pulses % per_bar) == 1;
-    if (bar_edge || !dd.ci.clk.locked) { deck_fire(0); deck_fire(1); }
+    bool bar_edge = pulse && clock_core()->clk.locked && (dd.pulses % per_bar) == 1;
+    if (bar_edge || !clock_core()->clk.locked) { deck_fire(0); deck_fire(1); }
 
     // ---- LOOP KNOBS: while the FOCUSED deck loops, CV6/CV7 belong to the loop
     // (window / length) — the same deck the trigs address. Everything is done on
@@ -923,7 +918,7 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         // preset_load can reload a colliding assignment, so the GUARD is the robust
         // half of the fix; the defaults are merely the polite half.
         // TR/AUDIO clock sources occupy no CV channel — nothing to collide with
-        int clk = (dd.clk_src <= 7) ? dd.clk_src : -1;
+        int clk = (clock_core_src() <= 7) ? clock_core_src() : -1;
         bool pos_ok = (lp != clk), len_ok = (ll != clk);
         int c6 = pos_ok ? cvv[lp] : 0;         // window position
         int c7 = len_ok ? cvv[ll] : 0;         // window length
@@ -1042,7 +1037,7 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // sit, defeating the takeover entirely (caught on first bench test).
     // HOLD when that channel carries the CLOCK (clock_src_is_cv): xf_cv drives the
     // crossfade PICKUP, so a pulse train would fake the grab and steal the fade.
-    if (!clock_src_is_cv(dd.clk_src, 6)) dd.xf_cv = c7;   // knob7 = crossfade (CV6 is the filter, house rule)
+    if (!clock_src_is_cv(clock_core_src(), 6)) dd.xf_cv = c7;   // knob7 = crossfade (CV6 is the filter, house rule)
     if (!dd.manual && xf_live) {       // auto or held: watch for the grab.
         // The move must PERSIST (~12 ms) — a single-block WiFi ADC spike on
         // the knob read faked a grab and killed every takeover fade the
@@ -1214,8 +1209,6 @@ static cJSON *dualdeck_preset_save(void)
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "ta", dd.d[0].track);
     cJSON_AddStringToObject(o, "tb", dd.d[1].track);
-    cJSON_AddNumberToObject(o, "clk_src", dd.clk_src);
-    cJSON_AddNumberToObject(o, "ppb", dd.ppb_idx);
     cJSON_AddNumberToObject(o, "fade", dd.fade_beats);
     cJSON_AddNumberToObject(o, "llen", dd.loop_len_beats);
     cJSON_AddNumberToObject(o, "lq", 1);      // llen units = QUARTER-beats
@@ -1236,14 +1229,8 @@ static void dualdeck_preset_load(const cJSON *node)
 {
     if (!node) return;
     cJSON *j;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) {
-        dd.clk_src = clock_source_clamp_cv_audio(j->valueint);
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
-        dd.ppb_idx = j->valueint;
-        if (dd.ppb_idx < 0) dd.ppb_idx = 0;
-        if (dd.ppb_idx > 5) dd.ppb_idx = 5;
-    }
+    // "clk_src" / "ppb" (pre-core-clock presets) are ignored: the clock is a
+    // module-wide setting now and a preset must not silently repoint it
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "fade")) && cJSON_IsNumber(j)) {
         int fb = j->valueint;
         dd.fade_beats = (fb == -1 || fb == 0 || fb == 1 || fb == 4 || fb == 8) ? fb : -1;
@@ -1295,7 +1282,6 @@ extern const machine_ui_t dualdeck_menu_ui;
 static int dd_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    MI_ADD(mi_pick("Clock", "clk_src", dd.clk_src, 7, MI_CV | MI_CLK));
     MI_ADD(mi_pick("DJ filter", "cvf", dd.cv_filt & 7, 5, MI_CV));
     MI_ADD(mi_pick("Crossfade", "cvx", dd.cv_fader & 7, 6, MI_CV));
     MI_ADD(mi_pick("Deck A loop window", "cvp0", dd.cv_lpos[0] & 7, 4, MI_CV));
