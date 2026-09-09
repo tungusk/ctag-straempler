@@ -71,7 +71,7 @@ static esp_err_t synth_start(void)
     sy.freq = 261.6f;           // C4-ish until CV read
     sy.knob_engine = -1;        // force a knob recapture on the first block
     sy.pitch_src = 0; sy.gate_src = 8;   // CV1 / TR1 unless the preset says otherwise
-    cvmtx_init(&sy.mtx, synth_mtx_labels, SYM_N);      // matrix off, floors armed
+    cvmtx_init(&sy.mtx, synth_mtx_labels, SYM_N, NULL);      // matrix off, floors armed
     svf_reset(&sy.flt_l);
     fxfilter_init(&sy.filt);
     fxfilter_init(&sy.band);

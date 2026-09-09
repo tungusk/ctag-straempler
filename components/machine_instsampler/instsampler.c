@@ -374,7 +374,7 @@ static esp_err_t keys_start(void)
     inst.start_frac = 0.0f;
     inst.knob_ctx = -1;           // force a knob recapture on the first block
     inst.pitch_src = 0; inst.gate_src = 8;   // CV1 / TR1 unless the preset says otherwise
-    cvmtx_init(&inst.mtx, keys_mtx_labels, ISM_N);   // matrix off, floors armed
+    cvmtx_init(&inst.mtx, keys_mtx_labels, ISM_N, NULL);   // matrix off, floors armed
     for (int i = 0; i < IS_MAX_ZONES; i++) {
         inst.zone[i].root = 48;
         inst.zone[i].loop_mode = LOOP_FWD;

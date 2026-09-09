@@ -1009,7 +1009,7 @@ static esp_err_t tape_start(void)
     tp.dly.div = 2; tp.trem.div = 2; tp.flg.div = 4;
     tp_rk = (fxrack_t){ .od = &tp.od, .flg = &tp.flg, .trem = &tp.trem, .dly = &tp.dly,
                         .filt = &tp.filt, .band = &tp.band, .rv = &tp.rv, .slot = tp.fx_slot };
-    cvmtx_init(&tp.mtx, (const char *const *)tape_mtx_labels, TPM_N);
+    cvmtx_init(&tp.mtx, (const char *const *)tape_mtx_labels, TPM_N, NULL);
     if (bank_alloc(&tp.tape, TP_LEN_SECS[tp.len_sel] * TP_RATE) < 0) {
         ESP_LOGE(TAG, "tape bank alloc failed");
         return ESP_ERR_NO_MEM;
