@@ -21,12 +21,10 @@
 static const char *TAG = "DECK";
 
 dk_state_t dk;
-const float dk_ppb[6] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 
 // smooth SYNC catch-up: drain sync_slew (frames) at a capped per-frame rate bend
 #define SYNC_SLEW_GAIN 0.0006f   // drains ~1667-frame TC once under the cap
 #define SYNC_SLEW_MAX  0.15f     // max +/-15% rate bend (~2.4 semitones), no dropout
-const char *const dk_ppb_names[6] = {"1 per 4 beats", "1 per 2 beats", "1 per beat", "2 per beat", "4 per beat", "8 per beat"};
 
 // fixed-TIME lock lead: the output chain lands beats a constant few ms late
 // (I2S/DAC latency + block-quantized edge capture + grid-anchor bias), so the
@@ -404,11 +402,11 @@ void deck_set_feel(float f)
 void deck_sync_now(void)
 {
     if (!dk.track[0] || !dk.file_frames) return;
-    if (!dk.sync || !dk.ci.clk.locked || dk.ci.clk.period == 0 || dk.track_bpm <= 20.0f) return;
+    if (!dk.sync || !clock_core()->clk.locked || clock_core()->clk.period == 0 || dk.track_bpm <= 20.0f) return;
     uint32_t beat_tf = (uint32_t)(60.0f * DK_RATE / dk.track_bpm);
     float seg_tf = (float)beat_tf / DK_PPB_EFF() * dk.speed_mult;   // frames/pulse
     if (seg_tf < 1.0f) return;
-    float p_ext = (float)dk.ci.clk.since / (float)dk.ci.clk.period;
+    float p_ext = (float)clock_core()->clk.since / (float)clock_core()->clk.period;
     if (p_ext > 1.0f) p_ext = 1.0f;
     int64_t rel = (int64_t)dk_map(dk.rpos_i) - (int64_t)dk.grid_offset;
     float p_trk = fmodf((float)rel, seg_tf) / seg_tf;
@@ -598,10 +596,10 @@ void deck_resync_now(void)
     // 2. the release instant IS the beat: park the lock point on the clock
     //    phase it happened at (the lead keeps the AUDIBLE beat where the ear
     //    expects it — the output chain lands beats ~13 ms late).
-    if (dk.sync && dk.ci.clk.locked && dk.ci.clk.period > 0) {
-        float p_ext = (float)dk.ci.clk.since / (float)dk.ci.clk.period;
+    if (dk.sync && clock_core()->clk.locked && clock_core()->clk.period > 0) {
+        float p_ext = (float)clock_core()->clk.since / (float)clock_core()->clk.period;
         if (p_ext > 1.0f) p_ext = 1.0f;
-        float lead = DK_LAG_LEAD_FR / (float)dk.ci.clk.period;
+        float lead = DK_LAG_LEAD_FR / (float)clock_core()->clk.period;
         float po = p_ext + lead;
         po -= floorf(po);                      // wrap to [0,1)
         dk.phase_offset = po;
@@ -623,13 +621,10 @@ static esp_err_t deck_start(void)
     dk.sync = true;
     dk.loop = true;
     dk.auto_an = true;       // auto-analyze unanalyzed tracks on load
-    dk.clk_src = 7;          // CV8, same convention as glitch
-    dk.ppb_idx = 4;          // 4 pulses per beat — the modular norm (4 PPQN)
     dk.rate = 1.0f;
     dk.rate_sm = 1.0f;
     dk.feel = 1.0f;
     dk.clk_scale = 1.0f;
-    clockin_reset(&dk.ci, DK_PPB_EFF());
     s_run = true;
     // unpinned: file-reading tasks pinned to core 0 cause WiFi audio clicks
     xTaskCreate(reader_task, "deck_reader", 4096, NULL, 6, NULL);
@@ -697,8 +692,8 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     // HOLD a channel that is carrying the CLOCK (clock_src_is_cv): these feed the
     // loop-knob grab detector, so letting a pulse train through would not just
     // move a parameter, it would fake a knob grab every pulse.
-    if (!clock_src_is_cv(dk.clk_src, 5)) s_cv6 = cvmed_step(&s_m6, io->cv[5]);
-    if (!clock_src_is_cv(dk.clk_src, 6)) s_cv7 = cvmed_step(&s_m7, io->cv[6]);
+    if (!clock_src_is_cv(clock_core_src(), 5)) s_cv6 = cvmed_step(&s_m6, io->cv[5]);
+    if (!clock_src_is_cv(clock_core_src(), 6)) s_cv7 = cvmed_step(&s_m7, io->cv[6]);
     bool d1 = !(io->trig_level & 1), d2 = !(io->trig_level & 2);
     tg_event_t e1 = trig_gate_step_ex(&s_tg1, d1, io->trig_rising & 1, nfr);
     tg_event_t e2 = trig_gate_step_ex(&s_tg2, d2, io->trig_rising & 2, nfr);
@@ -866,13 +861,13 @@ filter_done:;                // mild resonance, DJ-ish
         if (dk.pitch_cv < 1024) m = 0.5f;
         else if (dk.pitch_cv > 3072) m = 2.0f;
         dk.speed_mult = m;
-        if (dk.ci.clk.locked && dk.ci.clk.period > 0 && beat_tf > 0) {
+        if (clock_core()->clk.locked && clock_core()->clk.period > 0 && beat_tf > 0) {
             float ppb = DK_PPB_EFF();
             // pulse-level phase lock (works for any mult/div): compare phase
             // within one external pulse against the track's matching segment
             float seg_tf = (float)beat_tf / ppb * m;           // track frames per pulse
-            float base = seg_tf / (float)dk.ci.clk.period;        // nominal rate
-            float p_ext = (float)dk.ci.clk.since / (float)dk.ci.clk.period;
+            float base = seg_tf / (float)clock_core()->clk.period;        // nominal rate
+            float p_ext = (float)clock_core()->clk.since / (float)clock_core()->clk.period;
             if (p_ext > 1.0f) p_ext = 1.0f;
             // FILE position, not the playback counter: the counter carries a
             // seek/loop skew, and locking against it puts the beat grid on a
@@ -889,7 +884,7 @@ filter_done:;                // mild resonance, DJ-ish
             // cmd 18.5 -> -9.5 ms; zero-crossing ~13 ms). The between-settle
             // baseline wanders ±3-5 ms, so exact zero is a moving target —
             // this centers it (musically dead-on)
-            float lead = DK_LAG_LEAD_FR / (float)dk.ci.clk.period;
+            float lead = DK_LAG_LEAD_FR / (float)clock_core()->clk.period;
             float err = p_ext - p_trk - dk.phase_offset + lead;   // NUDGE trims the lock point
             err -= floorf(err);                            // wrap to [0,1)
             if (err > 0.5f) err -= 1.0f;                    // nearest, in [-0.5,0.5)
@@ -1020,8 +1015,7 @@ filter_done:;                // mild resonance, DJ-ish
     // extracted from). set_ppb every block keeps the pulse-rate sanity gates
     // scaled and, ON an actual mult/div change, drops the lock for a clean
     // 2-pulse relock instead of letting the guards defend the stale period.
-    clockin_set_ppb(&dk.ci, DK_PPB_RAW());   // gates take the RAW setting
-    clockin_block(&dk.ci, clock_source_level(dk.clk_src, io), frames);
+    // (the CORE clock is ticked by the audio task before process() — clock.h)
 }
 
 // ---- preset -------------------------------------------------------------------
@@ -1033,8 +1027,6 @@ static cJSON *deck_preset_save(void)
     cJSON_AddBoolToObject(o, "loop", dk.loop);
     cJSON_AddBoolToObject(o, "auto_an", dk.auto_an);
     cJSON_AddBoolToObject(o, "loop_freeze", dk.loop_freeze);
-    cJSON_AddNumberToObject(o, "clk_src", dk.clk_src);
-    cJSON_AddNumberToObject(o, "ppb", dk.ppb_idx);
     cJSON_AddNumberToObject(o, "clkx", (double)dk.clk_scale);
     cJSON_AddNumberToObject(o, "llenq", dk_loop_q[s_loop_len_idx]);   // QUARTER-beats
     return o;
@@ -1049,13 +1041,8 @@ static void deck_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop_freeze"))) dk.loop_freeze = cJSON_IsTrue(j);
     // must land before the track restore below so it gates the boot-time load
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "auto_an"))) dk.auto_an = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j))
-        dk.clk_src = clock_source_clamp_cv_audio(j->valueint);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
-        dk.ppb_idx = j->valueint;
-        if (dk.ppb_idx < 0) dk.ppb_idx = 0;
-        if (dk.ppb_idx > 5) dk.ppb_idx = 5;
-    }
+    // "clk_src" / "ppb" (pre-core-clock presets) are ignored: the clock is a
+    // module-wide setting now and a preset must not silently repoint it
     // only (re)load when the track actually changes — a remote "Apply" that
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "clkx")) && cJSON_IsNumber(j)) {
         float cs = (float)j->valuedouble;
@@ -1089,9 +1076,8 @@ extern const machine_ui_t deck_menu_ui;
 static int dk_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    MI_ADD(mi_pick("Clock", "clk_src", dk.clk_src, 7, MI_CV | MI_CLK));
-    if (!clock_src_is_cv(dk.clk_src, 5)) MI_ADD(mi("loop window", 5));
-    if (!clock_src_is_cv(dk.clk_src, 6)) MI_ADD(mi("loop length", 6));
+    if (!clock_src_is_cv(clock_core_src(), 5)) MI_ADD(mi("loop window", 5));
+    if (!clock_src_is_cv(clock_core_src(), 6)) MI_ADD(mi("loop length", 6));
     MI_ADD(mi("play/stop (hold: restart)", 8));
     MI_ADD(mi("loop on/off", 9));
     return n;

@@ -84,13 +84,9 @@ typedef struct {
     // seamless, crossfaded, and the PLL never notices.
     volatile uint32_t tl_start;    // = grid_offset (0 = no track-loop mapping)
     volatile uint32_t tl_len;      // whole beats of track (0 = disabled)
-    volatile int  clk_src;         // CV channel of the clock (default CV8)
-    volatile int  ppb_idx;         // pulses-per-beat index into dk_ppb[] (mult/div)
+    // clock source + pulses-per-beat are the CORE clock's (clock_core(),
+    // clock.h) — module-wide settings; the Setup rows write through
     volatile int  pitch_cv;        // knob7 free-rate when sync is off
-    // conditioned clock input — the shared front-end (clock.h): floor-tracked
-    // Schmitt, ppb-scaled sanity gates, ghost gate, raw-fire diagnostics.
-    // The deck's private copy is what clockin_t was extracted from.
-    clockin_t ci;
     float rate_sm;                 // smoothed rate (edge jitter -> no warble)
     volatile uint32_t dbg_starve;  // blocks muted mid-play: reader fell behind
     // the window the UI should DRAW: the pending one if a move is scheduled,
@@ -163,7 +159,6 @@ typedef struct {
 } dk_state_t;
 
 extern dk_state_t dk;
-extern const float dk_ppb[6];     // {0.25, 0.5, 1, 2, 4, 8} pulses per beat
 // effective pulses per beat: the mult/div setting over the clock scale —
 // keep the three tempo layers distinct: feel (per-track, persisted) x
 // clk_scale (setup) x speed_mult (performance)
@@ -171,12 +166,11 @@ extern const float dk_ppb[6];     // {0.25, 0.5, 1, 2, 4, 8} pulses per beat
 // is what the DETECTOR gets (clockin_set_ppb) — its sanity gates are scaled
 // from it, and feeding the octave fold back in here creates a relock loop
 // (fold -> gates change -> lock drops -> fold resets -> ..., bench-caught).
-#define DK_PPB_RAW() (dk_ppb[dk.ppb_idx] / (dk.clk_scale > 0 ? dk.clk_scale : 1.0f))
+#define DK_PPB_RAW() (clock_core_ppb() / (dk.clk_scale > 0 ? dk.clk_scale : 1.0f))
 // EFFECTIVE: the raw setting x the detector's octave fold. This is what TEMPO
 // MATH uses. Keep the four layers distinct: feel (per-track) x clk_scale
 // (setup) x oct (auto musical-range) x speed_mult (performance).
-#define DK_PPB_EFF() (DK_PPB_RAW() * (dk.ci.oct > 0 ? dk.ci.oct : 1.0f))
-extern const char *const dk_ppb_names[6];
+#define DK_PPB_EFF() (clockin_ppb_eff(clock_core()) / (dk.clk_scale > 0 ? dk.clk_scale : 1.0f))
 
 // UI-side (SD-touching; call from UI/background tasks only)
 int  deck_load_track(const char *name);   // select + start streaming + read sidecar

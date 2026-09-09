@@ -2,6 +2,7 @@
 #include "clock_ui.h"
 #include "machine.h"
 #include "menu_config.h"
+#include "beatlisten.h"
 
 static bool s_dirty;
 
@@ -11,6 +12,12 @@ int clock_ui_cycle_src(int dir)
 {
     int s = clock_source_cycle_cv_audio(clock_core_src(), dir);
     clock_core_set_src(s);
+    // picking AUDIO switches the listener on (GROOVE) if it was off: a clock
+    // source that silently reads 0 is a trap, not a feature (the deck's rule)
+    if (s == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
+        beatlisten_set_mode(BL_GROOVE);
+        configSetIntSetting("blisten", BL_GROOVE);
+    }
     mark();
     return s;
 }
@@ -57,4 +64,10 @@ void clock_ui_flush(void)
     configSetIntSetting("clk_ppq",  (int)(clock_core_ppb() + 0.5f));
     configSetIntSetting("clk_bpm",  (int)(clock_core_int_bpm() + 0.5f));
     configSetIntSetting("clk_auto", clock_core_auto() ? 1 : 0);
+}
+
+const char *clock_ui_ppq_name(void)
+{
+    int q = (int)(clock_core_ppb() + 0.5f);
+    return q == 1 ? "1 per beat" : q == 2 ? "2 per beat" : q == 8 ? "8 per beat" : "4 per beat";
 }

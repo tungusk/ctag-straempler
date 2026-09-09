@@ -20,6 +20,7 @@
 #include "sample_browser.h"
 #include "setup_menu.h"
 #include "deck_priv.h"
+#include "clock_ui.h"
 
 static const color_t ACCENT = {40, 200, 230};
 
@@ -49,8 +50,8 @@ static int s_last_dbpm = -1;
 static float ext_bpm_disp(void){
     static float ema = 0;
     static uint32_t last_tk = 0;
-    float x = dk.ci.clk.bpm / DK_PPB_EFF();
-    if (!dk.ci.clk.locked || x <= 0) { ema = 0; return x; }
+    float x = clock_core()->clk.bpm / DK_PPB_EFF();
+    if (!clock_core()->clk.locked || x <= 0) { ema = 0; return x; }
     float d = x - ema;
     if (ema <= 0 || d > 2.0f || d < -2.0f) { ema = x; return ema; }  // real tempo change: snap
     // advance at most 4x/s — this runs from BOTH bpm draws on BOTH timer
@@ -71,7 +72,7 @@ static void draw_big_bpm(void){
     // legitimately wobbles a few % while the PLL corrects phase, which made
     // the big number dance even with a perfect clock
     float bpm;
-    if (dk.sync && dk.ci.clk.locked && dk.ci.clk.bpm > 0)
+    if (dk.sync && clock_core()->clk.locked && clock_core()->clk.bpm > 0)
         bpm = ext_bpm_disp() * dk.speed_mult;
     else
         bpm = dk.track_bpm > 0 ? dk.track_bpm * dk.rate : 0;
@@ -86,7 +87,7 @@ static void draw_big_bpm(void){
     int bw = 120, bh = TFT_getfontheight() + 4;
     _bg = TFT_BLACK;
     TFT_fillRect(_width - bw, 2, bw, bh, _bg);
-    _fg = (dk.sync && dk.ci.clk.locked) ? (color_t){40, 200, 90} : TFT_WHITE;
+    _fg = (dk.sync && clock_core()->clk.locked) ? (color_t){40, 200, 90} : TFT_WHITE;
     TFT_print(s, _width - TFT_getStringWidth(s) - 8, 4);
     cfont = f;
 }
@@ -116,9 +117,9 @@ static void draw_info(void){
         snprintf(s1, sizeof(s1), "trk %.1f  %s  x%s  %s", dk.track_bpm, st, sp, fl);
 
     if (dk.sync){
-        if (dk.ci.clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK",
+        if (clock_core()->clk.locked) snprintf(s2, sizeof(s2), "ext %.1f bpm  LOCK",
                                     ext_bpm_disp());
-        else snprintf(s2, sizeof(s2), "ext: waiting for clock on %s", clock_source_name(dk.clk_src));
+        else snprintf(s2, sizeof(s2), "ext: waiting for clock on %s", clock_source_name(clock_core_src()));
     } else s2[0] = 0;
     if (strcmp(s1, s_info1) != 0){
         strcpy(s_info1, s1);
@@ -129,7 +130,7 @@ static void draw_info(void){
     if (strcmp(s2, s_info2) != 0){
         strcpy(s_info2, s2);
         _bg = TFT_BLACK; TFT_fillRect(0, y + fh + 6, _width, fh + 4, _bg);
-        _fg = dk.ci.clk.locked ? (color_t){40, 200, 90} : TFT_LIGHTGREY;
+        _fg = clock_core()->clk.locked ? (color_t){40, 200, 90} : TFT_LIGHTGREY;
         if (s2[0]) TFT_print(s2, 8, y + fh + 6);
     }
 }
@@ -315,13 +316,13 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
                 char dbg[56];
                 snprintf(dbg, sizeof(dbg), "%c e%lu i%lu p%lu E%+d S%lu g%u L%d W%ld",
                          dk.loop_active ? 'L' : (dk.playing ? 'P' : 's'),
-                         (unsigned long)dk.ci.raw_fires,
-                         (unsigned long)(dk.ci.raw_iv / 44),
-                         (unsigned long)(dk.ci.clk.period / 44),
+                         (unsigned long)clock_core()->raw_fires,
+                         (unsigned long)(clock_core()->raw_iv / 44),
+                         (unsigned long)(clock_core()->clk.period / 44),
                          (int)(dk.phase_err * 100),
                          (unsigned long)dk.dbg_starve,
-                         (unsigned)dk.ci.clk.ghost_run,
-                         (int)dk.ci.clk.locked,
+                         (unsigned)clock_core()->clk.ghost_run,
+                         (int)clock_core()->clk.locked,
                          (long)((int32_t)(dk.wpos - dk.rpos_i)));
                 audio_status_set_voices("deck", dbg);
             }
@@ -331,13 +332,13 @@ static int deck_live_handler(int it_id, int event, void *ev_data){
             s_load_ret = M_DECK_LIVE;                // (TR1/TR2 are the transport)
             return M_DECK_LOAD;
         case EV_FWD:
-            if (dk.ci.clk.locked && dk.sync) {          // locked+synced: fine phase nudge
+            if (clock_core()->clk.locked && dk.sync) {          // locked+synced: fine phase nudge
                 dk.phase_offset -= DK_NUDGE_STEP;
                 if (dk.phase_offset < 0.0f) dk.phase_offset += 1.0f;
             } else deck_seek_beats(+4);              // else: one-bar scrub
             break;
         case EV_BWD:
-            if (dk.ci.clk.locked && dk.sync) {
+            if (clock_core()->clk.locked && dk.sync) {
                 dk.phase_offset += DK_NUDGE_STEP;
                 if (dk.phase_offset >= 1.0f) dk.phase_offset -= 1.0f;
             } else deck_seek_beats(-4);
@@ -373,8 +374,8 @@ static void setup_value_str(int i, char *v, size_t n){
     switch(i){
         case 0: snprintf(v, n, "%s", dk.track[0] ? dk.track : "(none)"); break;
         case 1: snprintf(v, n, "%s", dk.sync ? "ON" : "OFF"); break;
-        case 2: snprintf(v, n, "%s", clock_source_name(dk.clk_src)); break;
-        case 3: snprintf(v, n, "%s", dk_ppb_names[dk.ppb_idx]); break;
+        case 2: snprintf(v, n, "%s", clock_source_name(clock_core_src())); break;
+        case 3: snprintf(v, n, "%s", clock_ui_ppq_name()); break;   // core clock ppq
         case 4: snprintf(v, n, "%s", dk.loop ? "ON" : "OFF"); break;
         case 5:
             if (dk.track_bpm > 0) snprintf(v, n, "%.1f", dk.track_bpm);
@@ -398,16 +399,9 @@ static void setup_adj(int i, int dir){
     switch(i){
         case 1: dk.sync = !dk.sync; break;
         case 2:
-            // CV1..8 + AUDIO only — the deck's trigs belong to the transport.
-            // Picking AUDIO switches the listener on (GROOVE) if it was off:
-            // a clock source that silently reads 0 is a trap, not a feature.
-            dk.clk_src = clock_source_cycle_cv_audio(dk.clk_src, dir);
-            if (dk.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
-                beatlisten_set_mode(BL_GROOVE);
-                configSetIntSetting("blisten", BL_GROOVE);
-            }
+            clock_ui_cycle_src(dir);   // the CORE clock's source (write-through, wakes the ear on AUDIO)
             break;
-        case 3: dk.ppb_idx += dir; if (dk.ppb_idx < 0) dk.ppb_idx = 0; if (dk.ppb_idx > 5) dk.ppb_idx = 5; break;
+        case 3: clock_ui_cycle_ppq(dir); break;   // core clock pulses-per-beat
         case 4: dk.loop = !dk.loop; break;
         case 5: {
             float b = dk.track_bpm > 0 ? dk.track_bpm : 120.0f;

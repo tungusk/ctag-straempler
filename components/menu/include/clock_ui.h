@@ -12,6 +12,7 @@
 int   clock_ui_cycle_src(int dir);      // CV1..8 > AUDIO > INT > OFF (no TR)
 void  clock_ui_set_src(int src);        // CLK_SRC_*
 float clock_ui_cycle_ppq(int dir);      // 1 > 2 > 4 > 8, returns the new value
+const char *clock_ui_ppq_name(void);    // "4 per beat" (Setup row text)
 float clock_ui_adj_bpm(float d);        // INT / fallback tempo, 20..300
 bool  clock_ui_toggle_auto(void);       // returns the new state
 void  clock_ui_flush(void);             // persist pending changes (autosave path)
