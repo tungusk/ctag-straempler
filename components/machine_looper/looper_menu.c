@@ -21,6 +21,7 @@
 #include "menu_config.h"
 #include "setup_menu.h"
 #include "looper_priv.h"
+#include "clock_ui.h"
 
 // Deck's transport grammar, ported to the 4-lane view (Arlo): the state lives
 // on a FAT color-coded box around the bar, the playhead is a neutral WHITE line
@@ -342,7 +343,7 @@ static const char *s_bounce_msg = ""; // transient result shown on the Bounce ro
 static void setup_value_str(int i, char *v, size_t n){
     switch(i){
         case 0: snprintf(v, n, "%s", lp.sync_on ? "ON" : "OFF"); break;
-        case 1: snprintf(v, n, "%s", clock_source_name(lp.clk_src)); break;
+        case 1: snprintf(v, n, "%s", clock_source_name(clock_core_src())); break;   // core clock
         case 2: snprintf(v, n, "%d", lp.bars); break;
         case 3: snprintf(v, n, "%s", lp.monitor ? "ON" : "OFF"); break;
         case 4: snprintf(v, n, "%s", lp.filter_on ? "ON" : "OFF"); break;
@@ -359,13 +360,9 @@ static void setup_adj(int i, int dir){
     switch(i){
         case 0: lp.sync_on = !lp.sync_on; break;
         case 1:
-            // full set incl. TR (the looper masks its clock trig) and AUDIO;
-            // picking AUDIO switches the listener on if it was off
-            lp.clk_src = (lp.clk_src + (dir > 0 ? 1 : CLK_SRC_COUNT - 1)) % CLK_SRC_COUNT;
-            if (lp.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
-                beatlisten_set_mode(BL_GROOVE);
-                configSetIntSetting("blisten", BL_GROOVE);
-            }
+            // the CORE clock's source (module-wide, write-through; wakes the ear
+            // on AUDIO). TR sources are still reachable from the web /settings.
+            clock_ui_cycle_src(dir);
             break;
         case 2: {
             int b = (dir > 0) ? lp.bars * 2 : lp.bars / 2;
@@ -373,13 +370,7 @@ static void setup_adj(int i, int dir){
             break;
         }
         case 3: lp.monitor = !lp.monitor; break;
-        case 5: {   // Clock PPQ ladder — Arlo's jig clocks at 8
-            static const int lad[] = {1, 2, 4, 8};
-            int k = 0, cur = looper_get_ppq();
-            for (int q = 0; q < 4; q++) if (lad[q] == cur) k = q;
-            looper_set_ppq((float)lad[(k + (dir > 0 ? 1 : 3)) % 4]);
-            break;
-        }
+        case 5: clock_ui_cycle_ppq(dir); break;   // core clock ppq ladder (1/2/4/8)
         case 4: lp.filter_on = !lp.filter_on; break;
     }
 }

@@ -25,26 +25,25 @@ lp_state_t lp;
 // components/machine/clock.c); lp.bpm / lp.locked mirror it for the UI.
 // "period" is samples per quarter. The floor-tracked Schmitt replaces the
 // detector's fixed 1500/800 thresholds, which misfired on attenuated CV.
-static clockin_t s_ci;
+// (the detector is the CORE clock now — clock_core(), clock.h)
 
 // clock level comes from the shared source helper (clock_source_level) —
 // CV, TR (the looper masks its clock trig out of button handling) or AUDIO
 // (the beat listener's synthesized grid).
 
-// PPQ accessors for the menu (s_ci stays private to the engine)
-int looper_get_ppq(void) { return (int)(s_ci.ppb + 0.5f); }
-void looper_set_ppq(float q) { clockin_set_ppb(&s_ci, q); }
+// PPQ accessor for the menu (reads the core clock)
+int looper_get_ppq(void) { return (int)(clock_core_ppb() + 0.5f); }
 
 // ---- track helpers --------------------------------------------------------
 static uint32_t bar_frames(void)
 {
-    if (!s_ci.clk.period) return 0;
+    if (!clock_core()->clk.period) return 0;
     // period is per PULSE; a 4/4 bar is 4 beats x ppb pulses each (the PPQ
     // row — Arlo's jig clocks at 8 PPQ and the old fixed-1 assumption meant
     // the looper could never lock it)
-    uint32_t ppb = (uint32_t)(s_ci.ppb + 0.5f);
+    uint32_t ppb = (uint32_t)(clock_core()->ppb + 0.5f);
     if (ppb < 1) ppb = 1;
-    return s_ci.clk.period * 4u * ppb * (uint32_t)(lp.bars > 0 ? lp.bars : 1);
+    return clock_core()->clk.period * 4u * ppb * (uint32_t)(lp.bars > 0 ? lp.bars : 1);
 }
 
 static void track_start_record(lp_track_t *t)
@@ -63,7 +62,6 @@ static esp_err_t looper_start(void)
 {
     memset(&lp, 0, sizeof(lp));
     lp.sync_on = true;
-    lp.clk_src = 7;   // CV8 by default — frees both trigs for buttons
     lp.bars = 4;
     lp.sel = 0;
     for (int i = 0; i < LP_TRACKS; i++) {
@@ -79,7 +77,6 @@ static esp_err_t looper_start(void)
         lp.tr[i].res = 900;
         svf_reset(&lp.tr[i].svf);
     }
-    clockin_reset(&s_ci, 1.0f);   // 1 pulse per beat, the looper convention
     audio_status_set_voices("looper", "");
     return ESP_OK;
 }
@@ -137,8 +134,8 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     // sees no phantom edge. TR1 = context action (arm/rec/punch/stop/re-arm),
     // TR2 = play/stop on the selected lane. A trig used as the clock source is
     // masked so it doesn't double as a button.
-    uint8_t clk_mask = (lp.clk_src == LP_CLK_TR1) ? 1 :
-                       (lp.clk_src == LP_CLK_TR2) ? 2 : 0;
+    uint8_t clk_mask = (clock_core_src() == LP_CLK_TR1) ? 1 :
+                       (clock_core_src() == LP_CLK_TR2) ? 2 : 0;
     static uint8_t prev_trig = 0x03;
     uint8_t pressed = prev_trig & (~io->trig_level) & 0x03 & ~clk_mask;
     prev_trig = io->trig_level;
@@ -163,8 +160,8 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     // (knobs 5/8 are faulty on this unit, so per-track-fixed mapping is out;
     // this is a focus-style control — values persist per track when deselected)
     // skip a channel that is carrying the CLOCK — see clock_src_is_cv()
-    if (!clock_src_is_cv(lp.clk_src, 5)) lp.tr[lp.sel].vol = cvm[5] >> 4;   // CV6 -> 0..255
-    if (!clock_src_is_cv(lp.clk_src, 6)) lp.tr[lp.sel].pan = cvm[6];        // CV7 -> 0..4095
+    if (!clock_src_is_cv(clock_core_src(), 5)) lp.tr[lp.sel].vol = cvm[5] >> 4;   // CV6 -> 0..255
+    if (!clock_src_is_cv(clock_core_src(), 6)) lp.tr[lp.sel].pan = cvm[6];        // CV7 -> 0..4095
 
     // filter mod on the jacks: rising CV1 OPENS the selected track's cutoff
     // (patch an envelope/LFO to open it), CV2 raises resonance. The 1V/oct
@@ -190,11 +187,13 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     // fire on the first frame anyway — the block-level front-end keeps that
     // timing exactly. An ACCEPTED pulse shows up as a ring_n change (Schmitt
     // fires that fail the sanity gate don't count, same as before).
-    uint32_t rn_pre = s_ci.clk.ring_n;
-    clockin_block(&s_ci, clock_source_level(lp.clk_src, io), frames);
-    bool clk_acc = (s_ci.clk.ring_n != rn_pre);
-    lp.bpm = s_ci.clk.bpm;                  // mirror to the UI-facing fields
-    lp.locked = s_ci.clk.locked;            // (also reflects clock-stop promptly)
+    // (the CORE clock is ticked before process() — clock.h); an ACCEPTED pulse
+    // is a ring_n change since the previous block, exactly as before
+    static uint32_t s_rn_prev = 0;
+    bool clk_acc = (clock_core()->clk.ring_n != (int)s_rn_prev);
+    s_rn_prev = (uint32_t)clock_core()->clk.ring_n;
+    lp.bpm = clock_core()->clk.bpm;                  // mirror to the UI-facing fields
+    lp.locked = clock_core()->clk.locked;            // (also reflects clock-stop promptly)
 
     // /status diag (the deck's house pattern): sync/lock/ppq + track states,
     // so the web can SEE why an arm is or isn't converting to a record
@@ -207,8 +206,8 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
             snprintf(d, sizeof(d), "%s%s q%d b%.1f f%lu T%c%c%c%c",
                      lp.sync_on ? "SYN " : "free ",
                      lp.locked ? "LOCK" : "----",
-                     (int)(s_ci.ppb + 0.5f), lp.bpm,
-                     (unsigned long)s_ci.raw_fires,
+                     (int)(clock_core()->ppb + 0.5f), lp.bpm,
+                     (unsigned long)clock_core()->raw_fires,
                      st_ch[lp.tr[0].state], st_ch[lp.tr[1].state],
                      st_ch[lp.tr[2].state], st_ch[lp.tr[3].state]);
             audio_status_set_voices("looper", d);
@@ -221,9 +220,9 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
             // each clock pulse = one quarter; a bar (4/4) is every 4 pulses.
             // Armed tracks start on the next bar boundary; the record LENGTH
             // (bars) is handled separately by track_start_record's target.
-            int ppb = (int)(s_ci.ppb + 0.5f);
+            int ppb = (int)(clock_core()->ppb + 0.5f);
             if (ppb < 1) ppb = 1;
-            if (s_ci.clk.locked && (s_ci.clk.ring_n % (4 * ppb)) == 0)
+            if (clock_core()->clk.locked && (clock_core()->clk.ring_n % (4 * ppb)) == 0)
                 bar_edge = true;
         }
 
@@ -328,7 +327,7 @@ int looper_save_track(int i)
     cJSON_AddStringToObject(root, "license", "own license");
     // tempo stamp when the loop was cut against a locked clock — dualdeck
     // and the deck read this to grid the loop without an analysis pass
-    float bpm = clockin_beat_bpm(&s_ci);
+    float bpm = clock_core_beat_bpm();
     if (bpm > 20.0f && bpm < 320.0f)
         cJSON_AddNumberToObject(root, "bpm", bpm);
     char *s = cJSON_Print(root);
@@ -418,8 +417,6 @@ static cJSON *looper_preset_save(void)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "sync", lp.sync_on);
-    cJSON_AddNumberToObject(o, "clk_src", lp.clk_src);
-    cJSON_AddNumberToObject(o, "ppq", s_ci.ppb);
     cJSON_AddNumberToObject(o, "bars", lp.bars);
     cJSON_AddBoolToObject(o, "monitor", lp.monitor);
     cJSON_AddBoolToObject(o, "filter", lp.filter_on);
@@ -431,14 +428,8 @@ static void looper_preset_load(const cJSON *node)
     if (!node) return;   // no saved state — keep start() defaults
     cJSON *j;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync")))                     lp.sync_on = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j)) {
-        int cs = j->valueint;              // 0..7 CV, 8/9 TR, 10 AUDIO (clock.h)
-        lp.clk_src = (cs >= 0 && cs < CLK_SRC_COUNT) ? cs : 7;
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppq")) && cJSON_IsNumber(j)) {
-        float q = (float)j->valuedouble;
-        clockin_set_ppb(&s_ci, (q == 1 || q == 2 || q == 4 || q == 8) ? q : 1.0f);
-    }
+    // "clk_src" / "ppq" (pre-core-clock presets) are ignored: the clock is a
+    // module-wide setting now and a preset must not silently repoint it
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "bars")) && cJSON_IsNumber(j))    lp.bars = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor")))                  lp.monitor = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "filter")))                   lp.filter_on = cJSON_IsTrue(j);
@@ -449,11 +440,10 @@ extern const machine_ui_t looper_menu_ui;
 static int lp_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    MI_ADD(mi_pick("Clock", "clk_src", lp.clk_src, 7, MI_CV | MI_TR | MI_CLK));
-    if (!clock_src_is_cv(lp.clk_src, 5)) MI_ADD(mi("level (selected track)", 5));
-    if (!clock_src_is_cv(lp.clk_src, 6)) MI_ADD(mi("pan (selected track)", 6));
-    if (lp.clk_src != LP_CLK_TR1) MI_ADD(mi("record / action (selected track)", 8));
-    if (lp.clk_src != LP_CLK_TR2) MI_ADD(mi("play/stop (selected track)", 9));
+    if (!clock_src_is_cv(clock_core_src(), 5)) MI_ADD(mi("level (selected track)", 5));
+    if (!clock_src_is_cv(clock_core_src(), 6)) MI_ADD(mi("pan (selected track)", 6));
+    if (clock_core_src() != LP_CLK_TR1) MI_ADD(mi("record / action (selected track)", 8));
+    if (clock_core_src() != LP_CLK_TR2) MI_ADD(mi("play/stop (selected track)", 9));
     return n;
 }
 

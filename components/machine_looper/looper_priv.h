@@ -40,7 +40,7 @@ typedef struct {
 
     // settings (UI writes, engine reads)
     volatile bool sync_on;
-    volatile int  clk_src;        // clock source (0..7 CV, 8 TR1, 9 TR2)
+    // clock: the CORE clock (clock_core(), clock.h), a module-wide setting
     volatile int  bars;           // loop length in bars when synced
     volatile bool monitor;        // pass line-in through to the output
     volatile bool filter_on;      // per-track bandpass filter enable
@@ -60,7 +60,6 @@ extern lp_state_t lp;
 // on success, -1 if the track is empty or the write failed. Call from UI task.
 int looper_save_track(int i);
 int looper_get_ppq(void);
-void looper_set_ppq(float q);
 
 // bounce (resample) all playing tracks down into track 1, baking in each
 // track's level + bandpass, then clear tracks 2-4. Mono; length = longest
