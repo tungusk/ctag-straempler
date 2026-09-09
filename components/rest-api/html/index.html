@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ctag-straempler</title>
+<title>Strämpler</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#111;color:#ccc;font-family:monospace;font-size:13px;padding-bottom:36px}
+body{background:#2e2e2e;color:#ccc;font-family:monospace;font-size:13px;padding-bottom:36px}
 header{background:#1e1e1e;border-bottom:1px solid #333;padding:6px 12px;display:flex;align-items:center;gap:10px}
 h1{font-size:13px;color:#888;flex:1;letter-spacing:.05em}
 .tabs{display:flex;gap:4px}
@@ -24,7 +24,7 @@ tr:hover td{background:#161616}
 .del:hover{background:#2a1010}
 .del.armed{background:#f22;color:#000;border-color:#f22;font-weight:bold}
 .del.armed:hover{background:#f44}
-label{display:block;color:#666;font-size:11px;margin:8px 0 2px}
+label{display:block;color:#777;font-size:11px;margin:8px 0 2px}
 input{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px 8px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
 select{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
 input[type=range]{padding:0;height:22px;accent-color:#0af}
@@ -36,7 +36,7 @@ input[type=checkbox]{color-scheme:dark;accent-color:#2f5566;opacity:.8}
 .dz{border:2px dashed #333;padding:24px;text-align:center;color:#555;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
 .dz.ov{border-color:#0af;color:#0af}
 progress{width:100%;height:6px;margin-top:6px;display:none}
-.msg{color:#666;font-size:11px;margin-top:4px;min-height:16px}
+.msg{color:#777;font-size:11px;margin-top:4px;min-height:16px}
 .ok{color:#4a4}
 .er{color:#a44}
 body.nosbar{padding-bottom:0}
@@ -85,7 +85,7 @@ body.nosbar .sbar{display:none}
 #p3>.card,#p3>.row,#rparams>.card{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
 #rparams .rpcols{columns:2 300px;column-gap:12px}
 .psec{margin-top:6px}
-.pnl{padding:8px 14px 10px}
+.pnl{padding:8px 14px 10px;background:#141414;border:1px solid #262626}   /* the panel card stays near-black */
 .pnl .msg{text-align:center;margin:4px auto 0}
 .ph{display:block;color:#0af;font-size:11px;letter-spacing:1px;margin-bottom:4px}
 .pgrid4{display:grid;grid-template-columns:repeat(4,116px);justify-content:center}
@@ -166,7 +166,7 @@ body.nosbar .sbar{display:none}
 .ren:hover{color:#0af;border-bottom-color:#0af}
 .bar{background:#181818;border:1px solid #333;height:14px;position:relative;margin:4px 0}
 .bar>i{display:block;height:100%;background:#0af}
-.card{border:1px solid #262626;background:#141414;padding:8px 10px;margin:8px 0}
+.card{border:none;background:#1c1c1c;padding:8px 10px;margin:8px 0}
 .card h4{margin:0 0 6px;color:#7fd4ff;font-weight:normal;font-size:12px;letter-spacing:1px}
 .kv{color:#9ab}.kv b{color:#ddd;font-weight:normal}
 .scope{width:100%;border-collapse:collapse;font-size:11px}
@@ -178,7 +178,7 @@ body.nosbar .sbar{display:none}
 </head>
 <body class="nosbar">
 <header>
-  <h1>ctag-straempler</h1>
+  <h1>Strämpler</h1>
   <div class="tabs">
     <div class="tab on" id="t3" onclick="tab(3)">Remote</div>
     <div class="tab" id="t5" onclick="tab(5)">Listener</div>
