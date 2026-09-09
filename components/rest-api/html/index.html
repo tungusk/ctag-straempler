@@ -89,6 +89,10 @@ body.nosbar .sbar{display:none}
 .pnl .msg{text-align:center;margin:4px auto 0}
 .ph{display:block;color:#0af;font-size:11px;letter-spacing:1px;margin-bottom:4px}
 .pgrid4{display:grid;grid-template-columns:repeat(4,116px);justify-content:center}
+/* the perform row: label on a fixed line, the item centred in one fixed 64 px band
+   whatever its size (GAIN 58, TR 48, DATA 54), with a little air between them */
+.pgrid4 .pcell{display:grid;grid-template-rows:14px 64px;row-gap:6px;align-items:center;justify-items:center}
+.pgrid4 .pknob{margin:0}
 .pcell,.jcell{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;color:#666;padding:6px 0 4px}
 .jcell{padding:6px 8px 4px;min-width:62px}
 .pl{color:#999;letter-spacing:1px;font-size:10px}
@@ -97,7 +101,7 @@ body.nosbar .sbar{display:none}
 .pknob:after{content:'';position:absolute;left:50%;top:50%;width:3px;height:28px;margin:-28px 0 0 -1.5px;background:linear-gradient(to bottom,#555 50%,transparent 50%);border-radius:2px}
 .pbtn{width:48px;height:48px;border-radius:50%;padding:0;font-size:11px;background:radial-gradient(circle at 40% 32%,#7a7a7a,#525252 70%);border-color:#8a8a8a;color:#f0f0f0;box-shadow:0 1px 3px #000}
 .pbtn:hover{background:radial-gradient(circle at 40% 32%,#8a8a8a,#5c5c5c 70%)}
-.led{position:absolute;left:92px;top:38px;width:48px;height:18px;fill:none;stroke:#d33;stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 2px #a22)}
+.led{position:absolute;left:92px;top:47px;width:48px;height:18px;fill:none;stroke:#d33;stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 2px #a22)}
 .led.on{stroke:#f66;filter:drop-shadow(0 0 5px #f33)}
 .encsvg{filter:drop-shadow(0 1px 3px #000);cursor:pointer}
 .encsvg .sec{fill:#1a1a1a;stroke:#2e2e2e;stroke-width:1.5}   /* the CV5-8 knob body */
@@ -291,11 +295,11 @@ body.nosbar .sbar{display:none}
       <div class="pcell dim" title="input gain &#8212; panel only"><span class="pl">GAIN</span><span class="pknob"></span></div>
       <div class="pcell" style="position:relative"><span class="pl">TR 1</span><button class="btn pbtn" onclick="remTrig(1)">pulse</button>
         <!-- the panel's LED window: flat leads into 2.5 cycles of a thick rounded sine (panel v2_3 F.Mask, 7.5 x 2.8 mm) -->
-        <svg class="led" id="recled" viewBox="0 0 54 20" title="REC"><path d="M2 10 H9 C11 10 12 3 14.5 3 S18 17 20.5 17 S24 3 27 3 S30.5 17 33 17 S37 3 39.5 3 S43 10 45 10 H52"/></svg></div>
+        <svg class="led" id="recled" viewBox="0 0 54 20" title="REC"><path d="M2 10 H13.5 C15 10 15 3 16 3 S20.5 17 21.5 17 S26 3 27 3 S31.5 17 32.5 17 S37 3 38 3 S39.5 10 40.5 10 H52"/></svg></div>
       <div class="pcell"><span class="pl">TR 2</span><button class="btn pbtn" onclick="remTrig(2)">pulse</button></div>
       <div class="pcell"><span class="pl">DATA</span>
         <!-- the encoder as one circle cut into four sectors: turn left / right, press (top), hold (bottom) -->
-        <svg class="encsvg" viewBox="0 0 60 60" width="54" height="54">
+        <svg class="encsvg" viewBox="0 0 60 60" width="58" height="58">
           <path class="sec" d="M30 30 L10.2 10.2 A28 28 0 0 1 49.8 10.2 Z" onclick="remEv('press')"><title>press</title></path>
           <path class="sec" d="M30 30 L49.8 10.2 A28 28 0 0 1 49.8 49.8 Z" onclick="remEv('fwd')"><title>turn right</title></path>
           <path class="sec" d="M30 30 L49.8 49.8 A28 28 0 0 1 10.2 49.8 Z" onclick="remEv('long')"><title>hold</title></path>
