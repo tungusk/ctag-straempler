@@ -39,6 +39,13 @@ convert-on-import (MP3 / any rate / any depth → native), a **teleremote**
 settings editor, live TFT **screen mirror**), and per-machine tabs
 (Radio, Editor, Freesound).
 
+![The Remote tab: the panel with a live screen mirror, the CV matrix with knob entries, the core clock, and the machine selector](docs/remote-tab.jpg)
+
+*The Remote tab, laid out like the panel: live screen mirror, encoder and
+trigger buttons, CV knobs and ring-meter jacks (drag to inject CV); beside
+it the CV MATRIX (panel knobs are "knob" entries you can re-aim), the
+module-wide CLOCK, and the machine selector.*
+
 - **Broadcast** (port 8000): the live output — or the line *input* — as
   endless WAV or 96k MP3, straight into a browser or VLC.
 - **Icecast push**: the module can act as a source client, streaming its
