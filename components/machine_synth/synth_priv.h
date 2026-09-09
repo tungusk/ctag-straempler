@@ -86,13 +86,9 @@ typedef struct {
     float fold;                  // 0..1 wavefold (knob7 in WT)
     int   cv1_disp;              // last CV1 read (UI)
 
-    // FOUR macro knobs (ch5..8 = K5..K8): K5 timbre (engine-aware), K6 cutoff,
-    // K7 resonance, K8 env->cut. Built units have all four; this dev unit's K5/K8
-    // are weak, so each uses drums-style TAKEOVER: the current value (Setup or
-    // default) holds until the knob is actually moved, then the knob drives it.
-    float knob_capt[4];          // captured position per knob at the last (re)capture
-    bool  knob_live[4];          // knob has moved past threshold -> it drives its param
-    int   knob_engine;           // engine the captures are valid for (-1 = recapture)
+    // The four macro knobs (K5 timbre / K6 cutoff / K7 reso / K8 env>cut) are
+    // ABSOLUTE entries of the CV matrix since 2026-09-08 (synth_mtx_defaults):
+    // takeover semantics live in cvmtx now, and a knob can be re-aimed.
     int8_t pitch_src;            // 1V/oct input, 0-7 = CV1-8 (preset "pcv", default CV1)
     int8_t gate_src;             // gate input, 8 = TR1 / 9 = TR2 (preset "gtr", default TR1)
 
@@ -103,6 +99,7 @@ typedef struct {
 } sy_state_t;
 
 extern const char *const synth_mtx_labels[SYM_N];   // dest names (synth.c)
+extern const int8_t synth_mtx_defaults[SYM_N];      // default knob wiring (ABS entries)
 
 extern sy_state_t sy;
 extern fxrack_t sy_rk;    // FX rack pointer-view over sy's effect instances

@@ -69,9 +69,8 @@ static esp_err_t synth_start(void)
     sy.cutoff_base = 1200.0f;
     sy.res01 = 0.2f;
     sy.freq = 261.6f;           // C4-ish until CV read
-    sy.knob_engine = -1;        // force a knob recapture on the first block
     sy.pitch_src = 0; sy.gate_src = 8;   // CV1 / TR1 unless the preset says otherwise
-    cvmtx_init(&sy.mtx, synth_mtx_labels, SYM_N, NULL);      // matrix off, floors armed
+    cvmtx_init(&sy.mtx, synth_mtx_labels, SYM_N, synth_mtx_defaults);   // knobs as ABS entries, floors armed
     svf_reset(&sy.flt_l);
     fxfilter_init(&sy.filt);
     fxfilter_init(&sy.band);
@@ -95,6 +94,10 @@ static void synth_stop(void)
 const char *const synth_mtx_labels[SYM_N] = {
     "Cutoff", "Reso", "Timbre", "Env>Cut", "LFO Rate", "LFO Dep", "Level", "Pitch"
 };
+// the panel knobs as ABSOLUTE matrix entries: K5 timbre, K6 cutoff, K7 reso,
+// K8 env>cut (CV5..8 = 4..7). Built units have all four; this dev unit's K5/K8
+// are weak, which is what the takeover (default holds until moved) is for.
+const int8_t synth_mtx_defaults[SYM_N] = { 5, 6, 4, 7, -1, -1, -1, -1 };
 
 static void synth_process(int32_t out[MACHINE_BLOCK],
                           const int32_t in[MACHINE_BLOCK],
@@ -105,40 +108,8 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
     int cvm[8];
     for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&med[k], io->cv[k]);
 
-    // FOUR macro knobs, K5..K8 = ch5..8 (cvm[4..7]). Each uses takeover: the
-    // current value (Setup / default) holds until the knob is moved past a small
-    // threshold, then the knob owns its param. This keeps the dev unit (weak
-    // K5/K8) sounding right on defaults while built units get four live macros.
-    float kn[4] = { (float)cvm[4]/4095.0f, (float)cvm[5]/4095.0f,
-                    (float)cvm[6]/4095.0f, (float)cvm[7]/4095.0f };
-    if (sy.knob_engine != sy.engine) {                // re-arm capture on an engine change
-        sy.knob_engine = sy.engine;
-        for (int i = 0; i < 4; i++) { sy.knob_capt[i] = kn[i]; sy.knob_live[i] = false; }
-    }
-    for (int i = 0; i < 4; i++)
-        if (!sy.knob_live[i] && fabsf(kn[i] - sy.knob_capt[i]) > 0.03f) sy.knob_live[i] = true;
-
-    // K6 = cutoff (full range, closes right down), K7 = resonance, K8 = env->cut
-    if (sy.knob_live[1]) sy.cutoff_base = 10.0f * powf(600.0f, kn[1]);   // 10 Hz .. 6 kHz (log)
-    if (sy.knob_live[2]) sy.res01 = kn[2];
-    if (sy.knob_live[3]) sy.env_to_cut = kn[3];
-    // K5 = engine-aware timbre: VA shape / FM index / WT fold
-    if (sy.knob_live[0]) {
-        if (sy.engine == ENG_FM)      sy.fm_index = kn[0] * 8.0f;
-        else if (sy.engine == ENG_WT) sy.fold     = kn[0];
-        else                          sy.shape    = kn[0];
-    }
-    // knob edits never reach the UI event queue: flag a committed move so the
-    // autosave picks it up (hysteresis — live knobs track every block)
-    {
-        static float s_kdirty[4] = {-1, -1, -1, -1};
-        for (int i = 0; i < 4; i++)
-            if (sy.knob_live[i] &&
-                (s_kdirty[i] < 0 || fabsf(kn[i] - s_kdirty[i]) > 0.03f)) {
-                s_kdirty[i] = kn[i];
-                machine_state_dirty();
-            }
-    }
+    // the macro knobs are ABSOLUTE matrix entries now (synth_mtx_defaults);
+    // the takeover + apply happen in the CV matrix section below
     sy.cv1_disp = cvm[0];
     // gate on TR1 (active low) or a web/soft MIDI note; computed up here so the
     // pitch holds through the release tail instead of snapping to the C3 fallback
@@ -153,10 +124,26 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
 
     // ---- CV matrix: assigned CVs modulate params ON TOP of the knob/Setup base
     // (block-rate; median-conditioned; ch1/2 rescaled from their idle floor) ----
-    cvmtx_track(&sy.mtx, cvm);                        // ch1/2 idle-floor follow
+    { static int s_eng = -1;                          // engine change: recapture the knobs
+      if (s_eng != sy.engine) { s_eng = sy.engine; cvmtx_rearm(&sy.mtx); } }
+    cvmtx_track(&sy.mtx, cvm);                        // ch1/2 idle-floor follow + ABS takeover
+    // ABSOLUTE entries (the knobs by default): once moved past the threshold
+    // the source REPLACES the base value — the old K5..K8 code, same curves
+    float kk;
+    if (cvmtx_abs(&sy.mtx, SYM_CUTOFF, &kk)) sy.cutoff_base = 10.0f * powf(600.0f, kk);   // 10 Hz .. 6 kHz (log)
+    if (cvmtx_abs(&sy.mtx, SYM_RES, &kk))    sy.res01 = kk;
+    if (cvmtx_abs(&sy.mtx, SYM_ENVCUT, &kk)) sy.env_to_cut = kk;
+    if (cvmtx_abs(&sy.mtx, SYM_TIMBRE, &kk)) {        // engine-aware: VA shape / FM index / WT fold
+        if (sy.engine == ENG_FM)      sy.fm_index = kk * 8.0f;
+        else if (sy.engine == ENG_WT) sy.fold     = kk;
+        else                          sy.shape    = kk;
+    }
     float m_cut = 0, m_res = 0, m_tmb = 0, m_e2c = 0, m_lfr = 0, m_lfd = 0, m_lvl = 0, m_semi = 0;
     for (int d = 0; d < SYM_N; d++) {
-        float av = cvmtx_val(&sy.mtx, cvm, d);        // amt * conditioned CV
+        float av = cvmtx_val(&sy.mtx, cvm, d);        // amt * conditioned CV (0 for ABS entries)
+        // an ABS source on a dest with no natural absolute meaning acts as a
+        // bipolar knob around centre, through the same offset scaling
+        if (av == 0.0f && d >= SYM_LFORATE && cvmtx_abs(&sy.mtx, d, &kk)) av = (kk - 0.5f) * 2.0f;
         if (av == 0.0f) continue;
         switch (d) {
             case SYM_CUTOFF:   m_cut  += av * 4000.0f; break;
@@ -380,7 +367,7 @@ int synth_patch_load(const char *id)
     if (!root) return -1;
     synth_preset_load(root);
     cJSON_Delete(root);
-    sy.knob_engine = -1;
+    cvmtx_rearm(&sy.mtx);       // knobs recapture against the loaded values
     return 0;
 }
 
@@ -396,10 +383,7 @@ static int synth_inputs(machine_input_t *o, int max)
     int n = 0;
     MI_ADD(mi_pick("Pitch (V/oct)", "pcv", sy.pitch_src, 0, MI_CV));
     MI_ADD(mi_pick("Gate", "gtr", sy.gate_src, 8, MI_TR));
-    MI_ADD(mi("K5 timbre", 4));
-    MI_ADD(mi("K6 cutoff", 5));
-    MI_ADD(mi("K7 resonance", 6));
-    MI_ADD(mi("K8 env>cutoff", 7));
+    // K5..K8 are ABSOLUTE matrix entries (mxs/mxm), not fixed jobs
     return n;
 }
 

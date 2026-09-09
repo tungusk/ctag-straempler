@@ -156,19 +156,19 @@ static void draw_dials(void)
     // K5 timbre (engine-aware)
     const char *l0; char v0[16]; float n0;
     k5_desc(&l0, v0, sizeof(v0), &n0);
-    dial(cx[0], cy, r, n0, l0, v0, sy.knob_live[0], slive_focus(1));
+    dial(cx[0], cy, r, n0, l0, v0, sy.mtx.live[SYM_TIMBRE], slive_focus(1));
     // K6 cutoff (invert the log map -> 0..1)
     float cv = logf(sy.cutoff_base / 10.0f) / logf(600.0f);
     char cval[16];
     if (sy.cutoff_base >= 1000.0f) snprintf(cval, sizeof(cval), "%.1fk", sy.cutoff_base / 1000.0f);
     else                           snprintf(cval, sizeof(cval), "%.0f", sy.cutoff_base);
-    dial(cx[1], cy, r, cv, "cut", cval, sy.knob_live[1], slive_focus(2));
+    dial(cx[1], cy, r, cv, "cut", cval, sy.mtx.live[SYM_CUTOFF], slive_focus(2));
     // K7 resonance
     char rval[16]; snprintf(rval, sizeof(rval), "%.0f%%", sy.res01 * 100.0f);
-    dial(cx[2], cy, r, sy.res01, "res", rval, sy.knob_live[2], slive_focus(3));
+    dial(cx[2], cy, r, sy.res01, "res", rval, sy.mtx.live[SYM_RES], slive_focus(3));
     // K8 env>cut
     char eval[16]; snprintf(eval, sizeof(eval), "%.0f%%", sy.env_to_cut * 100.0f);
-    dial(cx[3], cy, r, sy.env_to_cut, "env>f", eval, sy.knob_live[3], slive_focus(4));
+    dial(cx[3], cy, r, sy.env_to_cut, "env>f", eval, sy.mtx.live[SYM_ENVCUT], slive_focus(4));
 }
 
 // ---- ADSR envelope shape (a polyline you can read at a glance) --------------
@@ -217,8 +217,8 @@ static unsigned dials_sig(void)
          + (unsigned)(sy.res01 * 1000.0f) * 29u
          + (unsigned)(sy.env_to_cut * 1000.0f) * 41u
          + (unsigned)sy.engine * 7u
-         + (sy.knob_live[0]?1u:0u) + (sy.knob_live[1]?2u:0u)
-         + (sy.knob_live[2]?4u:0u) + (sy.knob_live[3]?8u:0u);
+         + (sy.mtx.live[SYM_TIMBRE]?1u:0u) + (sy.mtx.live[SYM_CUTOFF]?2u:0u)
+         + (sy.mtx.live[SYM_RES]?4u:0u) + (sy.mtx.live[SYM_ENVCUT]?8u:0u);
 }
 static unsigned adsr_sig(void)
 {
@@ -260,7 +260,7 @@ static void slive_edit(int dir)
             sy.engine += dir;
             if (sy.engine < 0) sy.engine = ENG_WT;
             if (sy.engine > ENG_WT) sy.engine = ENG_VA;
-            sy.knob_engine = -1;   // K5 timbre is engine-specific -> recapture
+            cvmtx_rearm(&sy.mtx);   // K5 timbre is engine-specific -> recapture
             break;
         case 1:   // timbre — engine-aware
             if (sy.engine == ENG_FM)      sy.fm_index = sclampf(sy.fm_index + d * 0.25f, 0.0f, 8.0f);
@@ -275,7 +275,7 @@ static void slive_edit(int dir)
         case 7: sy.sus = sclampf(sy.sus + d * 0.05f, 0.0f, 1.0f); break;
         case 8: sy.rel = sclampf(sy.rel + d * 0.02f, 0.001f, 3.0f); break;
     }
-    if (s_live_sel >= 1 && s_live_sel <= 4) sy.knob_engine = -1;   // re-arm takeover
+    if (s_live_sel >= 1 && s_live_sel <= 4) cvmtx_rearm(&sy.mtx);   // re-arm takeover
 }
 
 static void slive_repaint(void)
