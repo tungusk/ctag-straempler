@@ -136,7 +136,7 @@ body.nosbar .sbar{display:none}
 .mxc [hidden]{display:none!important}
 .mxmode{background:none;border:1px solid #262626;color:#666;border-radius:2px;height:18px;padding:0 5px;font-family:monospace;font-size:10px;line-height:16px;cursor:pointer;white-space:nowrap}
 .mxmode.on{color:#0af;border-color:#3a5a6a}
-.mxdef{color:#4a4a4a;font-size:10px;border:1px dashed #262626;border-radius:2px;padding:1px 5px;white-space:nowrap}
+.mxdef{color:#4a4a4a;font-size:10px;padding:1px 3px;white-space:nowrap}
 .mxrev{background:none;border:1px solid #2e3e4a;color:#7fb2cc;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
 .mxrev:hover{color:#0af;border-color:#0af}
 .mxrev.undo{border-color:#3a6a4a;color:#6c9}
@@ -1165,10 +1165,10 @@ function mxTailHtml(cv,dest,amt,mode){
   if(dest<0)return '';
   var L=mxLoaded(dest),isDef=mxDef[dest]>=0;
   var same=L?(L.cv===cv&&L.mode===mode&&(mode===1||L.amt===(+amt))):false;
-  if(!same)return '<button class="mxrev undo" title="undo: back to what the module has'+(L?' ('+SRC_NAMES[L.cv]+', '+(L.mode?'knob':(L.amt>0?'+':'')+L.amt+'%')+')':' (unassigned)')+'" onclick="mxUndo('+dest+')">&#8630;</button>';
+  if(!same)return '<button class="mxrev undo" title="undo: back to what the module has'+(L?' ('+SRC_NAMES[L.cv]+', '+(L.mode?'knob':(L.amt>0?'+':'')+L.amt+'%')+')':' (unassigned)')+'" onclick="mxUndo('+dest+')">&#8635;</button>';
   if(!isDef)return '';
   if(mxDef[dest]===cv&&mode===1&&(+amt)===0)return '<span class="mxdef" title="the panel knob\'s default job">default</span>';
-  return '<button class="mxrev" title="back to the default: '+SRC_NAMES[mxDef[dest]]+', knob" onclick="mxRevert('+dest+')">&#8634;</button>';
+  return '<button class="mxrev" title="back to the default: '+SRC_NAMES[mxDef[dest]]+', knob" onclick="mxRevert('+dest+')">&#8635;</button>';
 }
 function mxUndo(dest){
   var a=mxCollect(),L=mxLoaded(dest);
@@ -1247,9 +1247,9 @@ function rpMatrix(d){
       for(var g=0;g<mxN;g++)if(d.mxs[g]<0){   // one arrow each: undo wins over back-to-default
         var L=mxLoaded(g);
         if(L&&L.cv===ch)cells+='<div class="mxf ghost" title="the module still has this; the edit removed it">'+esc(mxLabs[g]||('dest '+(g+1)))
-          +'<button class="mxrev undo" title="undo: back to what the module has" onclick="mxUndo('+g+')">&#8630;</button></div>';
+          +'<button class="mxrev undo" title="undo: back to what the module has" onclick="mxUndo('+g+')">&#8635;</button></div>';
         else if(mxDef[g]===ch)cells+='<div class="mxf ghost" title="this panel knob\'s default job is unassigned">'+esc(mxLabs[g]||('dest '+(g+1)))
-          +'<button class="mxrev" title="back to the default: '+SRC_NAMES[ch]+', knob" onclick="mxRevert('+g+')">&#8634;</button></div>';
+          +'<button class="mxrev" title="back to the default: '+SRC_NAMES[ch]+', knob" onclick="mxRevert('+g+')">&#8635;</button></div>';
       }
       if(!nc&&!chips&&!cells)cells+=mxCell(ch,-1,0,0);
     }
