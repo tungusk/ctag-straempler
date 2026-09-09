@@ -92,7 +92,8 @@ typedef struct machine_s {
     // matrix view. Fill `out` (up to `max` entries), return the count. Called
     // from the httpd task: read state only, never block. An entry with a
     // preset `key` is EDITABLE (the page writes the chosen source to that key
-    // and re-applies the preset); without one it is a fixed job.
+    // and re-applies the preset); without one it is a fixed job. The CLOCK is
+    // not described here: it is the core's (clock.h), appended by the core.
     int (*inputs)(struct machine_input_s *out, int max);
 } machine_t;
 
@@ -108,6 +109,9 @@ typedef struct machine_input_s {
 #define MI_CV   1        // CV1-8
 #define MI_TR   2        // TR1 / TR2
 #define MI_CLK  4        // AUDIO / INT / OFF (clock-source extras)
+#define MI_GLOBAL 8      // the key is a MODULE-WIDE setting (POST /settings), not a
+                         // preset key — the core appends the Clock entry for every
+                         // machine (2026-09-08); machines never list one themselves
 #define MACHINE_INPUTS_MAX 24
 static inline machine_input_t mi(const char *label, int src)
 { machine_input_t m = { label, NULL, (int8_t)src, (int8_t)src, 0 }; return m; }

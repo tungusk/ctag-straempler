@@ -1496,9 +1496,14 @@ static esp_err_t remote_params_get_handler(httpd_req_t *req)
     const machine_t *m = machine_active();
     if (!m || !m->preset_save) { send_json(req, "{}"); return ESP_OK; }
     cJSON *o = m->preset_save();
-    if (o && m->inputs) {   // input map: fixed jobs + editable picks (see machine.h)
+    if (o) {   // input map: fixed jobs + editable picks (see machine.h)
         machine_input_t in[MACHINE_INPUTS_MAX];
-        int n = m->inputs(in, MACHINE_INPUTS_MAX);
+        int n = m->inputs ? m->inputs(in, MACHINE_INPUTS_MAX) : 0;
+        // the CORE clock is one entry on EVERY machine's map: a global pick
+        // (MI_GLOBAL) the page writes through POST /settings, never the preset
+        if (n < MACHINE_INPUTS_MAX)
+            in[n++] = mi_pick("Clock", "clk_src", clock_core_src(), 3,
+                              MI_CV | MI_TR | MI_CLK | MI_GLOBAL);
         cJSON *a = cJSON_AddArrayToObject(o, "imap");
         for (int i = 0; i < n; i++) {
             cJSON *e = cJSON_CreateObject();

@@ -309,6 +309,20 @@ body.nosbar .sbar{display:none}
   </div>
   <div class="rcol">
   <div id="rmatrix"></div>
+  <div class="card pnl" id="clkcard">
+    <div class="row tight" style="align-items:center;margin-top:0">
+      <b class="ph" style="flex:1;padding:0;margin:0">CLOCK</b>
+      <span id="clkro" style="color:#888;margin-right:8px;font-size:11px">&#8212;</span>
+      <button class="btn" style="flex:0 0 auto" onclick="clkApply()">Apply</button>
+    </div>
+    <div class="row tight" style="align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
+      <label style="color:#888;font-size:11px">source <select id="clksrc" style="width:82px;display:inline-block"></select></label>
+      <label style="color:#888;font-size:11px">ppq <select id="clkppq" style="width:54px;display:inline-block"><option>1</option><option>2</option><option>4</option><option>8</option></select></label>
+      <label style="color:#888;font-size:11px">int bpm <input type="number" id="clkbpm" min="20" max="300" step="1" style="width:58px;display:inline-block"></label>
+      <label style="color:#888;font-size:11px" title="INT stands in while the external source is unlocked; the jack wins back on its first edge"><input type="checkbox" id="clkauto" style="width:auto"> fallback</label>
+    </div>
+    <div class="msg" id="clkmsg" style="display:none"></div>
+  </div>
   <div class="card pnl"><b class="ph">MACHINE</b>
     <div id="rmach"></div>
   </div>
@@ -1013,17 +1027,17 @@ function loadRemote(){
     mh+=auCell('out','r');
     document.getElementById('rmon').innerHTML=mh;
     knInit();   // the CV1-4 sockets drag like the knobs
-    updateClkTag();
-    // auto-load the machine params so the ·CLK tag (clk_src) shows without a
-    // manual Reload — the CV meters then say which channel is the clock
-    rpLoad();
+    clkLoad();  // the CLOCK card (+ the ·CLK tag on the clock's channel)
+    rpLoad();   // auto-load the machine params
   }).catch(function(){});
 }
 
-// tag the channel the active machine clocks from (clk_src in its settings):
-// the CV label turns cyan with a CLK mark, so the meter explains the patch
+// tag the channel the module clocks from (the CORE clock's source, from
+// /status "clk"): the CV label turns cyan with a CLK mark, so the meter
+// explains the patch
+window.clkSrc=null;
 function updateClkTag(){
-  var cs=(rpData&&typeof rpData.clk_src==='number')?rpData.clk_src:null;
+  var cs=(typeof window.clkSrc==='number')?window.clkSrc:null;
   for(var i=0;i<8;i++){
     var l=document.getElementById('rl'+i);
     if(!l)continue;
@@ -1114,7 +1128,7 @@ function mxPick(e,nolabel){   // an editable input-map entry: label + source dro
   if(e.o&4)allow.push(10,11,12);
   if(allow.indexOf(e.s)<0)allow.push(e.s);
   var o='';allow.forEach(function(v){o+='<option value="'+v+'"'+(v===e.s?' selected':'')+'>'+(SRC_NAMES[v]||v)+'</option>';});
-  return '<div class="mxp">'+(nolabel?'':'<span>'+esc(e.l)+'</span>')+'<select data-ik="'+esc(e.k)+'" data-idef="'+e.d+'">'+o+'</select></div>';
+  return '<div class="mxp">'+(nolabel?'':'<span>'+esc(e.l)+'</span>')+'<select data-ik="'+esc(e.k)+'" data-idef="'+e.d+'"'+((e.o&8)?' data-ig="1" title="module-wide setting (the core clock)"':'')+'>'+o+'</select></div>';
 }
 function rpMatrix(d){
   var hasM=Array.isArray(d.mxs),im=Array.isArray(d.imap)?d.imap:[];
@@ -1221,8 +1235,12 @@ function rpLoad(retry){
 
 function rpApply(){
   if(!rpData)return;
-  var d=JSON.parse(JSON.stringify(rpData));
-  document.querySelectorAll('[data-ik]').forEach(function(s){d[s.dataset.ik]=+s.value;});   // input-map picks
+  var d=JSON.parse(JSON.stringify(rpData)),glob={};
+  document.querySelectorAll('[data-ik]').forEach(function(s){   // input-map picks
+    if(s.dataset.ig)glob[s.dataset.ik]=+s.value;               // module-wide (the core clock) -> /settings
+    else d[s.dataset.ik]=+s.value;
+  });
+  if(Object.keys(glob).length)fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(glob)}).then(function(){clkLoad();}).catch(function(){});
   if(Array.isArray(d.mxs)){   // matrix: rebuild per-destination arrays from the CV rows
     for(var k=0;k<d.mxs.length;k++){d.mxs[k]=-1;if(Array.isArray(d.mxa))d.mxa[k]=0;}
     document.querySelectorAll('.mxc').forEach(function(c){
@@ -1245,6 +1263,41 @@ function rpApply(){
       m.textContent=res.error||'Applied — autosaves in a couple of seconds';
       if(!res.error){rpData=d;setTimeout(rpLoad,600);}   // re-render: picks move rows, labels refresh
     }).catch(function(){});
+}
+
+// ---- CLOCK card: the core clock's module-wide settings (GET/POST /settings
+// clk_src / clk_ppq / clk_bpm / clk_auto) + a live readout from /status "clk"
+function clkLoad(){
+  fetch('/settings').then(function(r){return r.json();}).then(function(d){
+    var ss=document.getElementById('clksrc');
+    if(!ss)return;
+    var o='';SRC_NAMES.forEach(function(n,i){o+='<option value="'+i+'"'+(i===d.clk_src?' selected':'')+'>'+n+'</option>';});
+    ss.innerHTML=o;
+    document.getElementById('clkppq').value=String(d.clk_ppq||4);
+    document.getElementById('clkbpm').value=d.clk_bpm||120;
+    document.getElementById('clkauto').checked=!!d.clk_auto;
+    if(typeof d.clk_src==='number'){window.clkSrc=d.clk_src;updateClkTag();}
+  }).catch(function(){});
+}
+function clkApply(){
+  var body={clk_src:+document.getElementById('clksrc').value,clk_ppq:+document.getElementById('clkppq').value,
+            clk_bpm:parseInt(document.getElementById('clkbpm').value,10)||120,clk_auto:document.getElementById('clkauto').checked?1:0};
+  fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(r){return r.json();}).then(function(res){
+      var m=document.getElementById('clkmsg');
+      m.style.display='';m.className='msg '+(res.error?'er':'ok');
+      m.textContent=res.error||'Applied';
+      setTimeout(function(){m.style.display='none';},2500);
+      clkLoad();setTimeout(rpLoad,600);   // the matrix's clock row mirrors the same setting
+    }).catch(function(){});
+}
+function clkReadout(c){   // /status "clk": {src,lock,bpm,ppq,fb,pulses}
+  var ro=document.getElementById('clkro');
+  if(!ro||!c)return;
+  if(typeof c.src==='number'&&c.src!==window.clkSrc){window.clkSrc=c.src;updateClkTag();}
+  var name=SRC_NAMES[c.src]||'?';
+  if(c.lock){ro.textContent=(c.fb?'FALLBACK ':(c.src===11?'INT ':name+' LOCK '))+(+c.bpm).toFixed(1)+' bpm';ro.style.color=(c.fb||c.src===11)?'#9ab':'#4c6';}
+  else{ro.textContent=c.src===12?'off':name+' \u2014 no clock';ro.style.color='#888';}
 }
 
 function remEv(e){fetch('/remote/event?ev='+e,{method:'POST'}).catch(function(){});}
@@ -1622,6 +1675,7 @@ function updateRemote(d){
   if(mc)mc.style.display=(d.machine=='Synth'||d.machine=='Keys')?'':'none';
   var cv=d.cv||[];
   knFollow(cv);
+  clkReadout(d.clk);
   var led=document.getElementById('recled');
   if(led)led.setAttribute('class','led'+(d.recording?' on':''));
   for(var i=0;i<cv.length;i++){
