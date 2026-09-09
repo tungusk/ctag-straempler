@@ -43,6 +43,37 @@ Unit 1 (.227) untouched.
   record on the same TR.
 - Antenna 20 dBm/RSSI experiment still parked in `git stash@{0}`.
 
+## 2026-09-08 PM — CV MATRIX STAGE 3: knob jobs are matrix entries (ABSOLUTE mode)
+
+Commits `64e2fa0..` on `v09-machines`; **.85 runs this build**. Bail tag before
+the series: `pre-cvmtx-abs-20260908` (= `e9c712a`, the core-clock build).
+
+- **cvmtx** gained CVM_ABS ("knob"): the hosts' hard-wired K5–K8 takeover moved
+  into the widget (`cvmtx_abs()`), per-host DEFAULTS (`cvmtx_init` 4th arg),
+  migration for presets without `mxm` (defaults onto still-free dests only —
+  a dest that already carried an offset stays single-driven), `skip_src` (the
+  core clock's channel never takes over), `nodirty` (Tape's window move).
+  Saves `mxm` + `mxd`. Device page: amount past +100 % = `knob`; default rows
+  wear a dot.
+- **Synth / Keys / Tape** dropped their knob blocks + Live-dial live flags read
+  the matrix; Tape got a `Reso` dest (TPM_RES, appended after RVMX). Input maps
+  no longer list K chips.
+- **Web**: cells have a ±/knob toggle; a cell matching its default wears a dim
+  `default` badge, an overridden one a ↺ revert (Arlo's ask); a cleared default
+  is a ghost on its default CV row with ↺; Reset rebuilds from `mxd`.
+- **Verified on .85 over REST**: migration on all three (Keys' patch had
+  Reso←CV3 as an offset → no absolute K7 there, by design — Arlo may want to
+  revert that entry); takeover lands on the exact log curve (CV6 3000 → 1085 Hz,
+  1000 → 48 Hz); under-threshold holds; re-aim K6→Level + CV6→Cutoff +50 %
+  offset both apply; reset restores; clock on CV6 holds Tape's cutoff knob,
+  CV4 releases it. Browser: cells, toggle, badge → ↺ → default round-trip.
+  Bug found+fixed in the pass: a dest added after a preset was stored (Tape
+  Reso) must keep its default on load (`37712a9`); .85's Tape autosave was
+  corrected in place.
+- **Owed by ear**: knob feel on Synth/Keys/Tape (same threshold + curves, so
+  expected identical). **Stage 4 open**: the other machines (focus-relative
+  dests — see the plan file).
+
 ## 2026-09-08 PM — THE CORE CLOCK (one clock interpreter, system side)
 
 Commits `aa10619..` on `v09-machines`; **.85 runs this build** (OTA'd, boot

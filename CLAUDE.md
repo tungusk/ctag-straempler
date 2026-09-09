@@ -232,6 +232,8 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   tab's CV MATRIX card renders it per input row (fixed = chip, pick =
   dropdown, Reset = defaults + matrix cleared); the CLOCK card (between CV
   MATRIX and MACHINE) edits the same setting with a live lock/tempo readout.
+  Synth/Keys/Tape list NO knob chips: their K5–K8 are matrix entries (`mxs`/`mxm`,
+  defaults in `mxd`; the page marks defaults and offers a revert arrow).
   Called from httpd — read state only. Editable today: Synth/Keys pitch +
   gate (`pcv`/`gtr`), Tape play/record gates (`ptr`/`rtr`), DoubleDecker's CV
   map. A new machine should describe its CV/TR reads here or the web page
@@ -545,7 +547,22 @@ The machines (all working; archives in `bin/`):
   the legacy synth/keys "msrc"/"mamt" keys transparently). Hosts: Tape,
   Synth, Keys (the latter two MIGRATED 2026-07-20 — their hand-rolled matrix
   pages are deleted). Host applies `cvmtx_val()` (-1..+1) as live OFFSETS —
-  the win_move convention. Sampler3's matrix is engine-woven (per-voice
+  the win_move convention. **ABSOLUTE ("knob") mode, 2026-09-08 (stage 3):**
+  an entry may instead be a knob — the hosts' old hard-wired K5–K8 takeover
+  (capture, 0.03 threshold, then the source REPLACES the base) lives in the
+  widget; `cvmtx_abs(m, d, &k01)` hands the host the position and the host
+  keeps its curve. Hosts pass a DEFAULTS table to `cvmtx_init()` (Synth: K5
+  timbre / K6 cutoff / K7 reso / K8 env>cut; Keys: K5 start …; Tape: K5
+  window / K6 cutoff / K7 reso — K8 stays unwired), applied at init and
+  MIGRATED onto still-free destinations when a preset has no `mxm`; a dest
+  already carrying an offset stays single-driven. `skip_src` = the core
+  clock's CV channel (never takes over); `nodirty` = performance-only dests.
+  Persisted `mxm` (modes) + `mxd` (defaults). Device page: amount past +100 %
+  reads `knob`; a default-matching row wears a dot. An ABS source on a dest
+  with no absolute meaning (Level, Pitch, crop points, FX rows) is a bipolar
+  knob around centre through the offset scaling. Stage 4 (not done): the
+  other machines' knob jobs, some FOCUS-RELATIVE (DoubleDecker's selected
+  deck, Looper's selected track, Drums' pointed pad). Sampler3's matrix is engine-woven (per-voice
   speed/start/length) and stays bespoke. DoubleDecker keeps its own CV Map
   (channel assignment, not a matrix — don't duplicate); Deck's contextual
   loop knobs ARE its CV interface, no matrix by design. Lives in
@@ -736,7 +753,11 @@ Sampler3 SHIPPED 2026-07-12.
   `keys-multisample-v1`).
   `bin/<name>/flash.sh` returns to any known-good state.
   Matching dated git tags.
-- **A KNOB CAN BE ROUTED TO ITS OWN DESTINATION — check the CV matrix first.**
+- **A KNOB IS A MATRIX ENTRY (since 2026-09-08) — read `mxs`/`mxm` first.** K5–K8
+  on Synth/Keys/Tape are ABSOLUTE entries with defaults; an offset routed onto
+  the same destination from the same channel is visible in one place now, and a
+  preset that already had one loads without the knob. The 07-28 lesson, kept for
+  the symptoms: **A KNOB COULD BE ROUTED TO ITS OWN DESTINATION — check the CV matrix first.**
   Arlo's Keys patch had `Cutoff <- CV6` at FULL amount, and CV6 *is* knob 6,
   already the cutoff control: cutoff driven twice from one source. Symptoms that
   cost hours on 2026-07-28 — remote `cut` writes snapping back to a few hundred
