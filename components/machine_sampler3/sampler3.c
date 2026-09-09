@@ -286,7 +286,7 @@ static void reader_task(void *pv)
                 if (v->autoplay) {              // fresh take: loop immediately —
                     v->autoplay = false;        // or, clock-synced, come in ON a
                     if (v->name[0]) {           // pulse at the in-phase offset
-                        if (s3.rec_synced && (s3.ci.clk.locked || s3.int_bpm > 0.5f))
+                        if (s3.rec_synced && clock_core()->clk.locked)
                             v->sync_start_req = true;
                         else v->playing = true;
                     }
@@ -490,9 +490,7 @@ static esp_err_t s3_start(void)
         v->playmode = S3_MODE_LOOP;      // preset feel (Arlo): loops by default
         s3.cv12_floor[i] = 4095;         // converge down on first reads
     }
-    s3.clk_src = 7;                      // CV8, same convention as deck/glitch
     s3.rec_wait_vid = -1;
-    clockin_reset(&s3.ci, 4.0f);         // ppq restored by preset load
     s_run = true;
     // unpinned: file-reading tasks pinned to core 0 cause WiFi audio clicks
     xTaskCreate(reader_task, "s3_reader", 4096, NULL, 6, NULL);
@@ -642,7 +640,7 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
                 // a locked clock, start lands ON the next pulse and stop on
                 // the next whole beat (loop-ready lengths); free-run acts now.
                 // trigger/finish are bare atomics — audio-task safe.
-                bool clk_ok = s3.ci.clk.locked || s3.int_bpm > 0.5f;
+                bool clk_ok = clock_core()->clk.locked;   // INT / fallback lock too
                 if (!recording_is_active()) {
                     rec_started_this_press[i] = true;
                     if (clk_ok) {
@@ -1110,27 +1108,12 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         out[fno * 2 + 1] = ((int32_t)r) << 16;
     }
 
-    // ---- CV clock: the shared conditioned front-end (Schmitt + floor +
-    // detector + ghost gate), pulses-per-beat carried in the service --------
-    bool edge = clockin_block(&s3.ci, clock_source_level(s3.clk_src, io), frames);
-
-    // internal clock: when no external clock is locked (external always wins),
-    // a settable-BPM metronome supplies the sync pulses — the whole synced
-    // workflow (quantized takes, tempo stamp, in-phase re-entry) works
-    // standalone. Same pulses-per-beat as the external setting.
-    bool ext_lock = s3.ci.clk.locked;
-    bool int_on = !ext_lock && s3.int_bpm > 0.5f;
-    bool clk_ok = ext_lock || int_on;
-    if (int_on) {
-        uint32_t ip = (uint32_t)(44100.0f * 60.0f / (s3.int_bpm * s3.ci.ppb));
-        s3.int_since += (uint32_t)frames;
-        if (s3.int_since >= ip) {
-            s3.int_since -= ip;
-            edge = true;                       // internal pulse
-        }
-    } else {
-        s3.int_since = 0;
-    }
+    // ---- clock: the CORE clock (ticked before process(), clock.h). The old
+    // per-machine internal metronome is the core's INT source / auto-fallback
+    // now, and it LOCKS like an external clock, so one flag covers both.
+    bool edge = clock_core_edge();
+    bool ext_lock = clock_core()->clk.locked;
+    bool clk_ok = ext_lock;
 
     // ---- clock-synced capture bookkeeping (audio-task-owned) ----------------
     s3.post_stop_frames += (uint32_t)frames;   // free-runs; reset at synced stop
@@ -1140,14 +1123,13 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
             if (s3.rec_pulses == 0 && !s3.rec_synced && s3.rec_first_pulse == 0)
                 s3.rec_first_pulse = s3.rec_frames;    // grid marker, unsynced start
             s3.rec_pulses++;
-            uint32_t ppw = (uint32_t)(s3.ci.ppb + 0.5f);       // pulses per beat
+            uint32_t ppw = (uint32_t)(clock_core_ppb() + 0.5f); // pulses per beat
             if (ppw < 1) ppw = 1;
             if (s3.rec_stop_wait && (s3.rec_pulses % ppw) == 0) {
                 recording_finish();                    // stop ON the whole beat
                 s3.rec_stop_wait = false;
                 s3.post_stop_frames = 0;               // phase ref for sync re-entry
-                float bpm = ext_lock ? clockin_beat_bpm(&s3.ci)
-                          : int_on ? s3.int_bpm : 0;
+                float bpm = clock_core_beat_bpm();
                 if (bpm > 0) {
                     s3.rec_bpm = bpm;
                     s3.rec_stamp_req = true;           // reader amends the sidecar
@@ -1232,9 +1214,6 @@ static cJSON *s3_preset_save(void)
     cJSON_AddNumberToObject(o, "s3v", 2);       // schema version gate
     cJSON_AddBoolToObject(o, "monitor", s3.monitor);
     cJSON_AddBoolToObject(o, "arm_mutes", s3.arm_mutes);
-    cJSON_AddNumberToObject(o, "clk_src", s3.clk_src);
-    cJSON_AddNumberToObject(o, "int_bpm", s3.int_bpm);
-    cJSON_AddNumberToObject(o, "ppq", s3.ci.ppb);
     cJSON *va = cJSON_CreateArray();
     cJSON_AddItemToObject(o, "voices", va);
     for (int i = 0; i < S3_NVOICES; i++) {
@@ -1269,16 +1248,8 @@ static void s3_preset_load(const cJSON *node)
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor"))) s3.monitor = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "arm_mutes"))) s3.arm_mutes = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j))
-        s3.clk_src = clock_source_clamp_cv_audio(j->valueint);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "int_bpm")) && cJSON_IsNumber(j)) {
-        float b = (float)j->valuedouble;
-        s3.int_bpm = (b >= 40.0f && b <= 240.0f) ? b : 0;
-    }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppq")) && cJSON_IsNumber(j)) {
-        float q = (float)j->valuedouble;
-        clockin_set_ppb(&s3.ci, (q == 1 || q == 2 || q == 4 || q == 8) ? q : 4.0f);
-    }
+    // "clk_src" / "int_bpm" / "ppq" (pre-core-clock presets) are ignored: the
+    // clock is a module-wide setting now and a preset must not repoint it
     cJSON *va = cJSON_GetObjectItemCaseSensitive(node, "voices");
     for (int i = 0; i < S3_NVOICES; i++) {
         cJSON *vo = va ? cJSON_GetArrayItem(va, i) : NULL;
@@ -1347,7 +1318,6 @@ static int s3_inputs(machine_input_t *o, int max)
     int n = 0;
     static const char *const sp[] = { "V1 speed", "V2 speed" }, *const st[] = { "V1 start", "V2 start" },
                       *const ln[] = { "V1 length", "V2 length" }, *const gt[] = { "V1 gate", "V2 gate" };
-    MI_ADD(mi_pick("Clock", "clk_src", s3.clk_src, 7, MI_CV | MI_CLK));
     for (int i = 0; i < S3_NVOICES && i < 2; i++) {
         const s3_voice_t *v = &s3.v[i];
         MI_ADD(mi(gt[i], 8 + i));

@@ -22,6 +22,7 @@
 #include "setup_menu.h"
 #include "sample_browser.h"
 #include "sampler3_priv.h"
+#include "clock_ui.h"
 
 static const color_t ACCENT   = {230, 160, 40};
 static const color_t COL_REC  = {220, 40, 40};
@@ -74,9 +75,8 @@ static int s_last_dbpm = -1;
 // per-pulse figure dances a few tenths (deck lesson); snaps on real changes.
 static void draw_clock_bpm(void){
     // external clock (green) wins; internal clock (grey) otherwise
-    float ebpm = clockin_beat_bpm(&s3.ci);
-    bool ext = ebpm > 0;
-    float bpm = ext ? ebpm : (s3.int_bpm > 0.5f ? s3.int_bpm : 0);
+    float bpm = clock_core_beat_bpm();      // the core clock (INT locks too)
+    bool ext = bpm > 0 && clock_core_src() != CLK_SRC_INT && !clock_core_fallback();
     static float ema = 0;
     static uint32_t last_tk = 0;
     if (bpm <= 0) ema = 0;
@@ -297,7 +297,7 @@ static void draw_banner(void){
     int st = 0;
     if (recording_is_active()) st = s3.rec_stop_wait ? 6 : 3;
     else if (s3.rec_wait_vid >= 0) st = 5;
-    else if (s3.arm_target >= 0) st = (s3.ci.clk.locked || s3.int_bpm > 0.5f) ? 7 : 2;
+    else if (s3.arm_target >= 0) st = clock_core()->clk.locked ? 7 : 2;
     else if (s3.save_failed) st = 4;
     else if (s3.last_rec[0]) st = 1;
     if (st == s_banner_state && st != 3) return;   // REC repaints (name may arrive)
@@ -553,8 +553,6 @@ static const char *rec_labels[] = {"Arm V1", "Arm V2", "Monitor", "Arm mutes",
 
 // PPQ ladder — click cycles; applies to the external detector AND the
 // internal clock's pulse synthesis (Arlo's jig clocks at 8)
-static const float ppq_ladder[] = {1.0f, 2.0f, 4.0f, 8.0f};
-#define PPQ_N 4
 
 static void rec_redraw(int pos){
     TFT_resetclipwin();
@@ -572,13 +570,11 @@ static void rec_redraw(int pos){
         if (i < 2) snprintf(val, sizeof(val), "%s", s3.arm_target == i ? "ARMED" : "-");
         else if (i == 2) snprintf(val, sizeof(val), "%s", s3.monitor ? "ON" : "OFF");
         else if (i == 3) snprintf(val, sizeof(val), "%s", s3.arm_mutes ? "ON" : "OFF");
-        else if (i == 4){
-            if (s3.int_bpm > 0.5f) snprintf(val, sizeof(val), "%.0f bpm%s",
-                                            s3.int_bpm, s3.ci.clk.locked ? " (ext!)" : "");
-            else snprintf(val, sizeof(val), "OFF");
-        }
-        else if (i == 5) snprintf(val, sizeof(val), "%d", (int)(s3.ci.ppb + 0.5f));
-        else snprintf(val, sizeof(val), "%s", clock_source_name(s3.clk_src));
+        else if (i == 4)   // the core clock's INT / fallback tempo; hold = auto-fallback toggle
+            snprintf(val, sizeof(val), "%.0f bpm%s", clock_core_int_bpm(),
+                     clock_core_fallback() ? " (fb)" : clock_core_auto() ? " (auto)" : "");
+        else if (i == 5) snprintf(val, sizeof(val), "%d", (int)(clock_core_ppb() + 0.5f));
+        else snprintf(val, sizeof(val), "%s", clock_source_name(clock_core_src()));
         if (i < 2 && s3.arm_target == i) _fg = COL_ARM;
         TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
     }
@@ -612,11 +608,8 @@ static int s3_rec_handler(int it_id, int event, void *ev_data){
         case EV_FWD:
         case EV_BWD: {
             int dir = (event == EV_FWD) ? +1 : -1;
-            if (sel) {                 // adjusting internal bpm
-                float b = s3.int_bpm < 0.5f ? 120.0f : s3.int_bpm + dir;
-                if (b < 40) b = 40;
-                if (b > 240) b = 240;
-                s3.int_bpm = b;
+            if (sel) {                 // adjusting the core clock's INT bpm
+                clock_ui_adj_bpm((float)dir);
             } else {
                 pos = (pos + S3_REC_N + dir) % S3_REC_N;
             }
@@ -627,30 +620,14 @@ static int s3_rec_handler(int it_id, int event, void *ev_data){
             if (pos < 2) s3_toggle_arm(pos);
             else if (pos == 2) s3.monitor = !s3.monitor;
             else if (pos == 3) s3.arm_mutes = !s3.arm_mutes;
-            else if (pos == 5) {       // Clock PPQ: click cycles the ladder
-                int k = 0;
-                for (int i = 0; i < PPQ_N; i++)
-                    if (s3.ci.ppb >= ppq_ladder[i] - 0.1f &&
-                        s3.ci.ppb <= ppq_ladder[i] + 0.1f) k = i;
-                clockin_set_ppb(&s3.ci, ppq_ladder[(k + 1) % PPQ_N]);
-            }
-            else if (pos == 6) {       // Clock Src: CV1..8 + AUDIO (trigs are
-                                       // voice gates — never clock inputs here)
-                s3.clk_src = clock_source_cycle_cv_audio(s3.clk_src, +1);
-                if (s3.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
-                    beatlisten_set_mode(BL_GROOVE);   // AUDIO implies the ear is on
-                    configSetIntSetting("blisten", BL_GROOVE);
-                }
-            }
-            else {                     // Int Clock: press = edit bpm / press again = done;
-                if (sel) sel = 0;      // (turn OFF by dialing... hold = off below)
-                else { sel = 1; if (s3.int_bpm < 0.5f) s3.int_bpm = 120.0f; }
-            }
+            else if (pos == 5) clock_ui_cycle_ppq(+1);   // core clock ppq ladder
+            else if (pos == 6) clock_ui_cycle_src(+1);   // core clock source (write-through)
+            else sel = !sel;           // Int Clock: press = edit bpm / press again = done
             rec_redraw(pos);
             break;
         case EV_LONG_PRESS:
-            if (pos == 4 && s3.int_bpm > 0.5f) {   // hold on the row = clock OFF
-                s3.int_bpm = 0;
+            if (pos == 4) {            // hold on the row = toggle the auto-fallback
+                clock_ui_toggle_auto();
                 sel = 0;
                 rec_redraw(pos);
                 break;

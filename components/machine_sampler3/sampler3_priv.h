@@ -169,7 +169,7 @@ typedef struct {
     // components/machine/clock.{h,c}) — Schmitt + floor + detector + ghost
     // gate + pulses-per-beat carried together. Drives the synced-record
     // workflow and the tempo stamp. PPQ is a Record-page setting (1/2/4/8).
-    clockin_t ci;
+    // (the detector is the CORE clock — clock_core(), clock.h)
     // ch1/2 idle ~21% up the scale by analog design (1V/oct jacks) — floor
     // trackers so matrix reads from them span the full range when patched
     int  cv12_floor[2];
@@ -179,11 +179,8 @@ typedef struct {
     uint16_t cv_hist[8][5];
     uint8_t  cv_hp;
     uint16_t cv_med[8];
-    volatile int clk_src;            // CV channel index (default 7 = CV8)
     // internal clock: drives the synced-record workflow when no external
     // clock is locked (external always wins). 0 = off. 4 ppb, like ext.
-    volatile float int_bpm;
-    uint32_t int_since;              // frames since the last internal pulse
 
     // clock-synced capture (audio-task-owned; reader consumes stamp_req).
     // With a locked clock: capture STARTS on a pulse (downbeat = frame 0)
