@@ -47,6 +47,7 @@ enum { ISM_CUTOFF = 0, ISM_RES, ISM_ENVCUT, ISM_LEVEL,
        ISM_PITCH, ISM_START, ISM_LOOPMOV, ISM_LOOPLEN, ISM_N };
 
 extern const char *const keys_mtx_labels[ISM_N];   // dest names (instsampler.c)
+extern const int8_t keys_mtx_defaults[ISM_N];      // default knob wiring (ABS entries)
 
 // one mapped sample region (v1 uses zone[0] only)
 typedef struct {
@@ -134,12 +135,10 @@ typedef struct {
     // mechanics to Synth; owns the old cv12_floor conditioning)
     cvmtx_t mtx;
 
-    // four macro knobs w/ takeover (Synth machinery); knob_ctx = -1 -> recapture
-    float knob_capt[4];
-    bool  knob_live[4];
+    // the four macro knobs (K5 start / K6 cutoff / K7 reso / K8 env>cut) are
+    // ABSOLUTE entries of the CV matrix since 2026-09-08 (keys_mtx_defaults)
     int8_t pitch_src;             // 1V/oct input, 0-7 = CV1-8 (preset "pcv", default CV1)
     int8_t gate_src;              // gate input, 8 = TR1 / 9 = TR2 (preset "gtr", default TR1)
-    int   knob_ctx;
 
     // live (UI)
     int   cv1_disp;

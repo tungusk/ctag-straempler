@@ -327,15 +327,15 @@ static void draw_dials(void)
     int cx[4] = { 40, 120, 200, 280 };   // recentred + slightly tighter for the bigger dials
     char v[16];
     snprintf(v, sizeof(v), "%.0f%%", inst.start_frac * 100.0f);
-    dial(cx[0], cy, r, inst.start_frac, "start", v, inst.knob_live[0], klive_focus(1));
+    dial(cx[0], cy, r, inst.start_frac, "start", v, inst.mtx.live[ISM_START], klive_focus(1));
     float cv = logf(inst.cutoff_base / 10.0f) / logf(600.0f);
     if (inst.cutoff_base >= 1000.0f) snprintf(v, sizeof(v), "%.1fk", inst.cutoff_base / 1000.0f);
     else                             snprintf(v, sizeof(v), "%.0f", inst.cutoff_base);
-    dial(cx[1], cy, r, cv, "cut", v, inst.knob_live[1], klive_focus(2));
+    dial(cx[1], cy, r, cv, "cut", v, inst.mtx.live[ISM_CUTOFF], klive_focus(2));
     snprintf(v, sizeof(v), "%.0f%%", inst.res01 * 100.0f);
-    dial(cx[2], cy, r, inst.res01, "res", v, inst.knob_live[2], klive_focus(3));
+    dial(cx[2], cy, r, inst.res01, "res", v, inst.mtx.live[ISM_RES], klive_focus(3));
     snprintf(v, sizeof(v), "%.0f%%", inst.env_to_cut * 100.0f);
-    dial(cx[3], cy, r, inst.env_to_cut, "env>f", v, inst.knob_live[3], klive_focus(4));
+    dial(cx[3], cy, r, inst.env_to_cut, "env>f", v, inst.mtx.live[ISM_ENVCUT], klive_focus(4));
 }
 
 // ---- ADSR curve (lifted from Synth) ----------------------------------------
@@ -385,8 +385,8 @@ static unsigned dials_sig(void)
          + (unsigned)(inst.start_frac * 1000.0f) * 17u
          + (unsigned)(inst.res01 * 1000.0f) * 29u
          + (unsigned)(inst.env_to_cut * 1000.0f) * 41u
-         + (inst.knob_live[0]?1u:0u) + (inst.knob_live[1]?2u:0u)
-         + (inst.knob_live[2]?4u:0u) + (inst.knob_live[3]?8u:0u);
+         + (inst.mtx.live[ISM_START]?1u:0u) + (inst.mtx.live[ISM_CUTOFF]?2u:0u)
+         + (inst.mtx.live[ISM_RES]?4u:0u) + (inst.mtx.live[ISM_ENVCUT]?8u:0u);
 }
 static unsigned adsr_sig(void)
 {
@@ -468,7 +468,7 @@ static void klive_edit(int dir)
             }
         } break;
     }
-    if (s_live_sel >= 1 && s_live_sel <= 4) inst.knob_ctx = -1;   // re-arm takeover
+    if (s_live_sel >= 1 && s_live_sel <= 4) cvmtx_rearm(&inst.mtx);   // re-arm takeover
 }
 
 // redraw the interactive elements (focus rings + values), no full-screen clear

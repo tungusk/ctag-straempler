@@ -46,6 +46,9 @@ static inline float cubic_read(const int16_t *b, uint32_t n, double pos)
 const char *const keys_mtx_labels[ISM_N] = {
     "Cutoff", "Reso", "Env>Cut", "Level", "Pitch", "Start", "LoopMov", "LoopLen"
 };
+// the panel knobs as ABSOLUTE matrix entries: K5 start offset, K6 cutoff,
+// K7 reso, K8 env>cut (CV5..8 = 4..7); takeover lives in cvmtx
+const int8_t keys_mtx_defaults[ISM_N] = { 5, 6, 7, -1, -1, 4, -1, -1 };
 
 // PSRAM is a 4 MB HARDWARE ceiling shared with the FX slabs (delay ~690 KB,
 // flanger ~90 KB, reverb tank ~170 KB) and with Tape, which wants up to 3.62 MB —
@@ -372,9 +375,8 @@ static esp_err_t keys_start(void)
     inst.glide = 0.0f;
     inst.level = 0.85f;
     inst.start_frac = 0.0f;
-    inst.knob_ctx = -1;           // force a knob recapture on the first block
     inst.pitch_src = 0; inst.gate_src = 8;   // CV1 / TR1 unless the preset says otherwise
-    cvmtx_init(&inst.mtx, keys_mtx_labels, ISM_N, NULL);   // matrix off, floors armed
+    cvmtx_init(&inst.mtx, keys_mtx_labels, ISM_N, keys_mtx_defaults);   // knobs as ABS entries, floors armed
     for (int i = 0; i < IS_MAX_ZONES; i++) {
         inst.zone[i].root = 48;
         inst.zone[i].loop_mode = LOOP_FWD;
@@ -422,31 +424,8 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     int cvm[8];
     for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&med[k], io->cv[k]);
 
-    // four macro knobs (ch5..8) with takeover: default holds until moved
-    float kn[4] = { (float)cvm[4]/4095.0f, (float)cvm[5]/4095.0f,
-                    (float)cvm[6]/4095.0f, (float)cvm[7]/4095.0f };
-    if (inst.knob_ctx != 0) {
-        inst.knob_ctx = 0;
-        for (int i = 0; i < 4; i++) { inst.knob_capt[i] = kn[i]; inst.knob_live[i] = false; }
-    }
-    for (int i = 0; i < 4; i++)
-        if (!inst.knob_live[i] && fabsf(kn[i] - inst.knob_capt[i]) > 0.03f) inst.knob_live[i] = true;
-    if (inst.knob_live[0]) inst.start_frac  = kn[0];                       // K5 = start offset
-    if (inst.knob_live[1]) inst.cutoff_base = 10.0f * powf(600.0f, kn[1]); // K6 = cutoff (log)
-    if (inst.knob_live[2]) inst.res01       = kn[2];                       // K7 = resonance
-    if (inst.knob_live[3]) inst.env_to_cut  = kn[3];                       // K8 = env>cut
-    // knob edits never reach the UI event queue: flag committed moves so the
-    // autosave picks them up (hysteresis — live knobs track every block)
-    {
-        static float s_kdirty[4] = {-1, -1, -1, -1};
-        for (int i = 0; i < 4; i++)
-            if (inst.knob_live[i] &&
-                (s_kdirty[i] < 0 || fabsf(kn[i] - s_kdirty[i]) > 0.03f)) {
-                s_kdirty[i] = kn[i];
-                machine_state_dirty();
-            }
-    }
-
+    // the macro knobs are ABSOLUTE matrix entries now (keys_mtx_defaults);
+    // the takeover + apply happen in the CV matrix section below
     inst.cv1_disp = cvm[0];
     float note;
     if (audio_midi_gate()) {                          // web MIDI wins while held
@@ -468,12 +447,23 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     if (!z->frames && inst.zone[0].frames) z = &inst.zone[0];
     inst.note_disp = note;
 
-    cvmtx_track(&inst.mtx, cvm);                      // ch1/2 idle-floor follow
+    cvmtx_track(&inst.mtx, cvm);                      // ch1/2 idle-floor follow + ABS takeover
+    // ABSOLUTE entries (the knobs by default): the source REPLACES the base
+    // once moved past the threshold — the old K5..K8 code, same curves
+    float kk;
+    if (cvmtx_abs(&inst.mtx, ISM_START, &kk))  inst.start_frac  = kk;
+    if (cvmtx_abs(&inst.mtx, ISM_CUTOFF, &kk)) inst.cutoff_base = 10.0f * powf(600.0f, kk);   // log
+    if (cvmtx_abs(&inst.mtx, ISM_RES, &kk))    inst.res01       = kk;
+    if (cvmtx_abs(&inst.mtx, ISM_ENVCUT, &kk)) inst.env_to_cut  = kk;
 
     // ---- CV matrix -> per-destination modulation on top of the base ----
     float m_cut = 0, m_res = 0, m_e2c = 0, m_lvl = 0, m_semi = 0, m_start = 0, m_lmov = 0, m_llen = 0;
     for (int d = 0; d < ISM_N; d++) {
-        float av = cvmtx_val(&inst.mtx, cvm, d);      // amt * conditioned CV
+        float av = cvmtx_val(&inst.mtx, cvm, d);      // amt * conditioned CV (0 for ABS entries)
+        // an ABS source on Level / Pitch / LoopMov / LoopLen acts as a bipolar
+        // knob around centre, through the same offset scaling
+        if (av == 0.0f && (d == ISM_LEVEL || d == ISM_PITCH || d == ISM_LOOPMOV || d == ISM_LOOPLEN)
+            && cvmtx_abs(&inst.mtx, d, &kk)) av = (kk - 0.5f) * 2.0f;
         if (av == 0.0f) continue;
         switch (d) {
             case ISM_CUTOFF:  m_cut   += av * 4000.0f; break;
@@ -772,12 +762,12 @@ static void keys_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "pcv")) && cJSON_IsNumber(j)) inst.pitch_src = (int8_t)(j->valueint & 7);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "gtr")) && cJSON_IsNumber(j)) inst.gate_src = (j->valueint == 9) ? 9 : 8;
     cvmtx_load(&inst.mtx, node);   // "mxs"/"mxa", with the legacy "msrc"/"mamt" fallback
-    inst.knob_ctx = -1;   // re-arm knob takeover against the loaded values
+    cvmtx_rearm(&inst.mtx);   // re-arm knob takeover against the loaded values
 }
 
 // ---- named patch files: usr/keys/PAT_NNN.jsn (shared preset_store) ---------
 // The autosave (de)serializers above do the state work; keys_preset_load
-// already re-arms knob takeover (knob_ctx = -1) and reloads the sample.
+// already re-arms knob takeover (cvmtx_rearm) and reloads the sample.
 static const preset_store_t KS_PS = { "/sdcard/usr/keys", "PAT_" };
 
 int keys_patch_save(char *id_out, size_t n)
@@ -806,10 +796,7 @@ static int keys_inputs(machine_input_t *o, int max)
     int n = 0;
     MI_ADD(mi_pick("Pitch (V/oct)", "pcv", inst.pitch_src, 0, MI_CV));
     MI_ADD(mi_pick("Gate", "gtr", inst.gate_src, 8, MI_TR));
-    MI_ADD(mi("K5 start offset", 4));
-    MI_ADD(mi("K6 cutoff", 5));
-    MI_ADD(mi("K7 resonance", 6));
-    MI_ADD(mi("K8 env>cutoff", 7));
+    // K5..K8 are ABSOLUTE matrix entries (mxs/mxm), not fixed jobs
     return n;
 }
 
