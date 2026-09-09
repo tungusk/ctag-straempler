@@ -197,19 +197,45 @@ persisted as `"machine"` in CONFIG.JSN). Plan + full history:
   `menu.c`) but stays in the registry as fallback + proof target; the selector
   uses a parallel `machines[18]` array so hidden entries don't desync the
   on-screen index.
+- **THE CORE CLOCK** (2026-09-08, `components/machine/clock.{h,c}`
+  `clock_core_*`): ONE clock interpreter for the whole module, owned by the
+  core and ticked in the audio task right after beatlisten and before the
+  active machine's `process()`. **Machines must not run a detector of their
+  own** — they read `clock_core()` (a `const clockin_t *`: `clk.locked`,
+  `clk.period/since/bpm`, `oct`, `ppb`), `clock_core_edge()` (accepted edge
+  this block), `clock_core_pulses()`, `clock_core_beat_bpm()`. The lock
+  survives machine switches. Source / pulses-per-beat / internal BPM /
+  auto-fallback are MODULE-WIDE settings (CONFIG.JSN `clk_src` default 3 =
+  CV4, `clk_ppq` 4, `clk_bpm` 120, `clk_auto` 0), read at boot in ui.c, live
+  on `GET/POST /settings`, reported in `/status` as `clk {src,lock,bpm,ppq,
+  fb,pulses}`. INT = the core's own pulse generator fed through the SAME
+  detector (so it locks and phase math works unchanged); OFF never locks;
+  `clk_auto` lets INT stand in ~2 s after an external source goes quiet
+  (immediately when the source has never fired), handing back on the jack's
+  first edge. A machine's Setup rows for clock source / PPQ / BPM edit the
+  global through `components/menu/clock_ui.{h,c}` (apply live, persist on
+  the autosave debounce — never `configSetIntSetting` per detent; the AUDIO
+  pick wakes the beat listener there too). Per-machine preset keys `clk`/
+  `clk_src`/`ppb`/`ppq`/`mbpm`/`int_bpm` are no longer written and are
+  IGNORED on load: a preset must not silently repoint the module's clock.
+  Machines that assumed 1 pulse per beat (Glitch's divisions) derive the
+  beat from `period x clockin_ppb_eff()`.
 - **Machine INPUT MAP** (2026-09-08): `machine_t.inputs(machine_input_t *out,
   int max)` describes what each front-panel input does OUTSIDE the assignable
-  CV matrix — `mi("K6 cutoff", 5)` for a fixed job, `mi_pick("Clock", "clk_src",
-  cur, dflt, MI_CV|MI_CLK)` for an EDITABLE pick whose preset key the web page
+  CV matrix — `mi("K6 cutoff", 5)` for a fixed job, `mi_pick("Gate", "gtr",
+  cur, dflt, MI_TR)` for an EDITABLE pick whose preset key the web page
   writes back through `POST /remote/params` (opts bits: `MI_CV` CV1-8, `MI_TR`
-  TR1/2, `MI_CLK` AUDIO/INT/OFF; source encoding = clock.h's). `GET
-  /remote/params` appends it as `"imap"`; the Remote tab's CV MATRIX card
-  renders it per input row (fixed = chip, pick = dropdown, Reset = defaults +
-  matrix cleared). Called from httpd — read state only. Editable today: clock
-  source (every clocked machine), Synth/Keys pitch + gate (`pcv`/`gtr`), Tape
-  play/record gates (`ptr`/`rtr`), DoubleDecker's CV map. A new machine
-  should describe its CV/TR reads here or the web page shows them as
-  unassigned.
+  TR1/2, `MI_CLK` AUDIO/INT/OFF, `MI_GLOBAL` = a module-wide setting the page
+  posts to `/settings` instead; source encoding = clock.h's). `GET
+  /remote/params` appends it as `"imap"` and the CORE adds the one Clock entry
+  itself (`clk_src`, MI_GLOBAL) — machines never list a clock. The Remote
+  tab's CV MATRIX card renders it per input row (fixed = chip, pick =
+  dropdown, Reset = defaults + matrix cleared); the CLOCK card (between CV
+  MATRIX and MACHINE) edits the same setting with a live lock/tempo readout.
+  Called from httpd — read state only. Editable today: Synth/Keys pitch +
+  gate (`pcv`/`gtr`), Tape play/record gates (`ptr`/`rtr`), DoubleDecker's CV
+  map. A new machine should describe its CV/TR reads here or the web page
+  shows them as unassigned.
 - **Machine web URIs**: a machine may publish REST endpoints served only while
   it is active (`machine_ui_t.web_uris` = `const httpd_uri_t[]`); the core
   registers/unregisters them on switch via `machine_set_web_cb()`
@@ -460,11 +486,11 @@ The machines (all working; archives in `bin/`):
   unification): `beatclock_t` detector (median ring, octave/spurious guards,
   faster-clock escape) + `clockin_t` conditioned front-end (floor-tracked
   Schmitt, ppb-scaled sanity gates, AC-tail ghost gate, raw-fire diagnostics).
-  ALL clock consumers — sampler3, deck, tracker, looper, glitch — go through
-  `clockin_block()`; no machine carries a private Schmitt or feeds raw CV to
-  the detector anymore. `clockin_set_ppb()` on a real ppb change drops the
-  lock for a clean 2-pulse relock. Deck + tracker lock quality re-verified by
-  Scarlett A/B capture after the migration.
+  Since 2026-09-08 the ONE instance is the core's (`clock_core_*`, see the
+  CORE CLOCK bullet above); no machine ticks a detector at all. `clockin_set_ppb()`
+  on a real ppb change drops the lock for a clean 2-pulse relock. Deck +
+  tracker lock quality re-verified by Scarlett A/B capture after the 07-13
+  migration (the 09-08 move is a pointer swap on the same detector).
 - `components/util/sample_ram.{h,c}` — `sample_list()` / `sample_load()` +
   `sample_list_shared()` (one sorted 224-entry browser list shared by
   slicer/granular — per-menu `[32]` caps silently hid fresh uploads)

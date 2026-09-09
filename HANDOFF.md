@@ -43,6 +43,42 @@ Unit 1 (.227) untouched.
   record on the same TR.
 - Antenna 20 dBm/RSSI experiment still parked in `git stash@{0}`.
 
+## 2026-09-08 PM — THE CORE CLOCK (one clock interpreter, system side)
+
+Commits `aa10619..` on `v09-machines`; **.85 runs this build** (OTA'd, boot
+clean, `reset=sw`). Bail point before the series: tag `pre-core-clock-20260908`
+(= `67c15b4`, the build on .85 before this = `9e7e031` code).
+
+- **What changed**: the shared detector code (`clock.c`) is now ONE INSTANCE
+  owned by the core (`clock_core_*`), ticked in the audio task after
+  beatlisten, before the machine. All seven clocked machines (Tape, Deck,
+  DoubleDecker, Tracker, Glitch, Looper, Sampler3) dropped their private
+  `clockin_t`/`clk_src`/ppb and read `clock_core()`. The lock survives
+  machine switches (verified: INT lock rode Tape→Deck→Looper→Glitch→Tape,
+  pulses monotonic). Sampler3's private metronome and Tape's manual BPM are
+  now the core's INT source / `clk_auto` fallback.
+- **Settings** (CONFIG.JSN, `GET/POST /settings`): `clk_src` (default 3 =
+  CV4, Arlo's 07-26 intent; unit 1's CV4 jack is broken — set CV1 there once
+  it gets this build), `clk_ppq` 1/2/4/8 (default 4 = Arlo's 16ths clock),
+  `clk_bpm` (INT / fallback tempo), `clk_auto` 0/1. Machine Setup rows write
+  through via `components/menu/clock_ui.{h,c}` (persist on the autosave
+  debounce). `/status` gains `clk {src,lock,bpm,ppq,fb,pulses}`.
+- **Remote tab**: new CLOCK card between CV MATRIX and MACHINE (source / ppq /
+  int bpm / fallback checkbox, live "CV4 LOCK 120.0 bpm" readout); the CV
+  MATRIX clock row is the same setting (a global pick, `MI_GLOBAL`, posted to
+  `/settings`); the ·CLK tag follows the core source. Machines no longer list
+  a Clock in `inputs()` — the core appends it. Closes the "Reset on Tape moves
+  the clock" nit.
+- **Verified over REST + browser**: INT locks at 120.2 (block-quantized
+  period, same as any source); ppq change relocks; fallback stands in within
+  a second when the jack never fired (2 s after a live clock stops) and
+  releases; settings persist. NOT yet verified by ear: a real clock into CV4
+  (Arlo to patch), Tracker sync on the core clock, Glitch divisions (now
+  beat-derived: `period x ppb_eff`), Deck `clk_scale` (now a deck-side
+  multiplier only, no longer fed to the detector gates).
+- **Next**: CV matrix stage 3 (knob jobs K5-K8 as cvmtx entries with an
+  ABSOLUTE/takeover mode, Synth/Keys/Tape first; Tape needs a Reso dest).
+
 ## 2026-09-08 PM — E-mu panel: one-off fabrication QUOTED
 
 - **Front Panel Express: $63.08 bare / $89.72 with full-panel UV print**,
