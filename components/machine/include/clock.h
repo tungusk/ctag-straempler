@@ -126,3 +126,28 @@ static inline float clockin_beat_bpm(const clockin_t *ci)
     float p = clockin_ppb_eff(ci);
     return (ci->clk.locked && ci->clk.bpm > 0 && p > 0) ? ci->clk.bpm / p : 0;
 }
+
+// ---- the CORE clock (2026-09-08) -----------------------------------------------
+// ONE clock interpreter for the whole module, owned by the core and ticked by the
+// audio task before the active machine's process() (right after beatlisten, whose
+// synthesized level it can consume). Machines READ it (clock_core()) and must not
+// run a detector of their own: the lock survives machine switches, "the module's
+// tempo" exists in exactly one place, and the source / pulses-per-beat / internal
+// BPM are GLOBAL settings (CONFIG.JSN clk_src / clk_ppq / clk_bpm / clk_auto,
+// persisted by whoever calls the setters — ui.c at boot, /settings, machine Setup
+// rows write through). Sources: CV1-8 / TR1-2 / AUDIO as before; INT = the core's
+// own pulse generator at int_bpm x ppb fed through the SAME detector, so
+// locked/period/since behave identically and every machine's phase math works
+// unchanged; OFF = no clock (never locks). AUTO fallback (clk_auto): with an
+// external source selected and no lock for ~2 s, the INT pulses take over until
+// the external source shows an edge again (external always wins).
+const clockin_t *clock_core(void);                    // read-only view for machines
+void  clock_core_block(const machine_io_t *io, int frames);   // AUDIO TASK ONLY
+bool  clock_core_edge(void);        // accepted (ghost-gated) edge in the last block
+uint32_t clock_core_pulses(void);   // accepted-edge counter (bar math, pre/post compares)
+int   clock_core_src(void);         void clock_core_set_src(int src);     // CLK_SRC_*
+float clock_core_ppb(void);         void clock_core_set_ppb(float ppb);   // 1/2/4/8
+float clock_core_int_bpm(void);     void clock_core_set_int_bpm(float bpm);
+bool  clock_core_auto(void);        void clock_core_set_auto(bool on);    // INT fallback
+bool  clock_core_fallback(void);    // INT pulses currently standing in for the source
+float clock_core_beat_bpm(void);    // locked ? detected BEAT tempo : 0 (INT locks too)

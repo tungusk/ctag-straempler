@@ -24,6 +24,7 @@
 #include "menu_config.h"
 #include "machine.h"
 #include "beatlisten.h"
+#include "clock.h"        // the core clock (/settings, /status)
 #include "tuner.h"
 #include "strampler_version.h"
 #include "recording.h"
@@ -802,6 +803,12 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     if ((j = cJSON_GetObjectItem(settings, "txpwr")))   cJSON_AddNumberToObject(out, "txpwr", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "encres")))  cJSON_AddNumberToObject(out, "encres", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "encdir")))  cJSON_AddNumberToObject(out, "encdir", j->valuedouble);
+    // the CORE clock (clock.h): report the LIVE values, which equal the persisted
+    // ones except on a fresh card where the defaults apply
+    cJSON_AddNumberToObject(out, "clk_src",  clock_core_src());
+    cJSON_AddNumberToObject(out, "clk_ppq",  (int)(clock_core_ppb() + 0.5f));
+    cJSON_AddNumberToObject(out, "clk_bpm",  (int)(clock_core_int_bpm() + 0.5f));
+    cJSON_AddNumberToObject(out, "clk_auto", clock_core_auto() ? 1 : 0);
     // NOTE: password intentionally omitted
 
     char *s = cJSON_PrintUnformatted(out);
@@ -917,6 +924,30 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         gpioSetEncoderDirection(rev);
     }
 
+    // the CORE clock's global settings (clock.h): applied live, persisted.
+    // clk_src = CLK_SRC_* (0-7 CV, 8/9 TR, 10 AUDIO, 11 INT, 12 OFF);
+    // clk_ppq = pulses per beat 1/2/4/8; clk_bpm = INT/fallback tempo;
+    // clk_auto = INT stands in while an external source is unlocked
+    {
+        static const char *const ck[4] = { "clk_src", "clk_ppq", "clk_bpm", "clk_auto" };
+        for (int i = 0; i < 4; i++) {
+            if (!(j = cJSON_GetObjectItem(in, ck[i])) || !cJSON_IsNumber(j)) continue;
+            int v = j->valueint;
+            bool ok = true;
+            switch (i) {
+                case 0: ok = (v >= 0 && v < CLK_SRC_COUNT); if (ok) clock_core_set_src(v); break;
+                case 1: ok = (v == 1 || v == 2 || v == 4 || v == 8); if (ok) clock_core_set_ppb((float)v); break;
+                case 2: ok = (v >= 20 && v <= 300); if (ok) clock_core_set_int_bpm((float)v); break;
+                case 3: v = v ? 1 : 0; clock_core_set_auto(v != 0); break;
+            }
+            if (!ok) continue;
+            if (cJSON_GetObjectItem(settings, ck[i]))
+                cJSON_ReplaceItemInObject(settings, ck[i], cJSON_CreateNumber(v));
+            else
+                cJSON_AddNumberToObject(settings, ck[i], v);
+        }
+    }
+
     // capture the final credentials before cfg is freed (same flow as the menu
     // settings path: save, then reconnect with the new config)
     wifi_config_t wifi_config;
@@ -995,14 +1026,22 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     uint32_t sav_us = 0, sav_n = 0;
     audio_save_stats(&sav_us, &sav_n);
 
+    // the CORE clock: source, lock, BEAT tempo, ppq, fallback, accepted pulses
+    // (the Remote tab's CLOCK card readout; bench scripts read it here too)
+    const clockin_t *cc = clock_core();
+    char clk[112];
+    snprintf(clk, sizeof(clk), ",\"clk\":{\"src\":%d,\"lock\":%d,\"bpm\":%.2f,\"ppq\":%d,\"fb\":%d,\"pulses\":%u}",
+             clock_core_src(), cc->clk.locked ? 1 : 0, (double)clock_core_beat_bpm(),
+             (int)(cc->ppb + 0.5f), clock_core_fallback() ? 1 : 0, (unsigned)clock_core_pulses());
+
     // build compact JSON by hand to avoid cJSON overhead in hot path
-    char buf[720];
+    char buf[860];
     int n = snprintf(buf, sizeof(buf),
         "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
         "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u,"
         "\"vu\":[%u,%u,%u,%u],"
         "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u,\"auspk\":%u,"
-        "\"ausgap\":%u,\"sav\":{\"us\":%u,\"n\":%u},\"fxpk\":%d%s%s}",
+        "\"ausgap\":%u,\"sav\":{\"us\":%u,\"n\":%u},\"fxpk\":%d%s%s%s}",
         m ? m->name : "",
         rec ? "true" : "false",
         st.v0, st.v1,
@@ -1012,7 +1051,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
         st.vu[0], st.vu[1], st.vu[2], st.vu[3],
         bl.mode, bl.state, (double)bl.bpm, (double)bl.conf, bl.cost_us,
         audio_proc_us(), audio_proc_peak_us(true), audio_loop_gap_us(true),
-        sav_us, sav_n, fpk[AUDIO_FX_STAGES - 1], fxst, tun);
+        sav_us, sav_n, fpk[AUDIO_FX_STAGES - 1], fxst, tun, clk);
     (void)n;
     send_json(req, buf);
     return ESP_OK;

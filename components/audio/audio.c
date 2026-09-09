@@ -19,6 +19,7 @@
 #include "recording.h"
 #include "machine.h"
 #include "beatlisten.h"
+#include "clock.h"                       // clock_core_block
 #include "tuner.h"
 #include "spi_per.h"
 #include "i2s_per.h"
@@ -643,6 +644,9 @@ static void audio_task(void *pvParams)
         beatlisten_push(in);
         // chromatic tuner: the same core input tap, OFF by default (one branch)
         tuner_push(in);
+        // the CORE clock: one detector for the whole module, ticked here so the
+        // machine reads this block's lock/phase (clock.h, 2026-09-08)
+        clock_core_block(&io, MACHINE_BLOCK / 2);
 
         // AUDIO-LOOP GAP — the peak interval between consecutive blocks. `aus`
         // times how long process() TAKES, which cannot see the task being LATE:

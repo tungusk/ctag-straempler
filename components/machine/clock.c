@@ -254,3 +254,150 @@ bool clockin_block(clockin_t *ci, uint16_t cv, int frames)
     }
     return edge;
 }
+
+// ---- the CORE clock ---------------------------------------------------------------
+// See clock.h. One instance; the audio task ticks it, everyone else reads. The
+// setters are called from the UI / httpd tasks — plain stores, the same benign
+// races the per-machine clk_src fields always had.
+#define CC_FALLBACK_FR   (CLK_RATE * 2)   // unlocked this long -> INT stands in
+
+typedef struct {
+    clockin_t ci;
+    int      src;          // CLK_SRC_*
+    float    int_bpm;      // INT generator / fallback tempo
+    bool     auto_fb;      // clk_auto
+    bool     fallback;     // INT currently standing in for an external source
+    bool     edge;         // accepted edge in the last block
+    uint32_t pulses;       // accepted edges since boot
+    uint32_t int_ph;       // INT generator phase (frames into the pulse period)
+    // external-activity watch for the fallback hand-back: its own tiny
+    // floor-tracked Schmitt, because while INT stands in the detector sees
+    // INT pulses, not the jack
+    int      ext_base;
+    bool     ext_high;
+    uint32_t ext_idle;     // frames since the external line last fired
+    bool     inited;
+} clock_core_t;
+
+static clock_core_t s_cc;
+
+static void cc_ensure(void)
+{
+    if (s_cc.inited) return;
+    s_cc.inited = true;
+    s_cc.src = 3;            // CV4: jack-only, collides with no knob (Arlo 2026-07-26)
+    s_cc.int_bpm = 120.0f;
+    s_cc.auto_fb = false;
+    s_cc.ext_base = 4095;
+    s_cc.ext_idle = 1u << 30;
+    clockin_reset(&s_cc.ci, 4.0f);
+}
+
+const clockin_t *clock_core(void)      { cc_ensure(); return &s_cc.ci; }
+bool  clock_core_edge(void)            { return s_cc.edge; }
+uint32_t clock_core_pulses(void)       { return s_cc.pulses; }
+int   clock_core_src(void)             { cc_ensure(); return s_cc.src; }
+float clock_core_ppb(void)             { cc_ensure(); return s_cc.ci.ppb; }
+float clock_core_int_bpm(void)         { cc_ensure(); return s_cc.int_bpm; }
+bool  clock_core_auto(void)            { cc_ensure(); return s_cc.auto_fb; }
+bool  clock_core_fallback(void)        { return s_cc.fallback; }
+float clock_core_beat_bpm(void)        { cc_ensure(); return clockin_beat_bpm(&s_cc.ci); }
+
+static void cc_relock(void)
+{
+    // a source change is a deliberate moment: drop the lock and relock clean
+    // (the clockin_set_ppb "changed" branch, without touching the gates)
+    s_cc.ci.clk.ring_n = 0;
+    s_cc.ci.clk.period = 0;
+    s_cc.ci.clk.locked = false;
+    s_cc.ci.clk.bpm = 0.0f;
+    s_cc.ci.clk.ghost_run = 0;
+    s_cc.ci.clk.split_run = 0;
+    s_cc.ci.edge_since = 1u << 30;
+    s_cc.ci.base = 4095;
+    s_cc.ci.high = false;
+    s_cc.int_ph = 0;
+}
+
+void clock_core_set_src(int src)
+{
+    cc_ensure();
+    if (src < 0 || src >= CLK_SRC_COUNT) src = 3;
+    if (src == s_cc.src) return;
+    s_cc.src = src;
+    s_cc.fallback = false;
+    s_cc.ext_base = 4095; s_cc.ext_high = false; s_cc.ext_idle = 1u << 30;
+    cc_relock();
+}
+
+void clock_core_set_ppb(float ppb)
+{
+    cc_ensure();
+    clockin_set_ppb(&s_cc.ci, ppb);   // drops the lock itself on an actual change
+}
+
+void clock_core_set_int_bpm(float bpm)
+{
+    cc_ensure();
+    if (bpm < 20.0f) bpm = 20.0f;
+    if (bpm > 300.0f) bpm = 300.0f;
+    s_cc.int_bpm = bpm;
+}
+
+void clock_core_set_auto(bool on)
+{
+    cc_ensure();
+    s_cc.auto_fb = on;
+    if (!on && s_cc.fallback) { s_cc.fallback = false; cc_relock(); }
+}
+
+// the INT pulse generator: a 50 % square at int_bpm x ppb pulses per minute,
+// advanced by `frames`, returned as a 0/4095 level for the detector
+static uint16_t cc_int_level(int frames)
+{
+    float ppm = s_cc.int_bpm * (s_cc.ci.ppb > 0 ? s_cc.ci.ppb : 1.0f);
+    uint32_t period = (uint32_t)((float)CLK_RATE * 60.0f / ppm);
+    if (period < 64) period = 64;
+    s_cc.int_ph += (uint32_t)frames;
+    if (s_cc.int_ph >= period) s_cc.int_ph -= period;
+    if (s_cc.int_ph >= period) s_cc.int_ph = 0;          // period shrank under us
+    return (s_cc.int_ph < period / 2) ? 4095 : 0;
+}
+
+void clock_core_block(const machine_io_t *io, int frames)
+{
+    cc_ensure();
+    uint16_t level;
+    if (s_cc.src == CLK_SRC_INT) {
+        level = cc_int_level(frames);
+    } else if (s_cc.src == CLK_SRC_OFF) {
+        level = 0;
+    } else {
+        uint16_t ext = clock_source_level(s_cc.src, io);
+        // external-activity watch (fallback bookkeeping only)
+        if ((int)ext < s_cc.ext_base) s_cc.ext_base = ext;
+        else if (s_cc.ext_base < 4095) s_cc.ext_base++;
+        bool fired = false;
+        if (!s_cc.ext_high) {
+            if ((int)ext >= s_cc.ext_base + 900) { s_cc.ext_high = true; fired = true; }
+        } else if ((int)ext < s_cc.ext_base + 350) {
+            s_cc.ext_high = false;
+        }
+        if (s_cc.ext_idle < (1u << 30)) s_cc.ext_idle += (uint32_t)frames;
+        if (fired) s_cc.ext_idle = 0;
+
+        if (s_cc.auto_fb) {
+            if (s_cc.fallback) {
+                if (fired) { s_cc.fallback = false; cc_relock(); }   // the jack is back
+            } else if (!s_cc.ci.clk.locked && s_cc.ext_idle >= CC_FALLBACK_FR) {
+                s_cc.fallback = true; cc_relock();                    // stand in
+            }
+        } else if (s_cc.fallback) {
+            s_cc.fallback = false; cc_relock();
+        }
+        level = s_cc.fallback ? cc_int_level(frames) : ext;
+    }
+    bool edge = clockin_block(&s_cc.ci, level, frames);
+    s_cc.edge = edge;
+    if (edge) s_cc.pulses++;
+}

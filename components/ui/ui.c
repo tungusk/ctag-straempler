@@ -17,6 +17,7 @@
 #include "disp_lock.h"
 #include "menu.h"
 #include "menu_config.h"
+#include "clock.h"          // core clock settings at boot
 #include "freesound.h"
 #include "mp3.h"
 #include "wifi.h"
@@ -236,6 +237,12 @@ void initUI(){
     // (rest at one state — they double-step at 2). AFTER mountSDStorage().
     initGPIO(ui_ev_queue, configGetIntSetting("encres", 2));
     gpioSetEncoderDirection(configGetIntSetting("encdir", 0)); // 1 = reversed lot
+    // the CORE clock's global settings (clock.h): source (CLK_SRC_*; 3 = CV4),
+    // pulses per beat, internal BPM, auto-fallback to INT when unlocked
+    clock_core_set_src(configGetIntSetting("clk_src", 3));
+    clock_core_set_ppb((float)configGetIntSetting("clk_ppq", 4));
+    clock_core_set_int_bpm((float)configGetIntSetting("clk_bpm", 120));
+    clock_core_set_auto(configGetIntSetting("clk_auto", 0) != 0);
 
     initAudio();
     initMenu(ui_ev_queue);
