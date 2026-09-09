@@ -72,8 +72,7 @@ typedef struct {
     volatile bool sync;            // follow the external CV clock
     volatile bool amiga;           // Amiga (nearest+wide) vs Clean (spline+narrow)
     volatile bool show_text;       // Live page shows the sample-name message panel
-    volatile int  clk_src;         // CV channel of the clock
-    volatile int  ppb_idx;         // pulses-per-beat index into trk_ppb[]
+    // clock source + pulses-per-beat: the CORE clock's (clock_core(), clock.h)
     volatile bool sound_dirty;     // menu flipped amiga → render re-applies
 
     // --- sequence loop ("loop mode": a live step-region loop, PO/KO-II style) ---
@@ -113,7 +112,6 @@ typedef struct {
     // CV clock (process fills, render reads for sync) — the shared
     // conditioned front-end (clock.h): floor-tracked Schmitt + ppb-scaled
     // gates replace the private near-copy of the deck pattern
-    clockin_t ci;
     float tf_cur;                  // current tempo factor (render-owned)
     int   ph_row, ph_frame, ph_speed;  // last rendered row/tick position
                                        // (render-owned; feeds the sync phase pull)
@@ -136,13 +134,11 @@ typedef struct {
 } trk_state_t;
 
 extern trk_state_t trk;
-extern const float trk_ppb[5];
 // RAW ppb feeds the detector's sanity gates; EFFECTIVE (x the octave fold)
 // feeds tempo math — mixing them makes the fold move the gates and the lock
 // never settles (bench-caught on the deck).
-#define TRK_PPB_RAW() (trk_ppb[trk.ppb_idx])
-#define TRK_PPB_EFF() (trk_ppb[trk.ppb_idx] * (trk.ci.oct > 0 ? trk.ci.oct : 1.0f))
-extern const char *const trk_ppb_names[5];
+#define TRK_PPB_RAW() (clock_core_ppb())
+#define TRK_PPB_EFF() (clockin_ppb_eff(clock_core()))
 
 // render-task-only libxmp entry (implemented in tracker.c, called by menu)
 int  tracker_list_modules(char (**out)[TRK_NAME_LEN]);   // browser list

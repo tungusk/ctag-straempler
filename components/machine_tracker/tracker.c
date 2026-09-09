@@ -24,8 +24,6 @@
 static const char *TAG = "TRACKER";
 
 trk_state_t trk;
-const float trk_ppb[5] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f};
-const char *const trk_ppb_names[5] = {"1 per 4 beats", "1 per 2 beats", "1 per beat", "2 per beat", "4 per beat"};
 
 static volatile bool s_run = false, s_alive = false;
 static bool s_logged_play = false;   // one-shot stack-watermark log per load
@@ -373,7 +371,7 @@ static void render_task(void *pv)
         // nudge latency; revert to /2 if S starts climbing in /status).
         // (Module is fully in PSRAM — no SD latency needs a big read-ahead.)
         uint32_t fill_ahead = (trk.loop_engage ||
-                               (trk.sync && trk.ci.clk.locked))
+                               (trk.sync && clock_core()->clk.locked))
                                   ? (uint32_t)(TRK_RATE / 4)
                                   : (uint32_t)(TRK_RATE / 2);
         bool room = (trk.wpos - trk.rpos) < fill_ahead;
@@ -387,8 +385,8 @@ static void render_task(void *pv)
                 // CV6 (position across the song). Tempo-syncs like normal play
                 // (the loop rides the external clock too).
                 int lb = trk.cur_bpm > 0 ? trk.cur_bpm : trk.mod_bpm;
-                if (trk.sync && trk.ci.clk.locked && trk.ci.clk.bpm > 0 && lb > 0) {
-                    float ext_beat = trk.ci.clk.bpm / TRK_PPB_EFF();
+                if (trk.sync && clock_core()->clk.locked && clock_core()->clk.bpm > 0 && lb > 0) {
+                    float ext_beat = clock_core()->clk.bpm / TRK_PPB_EFF();
                     float tgt = (float)lb / ext_beat;   // time factor: live mod bpm / ext
                     if (tgt < 0.5f) tgt = 0.5f;
                     if (tgt > 2.0f) tgt = 2.0f;
@@ -414,7 +412,7 @@ static void render_task(void *pv)
                 // the start follows for free — it is always a multiple of the
                 // length (block math below). Free-running keeps raw row lengths.
                 int rpb = 1;
-                if (trk.sync && trk.ci.clk.locked) {
+                if (trk.sync && clock_core()->clk.locked) {
                     rpb = 24 / spd;
                     if (rpb < 1) rpb = 1;
                     int snapped = ((len + rpb / 2) / rpb) * rpb;   // nearest beat
@@ -436,7 +434,7 @@ static void render_task(void *pv)
                 // identical bug the deck had). Growing a loop must keep the start
                 // and extend the END. So the start moves ONLY when CV6 moves.
                 uint32_t snap = 1;
-                if (trk.sync && trk.ci.clk.locked && rpb > 1) snap = (uint32_t)rpb;
+                if (trk.sync && clock_core()->clk.locked && rpb > 1) snap = (uint32_t)rpb;
                 if (!cv6_grabbed &&
                     (trk.loop_pos_cv - cv6_engage > 120 || cv6_engage - trk.loop_pos_cv > 120)) {
                     cv6_grabbed = true;              // the knob MOVED: it owns the window
@@ -492,8 +490,8 @@ static void render_task(void *pv)
                 // tempo factor (pitch-preserving). Slew so clock jitter drifts
                 // instead of warbling. Nominal factor 1.0 when unsynced/unlocked.
                 int live_bpm = trk.cur_bpm > 0 ? trk.cur_bpm : trk.mod_bpm;
-                if (trk.sync && trk.ci.clk.locked && trk.ci.clk.bpm > 0 && live_bpm > 0) {
-                    float ext_beat = trk.ci.clk.bpm / TRK_PPB_EFF();
+                if (trk.sync && clock_core()->clk.locked && clock_core()->clk.bpm > 0 && live_bpm > 0) {
+                    float ext_beat = clock_core()->clk.bpm / TRK_PPB_EFF();
                     // xmp_set_tempo_factor is a TIME multiplier (bigger = slower),
                     // bench-verified inverted 2026-07-11 — so the ratio is mod/ext.
                     // LIVE bpm, not load-time: IT songs change tempo mid-song and
@@ -507,14 +505,14 @@ static void render_task(void *pv)
                     // audible position trails the render by the ring lead, so
                     // subtract it. Compare in PULSE phase (like the deck) so
                     // clock mult/div keeps working.
-                    if (trk.ph_speed > 0 && trk.ci.clk.period > 0) {
+                    if (trk.ph_speed > 0 && clock_core()->clk.period > 0) {
                         float beat_fr = 44100.0f * 60.0f / ext_beat;
                         float ph_r = fmodf((float)trk.ph_row * (float)trk.ph_speed
                                            + (float)trk.ph_frame, 24.0f) / 24.0f;
                         float lead_b = (float)(trk.wpos - trk.rpos) / beat_fr;
                         float p_trk = (ph_r - lead_b) * TRK_PPB_EFF();
                         p_trk -= floorf(p_trk);
-                        float p_ext = (float)trk.ci.clk.since / (float)trk.ci.clk.period;
+                        float p_ext = (float)clock_core()->clk.since / (float)clock_core()->clk.period;
                         if (p_ext > 1.0f) p_ext = 1.0f;
                         float err = p_ext - p_trk;          // >0: rows behind the clock
                         if (err > 0.5f)  err -= 1.0f;
@@ -562,13 +560,13 @@ static void render_task(void *pv)
                 // (a fractional jump would be pulled straight back out).
                 // Known flag (plan): speeds >12 at ppb x4 overshoot via the
                 // min-1-row clamp; the bounded pull absorbs the residue.
-                if (trk.nudge_req != 0 && trk.sync && trk.ci.clk.locked &&
+                if (trk.nudge_req != 0 && trk.sync && clock_core()->clk.locked &&
                     last_norm_row >= 0 && fi.row != last_norm_row &&
                     fi.speed > 0 && trk.total_steps > 0 &&
                     fi.pos >= 0 && fi.pos < trk.n_orders) {
                     int det = trk.nudge_req;
                     trk.nudge_req = 0;
-                    float rpp = (24.0f / trk_ppb[trk.ppb_idx]) / (float)fi.speed;
+                    float rpp = (24.0f / TRK_PPB_RAW()) / (float)fi.speed;
                     int rows = (int)lroundf(rpp * (float)det);
                     if (rows == 0) rows = det > 0 ? 1 : -1;   // never a no-op
                     int64_t tgt = (int64_t)trk.order_step0[fi.pos] + fi.row + rows;
@@ -610,7 +608,6 @@ static esp_err_t tracker_start(void)
 {
     char keep_file[TRK_NAME_LEN];
     bool keep_loop = trk.loop, keep_sync = trk.sync, keep_amiga = trk.amiga;
-    int keep_clk = trk.clk_src, keep_ppb = trk.ppb_idx;
     strlcpy(keep_file, trk.file, sizeof(keep_file));   // survive the memset
 
     memset(&trk, 0, sizeof(trk));
@@ -622,15 +619,10 @@ static esp_err_t tracker_start(void)
     mkdir(TRK_DIR_VFS, 0777);
     sd_lock_give();
     trk.loop = keep_loop; trk.sync = keep_sync; trk.amiga = keep_amiga;
-    trk.clk_src = keep_clk; trk.ppb_idx = keep_ppb;
     strlcpy(trk.file, keep_file, sizeof(trk.file));
-    if (trk.ppb_idx < 0 || trk.ppb_idx > 4) trk.ppb_idx = 4;
     trk.tf_cur = 1.0f;
     trk.loop_len = 4;               // sane until process() reads CV7
     trk.state = TRK_EMPTY;
-    // shared front-end: ppb-scaled sanity gates replace the old fixed
-    // widened gate (which had to cover 4 PPQN and 1-per-4-beats at once)
-    clockin_reset(&trk.ci, trk_ppb[trk.ppb_idx]);
 
     s_run = true;
     // 32 KB stack: libxmp's loaders overrun the old 8 KB (FreeRTOS
@@ -715,8 +707,8 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     // HOLD a channel carrying the CLOCK (clock_src_is_cv): the deadband below is a
     // jitter filter, not a gate — a pulse train sails through it and resizes the
     // loop every pulse.
-    int cv_len = clock_src_is_cv(trk.clk_src, 6) ? (cv_len_h < 0 ? s_cvm[6] : cv_len_h) : s_cvm[6];
-    int cv_pos = clock_src_is_cv(trk.clk_src, 5) ? (cv_pos_h < 0 ? s_cvm[5] : cv_pos_h) : s_cvm[5];
+    int cv_len = clock_src_is_cv(clock_core_src(), 6) ? (cv_len_h < 0 ? s_cvm[6] : cv_len_h) : s_cvm[6];
+    int cv_pos = clock_src_is_cv(clock_core_src(), 5) ? (cv_pos_h < 0 ? s_cvm[5] : cv_pos_h) : s_cvm[5];
     // (median: the +/-60 deadband below is a
                                                 // JITTER filter — a 1200-count outlier
                                                 // sails straight through it and resizes
@@ -864,8 +856,7 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     // CV clock conditioning: the shared front-end (clockin_t) — floor-tracked
     // Schmitt + ppb-scaled gates; drops the lock for a clean relock when the
     // ppb setting actually changes
-    clockin_set_ppb(&trk.ci, TRK_PPB_RAW());   // gates take the RAW setting
-    clockin_block(&trk.ci, clock_source_level(trk.clk_src, io), frames);
+    // (the CORE clock is ticked by the audio task before process() — clock.h)
 }
 
 // ---- preset -----------------------------------------------------------------
@@ -878,8 +869,6 @@ static cJSON *tracker_preset_save(void)
     cJSON_AddBoolToObject(o, "amiga", trk.amiga);
     cJSON_AddBoolToObject(o, "show_text", trk.show_text);
     cJSON_AddBoolToObject(o, "loop_freeze", trk.loop_freeze);
-    cJSON_AddNumberToObject(o, "clk_src", trk.clk_src);
-    cJSON_AddNumberToObject(o, "ppb", trk.ppb_idx);
     return o;
 }
 
@@ -890,7 +879,7 @@ static void tracker_preset_load(const cJSON *node)
     trk.show_text = false;          // the sample-name panel is opt-in now (Arlo):
                                     // the play bar is the page, not a caption block
     trk.loop_freeze = false;
-    trk.clk_src = 7; trk.ppb_idx = 4; trk.file[0] = 0;
+    trk.file[0] = 0;
     if (!node) return;
     cJSON *j;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop")))  trk.loop  = cJSON_IsTrue(j);
@@ -898,11 +887,8 @@ static void tracker_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "amiga"))) trk.amiga = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "show_text"))) trk.show_text = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop_freeze"))) trk.loop_freeze = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j))
-        trk.clk_src = clock_source_clamp_cv_audio(j->valueint);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "ppb")) && cJSON_IsNumber(j)) {
-        trk.ppb_idx = j->valueint; if (trk.ppb_idx < 0) trk.ppb_idx = 0; if (trk.ppb_idx > 4) trk.ppb_idx = 4;
-    }
+    // "clk_src" / "ppb" (pre-core-clock presets) are ignored: the clock is a
+    // module-wide setting now and a preset must not silently repoint it
     // file restore happens in start() (needs the render task up) — stash it
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "file")) && cJSON_IsString(j) && j->valuestring[0]) {
         strlcpy(trk.file, j->valuestring, sizeof(trk.file));
@@ -920,9 +906,8 @@ extern const machine_ui_t tracker_menu_ui;
 static int trk_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    MI_ADD(mi_pick("Clock", "clk_src", trk.clk_src, 7, MI_CV | MI_CLK));
-    if (!clock_src_is_cv(trk.clk_src, 5)) MI_ADD(mi("loop position / DJ sweep", 5));
-    if (!clock_src_is_cv(trk.clk_src, 6)) MI_ADD(mi("loop length / resonance", 6));
+    if (!clock_src_is_cv(clock_core_src(), 5)) MI_ADD(mi("loop position / DJ sweep", 5));
+    if (!clock_src_is_cv(clock_core_src(), 6)) MI_ADD(mi("loop length / resonance", 6));
     MI_ADD(mi("play/stop (hold: restart)", 8));
     MI_ADD(mi("loop on/off", 9));
     return n;

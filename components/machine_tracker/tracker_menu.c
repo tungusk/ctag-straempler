@@ -21,6 +21,7 @@
 #include "audio.h"
 #include "setup_menu.h"
 #include "tracker_priv.h"
+#include "clock_ui.h"
 
 static char (*s_mods)[TRK_NAME_LEN] = NULL;
 static int  s_n_mods = 0, s_mod_idx = 0;
@@ -204,9 +205,9 @@ static void draw_info(void){
         // bpm slot: when clock-synced and locked, show the EXTERNAL tempo the
         // module is actually following, tagged EXT — the sync-is-live indicator
         char bs[16];
-        if (trk.sync && trk.ci.clk.locked && trk.ci.clk.bpm > 0)
+        if (trk.sync && clock_core()->clk.locked && clock_core()->clk.bpm > 0)
             snprintf(bs, sizeof(bs), "%d bpm EXT",
-                     (int)(trk.ci.clk.bpm / TRK_PPB_EFF() + 0.5f));
+                     (int)(clock_core()->clk.bpm / TRK_PPB_EFF() + 0.5f));
         else
             snprintf(bs, sizeof(bs), "%d bpm", trk.mod_bpm);
         if (trk.loop_engage && trk.retrig_div > 0)
@@ -332,7 +333,7 @@ static int tracker_live_handler(int it_id, int event, void *ev_data){
         // otherwise the existing pattern scrub. Loop mode keeps its behaviour
         // (CV6 covers position there; a nudge would be undone at re-seat).
         case EV_FWD:
-            if (trk.sync && trk.ci.clk.locked && !trk.loop_engage && trk.playing){
+            if (trk.sync && clock_core()->clk.locked && !trk.loop_engage && trk.playing){
                 trk.nudge_req++;
                 nudge_note(+1);
             } else if (trk.num_pat > 0){
@@ -342,7 +343,7 @@ static int tracker_live_handler(int it_id, int event, void *ev_data){
             }
             break;
         case EV_BWD:
-            if (trk.sync && trk.ci.clk.locked && !trk.loop_engage && trk.playing){
+            if (trk.sync && clock_core()->clk.locked && !trk.loop_engage && trk.playing){
                 trk.nudge_req--;
                 nudge_note(-1);
             } else if (trk.num_pat > 0){
@@ -360,7 +361,7 @@ static int tracker_live_handler(int it_id, int event, void *ev_data){
 // ---- Setup (shared setup-menu framework) ------------------------------------
 // Module = ACTION (opens the module browser); Loop/Sound/Sync/Clock Src/Info
 // Text/Loop Freeze = TOGGLE cycles; Clock (ppb ladder) = RANGE (bidirectional
-// turn through trk_ppb_names, clamped 0..4).
+// turn cycles the core clock ppq ladder).
 static const setup_item_t trk_setup_items[] = {
     {"Module",      ST_ACTION},
     {"Loop",        ST_TOGGLE},
@@ -378,8 +379,8 @@ static void trk_setup_render(int i, char *v, size_t n){
         case 1: snprintf(v, n, "%s", trk.loop ? "ON" : "OFF"); break;
         case 2: snprintf(v, n, "%s", trk.amiga ? "Amiga" : "Clean"); break;
         case 3: snprintf(v, n, "%s", trk.sync ? "ON" : "OFF"); break;
-        case 4: snprintf(v, n, "%s", clock_source_name(trk.clk_src)); break;
-        case 5: snprintf(v, n, "%s", trk_ppb_names[trk.ppb_idx]); break;
+        case 4: snprintf(v, n, "%s", clock_source_name(clock_core_src())); break;   // core clock
+        case 5: snprintf(v, n, "%s", clock_ui_ppq_name()); break;
         case 6: snprintf(v, n, "%s", trk.show_text ? "ON" : "OFF"); break;
         case 7: snprintf(v, n, "%s", trk.loop_freeze ? "ON" : "OFF"); break;
     }
@@ -391,14 +392,9 @@ static void trk_setup_adj(int i, int dir){
         case 2: trk.amiga = !trk.amiga; trk.sound_dirty = true; break;
         case 3: trk.sync = !trk.sync; break;
         case 4:
-            // CV1..8 + AUDIO (TR1/TR2 are play/loop); AUDIO wakes the ear
-            trk.clk_src = clock_source_cycle_cv_audio(trk.clk_src, dir);
-            if (trk.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
-                beatlisten_set_mode(BL_GROOVE);
-                configSetIntSetting("blisten", BL_GROOVE);
-            }
+            clock_ui_cycle_src(dir);   // the CORE clock's source (write-through, wakes the ear on AUDIO)
             break;
-        case 5: trk.ppb_idx += dir; if (trk.ppb_idx < 0) trk.ppb_idx = 0; if (trk.ppb_idx > 4) trk.ppb_idx = 4; break;
+        case 5: clock_ui_cycle_ppq(dir); break;   // core clock pulses-per-beat
         case 6: trk.show_text = !trk.show_text; break;
         case 7: trk.loop_freeze = !trk.loop_freeze; break;
     }
