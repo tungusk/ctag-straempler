@@ -15,8 +15,12 @@ gl_state_t gl;
 // window length in frames: a clock division when synced+locked, else knob/ms
 static uint32_t window_frames(void)
 {
-    if (gl.sync && gl.ci.clk.locked && gl.ci.clk.period > 0)
-        return gl.ci.clk.period / (1u << gl.division);   // 1/4 = period .. 1/32 = period/8
+    const clockin_t *ci = clock_core();
+    if (gl.sync && ci->clk.locked && ci->clk.period > 0) {
+        // the core clock runs at ppq pulses per BEAT (it used to be 1 here)
+        uint32_t beat = (uint32_t)((float)ci->clk.period * clockin_ppb_eff(ci) + 0.5f);
+        return beat / (1u << gl.division);   // 1/4 = a beat .. 1/32 = beat/8
+    }
     return (uint32_t)gl.win_ms * GL_RATE / 1000;
 }
 
@@ -48,9 +52,7 @@ static esp_err_t glitch_start(void)
     gl.win_ms = 120;
     gl.pitch_cv = 2048;
     gl.level = 255;
-    gl.clk_src = 7;     // CV8 default (both trigs are stutter controls)
     gl.division = 1;    // 1/8 note
-    clockin_reset(&gl.ci, 1.0f);   // 1 pulse per beat, same as the looper
     audio_status_set_voices("glitch", "");
     return ESP_OK;
 }
@@ -77,9 +79,9 @@ static void glitch_process(int32_t out[MACHINE_BLOCK],
     if (!gl.ring || !gl.win) { memset(out, 0, MACHINE_BLOCK * sizeof(int32_t)); return; }
 
     // skip a channel that is carrying the CLOCK — see clock_src_is_cv()
-    if (!clock_src_is_cv(gl.clk_src, 5))
+    if (!clock_src_is_cv(clock_core_src(), 5))
         gl.win_ms = 20 + (int)((uint32_t)cvm[5] * 480 / 4095);   // knob6 = 20..500 ms
-    if (!clock_src_is_cv(gl.clk_src, 6))
+    if (!clock_src_is_cv(clock_core_src(), 6))
         gl.pitch_cv = cvm[6];                                    // knob7 = pitch
     uint16_t c1 = cvm[0] > 900 ? cvm[0] - 900 : 0;        // CV1 jack = level
     gl.level = c1 ? (uint16_t)((uint32_t)c1 * 255 / 3195) : 255;
@@ -99,9 +101,7 @@ static void glitch_process(int32_t out[MACHINE_BLOCK],
     else if (!want && gl.stutter) { gl.stutter = false; }
 
     int frames = MACHINE_BLOCK / 2;
-    // keep the tempo detector running — CV is sampled once per block, so the
-    // block-level conditioned feed is timing-identical to the old per-frame tick
-    clockin_block(&gl.ci, clock_source_level(gl.clk_src, io), frames);
+    // (the CORE clock is ticked by the audio task before process() — clock.h)
     for (int f = 0; f < frames; f++) {
         int32_t l, r;
         if (!gl.stutter) {
@@ -142,7 +142,6 @@ static cJSON *glitch_preset_save(void)
     cJSON_AddBoolToObject(o, "reverse", gl.reverse);
     cJSON_AddBoolToObject(o, "sync", gl.sync);
     cJSON_AddNumberToObject(o, "division", gl.division);
-    cJSON_AddNumberToObject(o, "clk_src", gl.clk_src);
     return o;
 }
 
@@ -154,8 +153,8 @@ static void glitch_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "reverse"))) gl.reverse = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync"))) gl.sync = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "division")) && cJSON_IsNumber(j)) gl.division = j->valueint;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "clk_src")) && cJSON_IsNumber(j))
-        gl.clk_src = clock_source_clamp_cv_audio(j->valueint);
+    // "clk_src" / "ppb" (pre-core-clock presets) are ignored: the clock is a
+    // module-wide setting now and a preset must not silently repoint it
 }
 
 extern const machine_ui_t glitch_menu_ui;
@@ -163,9 +162,8 @@ extern const machine_ui_t glitch_menu_ui;
 static int gl_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    MI_ADD(mi_pick("Clock", "clk_src", gl.clk_src, 7, MI_CV | MI_CLK));
-    if (!clock_src_is_cv(gl.clk_src, 5)) MI_ADD(mi("window length", 5));
-    if (!clock_src_is_cv(gl.clk_src, 6)) MI_ADD(mi("pitch", 6));
+    if (!clock_src_is_cv(clock_core_src(), 5)) MI_ADD(mi("window length", 5));
+    if (!clock_src_is_cv(clock_core_src(), 6)) MI_ADD(mi("pitch", 6));
     MI_ADD(mi("stutter (hold)", 8));
     MI_ADD(mi("stutter latch", 9));
     return n;

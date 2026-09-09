@@ -31,9 +31,8 @@ typedef struct {
 
     // beat sync — the shared conditioned front-end (clock.h): floor-Schmitt
     // replaces the fixed 1500/800 thresholds that misfired on attenuated CV
-    clockin_t         ci;
     volatile bool sync;           // window length follows the clock
-    volatile int  clk_src;        // clock CV channel (0..7), default CV8
+    // clock: the CORE clock (clock_core(), clock.h), a module-wide setting
     volatile int  division;       // 0=1/4, 1=1/8, 2=1/16, 3=1/32 note
 } gl_state_t;
 

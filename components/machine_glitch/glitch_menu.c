@@ -15,6 +15,7 @@
 #include "menu_config.h"
 #include "setup_menu.h"
 #include "glitch_priv.h"
+#include "clock_ui.h"
 
 static const color_t LIVE_COL   = {40, 160, 90};
 static const color_t GLITCH_COL = {230, 90, 40};
@@ -54,9 +55,10 @@ static void info_block(void){
     TFT_print(s, _width/2 - TFT_getStringWidth(s)/2, y + 2);
     char t[40];
     if (gl.sync){
-        if (gl.ci.clk.locked) snprintf(t, sizeof(t), "SYNC %s  %.1f BPM", div_name(gl.division), gl.ci.clk.bpm);
-        else               snprintf(t, sizeof(t), "SYNC %s  (no clock)", div_name(gl.division));
-        _fg = gl.ci.clk.locked ? (color_t){40,200,90} : TFT_LIGHTGREY;
+        bool lk = clock_core()->clk.locked;
+        if (lk) snprintf(t, sizeof(t), "SYNC %s  %.1f BPM", div_name(gl.division), clock_core_beat_bpm());
+        else    snprintf(t, sizeof(t), "SYNC %s  (no clock)", div_name(gl.division));
+        _fg = lk ? (color_t){40,200,90} : TFT_LIGHTGREY;
         TFT_print(t, _width/2 - TFT_getStringWidth(t)/2, y + fh + 6);
     }
     s_last_win = gl.win_ms;
@@ -101,7 +103,7 @@ static void gl_setup_val(int i, char *v, size_t n){
         case 1: snprintf(v, n, "%s", gl.reverse ? "ON" : "OFF"); break;
         case 2: snprintf(v, n, "%s", gl.sync ? "ON" : "OFF"); break;
         case 3: snprintf(v, n, "%s", div_name(gl.division)); break;
-        case 4: snprintf(v, n, "%s", clock_source_name(gl.clk_src)); break;
+        case 4: snprintf(v, n, "%s", clock_source_name(clock_core_src())); break;   // core clock
     }
 }
 
@@ -112,12 +114,7 @@ static void gl_adj(int i, int dir){
         case 2: gl.sync = !gl.sync; break;
         case 3: gl.division += dir; if(gl.division < 0) gl.division = 3; if(gl.division > 3) gl.division = 0; break;
         case 4:
-            // CV1..8 + AUDIO (both trigs are stutter controls); AUDIO wakes the ear
-            gl.clk_src = clock_source_cycle_cv_audio(gl.clk_src, dir);
-            if (gl.clk_src == CLK_SRC_AUDIO && beatlisten_get_mode() == BL_OFF) {
-                beatlisten_set_mode(BL_GROOVE);
-                configSetIntSetting("blisten", BL_GROOVE);
-            }
+            clock_ui_cycle_src(dir);   // the CORE clock's source (write-through, wakes the ear on AUDIO)
             break;
     }
 }
