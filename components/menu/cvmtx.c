@@ -235,7 +235,9 @@ void cvmtx_load(cvmtx_t *m, const cJSON *node)
             m->amt[d] = a < -1.0f ? -1.0f : a > 1.0f ? 1.0f : a;
         }
         if (have_modes) m->mode[d] = (cJSON_IsNumber(mi) && mi->valueint == CVM_ABS) ? CVM_ABS : CVM_OFFSET;
-        else            m->mode[d] = CVM_OFFSET;     // pre-stage-3 preset: everything was an offset
+        else if (cJSON_IsNumber(si)) m->mode[d] = CVM_OFFSET;   // pre-stage-3 preset: a STORED entry was an offset
+        // (an entry beyond the stored arrays — a destination added since, e.g.
+        // Tape's Reso — keeps the init default)
     }
     if (!have_modes && m->def_src) {
         // MIGRATION: the knobs this preset relied on were hard-wired in the
