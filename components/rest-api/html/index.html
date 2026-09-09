@@ -99,8 +99,13 @@ body.nosbar .sbar{display:none}
 .pcell.dim .pl{color:#555}
 .pknob{width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 50% 38%,#2c2c2c,#151515 70%);border:1px solid #3a3a3a;box-shadow:0 2px 4px #000;position:relative;margin:6px 0 4px}   /* GAIN: the CV5-8 knob body, panel-only */
 .pknob:after{content:'';position:absolute;left:50%;top:50%;width:3px;height:28px;margin:-28px 0 0 -1.5px;background:linear-gradient(to bottom,#555 50%,transparent 50%);border-radius:2px}
-.pbtn{width:48px;height:48px;border-radius:50%;padding:0;font-size:11px;background:radial-gradient(circle at 40% 32%,#7a7a7a,#525252 70%);border-color:#8a8a8a;color:#f0f0f0;box-shadow:0 1px 3px #000}
-.pbtn:hover{background:radial-gradient(circle at 40% 32%,#8a8a8a,#5c5c5c 70%)}
+.pbtn{width:48px;height:48px;border-radius:50%;overflow:hidden;display:flex;flex-direction:column;font-size:10px;font-family:monospace;color:#f0f0f0;background:radial-gradient(circle at 40% 32%,#7a7a7a,#525252 70%);border:1px solid #8a8a8a;box-shadow:0 1px 3px #000;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none}   /* TR cap: top half = pulse, bottom half = hold while pressed */
+.pbtn .tph{flex:1 1 0;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:0 solid transparent}
+.pbtn .tph:first-child{border-bottom:1px solid #3a3a3a}   /* the divider; the lower half carries a transparent twin so both halves measure the same */
+.pbtn .tph:last-child{border-top-width:1px}
+.pbtn .tph:hover{background:rgba(255,255,255,.08)}
+.pbtn.on{border-color:#e33;box-shadow:0 0 8px #e33,0 1px 3px #000}
+.pbtn.on .hold{background:rgba(255,80,80,.3)}
 .led{position:absolute;left:92px;top:47px;width:48px;height:18px;fill:none;stroke:#d33;stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 2px #a22)}
 .led.on{stroke:#f66;filter:drop-shadow(0 0 5px #f33)}
 .encsvg{filter:drop-shadow(0 1px 3px #000);cursor:pointer}
@@ -293,19 +298,19 @@ body.nosbar .sbar{display:none}
     <div class="psec">
     <div class="pgrid4">
       <div class="pcell dim" title="input gain &#8212; panel only"><span class="pl">GAIN</span><span class="pknob"></span></div>
-      <div class="pcell" style="position:relative"><span class="pl">TR 1</span><button class="btn pbtn" onclick="remTrig(1)">pulse</button>
+      <div class="pcell" style="position:relative"><span class="pl">TR 1</span><div class="pbtn"><div class="tph" onclick="remTrig(1)">pulse</div><div class="tph hold" onpointerdown="this.setPointerCapture(event.pointerId);remHold(1,this,1)" onpointerup="remHold(1,this,0)" onpointercancel="remHold(1,this,0)" oncontextmenu="return false">hold</div></div>
         <!-- the panel's LED window: flat leads into 2.5 cycles of a thick rounded sine (panel v2_3 F.Mask, 7.5 x 2.8 mm) -->
         <svg class="led" id="recled" viewBox="0 0 54 20" title="REC"><path d="M6.6 10 H13.5 C15 10 15 3 16 3 S20.5 17 21.5 17 S26 3 27 3 S31.5 17 32.5 17 S37 3 38 3 S39.5 10 40.5 10 H47.4"/></svg></div>
-      <div class="pcell"><span class="pl">TR 2</span><button class="btn pbtn" onclick="remTrig(2)">pulse</button></div>
+      <div class="pcell"><span class="pl">TR 2</span><div class="pbtn"><div class="tph" onclick="remTrig(2)">pulse</div><div class="tph hold" onpointerdown="this.setPointerCapture(event.pointerId);remHold(2,this,1)" onpointerup="remHold(2,this,0)" onpointercancel="remHold(2,this,0)" oncontextmenu="return false">hold</div></div></div>
       <div class="pcell"><span class="pl">DATA</span>
         <!-- the encoder as one circle cut into four sectors: turn left / right, press (top), hold (bottom) -->
-        <svg class="encsvg" viewBox="0 0 60 60" width="58" height="58">
-          <path class="sec" d="M30 30 L10.2 10.2 A28 28 0 0 1 49.8 10.2 Z" onclick="remEv('press')"><title>press</title></path>
-          <path class="sec" d="M30 30 L49.8 10.2 A28 28 0 0 1 49.8 49.8 Z" onclick="remEv('fwd')"><title>turn right</title></path>
-          <path class="sec" d="M30 30 L49.8 49.8 A28 28 0 0 1 10.2 49.8 Z" onclick="remEv('long')"><title>hold</title></path>
-          <path class="sec" d="M30 30 L10.2 49.8 A28 28 0 0 1 10.2 10.2 Z" onclick="remEv('bwd')"><title>turn left</title></path>
-          <text x="30" y="16" class="lab">press</text>
-          <text x="30" y="51" class="lab">hold</text>
+        <svg class="encsvg" viewBox="0 0 60 60" width="60" height="60">   <!-- r 29 at 60 px = the 58 px knobs + their 1 px border -->
+          <path class="sec" d="M30 30 L9.5 9.5 A29 29 0 0 1 50.5 9.5 Z" onclick="remEv('press')"><title>press</title></path>
+          <path class="sec" d="M30 30 L50.5 9.5 A29 29 0 0 1 50.5 50.5 Z" onclick="remEv('fwd')"><title>turn right</title></path>
+          <path class="sec" d="M30 30 L50.5 50.5 A29 29 0 0 1 9.5 50.5 Z" onclick="remEv('long')"><title>hold</title></path>
+          <path class="sec" d="M30 30 L9.5 50.5 A29 29 0 0 1 9.5 9.5 Z" onclick="remEv('bwd')"><title>turn left</title></path>
+          <text x="30" y="15.5" class="lab">press</text>
+          <text x="30" y="52" class="lab">hold</text>
           <text x="16" y="34" class="lab arr">&#8249;</text>
           <text x="44" y="34" class="lab arr">&#8250;</text>
           <circle cx="30" cy="30" r="3" class="axle"/>
@@ -1402,7 +1407,11 @@ function clkReadout(c){   // /status "clk": {src,lock,bpm,ppq,fb,pulses}
 }
 
 function remEv(e){fetch('/remote/event?ev='+e,{method:'POST'}).catch(function(){});}
-function remTrig(t){fetch('/remote/trig?t='+t+'&ms=40',{method:'POST'}).catch(function(){});}
+function remTrig(t,ms){fetch('/remote/trig?t='+t+'&ms='+(ms||40),{method:'POST'}).catch(function(){});}
+var holdEl=[null,null,null];
+function remHold(t,el,down){remTrig(t,down?60000:5);el.parentNode.classList.toggle('on',!!down);holdEl[t]=down?el:null;}   // hold = gate for the press; 60 s is only the ceiling if the release never arrives; release = a 5 ms trig (an absolute deadline that cuts it)
+function holdDropAll(){for(var t=1;t<=2;t++)if(holdEl[t])remHold(t,holdEl[t],0);}
+window.addEventListener('blur',holdDropAll);document.addEventListener('visibilitychange',function(){if(document.hidden)holdDropAll();});
 // Perform CV: POST /remote/cv overrides a channel in the audio task with a
 // timeout decay, so a released knob returns to the physical one — nothing can
 // be pinned by a stale value.
