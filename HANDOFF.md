@@ -43,6 +43,27 @@ Unit 1 (.227) untouched.
   record on the same TR.
 - Antenna 20 dBm/RSSI experiment still parked in `git stash@{0}`.
 
+## 2026-09-08 PM — E-mu panel: one-off fabrication QUOTED
+
+- **Front Panel Express: $63.08 bare / $89.72 with full-panel UV print**,
+  2 mm natural anodized aluminum, one piece (no minimum; 5–9 pcs would be
+  $80.75 ea). Ex tax + shipping, 5 business days. Their price list is dated
+  06/06/2025 and below 29 pcs the app price is the quote (their FAQ).
+- Quote came from their *Front Panel Designer* app (now installed on the
+  bench Mac, driven by osascript). The cut DXF imported clean — every hole a
+  drill hole, display window + SD slot as free contours, 152.40 × 152.40.
+- Files in the build-pack (`40acc75`, pushed): `panel-emu/emu_panel_fpe.fpd`
+  = the priced project ready for their webshop; `emu_panel_art.png/.svg` =
+  art-only transparent artwork (generator now emits them). README
+  "Fabrication" has the itemized quote, the FPD click recipe, and the
+  alternatives: Meface (UK, sub-surface print, ~£40–60, unquoted) and
+  SendCutSend (blank only, ~$15–30, artwork = CerMark on the hackerspace
+  laser, no blue).
+- Arlo's reaction: "more than the boards for sure" (five JLC v2_3 panels
+  were ~$19). Nothing ordered. Still open before any order: rail height
+  measurement, GATE/TRIG DIP pins, countersinks on the five M3 holes,
+  blue-on-natural-anodize without white under-print.
+
 ## 2026-09-07 — bench + hardware notes
 
 - New unit (.85) OTA'd to the **v0.10-beta1 release image** (clean build
