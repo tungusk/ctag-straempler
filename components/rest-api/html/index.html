@@ -137,10 +137,8 @@ body.nosbar .sbar{display:none}
 .mxmode{background:none;border:1px solid #262626;color:#666;border-radius:2px;height:18px;padding:0 5px;font-family:monospace;font-size:10px;line-height:16px;cursor:pointer;white-space:nowrap}
 .mxmode.on{color:#0af;border-color:#3a5a6a}
 .mxdef{color:#4a4a4a;font-size:10px;padding:1px 3px;white-space:nowrap}
-.mxrev{background:none;border:1px solid #2e3e4a;color:#7fb2cc;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
-.mxrev:hover{color:#0af;border-color:#0af}
-.mxrev.undo{border-color:#3a6a4a;color:#6c9}
-.mxrev.undo:hover{color:#8f8;border-color:#8f8}
+.mxrev{background:none;border:1px solid #3a6a4a;color:#6c9;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
+.mxrev:hover{color:#8f8;border-color:#8f8}
 .mxc select.on{border-color:#3a7;color:#6c9}
 .mxf.ghost{opacity:.55;border-style:dashed;display:inline-flex;align-items:center;gap:6px}
 .mxp select{width:82px}
@@ -1143,8 +1141,10 @@ var SRC_NAMES=['CV1','CV2','CV3','CV4','CV5','CV6','CV7','CV8','TR1','TR2','AUDI
 function mxCell(cv,dest,amt,mode){
   mode=mode?1:0;
   var o='<option value="-1"'+(dest<0?' selected':'')+'>off</option>';
-  for(var k=0;k<mxN;k++)o+='<option value="'+k+'"'+(k===dest?' selected':'')+(mxDef[k]===cv?' style="color:#6c9"':'')+'>'+esc(mxLabs[k]||('dest '+(k+1)))+'</option>';
-  return '<div class="mxc" data-cv="'+cv+'" data-mode="'+mode+'"><select class="'+(dest>=0?'on':'')+'" onchange="mxRerender(mxCollect())">'+o+'</select>'
+  for(var k=0;k<mxN;k++)o+='<option value="'+k+'"'+(k===dest?' selected':'')+(mxDef[k]===cv?' style="color:#6c9;background:#12301e"':'')+'>'+esc(mxLabs[k]||('dest '+(k+1)))+'</option>';
+  // green outline = assigned AND as the module has it; an unapplied edit drops it
+  var L=mxLoaded(dest),same=!!(L&&L.cv===cv&&L.mode===mode&&(mode===1||L.amt===(+amt)));
+  return '<div class="mxc" data-cv="'+cv+'" data-mode="'+mode+'"><select class="'+(dest>=0&&same?'on':'')+'" onchange="mxRerender(mxCollect())">'+o+'</select>'
     +'<button class="mxmode'+(mode?' on':'')+'" title="offset (± amount) or knob (absolute: takes over once moved)" onclick="mxModeTog(this)">'+(mode?'knob':'&#177;')+'</button>'
     +'<input type="range" min="-100" max="100" step="1" value="'+amt+'"'+(mode?' hidden':'')+' oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\';mxTail(this.parentNode)">'
     +'<span class="amt"'+(mode?' hidden':'')+'>'+(amt>0?'+':'')+amt+'%</span>'
@@ -1177,7 +1177,10 @@ function mxUndo(dest){
   mxRerender(a);
 }
 function mxTail(c){
-  c.querySelector('.mxtail').innerHTML=mxTailHtml(+c.dataset.cv,+c.querySelector('select').value,parseInt(c.querySelector('input').value)||0,+c.dataset.mode);
+  var cv=+c.dataset.cv,dest=+c.querySelector('select').value,amt=parseInt(c.querySelector('input').value)||0,mode=+c.dataset.mode;
+  c.querySelector('.mxtail').innerHTML=mxTailHtml(cv,dest,amt,mode);
+  var L=mxLoaded(dest),same=!!(L&&L.cv===cv&&L.mode===mode&&(mode===1||L.amt===amt));
+  c.querySelector('select').className=(dest>=0&&same)?'on':'';
 }
 function mxModeTog(b){
   var c=b.parentNode,m=c.dataset.mode==='1'?0:1;
