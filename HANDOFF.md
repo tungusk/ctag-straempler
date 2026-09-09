@@ -43,6 +43,22 @@ Unit 1 (.227) untouched.
   record on the same TR.
 - Antenna 20 dBm/RSSI experiment still parked in `git stash@{0}`.
 
+## 2026-09-08 late — Remote tab polish (Arlo-driven, one OTA per tweak)
+
+Commits `9d4691c..e388b16`, all PUSHED; **.85 runs `e388b16`**. Panel frame:
+TR1/TR2 = lit 48 px caps; **DATA = one 58 px circle cut into four sectors**
+(← → / press top / hold bottom, knob-body colours); REC LED traced from the
+panel v2_3 F.Mask window (flat leads + 2.5 cycles; leads later shortened 40 %,
+wavelength ~70 %, sits 4 px lower); GAIN drawn at the CV5-8 knob size (inert);
+the perform row = label line + fixed 64 px item band (`.pgrid4 .pcell`); jack
+ring meters fill the 6 o'clock gap in ring grey; a SMALL screenshot loads at
+launch (retries through 503 Warming — allocates the lazy 230 KB shadow FB on
+page open). CV MATRIX: assigned dest dropdown green outline+text (only while
+it matches what the module has), the row's default dest green+tinted in the
+list, `default` plain text, and ONE green full-circle arrow per row = back to
+that CV's default (ghosts/undo tried and dropped — "only needs one"). If the
+page looks stale: hard reload (Chrome caches the script).
+
 ## 2026-09-08 PM — CV MATRIX STAGE 3: knob jobs are matrix entries (ABSOLUTE mode)
 
 Commits `64e2fa0..` on `v09-machines`; **.85 runs this build**. Bail tag before
