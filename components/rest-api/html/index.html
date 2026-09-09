@@ -99,10 +99,14 @@ body.nosbar .sbar{display:none}
 .pbtn:hover{background:radial-gradient(circle at 40% 32%,#8a8a8a,#5c5c5c 70%)}
 .led{position:absolute;left:89px;top:39px;width:54px;height:20px;fill:none;stroke:#d33;stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 2px #a22)}
 .led.on{stroke:#f66;filter:drop-shadow(0 0 5px #f33)}
-.encring{width:66px;height:66px;border-radius:50%;background:radial-gradient(circle at 45% 35%,#2c2c2c,#161616 75%);border:1px solid #3e3e3e;box-shadow:0 1px 3px #000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}
+.encsvg{filter:drop-shadow(0 1px 3px #000);cursor:pointer}
+.encsvg .sec{fill:#585858;stroke:#1e1e1e;stroke-width:1.5}
+.encsvg .sec:hover{fill:#6e6e6e}
+.encsvg .lab{fill:#eee;font-family:monospace;font-size:7.5px;text-anchor:middle;pointer-events:none}
+.encsvg .arr{font-size:14px;font-weight:bold}
+.encsvg .axle{fill:#2a2a2a;stroke:#111;stroke-width:1;pointer-events:none}
 .enc{display:flex;gap:2px}
-.enc .btn,.encring .btn{padding:1px 3px;font-size:9px;line-height:12px}
-.encring .enc{gap:1px}
+.enc .btn{padding:3px 5px;font-size:10px}
 .jgrid{display:grid;grid-template-columns:repeat(7,auto);justify-content:center}
 .jcell.sep{border-left:1px dotted #444}
 .jcell.sepr{border-right:1px dotted #444}
@@ -292,10 +296,18 @@ body.nosbar .sbar{display:none}
         <svg class="led" id="recled" viewBox="0 0 54 20" title="REC"><path d="M2 10 H9 C11 10 12 3 14.5 3 S18 17 20.5 17 S24 3 27 3 S30.5 17 33 17 S37 3 39.5 3 S43 10 45 10 H52"/></svg></div>
       <div class="pcell"><span class="pl">TR 2</span><button class="btn pbtn" onclick="remTrig(2)">pulse</button></div>
       <div class="pcell"><span class="pl">DATA</span>
-        <div class="encring">
-        <div class="enc"><button class="btn" onclick="remEv('bwd')">&#8592;</button><button class="btn" onclick="remEv('press')">press</button><button class="btn" onclick="remEv('fwd')">&#8594;</button></div>
-        <button class="btn" style="padding:2px 9px" onclick="remEv('long')">hold</button>
-        </div>
+        <!-- the encoder as one circle cut into four sectors: turn left / right, press (top), hold (bottom) -->
+        <svg class="encsvg" viewBox="0 0 60 60" width="54" height="54">
+          <path class="sec" d="M30 30 L10.2 10.2 A28 28 0 0 1 49.8 10.2 Z" onclick="remEv('press')"><title>press</title></path>
+          <path class="sec" d="M30 30 L49.8 10.2 A28 28 0 0 1 49.8 49.8 Z" onclick="remEv('fwd')"><title>turn right</title></path>
+          <path class="sec" d="M30 30 L49.8 49.8 A28 28 0 0 1 10.2 49.8 Z" onclick="remEv('long')"><title>hold</title></path>
+          <path class="sec" d="M30 30 L10.2 49.8 A28 28 0 0 1 10.2 10.2 Z" onclick="remEv('bwd')"><title>turn left</title></path>
+          <text x="30" y="16" class="lab">press</text>
+          <text x="30" y="51" class="lab">hold</text>
+          <text x="16" y="34" class="lab arr">&#8249;</text>
+          <text x="44" y="34" class="lab arr">&#8250;</text>
+          <circle cx="30" cy="30" r="3" class="axle"/>
+        </svg>
       </div>
     </div>
     <div class="pgrid4" id="rperf"></div>
