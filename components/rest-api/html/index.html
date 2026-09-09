@@ -95,12 +95,14 @@ body.nosbar .sbar{display:none}
 .pcell.dim .pl{color:#555}
 .pknob{width:42px;height:42px;border-radius:50%;background:#1a1a1a;border:1px solid #2e2e2e;position:relative}
 .pknob:after{content:'';position:absolute;left:50%;top:4px;width:2px;height:11px;margin-left:-1px;background:#444}
-.pbtn{width:54px;height:54px;border-radius:50%;padding:0;font-size:11px;background:#3a3a3a;border-color:#5a5a5a;color:#ccc}
-.pbtn:hover{background:#454545}
-.led{position:absolute;left:100px;top:42px;width:32px;height:14px;fill:none;stroke:#d33;stroke-width:1.8;stroke-linecap:round;filter:drop-shadow(0 0 2px #a22)}
+.pbtn{width:54px;height:54px;border-radius:50%;padding:0;font-size:11px;background:radial-gradient(circle at 40% 32%,#7a7a7a,#525252 70%);border-color:#8a8a8a;color:#f0f0f0;box-shadow:0 1px 3px #000}
+.pbtn:hover{background:radial-gradient(circle at 40% 32%,#8a8a8a,#5c5c5c 70%)}
+.led{position:absolute;left:89px;top:39px;width:54px;height:20px;fill:none;stroke:#d33;stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 2px #a22)}
 .led.on{stroke:#f66;filter:drop-shadow(0 0 5px #f33)}
+.encring{width:66px;height:66px;border-radius:50%;background:radial-gradient(circle at 45% 35%,#2c2c2c,#161616 75%);border:1px solid #3e3e3e;box-shadow:0 1px 3px #000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}
 .enc{display:flex;gap:2px}
-.enc .btn{padding:3px 5px;font-size:10px}
+.enc .btn,.encring .btn{padding:1px 3px;font-size:9px;line-height:12px}
+.encring .enc{gap:1px}
 .jgrid{display:grid;grid-template-columns:repeat(7,auto);justify-content:center}
 .jcell.sep{border-left:1px dotted #444}
 .jcell.sepr{border-right:1px dotted #444}
@@ -133,6 +135,9 @@ body.nosbar .sbar{display:none}
 .mxdef{color:#4a4a4a;font-size:10px;border:1px dashed #262626;border-radius:2px;padding:1px 5px;white-space:nowrap}
 .mxrev{background:none;border:1px solid #2e3e4a;color:#7fb2cc;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
 .mxrev:hover{color:#0af;border-color:#0af}
+.mxrev.undo{border-color:#3a6a4a;color:#6c9}
+.mxrev.undo:hover{color:#8f8;border-color:#8f8}
+.mxc select.on{border-color:#3a7;color:#6c9}
 .mxf.ghost{opacity:.55;border-style:dashed;display:inline-flex;align-items:center;gap:6px}
 .mxp select{width:82px}
 .mxcard .mtx{width:100%}
@@ -283,11 +288,14 @@ body.nosbar .sbar{display:none}
     <div class="pgrid4">
       <div class="pcell dim" title="input gain &#8212; panel only"><span class="pl">GAIN</span><span class="pknob"></span></div>
       <div class="pcell" style="position:relative"><span class="pl">TR 1</span><button class="btn pbtn" onclick="remTrig(1)">pulse</button>
-        <svg class="led" id="recled" viewBox="0 0 32 14" title="REC"><path d="M1 7 C2.5 1 4.5 1 6 7 S9.5 13 11 7 S14.5 1 16 7 S19.5 13 21 7 S24.5 1 26 7 S29.5 13 31 7"/></svg></div>
+        <!-- the panel's LED window: flat leads into 2.5 cycles of a thick rounded sine (panel v2_3 F.Mask, 7.5 x 2.8 mm) -->
+        <svg class="led" id="recled" viewBox="0 0 54 20" title="REC"><path d="M2 10 H9 C11 10 12 3 14.5 3 S18 17 20.5 17 S24 3 27 3 S30.5 17 33 17 S37 3 39.5 3 S43 10 45 10 H52"/></svg></div>
       <div class="pcell"><span class="pl">TR 2</span><button class="btn pbtn" onclick="remTrig(2)">pulse</button></div>
       <div class="pcell"><span class="pl">DATA</span>
+        <div class="encring">
         <div class="enc"><button class="btn" onclick="remEv('bwd')">&#8592;</button><button class="btn" onclick="remEv('press')">press</button><button class="btn" onclick="remEv('fwd')">&#8594;</button></div>
-        <button class="btn" style="padding:3px 10px;font-size:10px" onclick="remEv('long')">hold</button>
+        <button class="btn" style="padding:2px 9px" onclick="remEv('long')">hold</button>
+        </div>
       </div>
     </div>
     <div class="pgrid4" id="rperf"></div>
@@ -1124,28 +1132,45 @@ function mxCell(cv,dest,amt,mode){
   mode=mode?1:0;
   var o='<option value="-1"'+(dest<0?' selected':'')+'>off</option>';
   for(var k=0;k<mxN;k++)o+='<option value="'+k+'"'+(k===dest?' selected':'')+'>'+esc(mxLabs[k]||('dest '+(k+1)))+'</option>';
-  return '<div class="mxc" data-cv="'+cv+'" data-mode="'+mode+'"><select onchange="mxTail(this.parentNode)">'+o+'</select>'
+  return '<div class="mxc" data-cv="'+cv+'" data-mode="'+mode+'"><select class="'+(dest>=0?'on':'')+'" onchange="mxRerender(mxCollect())">'+o+'</select>'
     +'<button class="mxmode'+(mode?' on':'')+'" title="offset (± amount) or knob (absolute: takes over once moved)" onclick="mxModeTog(this)">'+(mode?'knob':'&#177;')+'</button>'
     +'<input type="range" min="-100" max="100" step="1" value="'+amt+'"'+(mode?' hidden':'')+' oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\';mxTail(this.parentNode)">'
     +'<span class="amt"'+(mode?' hidden':'')+'>'+(amt>0?'+':'')+amt+'%</span>'
     +'<span class="mxtail">'+mxTailHtml(cv,dest,amt,mode)+'</span>'
 +'</div>';
 }
-// the trailing badge: "default" while a defaulted dest matches its default,
-// the revert arrow once it differs
+// the trailing badges: "default" while a defaulted dest matches its default,
+// the round arrow (back to the default) once it differs, and an UNDO arrow
+// while the dest differs from what the module currently has (an edit not yet
+// applied) — undo puts that dest back to the loaded state
+function mxLoaded(dest){   // {cv,amt,mode} as the module has it, or null
+  if(!rpData||!Array.isArray(rpData.mxs)||!(rpData.mxs[dest]>=0))return null;
+  return {cv:rpData.mxs[dest],amt:(rpData.mxa&&rpData.mxa[dest])||0,mode:(rpData.mxm&&rpData.mxm[dest]===1)?1:0};
+}
 function mxTailHtml(cv,dest,amt,mode){
-  if(dest<0||!(mxDef[dest]>=0))return '';
-  if(mxDef[dest]===cv&&mode===1&&(+amt)===0)return '<span class="mxdef" title="the panel knob\'s default job">default</span>';
-  return '<button class="mxrev" title="back to the default: '+SRC_NAMES[mxDef[dest]]+', knob" onclick="mxRevert('+dest+')">&#8634;</button>';
+  if(dest<0)return '';
+  var h='',L=mxLoaded(dest);
+  if(mxDef[dest]>=0){
+    if(mxDef[dest]===cv&&mode===1&&(+amt)===0)h+='<span class="mxdef" title="the panel knob\'s default job">default</span>';
+    else h+='<button class="mxrev" title="back to the default: '+SRC_NAMES[mxDef[dest]]+', knob" onclick="mxRevert('+dest+')">&#8634;</button>';
+  }
+  var same=L?(L.cv===cv&&L.mode===mode&&(mode===1||L.amt===(+amt))):false;
+  if(!same)h+='<button class="mxrev undo" title="undo: back to what the module has'+(L?' ('+SRC_NAMES[L.cv]+', '+(L.mode?'knob':(L.amt>0?'+':'')+L.amt+'%')+')':' (unassigned)')+'" onclick="mxUndo('+dest+')">&#8630;</button>';
+  return h;
+}
+function mxUndo(dest){
+  var a=mxCollect(),L=mxLoaded(dest);
+  if(L){a.mxs[dest]=L.cv;a.mxa[dest]=L.amt;a.mxm[dest]=L.mode;}
+  else{a.mxs[dest]=-1;a.mxa[dest]=0;a.mxm[dest]=0;}
+  mxRerender(a);
 }
 function mxTail(c){
   c.querySelector('.mxtail').innerHTML=mxTailHtml(+c.dataset.cv,+c.querySelector('select').value,parseInt(c.querySelector('input').value)||0,+c.dataset.mode);
 }
 function mxModeTog(b){
   var c=b.parentNode,m=c.dataset.mode==='1'?0:1;
-  c.dataset.mode=String(m);b.className='mxmode'+(m?' on':'');b.innerHTML=m?'knob':'&#177;';
-  c.querySelector('input').hidden=!!m;c.querySelector('.amt').hidden=!!m;
-  mxTail(c);
+  c.dataset.mode=String(m);
+  mxRerender(mxCollect());
 }
 // the matrix as the firmware stores it, read back from the cells (a dest
 // claimed twice: the later row wins)
@@ -1205,10 +1230,16 @@ function rpMatrix(d){
     var add=(hasM&&ch<8),nc=0;
     if(add){   // the loaded assignments; a bare row gets one off slot unless a chip already fills the line
       for(var k=0;k<mxN;k++)if(d.mxs[k]===ch){cells+=mxCell(ch,k,(d.mxa&&typeof d.mxa[k]==='number')?d.mxa[k]:0,mxm[k]===1);nc++;}
-      // a default (panel knob) that has been cleared: a ghost with the revert arrow
-      for(var g=0;g<mxN;g++)if(mxDef[g]===ch&&d.mxs[g]<0)
-        cells+='<div class="mxf ghost" title="this panel knob\'s default job is unassigned">'+esc(mxLabs[g]||('dest '+(g+1)))
-          +'<button class="mxrev" title="back to the default: '+SRC_NAMES[ch]+', knob" onclick="mxRevert('+g+')">&#8634;</button></div>';
+      // a default (panel knob) that has been cleared: a ghost with the revert arrow;
+      // a dest the module still has but this (unapplied) edit dropped: a ghost with undo
+      for(var g=0;g<mxN;g++)if(d.mxs[g]<0){
+        var L=mxLoaded(g);
+        if(mxDef[g]===ch)cells+='<div class="mxf ghost" title="this panel knob\'s default job is unassigned">'+esc(mxLabs[g]||('dest '+(g+1)))
+          +'<button class="mxrev" title="back to the default: '+SRC_NAMES[ch]+', knob" onclick="mxRevert('+g+')">&#8634;</button>'
+          +(L&&L.cv===ch?'<button class="mxrev undo" title="undo: the module still has this" onclick="mxUndo('+g+')">&#8630;</button>':'')+'</div>';
+        else if(L&&L.cv===ch)cells+='<div class="mxf ghost" title="the module still has this; the edit removed it">'+esc(mxLabs[g]||('dest '+(g+1)))
+          +'<button class="mxrev undo" title="undo: back to what the module has" onclick="mxUndo('+g+')">&#8630;</button></div>';
+      }
       if(!nc&&!chips&&!cells)cells+=mxCell(ch,-1,0,0);
     }
     cells+=chips;   // fixed jobs / picks trail any dropdown so the dropdowns form one column
