@@ -159,6 +159,11 @@ read at boot into initGPIO, settable live via POST /settings).
 11; the default), 4 = the EC11-class parts on new-build units (rest at one
 state — on setting 2 they double-step per click). `settings.encdir`: 1 =
 reversed lot (the new-build parts also count backwards; default 0).
+`settings.tftclk`: display SPI write clock in MHz (default 26 = the
+library's; 40 is bit-exact on the new-build panel — PROVE it per unit with
+`GET /tftread?pattern=1&clk=40` (needs SJ1 bridged), then persist over
+`POST /settings`). Real dividers are 26.7/40/80 only. Redraw timing lives in
+`/sysinfo` `"tft"` (see HANDOFF 2026-09-09 late).
 
 **Sleep at least one tick.** `CONFIG_FREERTOS_HZ=100`: one tick is 10 ms, so
 `pdMS_TO_TICKS(n)` for n<10 is ZERO and `vTaskDelay(0)` never yields to

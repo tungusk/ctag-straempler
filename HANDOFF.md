@@ -9,6 +9,61 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-09 late — DISPLAY REDRAW SPEED, stages 1+2 (bail tag `pre-redraw-speed-20260909`)
+
+Arlo: "the screen is the weak link" but audio wins — anything that hurts audio
+is not worth it. Commits `ce2aa07..` on `v09-machines` + fork lib `7b30a32`,
+`4e6d866` (submodule `shadow-framebuffer`), all PUSHED; **.85 runs it with
+`tftclk` persisted at 40**. Unit 1 untouched (still on the old build).
+
+- **Measure first**: `/sysinfo` now carries `"tft"` = `clk` (MHz), `shadow`
+  (FB allocated), `ev` (last user-driven draw us — a machine switch is a full
+  repaint), `worst`+`wev` (event id), `tick`/`tickw` (last/worst timer-tick
+  repaint), `avg`, `n`. `/sysinfo?tftclear=1` resets. `ui_ev_loop` times
+  every event around `menuProcessEvent`.
+- **`settings.tftclk`** (MHz, default = the library's 26; clamp 8–80): read at
+  boot in `configDisplay`, live over `POST /settings` (under `disp_lock`),
+  reported live on GET. **Must go in the next beta's notes.**
+- **`GET /tftread?pattern=1&clk=N[&keep=1]`** = the per-unit PROOF for a
+  write clock: 1280 px of bit-stress patterns through the DMA path at clock N,
+  read back at 1 MHz, mismatches counted (+ how many read all-zero/all-FF, a
+  byte sum; `keep=1` leaves the stripe up for an eyeball). Needs SJ1 bridged.
+- **Finding: 40 MHz "failed" only because of the driver.** The lobo SPI driver
+  inserts a read-side dummy clock on EVERY transaction at >=40 MHz through the
+  GPIO matrix (display pins 18/19/23/5 are VSPI's on the HSPI host = matrix),
+  so the panel dropped every write (1280/1280 read back untouched black). New
+  `LB_SPI_DEVICE_NO_DUMMY` flag (lib `7b30a32`, mirrors IDF's
+  `SPI_DEVICE_NO_DUMMY`), set on the TFT device in `ui.c`. After that: 26/40/80
+  MHz all bit-exact, 25/25 runs each. 32 is not a real divider (80/3 = 26.7,
+  80/2 = 40, 80/1 = 80).
+- **Stage 2 (lib `4e6d866`)**: `shadow_win` row-wise memcpy (was per-pixel
+  with 4 compares), persistent `trans_cline` (was malloc/free per fillRect),
+  persistent glyph DMA scratch (was malloc/free per CHARACTER, silent
+  per-pixel fallback on OOM). Screenshot verified pixel-correct after.
+- **Numbers (.85, machine-switch full repaint, ms; shadow off / on)**:
+  Synth 26 MHz 409/502 · 40 MHz 297/393 · 80 MHz 185/281;
+  Tracker 354/439 · 248/337 · 143/234. Pure page repaint (`ev=enter`) on
+  Synth with shadow: 170 / 122 / 80 ms. Shadow tax was ~190 ms before stage 2,
+  ~95 ms after — now PSRAM-bandwidth bound. **A Synth page pushes ~5 screens'
+  worth of pixels** (overdraw) — that is stage 3's target, and the reason a
+  1 Hz Tape waveform tick costs 143 ms.
+- **Audio gate (`tools/bench/tft_gate.py`, Scarlett)**: Synth + reverb, held
+  note, continuous full repaints: control 0 events; 26 MHz 1, 40 MHz 2, 80 MHz
+  1 marginal event (1.6–1.9x ceiling, mid) in 30 s at 122/156/218 repaints.
+  The clock adds nothing; the repaint LOAD itself costs an occasional marginal
+  event at every clock (pre-existing; fewer pixels is the cure). `auspk` <=
+  control. Rig note: noise floor -47 dBFS today vs -61..-66 at the July
+  calibration — worth a cable check before the next serious hunt.
+- **Bench gotcha**: `/remote/event?ev=enter` now exists (full repaint on
+  demand). The rig scripts default to unit 1's IP — `STRAEMPLER_IP=192.168.3.85`.
+- **Open**: (a) default `tftclk` in firmware stays 26 — decide whether the
+  shipped default becomes 40 (proof per unit via the pattern test; 80 is out
+  of the ESP32 GPIO-matrix spec though bit-exact here); (b) stage 3 = fewer
+  pixels per page (use `tft.ev`/`tickw` to rank; Tracker/Deck/DoubleDecker/
+  Looper repaint unconditionally every 300 ms); (c) with readback working,
+  `/screenshot` could read GRAM directly and skip the shadow FB entirely on
+  bridged units (zero shadow tax — the Remote tab allocates it on every open).
+
 ## 2026-09-09 — SECOND PUBLIC BETA: `v0.10-beta2` (tag at `73d8828`)
 
 Ear pass PASSED on .85 (clock into CV4 → Deck LOCK, lock rides Deck→Tape→
