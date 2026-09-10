@@ -893,7 +893,9 @@ static int tape_action(int i)
 
 static setup_menu_t tape_setup = {
     .items = tape_setup_items,
-    .n = 28,
+    // COUNT THE TABLE: this was 28 against a 29-entry table, so the appended
+    // "FX Route" row was unreachable on the device (it is index 28)
+    .n = (int)(sizeof(tape_setup_items) / sizeof(tape_setup_items[0])),
     .title = "Tape Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_TAPE_MAIN,

@@ -51,8 +51,11 @@ static bool s_skip_clear = false;
 #define SLIVE_ENV_N  4                    // A D S R
 #define SLIVE_LFO_N  5                    // sync, div/rate, shape, amount, dest
 static int s_env_view = 0;                // 0 = ADSR, 1 = LFO
-static int slive_n(void)     { return SLIVE_BASE + (s_env_view ? SLIVE_LFO_N : SLIVE_ENV_N) + 1; }
-static int slive_title_el(void) { return slive_n() - 1; }
+static int slive_n(void)        { return SLIVE_BASE + 1 + (s_env_view ? SLIVE_LFO_N : SLIVE_ENV_N); }
+// the header sits BEFORE its own params, so the scroll reads in order:
+// tag, dials, ENV/LFO header, then that view's values (Arlo 2026-09-10)
+static int slive_title_el(void) { return SLIVE_BASE; }
+static int slive_param0(void)   { return SLIVE_BASE + 1; }
 static int  s_live_sel  = 1;      // start on the first dial
 static bool s_live_edit = false;
 static int slive_focus(int e) { return s_live_sel != e ? 0 : (s_live_edit ? 2 : 1); }
@@ -251,7 +254,7 @@ static void draw_adsr(void)
     int sw = (w - 4) - aw - dw - rw;
     int xb = x + 2, yb = y + h - 2, yt = y + 2;
     int ys = yb - (int)(sy.sus * (float)(h - 4));
-    int adsr_sel = (s_live_sel >= 5 && s_live_sel <= 8);   // an A/D/S/R point is the focus
+    int adsr_sel = (s_live_sel >= slive_param0() && s_live_sel < slive_n());   // an A/D/S/R point is the focus
     // dim the envelope polyline unless it's the selected element
     color_t col = adsr_sel ? (color_t){60, 200, 120} : (color_t){30, 96, 58};
     int x1 = xb + aw, x2 = x1 + dw, x3 = x2 + sw, x4 = x3 + rw;
@@ -266,10 +269,11 @@ static void draw_adsr(void)
         TFT_drawLine(x3 + dx, ys + dy, x4 + dx, yb + dy, col);
     }
     if (adsr_sel) {   // encoder-nav focus point (A/D/S/R)
-        int mx = x1, my = yt;
-        if (s_live_sel == 6) { mx = x2; my = ys; }
-        else if (s_live_sel == 7) { mx = x3; my = ys; }
-        else if (s_live_sel == 8) { mx = x4; my = yb; }
+        int mx = x1, my = yt;                              // param0 = A
+        int k = s_live_sel - slive_param0();
+        if (k == 1)      { mx = x2; my = ys; }
+        else if (k == 2) { mx = x3; my = ys; }
+        else if (k == 3) { mx = x4; my = yb; }
         // bigger, green selection dot (edit mode stays amber to read distinct)
         int r = s_live_edit ? 6 : 5;
         // keep the whole dot inside the cleared rect (right = x+w-1, bottom =
@@ -323,7 +327,7 @@ static void draw_lfo(void)
 
     int cw = w / SLIVE_LFO_N;
     for (int i = 0; i < SLIVE_LFO_N; i++) {
-        int cx = x + i * cw + cw / 2, f = (s_live_sel == SLIVE_BASE + i);
+        int cx = x + i * cw + cw / 2, f = (s_live_sel == slive_param0() + i);
         _fg = f ? (color_t){130,130,140} : (color_t){80,80,90};
         TFT_setFont(DEF_SMALL_FONT, NULL);
         int lw = TFT_getStringWidth((char*)lab[i]);
@@ -401,8 +405,8 @@ static void slive_edit(int dir)
         case 4: sy.env_to_cut  = sclampf(sy.env_to_cut + d * 0.05f, 0.0f, 1.0f); break;
         default: break;
     }
-    if (s_live_sel >= SLIVE_BASE && s_live_sel < slive_title_el()) {
-        int k = s_live_sel - SLIVE_BASE;
+    if (s_live_sel >= slive_param0()) {
+        int k = s_live_sel - slive_param0();
         if (!s_env_view) {                       // ENV view: A D S R
             switch (k) {
                 case 0: sy.atk = sclampf(sy.atk + d * 0.005f, 0.0005f, 2.0f); break;
@@ -522,6 +526,7 @@ static const setup_item_t sy_setup_items[] = {
     {"Attack",    ST_RANGE},  {"Decay",     ST_RANGE},  {"Sustain",   ST_RANGE},
     {"Release",   ST_RANGE},  {"Env>Cut",   ST_RANGE},  {"Glide",     ST_RANGE},
     {"LFO Rate",  ST_RANGE},  {"LFO Depth", ST_RANGE},  {"LFO Dest",  ST_TOGGLE},
+    {"LFO Sync",  ST_TOGGLE}, {"LFO Div",   ST_TOGGLE}, {"LFO Shape", ST_TOGGLE},
     {"Level",     ST_RANGE},
     {"Load Wave", ST_ACTION}, {"CV Matrix", ST_ACTION},
     {"FX1",        ST_ACTION}, {"FX2",       ST_ACTION}, {"FX3 Reverb", ST_ACTION},
@@ -567,15 +572,20 @@ static void setup_val(int i, char *v, size_t n)
         case 12: snprintf(v, n, "%.1f Hz", sy.lfo_rate); break;
         case 13: snprintf(v, n, "%.0f%%", sy.lfo_depth * 100.0f); break;
         case 14: snprintf(v, n, "%s", sy.lfo_dest == LFO_CUT ? "cutoff" : sy.lfo_dest == LFO_PITCH ? "pitch" : "off"); break;
-        case 15: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
-        case 16: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
-        case 17: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx.src[d] >= 0) on++;
+        case 15: snprintf(v, n, "%s", sy.lfo_sync ? "on" : "off"); break;
+        case 16: snprintf(v, n, "%s", sy_lfo_div_name(sy.lfo_div)); break;
+        case 17: { static const char *sh[LFO_SHAPE_N] = {"sine","tri","saw","sqr","rnd"};
+                   int q = (sy.lfo_shape < 0 || sy.lfo_shape >= LFO_SHAPE_N) ? 0 : sy.lfo_shape;
+                   snprintf(v, n, "%s", sh[q]); break; }
+        case 18: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
+        case 19: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
+        case 20: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx.src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
-        case 18: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 0)); break;
-        case 19: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 1)); break;
-        case 20: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 2)); break;
-        case 21: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
-        case 22: snprintf(v, n, "load >"); break;
+        case 21: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 0)); break;
+        case 22: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 1)); break;
+        case 23: snprintf(v, n, "%s >", fxrack_slot_name(&sy_rk, 2)); break;
+        case 24: snprintf(v, n, "%s", s_last_saved[0] ? s_last_saved : "save >"); break;
+        case 25: snprintf(v, n, "load >"); break;
     }
 }
 
@@ -598,29 +608,45 @@ static void sy_adj(int i, int dir)
         case 12: sy.lfo_rate += d * 0.25f; if (sy.lfo_rate < 0.05f) sy.lfo_rate = 0.05f; if (sy.lfo_rate > 20) sy.lfo_rate = 20; break;
         case 13: sy.lfo_depth += d * 0.05f; if (sy.lfo_depth < 0) sy.lfo_depth = 0; if (sy.lfo_depth > 1) sy.lfo_depth = 1; break;
         case 14: sy.lfo_dest += dir; if (sy.lfo_dest < 0) sy.lfo_dest = 2; if (sy.lfo_dest > 2) sy.lfo_dest = 0; break;
-        case 15: sy.level += d * 0.05f; if (sy.level < 0) sy.level = 0; if (sy.level > 1) sy.level = 1; break;
+        case 15: sy.lfo_sync = !sy.lfo_sync; break;
+        case 16: {
+            sy.lfo_div += dir;
+            if (sy.lfo_div < 0) sy.lfo_div = SY_LFO_DIV_N - 1;
+            else if (sy.lfo_div >= SY_LFO_DIV_N) sy.lfo_div = 0;
+            break;
+        }
+        case 17: {
+            sy.lfo_shape += dir;
+            if (sy.lfo_shape < 0) sy.lfo_shape = LFO_SHAPE_N - 1;
+            else if (sy.lfo_shape >= LFO_SHAPE_N) sy.lfo_shape = 0;
+            break;
+        }
+        case 18: sy.level += d * 0.05f; if (sy.level < 0) sy.level = 0; if (sy.level > 1) sy.level = 1; break;
     }
 }
 
 static int sy_setup_action(int i)
 {
-    if (i == 16) return M_SYNTH_LOAD;      // Load Wave -> browser
-    if (i == 17) { s_setup_return = 17; return M_SYNTH_MATRIX; }   // CV Matrix
-    if (i == 18) { s_setup_return = 18; s_cur_slot = 0; return M_SYNTH_FX; }   // FX1
-    if (i == 19) { s_setup_return = 19; s_cur_slot = 1; return M_SYNTH_FX; }   // FX2
-    if (i == 20) { s_setup_return = 20; s_cur_slot = 2; return M_SYNTH_FX; }   // FX3 reverb
-    if (i == 21) {                         // Save Patch: mint + write, stay on Setup
+    if (i == 19) return M_SYNTH_LOAD;      // Load Wave -> browser
+    if (i == 20) { s_setup_return = 20; return M_SYNTH_MATRIX; }   // CV Matrix
+    if (i == 21) { s_setup_return = 21; s_cur_slot = 0; return M_SYNTH_FX; }   // FX1
+    if (i == 22) { s_setup_return = 22; s_cur_slot = 1; return M_SYNTH_FX; }   // FX2
+    if (i == 23) { s_setup_return = 23; s_cur_slot = 2; return M_SYNTH_FX; }   // FX3 reverb
+    if (i == 24) {                         // Save Patch: mint + write, stay on Setup
         if (synth_patch_save(s_last_saved, sizeof(s_last_saved)) != 0)
             snprintf(s_last_saved, sizeof(s_last_saved), "err");
         return 0;                          // framework redraws -> row shows the id
     }
-    if (i == 22) return M_SYNTH_PATCH;     // Load Patch -> patch browser
+    if (i == 25) return M_SYNTH_PATCH;     // Load Patch -> patch browser
     return 0;
 }
 
 static setup_menu_t sy_setup = {
     .items = sy_setup_items,
-    .n = 23,
+    // COUNT THE TABLE, never a literal: this was 23 while the table grew to 26
+    // when the LFO rows went in, which silently dropped FX3 Reverb, Save Patch
+    // and Load Patch off the end of the page
+    .n = (int)(sizeof(sy_setup_items) / sizeof(sy_setup_items[0])),
     .title = "Synth Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_SYNTH_LIVE,

@@ -179,11 +179,25 @@ scoping an "add an LFO" request in the other machines.
   dot straddled x=8 and left green crumbs outside the rect. Invisible until
   something stopped repainting over them, which the view switch does. Verified
   gone by scanning the BMP for green pixels left of the strip.
-- **Not done**: the three new params are not on the Setup page. Inserting rows
+- **Setup rows added** (`LFO Sync` / `LFO Div` / `LFO Shape` at 15/16/17), which
+  renumbered everything after them — Level 18, Load Wave 19, CV Matrix 20,
+  FX1-3 21-23, Save/Load Patch 24/25, in the value formatter, the adjust
+  handler AND the action mapping.
+- **`setup_menu_t.n` IS A HARDCODED LITERAL and it bit immediately**: Synth's
+  was 23 while the table grew to 26, silently dropping FX3 Reverb, Save Patch
+  and Load Patch off the end of the page. Both Synth and Tape now derive it
+  with `sizeof(table)/sizeof(table[0])`. **Audit the rest if you add rows**:
+  deck 12, glitch 5, granular 5, slicer 8, tracker 8 all matched their tables,
+  but **TAPE WAS ALREADY WRONG before this session** — `.n = 28` against a
+  29-entry table, so the appended `FX Route` row (pre/post, index 28) had been
+  unreachable on the device. Fixed here.
+- **Header before its params** (Arlo): the ENV/LFO title is element `SLIVE_BASE`
+  (5) and the view's values run from `slive_param0()` (6), so the scroll reads
+  tag -> dials -> header -> A D S R (or the five LFO cells) in order.
+- **Old note, superseded**: the three params were briefly Live-page only. Inserting rows
   after the existing LFO ones would renumber ~15 `case` labels including the
   ACTION mapping (Load Wave / CV Matrix / FX / patches), which is a bad trade
-  for a param already reachable on Live and in the web ADVANCED table. **Keys
-  is next** — same section, lifted the way the ADSR was.
+  **Keys is next** — same section, lifted the way the ADSR was.
 
 ## 2026-09-10 — FX sliders take the CV matrix's grey
 
