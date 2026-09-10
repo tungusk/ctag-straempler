@@ -1510,6 +1510,7 @@ static esp_err_t remote_event_handler(httpd_req_t *req)
     else if (strcmp(evs, "bwd")   == 0) ev = EV_BWD;
     else if (strcmp(evs, "press") == 0) ev = EV_SHORT_PRESS;
     else if (strcmp(evs, "long")  == 0) ev = EV_LONG_PRESS;
+    else if (strcmp(evs, "enter") == 0) ev = EV_ENTERED_MENU;   // full page repaint (bench: redraw load while audio plays)
     else {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad ev");
         return ESP_FAIL;
