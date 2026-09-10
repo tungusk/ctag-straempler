@@ -15,6 +15,7 @@
 #include "ui_events.h"
 #include "tft.h"
 #include "tftspi.h"
+#include "esp_heap_caps.h"   // DMA band buffer for the waveform blit
 #include "machine.h"
 #include "sample_browser.h"
 #include "sample_ram.h"
@@ -76,6 +77,11 @@ static color_t wave_lit(void)
     return (color_t){35, 120, 255};                     // saturated blue
 }
 
+// Redraw-speed discipline (2026-09-09): a FULL redraw clears the screen once;
+// the black per-element clears are skipped then.
+static bool s_skip_clear = false;
+#define CLEAR_RECT(x, y, w, h) do { if (!s_skip_clear) TFT_fillRect((x), (y), (w), (h), TFT_BLACK); } while (0)
+
 static int s_last_ph = -1;
 static int s_last_state = -1;         // last transport state for the border
 static unsigned s_sig_head = 0, s_sig_crop = 0, s_sig_name = 0;
@@ -119,7 +125,7 @@ static const char *header_name(char *buf, size_t n)
 // fast tick — must NOT touch row B's rows.
 static void draw_header_status(void)
 {
-    _bg = TFT_BLACK; TFT_fillRect(0, 0, _width, HDR_A_H, _bg);
+    _bg = TFT_BLACK; CLEAR_RECT(0, 0, _width, HDR_A_H);
     TFT_setFont(DEF_SMALL_FONT, NULL);
     _fg = (color_t){150, 155, 172}; TFT_print("Tape", 6, 2);
     tape_beat_frames();
@@ -141,7 +147,7 @@ static void draw_header_name(void)
     // clear to the waveform top (not w_y()-2): the selection box needs the extra
     // rows, and anything drawn below the cleared band becomes a STALE line that
     // nothing erases — which is exactly how the thick box left an "underline"
-    _bg = TFT_BLACK; TFT_fillRect(0, HDR_A_H, _width, w_y() - HDR_A_H, _bg);
+    _bg = TFT_BLACK; CLEAR_RECT(0, HDR_A_H, _width, w_y() - HDR_A_H);
     char nb[24];
     const char *nm = header_name(nb, sizeof(nb));
     bool sel = (s_btn == TB_NAME) && tp.rec_dest == TPD_TAPE;
@@ -182,12 +188,22 @@ static unsigned name_sig(void)
 
 static void draw_header(void) { draw_header_status(); draw_header_name(); }
 
-// one waveform column (also used to erase the playhead)
-static void wave_col(int x)
+// One waveform column, described: what wave_col() paints for column x. Both
+// the single-column painter (playhead erase) and the band rasterizer
+// (draw_wave) paint from this, so they cannot disagree pixel for pixel.
+typedef struct {
+    uint8_t grid;    // 0 none, 1 GRID_COL, 2 BAR_COL (full height + 1 px overshoot)
+    uint8_t lit;     // wave colour: 1 = transport colour, 0 = dim
+    uint8_t crop;    // crop-edge tick (full height)
+    uint8_t box;     // loop box: 0 none, 1 full-height edge, 2 top/bottom 3 px
+    int16_t ph;      // wave half-height, 0 = no wave
+} wcol_t;
+
+static bool wave_col_desc(int x, wcol_t *d)
 {
-    int y0 = w_y(), h = w_h(), cy = y0 + h / 2;
-    if (x < W_X || x >= W_X + W_W) return;
-    _bg = TFT_BLACK; TFT_fillRect(x, y0, 1, h, _bg);
+    int h = w_h();
+    memset(d, 0, sizeof(*d));
+    if (x < W_X || x >= W_X + W_W) return false;
     uint32_t ein, eout; tape_eff_window(&ein, &eout);
     int xi = frame_x(ein), xo = frame_x(eout);
     // grid tick at this column?
@@ -202,7 +218,7 @@ static void wave_col(int x)
             int tx2 = frame_x((uint32_t)(tick + (long)b));
             if (x == tx || x == tx2) {
                 long bidx = (x == tx) ? bi : bi + 1;
-                TFT_drawLine(x, y0, x, y0 + h, (bidx % 4 == 0) ? BAR_COL : GRID_COL);
+                d->grid = (bidx % 4 == 0) ? 2 : 1;
             }
         }
     }
@@ -219,11 +235,12 @@ static void wave_col(int x)
         bool crop_set = tp.out_pt > tp.in_pt;
         bool inside = crop_set ? (fr >= (long)ein && fr < (long)eout)
                                : (tp.recording && fr < (long)tp.len);
-        TFT_drawLine(x, cy - ph, x, cy + ph, inside ? wave_lit() : WF_DIM);
+        d->ph = (int16_t)ph;
+        d->lit = inside ? 1 : 0;
     }
     // always-on crop edge ticks (1px cyan) — the loop's boundaries stay marked
     // even when nothing is selected; the box and draw_crop_sel paint over them
-    if (x == xi || x == xo) TFT_drawLine(x, y0, x, y0 + h - 1, CROP_COL);
+    if (x == xi || x == xo) d->crop = 1;
     // LOOP BOX (Arlo 2026-07-25): a thick outline around the loop area, drawn
     // ONLY while the Window element is selected — WHITE while merely
     // highlighted, GREEN once grabbed, so green always means "turning the
@@ -233,15 +250,67 @@ static void wave_col(int x)
     // top/bottom edges; kept inside y0..y0+h-1, the band wave_col clears.
     if (s_btn == TB_WIN && x >= xi && x <= xo) {
         const int BOX_T = 3;                        // outline thickness (px)
-        color_t bc = s_grab ? (color_t){30, 215, 90} : (color_t){235, 238, 245};
-        int yb = y0 + h - 1;
-        if (x < xi + BOX_T || x > xo - BOX_T) TFT_drawLine(x, y0, x, yb, bc);
-        else for (int k = 0; k < BOX_T; k++) {
-            TFT_drawPixel(x, y0 + k, bc, 1);
-            TFT_drawPixel(x, yb - k, bc, 1);
-        }
+        d->box = (x < xi + BOX_T || x > xo - BOX_T) ? 1 : 2;
     }
-    TFT_drawPixel(x, cy, (color_t){200, 206, 218}, 1);   // white origin line (over the wave centre)
+    return true;
+}
+static color_t wave_box_col(void)   { return s_grab ? (color_t){30, 215, 90} : (color_t){235, 238, 245}; }
+static color_t wave_origin_col(void) { return (color_t){200, 206, 218}; }
+
+// one waveform column (also used to erase the playhead)
+static void wave_col(int x)
+{
+    int y0 = w_y(), h = w_h(), cy = y0 + h / 2, yb = y0 + h - 1;
+    wcol_t d;
+    if (!wave_col_desc(x, &d)) return;
+    _bg = TFT_BLACK; TFT_fillRect(x, y0, 1, h, _bg);
+    if (d.grid) TFT_drawLine(x, y0, x, y0 + h, d.grid == 2 ? BAR_COL : GRID_COL);
+    if (d.ph)   TFT_drawLine(x, cy - d.ph, x, cy + d.ph, d.lit ? wave_lit() : WF_DIM);
+    if (d.crop) TFT_drawLine(x, y0, x, yb, CROP_COL);
+    if (d.box == 1) TFT_drawLine(x, y0, x, yb, wave_box_col());
+    else if (d.box == 2) {
+        color_t bc = wave_box_col();
+        for (int k = 0; k < 3; k++) { TFT_drawPixel(x, y0 + k, bc, 1); TFT_drawPixel(x, yb - k, bc, 1); }
+    }
+    TFT_drawPixel(x, cy, wave_origin_col(), 1);   // white origin line (over the wave centre)
+}
+
+// The whole strip in one pass: rasterise 6-row bands into a DMA buffer and
+// blit each (about 18 transfers) instead of 300 columns x 3-4 transactions.
+// Paints exactly what wave_col() paints, in the same priority order. The
+// 2 px margins either side of the wave are painted black like the old strip
+// clear did. Returns false (nothing drawn) if the buffers can't be had.
+static bool draw_wave_blit(void)
+{
+    const int x0 = W_X - 2, wcols = W_W + 4, y0 = w_y(), h = w_h(), cyr = h / 2;
+    const int BAND = 6;
+    color_t *buf  = heap_caps_malloc((size_t)wcols * BAND * sizeof(color_t), MALLOC_CAP_DMA);
+    wcol_t  *desc = heap_caps_malloc((size_t)wcols * sizeof(wcol_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf || !desc) { free(buf); free(desc); return false; }
+    for (int c = 0; c < wcols; c++) wave_col_desc(x0 + c, &desc[c]);
+    const color_t black = {0, 0, 0}, lit = wave_lit(), dim = WF_DIM, bc = wave_box_col(), org = wave_origin_col();
+    for (int r0 = 0; r0 < h; r0 += BAND) {
+        int rows = (h - r0 < BAND) ? (h - r0) : BAND;
+        for (int r = 0; r < rows; r++) {
+            int rr = r0 + r;
+            color_t *row = buf + r * wcols;
+            for (int c = 0; c < wcols; c++) {
+                const wcol_t *d = &desc[c];
+                color_t px = black;
+                if (d->grid) px = (d->grid == 2) ? BAR_COL : GRID_COL;
+                if (d->ph && rr >= cyr - d->ph && rr <= cyr + d->ph) px = d->lit ? lit : dim;
+                if (d->crop) px = CROP_COL;
+                if (d->box == 1 || (d->box == 2 && (rr < 3 || rr > h - 4))) px = bc;
+                if (rr == cyr) px = org;
+                row[c] = px;
+            }
+        }
+        if (disp_select() != ESP_OK) break;
+        send_data(x0, y0 + r0, x0 + wcols - 1, y0 + r0 + rows - 1, (uint32_t)(wcols * rows), buf);
+        disp_deselect();
+    }
+    free(buf); free(desc);
+    return true;
 }
 
 // bold the selected crop edge so it's obvious which point you're editing
@@ -269,7 +338,13 @@ static void draw_crop_sel(void)
 static void draw_wave(void)
 {
     int y0 = w_y(), h = w_h();
-    _bg = TFT_BLACK; TFT_fillRect(W_X - 2, y0, W_W + 4, h, _bg);
+    if (tp.len && draw_wave_blit()) {          // the fast path paints every pixel of the strip
+        draw_crop_sel();
+        s_last_ph = -1;
+        s_wave_len = tp.len;
+        return;
+    }
+    _bg = TFT_BLACK; CLEAR_RECT(W_X - 2, y0, W_W + 4, h);
     if (tp.len == 0) {
         if (tp.tr2_armed) {                            // long-press erased, waiting for release
             const char *m = "Armed: Release to Record!";
@@ -288,6 +363,7 @@ static void draw_wave(void)
         s_wave_len = 0;
         return;
     }
+    if (s_skip_clear) TFT_fillRect(W_X - 2, y0, W_W + 4, h, TFT_BLACK);   // fallback path: wave_col needs a black strip
     for (int x = W_X; x < W_X + W_W; x++) wave_col(x);
     draw_crop_sel();
     s_last_ph = -1;
@@ -310,7 +386,7 @@ static void draw_playhead(void)
 static void draw_crop_readout(void)
 {
     int y = crop_ry();
-    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, TFT_getfontheight() + 3, _bg);
+    _bg = TFT_BLACK; CLEAR_RECT(0, y, _width, TFT_getfontheight() + 3);
     if (tp.rec_dest == TPD_CARD) return;
     uint32_t bt = tape_beat_frames();
     if (tp.recording) {                              // while recording, the crop is meaningless —
@@ -356,7 +432,7 @@ static void draw_buttons(void)
 {
     int fh = TFT_getfontheight();
     int y = strip_y();
-    _bg = TFT_BLACK; TFT_fillRect(0, y - 2, _width, fh * 2 + 8, _bg);
+    _bg = TFT_BLACK; CLEAR_RECT(0, y - 2, _width, fh * 2 + 8);
     if (tp.rec_dest == TPD_CARD) return;
 
     // TB_CLR slot repurposed 2026-07-20 (Arlo): Live gets the crop — Clear was
@@ -416,7 +492,7 @@ static void draw_hint(void)
 {
     int y = strip_y() + (TFT_getfontheight() * 2 + 6);
     TFT_setFont(DEF_SMALL_FONT, NULL);
-    _bg = TFT_BLACK; TFT_fillRect(0, y, _width, TFT_getfontheight() + 2, _bg);
+    _bg = TFT_BLACK; CLEAR_RECT(0, y, _width, TFT_getfontheight() + 2);
     bool stopped = tp_ui_stopped();
     const char *h = "";
     if (tp.rec_dest == TPD_CARD) h = "";
@@ -486,10 +562,12 @@ static void main_full_redraw(void)
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
+    s_skip_clear = true;                 // the screen is already black
     draw_header();  s_sig_head = head_sig(); s_sig_name = name_sig();
     draw_wave();                         // includes the crop highlight
     draw_playhead();
     redraw_strip(); s_sig_crop = crop_sig();
+    s_skip_clear = false;
 }
 
 // ---- crop-point edit (only while a crop element is grabbed) --------------------
