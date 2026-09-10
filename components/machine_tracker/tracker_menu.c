@@ -45,6 +45,11 @@ static void refresh_mods(void){
 #define STAT_Y   80
 #define BODY_Y   140        // sample-name panel: BELOW the bar (off by default)
 static char s_type[48] = "", s_stat[48] = "";
+// Redraw-speed discipline (2026-09-09): a FULL redraw clears the screen once;
+// the per-element clears below are skipped then (they re-blacked ~65k px on
+// top of the 77k px fillScreen).
+static bool s_skip_clear = false;
+#define CLEAR_RECT(x, y, w, h) do { if (!s_skip_clear) TFT_fillRect((x), (y), (w), (h), TFT_BLACK); } while (0)
 static char s_title[TRK_TITLE_LEN] = "";
 static char s_body_sig[32] = "";
 static int  s_body_top = -999;
@@ -173,7 +178,7 @@ static void draw_title(void){
     Font f = cfont;
     TFT_setFont(DEJAVU24_FONT, NULL);
     int bh = TFT_getfontheight();
-    _bg = TFT_BLACK; TFT_fillRect(0, TITLE_Y, _width, bh + 4, _bg);
+    _bg = TFT_BLACK; CLEAR_RECT(0, TITLE_Y, _width, bh + 4);
     _fg = TFT_WHITE;
     char nm[24]; snprintf(nm, sizeof(nm), "%.22s", trk.title[0] ? trk.title : "(untitled)");
     TFT_print(nm, 8, TITLE_Y);
@@ -231,13 +236,13 @@ static void draw_info(void){
     }
     if (strcmp(ty, s_type) != 0){
         strcpy(s_type, ty);
-        _bg = TFT_BLACK; TFT_fillRect(0, TYPE_Y, _width, fh + 4, _bg);
+        _bg = TFT_BLACK; CLEAR_RECT(0, TYPE_Y, _width, fh + 4);
         _fg = (trk.state == TRK_FAIL) ? (color_t){230, 120, 120} : (color_t){120, 200, 255};
         TFT_print(ty, 8, TYPE_Y);
     }
     if (strcmp(st, s_stat) != 0){
         strcpy(s_stat, st);
-        _bg = TFT_BLACK; TFT_fillRect(0, STAT_Y, _width, fh + 4, _bg);
+        _bg = TFT_BLACK; CLEAR_RECT(0, STAT_Y, _width, fh + 4);
         _fg = trk.loop_engage ? (color_t){235, 120, 175} : TFT_WHITE;
         if (st[0]) TFT_print(st, 8, STAT_Y);
     }
@@ -251,7 +256,7 @@ static void draw_body(bool force){
     if (!trk.show_text){
         if (!force && s_body_top == -1){ cfont = f; return; }   // already blank
         s_body_top = -1; s_body_sig[0] = 0;
-        _bg = TFT_BLACK; TFT_fillRect(0, BODY_Y, _width, _height - BODY_Y, _bg);
+        _bg = TFT_BLACK; CLEAR_RECT(0, BODY_Y, _width, _height - BODY_Y);
         cfont = f;
         return;
     }
@@ -264,18 +269,24 @@ static void draw_body(bool force){
     // knob7/CV7 scrolls the list — but only in the TOP HALF of its range (the
     // lower half rests at line 1), and NOT while looping (there CV7 = loop len).
     uint16_t cv[8]; audio_get_cv(cv);
+    // hysteresis: the knob must move a real amount (24 counts ~ 0.6 %) before
+    // the scroll position is recomputed, so ADC jitter on a row boundary can't
+    // flip `top` back and forth and repaint the whole panel every tick
+    static int s_scroll_cv = -1000;
+    int dcv = (int)cv[6] - s_scroll_cv;
+    if (force || dcv > 24 || dcv < -24) s_scroll_cv = cv[6];
     int top = 0;
     if (trk.loop_engage){
         top = s_body_top >= 0 ? s_body_top : 0;   // hold position while looping
-    } else if (maxtop > 0 && cv[6] > 2048){
-        top = (int)((int64_t)(cv[6] - 2048) * maxtop / (4095 - 2048));
+    } else if (maxtop > 0 && s_scroll_cv > 2048){
+        top = (int)((int64_t)(s_scroll_cv - 2048) * maxtop / (4095 - 2048));
         if (top < 0) top = 0;
         if (top > maxtop) top = maxtop;
     }
     char sig[32]; snprintf(sig, sizeof(sig), "N%d.%d:%.10s", n, top, n ? trk.names[0] : "");
     if (!force && top == s_body_top && strcmp(sig, s_body_sig) == 0){ cfont = f; return; }
     s_body_top = top; strlcpy(s_body_sig, sig, sizeof(s_body_sig));
-    _bg = TFT_BLACK; TFT_fillRect(0, BODY_Y, _width, _height - BODY_Y, _bg);
+    _bg = TFT_BLACK; CLEAR_RECT(0, BODY_Y, _width, _height - BODY_Y);
     int y = BODY_Y;
     for (int i = 0; i < rows && top + i < n; i++){
         int has = trk.names[top + i][0] != 0;
@@ -293,10 +304,12 @@ static void live_full_redraw(void){
     _bg = TFT_BLACK; _fg = TFT_WHITE;
     TFT_setFont(DEFAULT_FONT, NULL);
     TFT_print("Tracker", 6, HDR_Y);
+    s_skip_clear = true;                 // the screen is already black
     s_title[0] = 0; draw_title();
     s_type[0] = 0; s_stat[0] = 0; draw_info();
     s_bar_state = -1; draw_bar();
     s_body_sig[0] = 0; s_body_top = -999; draw_body(true);
+    s_skip_clear = false;
 }
 
 static int tracker_live_handler(int it_id, int event, void *ev_data){
