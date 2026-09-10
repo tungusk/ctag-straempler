@@ -66,9 +66,15 @@ half mode, and **typing works whether or not a key is on screen**. .85 runs it.
 - **Full width moves the card in the DOM**: `#midihome` (left column) <->
   `#midiband`, a full-width band under the top pair. **The mode follows the
   WINDOW** (`midiAuto()`, `innerWidth>=1040` — the same breakpoint the rest of
-  the tab uses for one column vs two), so the manual full/half button is gone.
+  the tab uses for one column vs two), **with a three-state button to override
+  it** (`51e76ee`): `auto` -> `full` -> `half` -> `auto`, kept per browser in
+  `web_midiw`, living in `#midiaux` so it rides into the gutter in wide mode.
+  Unknown stored values fall back to auto — that key held `'1'`/`'0'` when the
+  width was a plain toggle, and the legacy value fell through the cycle map and
+  wedged the button on `undefined`.
   Verified 1101 -> wide/midiband/29 keys, 900 -> half/midihome/17 keys/nav
-  shown, and back. **Consequence, accepted by Arlo:** in full width the left
+  shown, and back; cycle verified auto/full/half with the pin honoured at a
+  1209 px window. **Consequence, accepted by Arlo:** in full width the left
   column loses its tallest card, so the ~150 px gap under the panel returns.
 - **`#midihome` MUST be `display:contents`.** Wrapping the card in it made the
   wrapper the flex item, so the single-column media query's `#midicard{order:2}`
