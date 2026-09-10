@@ -194,7 +194,8 @@ void configDisplay(){
         .mode=0,                                // SPI mode 0
         .spics_io_num=-1,                       // we will use external CS pin
         .spics_ext_io_num=SPI_TFT_CS_PIN,           // external CS pin
-        .flags=LB_SPI_DEVICE_HALFDUPLEX,           // ALWAYS SET  to HALF DUPLEX MODE!! for display spi
+        .flags=LB_SPI_DEVICE_HALFDUPLEX            // ALWAYS SET  to HALF DUPLEX MODE!! for display spi
+              | LB_SPI_DEVICE_NO_DUMMY,            // writes at >=40 MHz through the GPIO matrix must not get the read-side dummy clock (reads stay <=10 MHz, see /tftread)
     };
     vTaskDelay(500 / portTICK_RATE_MS);
     // ==== Initialize the SPI bus and attach the LCD to the SPI bus ====

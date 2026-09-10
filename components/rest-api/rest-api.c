@@ -695,7 +695,7 @@ extern uint32_t ui_tft_set_clock_hz(uint32_t hz);
 // back at 1 MHz, and counts pixels that differ (RGB666: low 2 bits masked).
 // The rows are restored from the shadow FB when it exists, else the UI is
 // asked to redraw. This is the pass/fail for settings.tftclk on a unit.
-static esp_err_t tftread_pattern(httpd_req_t *req, int clk_mhz)
+static esp_err_t tftread_pattern(httpd_req_t *req, int clk_mhz, int keep)
 {
     const int rows = 4, w = _width, n = rows * w;
     color_t *pat   = heap_caps_malloc((size_t)n * sizeof(color_t), MALLOC_CAP_DMA);
@@ -741,7 +741,8 @@ static esp_err_t tftread_pattern(httpd_req_t *req, int clk_mhz)
 
     // read back at a conservative clock, row by row
     spi_lobo_set_speed(disp_spi, 1000000);
-    int mismatch = 0, first_y = -1, first_x = -1;
+    int mismatch = 0, first_y = -1, first_x = -1, n_zero = 0, n_ff = 0;
+    uint32_t rsum = 0;
     uint8_t first_w[3] = {0}, first_r[3] = {0};
     esp_err_t rerr = ESP_OK;
     for (int y = 0; y < rows && rerr == ESP_OK; y++) {
@@ -750,6 +751,9 @@ static esp_err_t tftread_pattern(httpd_req_t *req, int clk_mhz)
         for (int x = 0; x < w; x++) {
             const color_t *c = &pat[y * w + x];
             const uint8_t *q = rd + 1 + x * 3;
+            if (!(q[0] | q[1] | q[2])) n_zero++;
+            if ((q[0] & q[1] & q[2]) == 0xFF) n_ff++;
+            rsum += q[0] + q[1] + q[2];
             if (((q[0] ^ c->r) & 0xFC) || ((q[1] ^ c->g) & 0xFC) || ((q[2] ^ c->b) & 0xFC)) {
                 if (mismatch == 0) {
                     first_y = y; first_x = x;
@@ -762,24 +766,27 @@ static esp_err_t tftread_pattern(httpd_req_t *req, int clk_mhz)
     }
 
     spi_lobo_set_speed(disp_spi, clk0);            // never persist the trial clock here
+    if (keep) { free(saved); saved = NULL; }       // leave the stripe up for an eyeball check (next redraw clears it)
     if (saved && disp_select() == ESP_OK) {
         send_data(0, 0, w - 1, rows - 1, n, saved);
         disp_deselect();
     }
     disp_lock_give();
 
-    if (!saved) {
+    if (!saved && !keep) {
         ui_ev_ts_t ev = { .event = EV_ENTERED_MENU, .event_data = NULL };
         if (ui_ev_queue) xQueueSend(ui_ev_queue, &ev, 0);
     }
 
-    char buf[512];
+    char buf[640];
     snprintf(buf, sizeof(buf),
         "{\"pattern\":true,\"clk_mhz\":%u,\"pixels\":%d,\"write_us\":%u,"
         "\"mismatch\":%d,\"first\":{\"y\":%d,\"x\":%d,\"wrote\":\"%02X%02X%02X\",\"read\":\"%02X%02X%02X\"},"
+        "\"read_zero\":%d,\"read_ff\":%d,\"read_sum\":%u,"
         "\"read_err\":%d,\"sel_err\":%d,\"restored_from_shadow\":%s,\"verdict\":\"%s\"}",
         (unsigned)(clk_used / 1000000u), n, write_us, mismatch, first_y, first_x,
         first_w[0], first_w[1], first_w[2], first_r[0], first_r[1], first_r[2],
+        n_zero, n_ff, (unsigned)rsum,
         (int)rerr, (int)sel, saved ? "true" : "false",
         (sel != ESP_OK || rerr != ESP_OK) ? "NO READBACK (bus error)" :
         mismatch == 0 ? "CLEAN" : "DIRTY — do not run this unit at this clock");
@@ -793,7 +800,8 @@ static esp_err_t tftread_get_handler(httpd_req_t *req)
         char q[12];
         if (get_query_param(req, "pattern", q, sizeof(q)) && atoi(q)) {
             int clk = get_query_param(req, "clk", q, sizeof(q)) ? atoi(q) : 0;
-            return tftread_pattern(req, clk);
+            int keep = get_query_param(req, "keep", q, sizeof(q)) ? atoi(q) : 0;
+            return tftread_pattern(req, clk, keep);
         }
     }
     static const color_t test[4] = {
