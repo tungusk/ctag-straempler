@@ -231,14 +231,31 @@ body.nosbar .sbar{display:none}
 .ren{cursor:pointer;border-bottom:1px dotted #555}
 /* MIDI card: octave arrows, transport dot, view-shift buttons, full-width mode */
 /* .row.tight>* forces padding:3px 14px on every child — these need their own */
-.row.tight>.octb{flex:0 0 auto;padding:2px 7px;font-size:11px;line-height:1.3}
-.row.tight>#midioct{flex:0 0 30px;padding:0;color:#ccc;font-size:11px;text-align:center}
-.row.tight>.mdot{width:8px;height:8px;border-radius:50%;background:#555;display:inline-block;flex:0 0 8px;padding:0}
+/* the octave trio travels as one item, so the wide-mode gutter column does not
+   stack the two buttons and the reading on three separate lines */
+#midioctg{display:flex;align-items:center;gap:2px;flex:0 0 auto}
+.row.tight>#midioctg{padding:0;margin-left:14px}
+.octb{padding:2px 7px;font-size:11px;line-height:1.3;flex:0 0 auto}
+#midioct{flex:0 0 30px;color:#ccc;font-size:11px;text-align:center}
+.mdot{width:8px;height:8px;border-radius:50%;background:#555;display:inline-block;flex:0 0 8px;padding:0}   /* NOT scoped to .row.tight — it rides inside #midiaux */
 .mdot.ws{background:#3fcf8f;box-shadow:0 0 5px #3fcf8f}
 .mdot.http{background:#fa0;box-shadow:0 0 5px #a70}
 .btn.kbnav{flex:0 0 16px;align-self:center;height:30px;padding:0;font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center}
 .card.pnl.wide{width:1016px}
 #midihome{display:contents}   /* a box here would take #midicard's place as the flex item */
+/* Wide mode: a constant key width cannot fill 1016 px, so the leftovers either
+   side of the keyboard become the control gutters and the header row goes away
+   — the card loses a whole row of height (Arlo 2026-09-10). */
+#midiaux{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.row.tight>#midiaux{padding:0}
+#midiaux .btn{flex:0 0 52px;padding:3px 8px}
+#midicard.wide{display:flex;align-items:center;gap:12px}
+#midicard.wide>.row.tight:first-child{flex:0 0 118px;flex-direction:column;align-items:flex-start;gap:8px;margin:0}
+#midicard.wide>.row.tight:first-child>span[style*="flex:1"]{display:none}
+#midicard.wide>#midi_body{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:12px}
+#midicard.wide #midirow{flex:1 1 auto;min-width:0;margin-top:0}
+#midicard.wide #midiaux{flex-direction:column;align-items:flex-end;gap:8px}
+#midicard.wide #mididev{flex:0 0 130px;margin-top:0}
 .mkey{border:1px solid #333;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;
   justify-content:space-between;padding:3px 0 4px;font-size:9px;cursor:pointer;user-select:none;-webkit-user-select:none;position:absolute;top:0}
 .mkey .u{color:#888}
@@ -416,12 +433,12 @@ body.nosbar .sbar{display:none}
     <div class="row tight" style="align-items:center">
       <b class="ph" style="flex:0 0 auto;padding:0;margin:0"><span class="hlp" data-h="Impulse Tracker layout, two manuals an octave apart: Z S X D C V G B H N J M , L . ; / is the lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P the upper. Octave on - and = &#183; Space releases held notes &#183; Esc panics. Typing plays whether or not a key is on screen &#8212; &#8249; &#8250; only move the view. Plays Synth / Keys; MIDI wins over CV while a note is held.">MIDI</span></b>
       <label style="flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;margin:0 0 0 14px;color:#888;font-size:11px"><input type="checkbox" id="midityping" checked style="width:auto;margin:0"> typing</label>
-      <button class="btn octb" style="margin-left:14px" onclick="midiOct(-1)" title="octave down (-)">&#9666;</button>
+      <span id="midioctg"><button class="btn octb" onclick="midiOct(-1)" title="octave down (-)">&#9666;</button>
       <span id="midioct">C4</span>
-      <button class="btn octb" onclick="midiOct(1)" title="octave up (=)">&#9656;</button>
+      <button class="btn octb" onclick="midiOct(1)" title="octave up (=)">&#9656;</button></span>
       <span style="flex:1"></span>
-      <span id="midist" class="mdot" title="transport"></span>
-      <button class="btn" style="flex:0 0 52px;margin-left:8px" onclick="midiSend('x');midiHeldClear()">Panic</button>
+      <span id="midiaux"><span id="midist" class="mdot" title="transport"></span>
+      <button class="btn" onclick="midiSend('x');midiHeldClear()">Panic</button></span>
     </div>
     <div class="row tight" id="midirow" style="gap:4px;align-items:stretch;margin-top:6px">
       <button class="btn kbnav" id="midiprev" onclick="midiShift(-1)">&#8249;</button>
@@ -2088,6 +2105,13 @@ function midiAuto(){
     (wide?document.getElementById('midiband'):document.getElementById('midihome')).appendChild(card);
     midiView=0;
   }
+  // the dot + Panic ride in the right gutter when wide, in the header when not
+  var aux=document.getElementById('midiaux'),body=document.getElementById('midi_body'),
+      hdr=card.querySelector('.row.tight');
+  if(aux&&body&&hdr){
+    var want=wide?body:hdr;
+    if(aux.parentElement!==want)want.appendChild(aux);
+  }
   midiDraw();
 }
 function midiDraw(){
@@ -2402,7 +2426,8 @@ bcastInit();     // broadcast Listen link + player URL (:8000)
 webLoad();       // browser-side prefs before the first render
 midiAuto();      // MIDI card width follows the window
 tab(3);          // Remote is the default tab
-foldAll();       // MACHINE / PLAY-MIDI / CLOCK / BOUNCE / ICECAST / BROADCAST fold too
+foldAll();       // MACHINE / MIDI / CLOCK / BOUNCE / ICECAST / BROADCAST fold too
+midiAuto();      // again: #midi_body only exists once foldAll has wrapped the card
 pollStatus();
 </script>
 </body>

@@ -80,6 +80,18 @@ half mode, and **typing works whether or not a key is on screen**. .85 runs it.
   `<` `>` shift by an octave (7 white keys) and clamp at both ends (view 0..7).
 - **Octave is two `.btn`s** flanking the reading, and the `<` `>` nav buttons are
   16x30 centred rather than full-bleed (Arlo, 09-10).
+- **Wide mode uses the gutters.** A constant key width cannot fill 1016 px, so
+  the leftovers either side of the keyboard hold the controls and the header row
+  disappears: the card is a flex row of [title / typing / octave column] |
+  keyboard | [dot / Panic column]. **120 px tall instead of ~190.** The right
+  group (`#midiaux`) is moved between the header row and `#midi_body` by
+  `midiAuto()`, so it needs `#midi_body` to exist — hence the second
+  `midiAuto()` call after `foldAll()` at startup.
+- Two CSS traps hit here, both the same shape: a rule scoped to `.row.tight>X`
+  stops applying the moment X is nested. It bit `.mdot` (0x0 once inside
+  `#midiaux`) and would bite anything else moved into a group. The octave
+  controls are wrapped in `#midioctg` so the gutter column does not stack the
+  two buttons and the reading on three lines.
 - **Trap, cost an hour of squinting**: `midiDraw()` read `#midikbd.clientWidth`
   and only THEN showed/hid the nav buttons, so the keys were sized to a width
   the buttons immediately took away — a half-drawn white key at the right edge.
