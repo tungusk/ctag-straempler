@@ -164,7 +164,7 @@ body.nosbar .sbar{display:none}
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
 .remset{align-items:flex-start;justify-content:flex-start;width:1016px;max-width:calc(100vw - 24px);margin:0 auto}   /* the settings zone: two across on the column grid, the odd one stays LEFT */
-.remset>div{flex:0 0 502px;max-width:100%}
+.remset>.rcol{flex:0 0 502px;max-width:100%}   /* left: MACHINE SETUP; right: GLOBAL then ADVANCED */
 @media (max-width:1040px){.remset{justify-content:center}}
 /* ADVANCED: the raw-key table inside the same dark frame as the two screens */
 .tft.adv{min-height:0}
@@ -418,9 +418,8 @@ body.nosbar .sbar{display:none}
   </div>
   <!-- the three settings cards: a row of their own, flowing side by side when the window allows -->
   <div class="remcols remset">
-    <div id="rsetup"></div>
-    <div id="rglob"></div>
-    <div id="rparams"></div>
+    <div class="rcol"><div id="rsetup"></div></div>
+    <div class="rcol"><div id="rglob"></div><div id="rparams"></div></div>
   </div>
   <div class="msg" id="rm"></div>
   <div class="remcols">
