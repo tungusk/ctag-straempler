@@ -317,11 +317,9 @@ static void draw_lfo(void)
     static const char *lab[SLIVE_LFO_N] = { "sync", "div", "shape", "amt", "dest" };
     char val[SLIVE_LFO_N][12];
     snprintf(val[0], 12, "%s", sy.lfo_sync ? "on" : "off");
-    if (sy.lfo_sync) snprintf(val[1], 12, "%s", sy_lfo_div_name(sy.lfo_div));
+    if (sy.lfo_sync) snprintf(val[1], 12, "%s", lfo_div_name(sy.lfo_div));
     else             snprintf(val[1], 12, "%.1fHz", sy.lfo_rate);
-    static const char *shn[LFO_SHAPE_N] = { "sine", "tri", "saw", "sqr", "rnd" };
-    int sh = sy.lfo_shape < 0 ? 0 : (sy.lfo_shape >= LFO_SHAPE_N ? 0 : sy.lfo_shape);
-    snprintf(val[2], 12, "%s", shn[sh]);
+    snprintf(val[2], 12, "%s", lfo_shape_name(sy.lfo_shape));
     snprintf(val[3], 12, "%.0f%%", sy.lfo_depth * 100.0f);
     snprintf(val[4], 12, "%s", sy.lfo_dest == LFO_CUT ? "cutoff" : sy.lfo_dest == LFO_PITCH ? "pitch" : "off");
 
@@ -419,8 +417,8 @@ static void slive_edit(int dir)
                 case 0: sy.lfo_sync = !sy.lfo_sync; break;
                 case 1:
                     if (sy.lfo_sync) { sy.lfo_div += dir;
-                                       if (sy.lfo_div < 0) sy.lfo_div = SY_LFO_DIV_N - 1;
-                                       if (sy.lfo_div >= SY_LFO_DIV_N) sy.lfo_div = 0; }
+                                       if (sy.lfo_div < 0) sy.lfo_div = LFO_DIV_N - 1;
+                                       if (sy.lfo_div >= LFO_DIV_N) sy.lfo_div = 0; }
                     else             sy.lfo_rate = sclampf(sy.lfo_rate + d * 0.25f, 0.05f, 20.0f);
                     break;
                 case 2: sy.lfo_shape += dir;
@@ -573,10 +571,8 @@ static void setup_val(int i, char *v, size_t n)
         case 13: snprintf(v, n, "%.0f%%", sy.lfo_depth * 100.0f); break;
         case 14: snprintf(v, n, "%s", sy.lfo_dest == LFO_CUT ? "cutoff" : sy.lfo_dest == LFO_PITCH ? "pitch" : "off"); break;
         case 15: snprintf(v, n, "%s", sy.lfo_sync ? "on" : "off"); break;
-        case 16: snprintf(v, n, "%s", sy_lfo_div_name(sy.lfo_div)); break;
-        case 17: { static const char *sh[LFO_SHAPE_N] = {"sine","tri","saw","sqr","rnd"};
-                   int q = (sy.lfo_shape < 0 || sy.lfo_shape >= LFO_SHAPE_N) ? 0 : sy.lfo_shape;
-                   snprintf(v, n, "%s", sh[q]); break; }
+        case 16: snprintf(v, n, "%s", lfo_div_name(sy.lfo_div)); break;
+        case 17: snprintf(v, n, "%s", lfo_shape_name(sy.lfo_shape)); break;
         case 18: snprintf(v, n, "%.0f%%", sy.level * 100.0f); break;
         case 19: snprintf(v, n, "%s", sy.wave_name[0] ? sy.wave_name : "(none)"); break;
         case 20: { int on = 0; for (int d = 0; d < SYM_N; d++) if (sy.mtx.src[d] >= 0) on++;
@@ -611,8 +607,8 @@ static void sy_adj(int i, int dir)
         case 15: sy.lfo_sync = !sy.lfo_sync; break;
         case 16: {
             sy.lfo_div += dir;
-            if (sy.lfo_div < 0) sy.lfo_div = SY_LFO_DIV_N - 1;
-            else if (sy.lfo_div >= SY_LFO_DIV_N) sy.lfo_div = 0;
+            if (sy.lfo_div < 0) sy.lfo_div = LFO_DIV_N - 1;
+            else if (sy.lfo_div >= LFO_DIV_N) sy.lfo_div = 0;
             break;
         }
         case 17: {

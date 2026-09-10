@@ -10,6 +10,7 @@
 #include "tremolo.h"
 #include "fxrack.h"       // shared FX slot rack (pulls fxfilter.h)
 #include "cvmtx.h"        // shared CV matrix widget
+#include "lfo.h"          // shared LFO: shapes, divisions, per-block tick
 
 // Synth voice — a no-sample sound source. v1 is a monophonic subtractive voice:
 // polyBLEP saw<->square oscillator, 1V/oct pitch on CV1, TR1 gate -> linear ADSR
@@ -27,13 +28,8 @@
 enum { ENV_IDLE = 0, ENV_ATK, ENV_DEC, ENV_SUS, ENV_REL };
 
 enum { ENG_VA = 0, ENG_FM, ENG_WT };     // oscillator engine (VA / FM / wavetable)
-enum { LFO_OFF = 0, LFO_CUT, LFO_PITCH };   // LFO destination
-enum { LFO_SINE = 0, LFO_TRI, LFO_SAW, LFO_SQR, LFO_RND, LFO_SHAPE_N };   // LFO shape
-// LFO clock divisions, as BEATS PER CYCLE (slowest first). One beat = a quarter,
-// so 16 beats = 4 bars. Used only when lfo_sync is on and the core clock locks.
-#define SY_LFO_DIV_N 7
-extern const float sy_lfo_beats[SY_LFO_DIV_N];
-const char *sy_lfo_div_name(int d);
+enum { LFO_OFF = 0, LFO_CUT, LFO_PITCH };   // LFO destination (ours; the rest
+                                            // of the LFO is shared — util/lfo.h)
 
 // CV matrix destinations — each carries its own source (-1 off / 0..7 = CV1..8)
 // and a bipolar amount; the modulation ADDS to the knob/Setup base per block.
@@ -46,9 +42,7 @@ typedef struct {
     // performance state
     float phase;                 // oscillator (VA) / carrier (FM) phase 0..1
     float mphase;                // FM modulator phase 0..1
-    float lfo_phase;             // LFO phase 0..1
-    float lfo_rnd;               // sample-and-hold value for the RND shape
-    uint32_t lfo_cyc;            // synced: which clock cycle the phase belongs to
+    lfo_t lfo;                   // LFO phase / S&H / synced-cycle state
     int   env_stage;
     float env;                   // envelope level 0..1
     float freq;                  // TARGET note frequency (Hz)
@@ -87,7 +81,7 @@ typedef struct {
     float lfo_depth;             // 0..1
     int   lfo_dest;              // LFO_OFF / LFO_CUT / LFO_PITCH
     bool  lfo_sync;              // rate comes from the CORE clock, not lfo_rate
-    int   lfo_div;               // sy_lfo_beats[] index (beats per cycle)
+    int   lfo_div;               // lfo_beats[] index (beats per cycle)
     int   lfo_shape;             // LFO_SINE / TRI / SAW / SQR / RND
     float level;                 // master 0..1
 
