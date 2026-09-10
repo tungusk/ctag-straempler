@@ -9,6 +9,45 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-09 night — DISPLAY REDRAW SPEED, stage 3 (fewer pixels), first four machines
+
+Commits `acaa662` Synth, `8883d36` Tracker, `2a2fc78` Deck, `5a79cf3` Tape —
+all PUSHED, **.85 runs `5a79cf3`** (tftclk 40). Eye-checked by Arlo on Synth
+("looks good"); Tracker/Deck/Tape checked by screenshot. All numbers at 40 MHz
+with the shadow FB allocated (the pessimistic case), from `/sysinfo` `tft`.
+
+**The pattern** (reuse it — every live page has the same shape):
+- `s_skip_clear` + `CLEAR_RECT()` macro: a full redraw calls `TFT_fillScreen`
+  once, then every element's own black clear is skipped. Elements keep their
+  clears for partial redraws. This alone is 20–45 % off every page entry.
+- Per-element signatures instead of one combined signature (Synth's four
+  dials: a knob move repaints ONE dial, 9 ms, not four, 40 ms).
+- Split the field that changes often out of the block that doesn't (Synth's
+  note name: 3 ms instead of the 40 ms header).
+- Encoder nav repaints the element losing focus + the one gaining it.
+- Column-sampled traces: one `TFT_drawFastVLine` per column (Synth osc), or
+  for a whole strip a band rasteriser: fill a 6-row DMA buffer and `send_data`
+  it (Tape waveform: ~18 transfers instead of 300 columns x 3–4 transactions).
+  `draw_wave_blit` + `wave_col_desc` in `tape_menu.c` is the reference; the
+  single-column painter shares the descriptor so erase and full draw agree.
+- Hysteresis on a CV-driven scroll (Tracker info text: 24 counts) so ADC
+  jitter on a boundary can't re-blit a panel every tick.
+
+| page (ms)        | entry before→after | biggest live cost before→after |
+|------------------|--------------------|--------------------------------|
+| Synth            | 165 → 111          | note 40 → 3, nav 84 → 20, knob 40 → 9 |
+| Tracker          | 118 → 80           | ticks already ~1               |
+| Deck             | 118 → 97           | ticks ~1; state change 28      |
+| Tape             | 260 → 145          | play/stop recolour 150 → 67; playing tick ~7 |
+
+**Still on the list** (measured, untouched): DoubleDecker 150, Looper 151,
+Keys 165, Sampler 149 ms entry; idle ticks all ≤ 5 ms — they are already
+signature-gated, so the win there is the single-clear pattern (~40–60 ms
+each, mechanical). Tape's playing fast tick (~7 ms) = header status row
+repainted every tick for the position readout + the playhead erase; could
+clear just the readout field. `/screenshot` via GRAM readback (no shadow) is
+still the way to kill the ~95 ms shadow tax on Remote-tab days.
+
 ## 2026-09-09 late — DISPLAY REDRAW SPEED, stages 1+2 (bail tag `pre-redraw-speed-20260909`)
 
 Arlo: "the screen is the weak link" but audio wins — anything that hurts audio
