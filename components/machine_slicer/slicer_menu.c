@@ -502,4 +502,5 @@ const machine_ui_t slicer_menu_ui = {
     .boot_target = M_SLICER_LIVE,
     .web_uris = slicer_web_uris,
     .n_web_uris = 1,
+    .setup = &sl_setup,
 };

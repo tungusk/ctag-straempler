@@ -780,4 +780,5 @@ const machine_ui_t dualdeck_menu_ui = {
     .n_main = 2,
     .register_pages = dd_register_pages,
     .boot_target = M_DD_LIVE,
+    .setup = &dd_setup,
 };

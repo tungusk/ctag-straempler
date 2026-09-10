@@ -1094,4 +1094,5 @@ const machine_ui_t drum_menu_ui = {
     .register_pages = drum_register_pages,
     .main_event = drum_main_event,
     .boot_target = M_DRUM_LIVE,
+    .setup = &dr_setup,
 };

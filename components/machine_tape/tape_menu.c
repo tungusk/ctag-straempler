@@ -1024,4 +1024,5 @@ const machine_ui_t tape_menu_ui = {
     .register_pages = tape_register_pages,
     .main_event = tape_main_event,
     .boot_target = M_TAPE_MAIN,
+    .setup = &tape_setup,
 };

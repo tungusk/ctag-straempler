@@ -185,4 +185,5 @@ const machine_ui_t granular_menu_ui = {
     .register_pages = gran_register_pages,
     .main_event = gran_main_event,
     .boot_target = M_GRAN_LIVE,
+    .setup = &gr_setup,
 };

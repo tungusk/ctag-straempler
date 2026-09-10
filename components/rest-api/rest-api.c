@@ -1514,6 +1514,37 @@ static esp_err_t remote_gate(httpd_req_t *req)
     return ESP_FAIL;
 }
 
+// ---- /remote/setup: the active machine's Setup page, mirrored row for row.
+// GET -> {"title","aff","pos","rows":[{"l","k","v"}]} (menu component builds
+// it from the machine's own setup table, so labels/order/values match the
+// TFT). POST ?i=<row>&dir=<-1|1>[&n=<count>] steps that row on the UI task,
+// exactly like a press (TOGGLE) or a turn in edit mode (RANGE).
+extern int setup_menu_remote_json(char *out, size_t n);   // menu; no REQUIRES edge (would cycle)
+static esp_err_t remote_setup_get_handler(httpd_req_t *req)
+{
+    char *b = malloc(4096);
+    if (!b) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
+    setup_menu_remote_json(b, 4096);
+    esp_err_t r = send_json(req, b);
+    free(b);
+    return r;
+}
+static esp_err_t remote_setup_post_handler(httpd_req_t *req)
+{
+    if (remote_gate(req) != ESP_OK) return ESP_OK;
+    char q[12];
+    if (!get_query_param(req, "i", q, sizeof(q))) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing i"); return ESP_FAIL; }
+    int *a = malloc(3 * sizeof(int));
+    if (!a) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
+    a[0] = atoi(q);
+    a[1] = get_query_param(req, "dir", q, sizeof(q)) ? atoi(q) : 1;
+    a[2] = get_query_param(req, "n", q, sizeof(q)) ? atoi(q) : 1;
+    ui_ev_ts_t uev = { .event = EV_REMOTE_SETUP, .event_data = a };
+    if (xQueueSend(ui_ev_queue, &uev, 0) != pdTRUE) { free(a); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "busy"); return ESP_FAIL; }
+    send_json(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 static esp_err_t remote_event_handler(httpd_req_t *req)
 {
     if (remote_gate(req) != ESP_OK) return ESP_OK;
@@ -2426,6 +2457,8 @@ static httpd_uri_t uris[] = {
     { .uri = "/trk/get",    .method = HTTP_GET,    .handler = mod_get_handler },
     { .uri = "/trk/delete", .method = HTTP_DELETE, .handler = mod_delete_handler },
     { .uri = "/remote/event",  .method = HTTP_POST, .handler = remote_event_handler },
+    { .uri = "/remote/setup",  .method = HTTP_GET,  .handler = remote_setup_get_handler },
+    { .uri = "/remote/setup",  .method = HTTP_POST, .handler = remote_setup_post_handler },
     { .uri = "/remote/trig",   .method = HTTP_POST, .handler = remote_trig_handler },
     { .uri = "/remote/cv",     .method = HTTP_POST, .handler = remote_cv_handler },
     { .uri = "/bounce/start",  .method = HTTP_POST, .handler = bounce_start_handler },

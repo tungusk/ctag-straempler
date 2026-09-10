@@ -669,4 +669,5 @@ const machine_ui_t synth_menu_ui = {
     .register_pages = synth_register_pages,
     .main_event = synth_main_event,
     .boot_target = M_SYNTH_LIVE,
+    .setup = &sy_setup,
 };

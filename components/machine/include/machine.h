@@ -57,6 +57,11 @@ typedef struct {
     // executing while the machine is being switched away.
     const void *web_uris;
     int n_web_uris;
+    // optional (2026-09-09): the machine's shared Setup page (a setup_menu_t*,
+    // void* so machine.h stays free of menu types). The web Remote tab mirrors
+    // it row for row (GET/POST /remote/setup) — same labels, same value
+    // strings, same press/turn grammar as the TFT.
+    const void *setup;
 } machine_ui_t;
 
 struct machine_input_s;

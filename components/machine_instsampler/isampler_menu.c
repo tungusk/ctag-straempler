@@ -1074,4 +1074,5 @@ const machine_ui_t keys_menu_ui = {
     .register_pages = keys_register_pages,
     .main_event = keys_main_event,
     .boot_target = M_ISMP_LIVE,
+    .setup = &ks_setup,
 };

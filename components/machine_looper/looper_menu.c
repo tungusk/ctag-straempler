@@ -441,4 +441,5 @@ const machine_ui_t looper_menu_ui = {
     .boot_target = M_LOOPER_LIVE,
     .web_uris = looper_web_uris,
     .n_web_uris = 1,
+    .setup = &lp_setup,
 };

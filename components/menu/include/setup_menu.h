@@ -37,3 +37,9 @@ int setup_menu_event(setup_menu_t *m, int event);
 // Enter a page with the cursor on row `pos` (e.g. return from a sub-page to the
 // line that opened it), instead of the default reset to the top row.
 void setup_menu_enter_at(setup_menu_t *m, int pos);
+
+// Web mirror (Remote tab): the ACTIVE machine's Setup page as JSON
+// {"title","aff","pos","rows":[{"l","k","v"}]} (k = setup_kind_t), and the
+// remote adjust — UI task only, then re-enter the current page to redraw.
+int  setup_menu_remote_json(char *out, size_t n);
+void setup_menu_remote_adjust(int i, int dir, int cnt);

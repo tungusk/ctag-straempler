@@ -36,6 +36,7 @@
 #include "clock_ui.h"
 #include "menu_nav.h"
 #include "machine.h"
+#include "setup_menu.h"   // web Setup-page mirror
 
 #define N_MAIN_MENUS 5
 
@@ -623,6 +624,20 @@ void menuProcessEvent(int ev, void * ev_data){
             }
         }
         free(js);
+        return;
+    }
+    // web Setup-page mirror: one row stepped like a knob turn, on this task
+    if(ev == EV_REMOTE_SETUP){
+        int *a = (int*) ev_data;
+        if(a != NULL){
+            setup_menu_remote_adjust(a[0], a[1], a[2]);
+            free(a);
+            autosave_kick();
+            // re-enter the current page so the TFT shows the new value (the
+            // Setup page keeps its cursor on the edited row)
+            ui_ev_ts_t re = { .event = EV_ENTERED_MENU, .event_data = NULL };
+            if(s_ev_queue) xQueueSend(s_ev_queue, &re, 0);
+        }
         return;
     }
     // any user input may change a parameter — (re)arm the debounced state save,

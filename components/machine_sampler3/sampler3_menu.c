@@ -678,4 +678,5 @@ const machine_ui_t s3_menu_ui = {
     .register_pages = s3_register_pages,
     .main_event = s3_main_event,
     .boot_target = M_S3_LIVE,
+    .setup = &s3_setup,
 };

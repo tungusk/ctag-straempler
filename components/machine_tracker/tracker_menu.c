@@ -502,4 +502,5 @@ const machine_ui_t tracker_menu_ui = {
     .n_main = 2,
     .register_pages = tracker_register_pages,
     .boot_target = M_TRACKER_LIVE,
+    .setup = &trk_setup,
 };
