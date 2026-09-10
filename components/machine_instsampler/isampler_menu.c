@@ -463,10 +463,15 @@ static void draw_adsr(void)
     // dim the envelope polyline unless it's the selected element
     color_t col = adsr_sel ? (color_t){60, 200, 120} : (color_t){30, 96, 58};
     int x1 = xb + aw, x2 = x1 + dw, x3 = x2 + sw, x4 = x3 + rw;
-    TFT_drawLine(xb, yb, x1, yt, col);
-    TFT_drawLine(x1, yt, x2, ys, col);
-    TFT_drawLine(x2, ys, x3, ys, col);
-    TFT_drawLine(x3, ys, x4, yb, col);
+    // 2 px, same as Synth: offset in x AND y so the near-vertical attack
+    // thickens too. Every offset point stays inside the cleared rect.
+    for (int o = 0; o < 3; o++) {
+        int dx = (o == 2) ? 1 : 0, dy = (o == 1) ? 1 : 0;
+        TFT_drawLine(xb + dx, yb + dy, x1 + dx, yt + dy, col);
+        TFT_drawLine(x1 + dx, yt + dy, x2 + dx, ys + dy, col);
+        TFT_drawLine(x2 + dx, ys + dy, x3 + dx, ys + dy, col);
+        TFT_drawLine(x3 + dx, ys + dy, x4 + dx, yb + dy, col);
+    }
     // encoder-nav focus marker on the selected point (5=A 6=D 7=S 8=R)
     if (adsr_sel) {
         int mx = x1, my = yt;
