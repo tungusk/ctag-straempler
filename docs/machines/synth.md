@@ -16,7 +16,10 @@ LFO and reverb. Patch a keyboard/sequencer's 1V/oct + gate and play it.
   toggle, Base Note, **glide**.
 - Linear **ADSR** → VCA; SVF low-pass with resonance, envelope amount to
   cutoff (`Env>Cut`).
-- **LFO** to cutoff or pitch, rate/depth.
+- **LFO** to cutoff or pitch: rate/depth, five shapes (sine/tri/saw/sqr/rnd)
+  and optional **tempo sync** to the core clock in divisions from 4 bars to
+  1/16. The Live page's bottom strip switches between the ENV curve and the
+  LFO cells — press the ENV/LFO header.
 - **Reverb** (Room/Hall/Plate/Shimmer) with mix.
 - **CV matrix**: 8 destinations (cutoff, res, env>cut, level, pitch, shape…)
   each assignable to any CV source with signed amounts.
@@ -35,5 +38,5 @@ LFO and reverb. Patch a keyboard/sequencer's 1V/oct + gate and play it.
 ## Setup
 
 Engine, Base Note, Quantize, Shape, FM Ratio/Index, ADSR, Env>Cut, Glide,
-LFO Rate/Depth/Dest, Level, Reverb + Mix, Load Wave, CV Matrix,
+LFO Rate/Depth/Dest/Sync/Div/Shape, Level, Reverb + Mix, Load Wave, CV Matrix,
 Save Patch / Load Patch.

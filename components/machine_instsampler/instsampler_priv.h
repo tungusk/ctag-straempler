@@ -10,6 +10,7 @@
 #include "tremolo.h"
 #include "fxrack.h"       // shared FX slot rack (FXK_*, FX_NSLOT_GEN, fxfilter)
 #include "cvmtx.h"        // shared CV matrix widget
+#include "lfo.h"          // shared LFO: shapes, divisions, per-block tick
 
 // Keys — tonal instrument sampler (see machine_instsampler.h). v1: one mono
 // PSRAM-resident sample, varispeed-pitched across the keyboard from CV1
@@ -31,6 +32,9 @@
                                    // trimming a fresh sample's loop end (~-60 dBFS)
 
 enum { ENV_IDLE = 0, ENV_ATK, ENV_DEC, ENV_SUS, ENV_REL };   // as Synth
+enum { LFO_OFF = 0, LFO_CUT, LFO_PITCH };   // LFO destination (as Synth; the
+                                            // shapes and divisions are shared —
+                                            // util/lfo.h)
 enum { LOOP_OFF = 0, LOOP_FWD };                              // LOOP_PP = v2
 
 // what an auto-tune verdict rests on (inst.tune_src) — surfaced on the Setup
@@ -114,6 +118,15 @@ typedef struct {
     float res01;              // 0..1 (K7)
     float glide;              // portamento seconds (0 = off)
     float level;              // master 0..1
+    // LFO (shared engine, Synth semantics): free Hz or a clock division, into
+    // cutoff or pitch. Mono machine, so one LFO for the whole instrument.
+    float lfo_rate;           // free-run Hz
+    float lfo_depth;          // 0..1
+    int   lfo_dest;           // LFO_OFF / LFO_CUT / LFO_PITCH
+    bool  lfo_sync;           // rate comes from the CORE clock, not lfo_rate
+    int   lfo_div;            // lfo_beats[] index (beats per cycle)
+    int   lfo_shape;          // LFO_SINE / TRI / SAW / SQR / RND
+    lfo_t lfo;                // phase / S&H / synced-cycle state
     float start_frac;         // K5 note-on start offset 0..1
     reverb_t rv;              // output reverb (lazy PSRAM slab; RV_OFF = bypass)
     fxdelay_t dly;            // output delay (lazy PSRAM slab; runs delay->reverb)

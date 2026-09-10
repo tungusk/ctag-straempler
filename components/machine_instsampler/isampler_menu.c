@@ -1,5 +1,5 @@
 // Keys UI — a Live dashboard (waveform + loop box + playhead, four macro dials,
-// ADSR curve) and a Setup page (shared setup_menu framework). Mirrors the Synth
+// ADSR/LFO strip) and a Setup page (shared setup_menu framework). Mirrors the Synth
 // dashboard: black canvas, boxed elements, redraw-on-change only. The waveform
 // strip shows the sustain-loop window as a box (the box IS the loop) with a
 // white playhead — the deck/slicer/sampler3 idiom.
@@ -20,6 +20,7 @@
 #include "sample_ram.h"
 #include "pitch_detect.h"          // Auto-Tune row: name/cents for the verdict
 #include "audio.h"                 // audio_proc_us() for the FX cost-guard
+#include "clock.h"                 // LFO view prints the core clock's tempo
 #include "instsampler_priv.h"
 
 static const color_t GATE_ON = {40, 200, 90};    // note stays green (gate flips too fast to read)
@@ -110,12 +111,21 @@ static int s_last_ph = -1;
 enum {
     KL_SAMPLE = 0,                              // the waveform / file name
     KL_START, KL_CUT, KL_RES, KL_ENVCUT,        // the four dials
-    KL_ATK, KL_DEC, KL_SUS, KL_REL,             // the ADSR points
-    KL_LOOPS, KL_LOOPE,                         // the loop-window edges
-    KL_N
+    KL_BOTTOM,                                  // the ENV/LFO header — press swaps view
+    KL_PARAM0                                   // first param of whichever view shows
 };
-#define KLIVE_N KL_N
-static inline bool kl_is_loop(int e) { return e == KL_LOOPS || e == KL_LOOPE; }
+// The bottom strip is two views and they are different LENGTHS, so the element
+// count is a function, not a constant, and the loop edges (which nav AFTER the
+// strip) move with it. Same shape as Synth, where the header sits BEFORE its
+// own params so the scroll reads in order (Arlo 2026-09-10).
+#define KL_ENV_N 4                              // A D S R
+#define KL_LFO_N 5                              // sync, div/rate, shape, amt, dest
+static int  s_env_view = 0;                     // 0 = ADSR, 1 = LFO
+static int  kl_nparam(void) { return s_env_view ? KL_LFO_N : KL_ENV_N; }
+static int  kl_loops(void)  { return KL_PARAM0 + kl_nparam(); }
+static int  kl_loope(void)  { return kl_loops() + 1; }
+static int  klive_n(void)   { return kl_loope() + 1; }
+static inline bool kl_is_loop(int e) { return e == kl_loops() || e == kl_loope(); }
 static int  s_live_sel  = 1;      // focused element (start on the first dial)
 static bool s_live_edit = false;  // false = browsing, true = editing the focus
 // focus code for a drawn element: 0 none, 1 selected(browse), 2 editing
@@ -166,7 +176,7 @@ static void draw_tag(bool clear)
         unsigned b = (unsigned)((uint64_t)lz->loop_end * 1000 / IS_RATE);
         if (lz->loop_mode != LOOP_FWD)
             snprintf(tag, sizeof(tag), "loop OFF %u-%u", a, b);
-        else if (s_live_sel == KL_LOOPS)
+        else if (s_live_sel == kl_loops())
             snprintf(tag, sizeof(tag), "loop [%u-%u ms", a, b);
         else
             snprintf(tag, sizeof(tag), "loop %u-%u] ms", a, b);
@@ -220,9 +230,9 @@ static void kwave_col_desc(int x, kwcol_t *d)
         int lsx = loop_x(kl_z()->loop_start), lex = loop_x(kl_z()->loop_end);
         for (int e = 0; e < 2; e++) {
             int ex = e ? lex : lsx;
-            int elem = e ? KL_LOOPE : KL_LOOPS;
+            int elem = e ? kl_loope() : kl_loops();
             int f = klive_focus(elem);
-            int ex2 = (elem == KL_LOOPS) ? ex + 1 : ex - 1;
+            int ex2 = (elem == kl_loops()) ? ex + 1 : ex - 1;
             if (x != ex && !(f && x == ex2)) continue;
             d->has_edge = 1;
             d->edge = !loop_on ? (color_t){45, 80, 95}          // off: dim
@@ -331,7 +341,7 @@ static void draw_wave(void)
         int lsx = loop_x(kl_z()->loop_start), lex = loop_x(kl_z()->loop_end);
         for (int e = 0; e < 2; e++) {
             int ex = e ? lex : lsx;
-            int elem = e ? KL_LOOPE : KL_LOOPS;
+            int elem = e ? kl_loope() : kl_loops();
             int f = klive_focus(elem);
             color_t c = !loop_on ? (color_t){45, 80, 95}          // off: dim
                       : f == 2  ? (color_t){130, 255, 150}        // editing: green
@@ -341,7 +351,7 @@ static void draw_wave(void)
             // a focused edge gets a second column so it reads as a grabbed handle
             // rather than as one more 1 px line among the waveform
             if (f) {
-                int ex2 = (elem == KL_LOOPS) ? ex + 1 : ex - 1;
+                int ex2 = (elem == kl_loops()) ? ex + 1 : ex - 1;
                 if (ex2 >= L_WX && ex2 < L_WX + L_WW)
                     TFT_drawLine(ex2, wy, ex2, wy + L_WH, c);
             }
@@ -451,7 +461,9 @@ static void draw_adsr(void)
     // (seen on the first shadow-FB screenshot — "53%" clipped, label cut to "El")
     int x = 8, y = dial_cy() + 20 + 2 * fh + 21, w = _width - 16, h = 38;
     _bg = TFT_BLACK; CLEAR_RECT(x, y - fh - 2, w, h + fh + 4);
-    _fg = (color_t){110, 110, 120}; TFT_print("ENV", x, y - fh - 2);
+    int tf = (s_live_sel == KL_BOTTOM);
+    _fg = tf ? (s_live_edit ? (color_t){130,255,150} : (color_t){160,240,255}) : (color_t){110, 110, 120};
+    TFT_print("ENV", x, y - fh - 2);
     float ta = inst.atk, td = inst.dec, tr = inst.rel, tsum = ta + td + tr;
     if (tsum < 1e-4f) tsum = 1e-4f;
     float body = (float)(w - 4) * 0.72f;
@@ -459,7 +471,7 @@ static void draw_adsr(void)
     int sw = (w - 4) - aw - dw - rw;
     int xb = x + 2, yb = y + h - 2, yt = y + 2;
     int ys = yb - (int)(inst.sus * (float)(h - 4));
-    int adsr_sel = (s_live_sel >= 5 && s_live_sel <= 8);   // an A/D/S/R point is the focus
+    int adsr_sel = (s_live_sel >= KL_PARAM0 && s_live_sel < kl_loops());   // an A/D/S/R point is the focus
     // dim the envelope polyline unless it's the selected element
     color_t col = adsr_sel ? (color_t){60, 200, 120} : (color_t){30, 96, 58};
     int x1 = xb + aw, x2 = x1 + dw, x3 = x2 + sw, x4 = x3 + rw;
@@ -475,9 +487,9 @@ static void draw_adsr(void)
     // encoder-nav focus marker on the selected point (5=A 6=D 7=S 8=R)
     if (adsr_sel) {
         int mx = x1, my = yt;
-        if (s_live_sel == 6) { mx = x2; my = ys; }
-        else if (s_live_sel == 7) { mx = x3; my = ys; }
-        else if (s_live_sel == 8) { mx = x4; my = yb; }
+        if (s_live_sel == KL_PARAM0 + 1) { mx = x2; my = ys; }
+        else if (s_live_sel == KL_PARAM0 + 2) { mx = x3; my = ys; }
+        else if (s_live_sel == KL_PARAM0 + 3) { mx = x4; my = yb; }
         // bigger, green selection dot (edit mode stays amber to read distinct)
         int r = s_live_edit ? 6 : 5;
         // keep the whole dot inside the cleared rect (right = x+w-1, bottom =
@@ -500,6 +512,65 @@ static unsigned adsr_sig(void)
     return (unsigned)(inst.atk*1000)*7u + (unsigned)(inst.dec*1000)*13u
          + (unsigned)(inst.sus*1000)*17u + (unsigned)(inst.rel*1000)*19u;
 }
+
+// ---- LFO section: the other view of the bottom strip ------------------------
+// Same rect as the ADSR graph, and the same five cells as Synth. "div" is a
+// clock division when sync is on and a free rate in Hz when it is off — the
+// cell relabels itself rather than showing a dead control.
+static void draw_lfo(void)
+{
+    int fh = TFT_getfontheight();
+    int x = 8, y = dial_cy() + 20 + 2 * fh + 21, w = _width - 16, h = 38;
+    _bg = TFT_BLACK; CLEAR_RECT(x, y - fh - 2, w, h + fh + 4);
+
+    int tf = (s_live_sel == KL_BOTTOM);
+    _fg = tf ? (s_live_edit ? (color_t){130,255,150} : (color_t){160,240,255}) : (color_t){110,110,120};
+    TFT_print("LFO", x, y - fh - 2);
+    // the live tempo sits next to the title so sync is legible at a glance
+    float bpm = clock_core_beat_bpm();
+    _fg = (color_t){70,70,80};
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    char t[28];
+    if (inst.lfo_sync) snprintf(t, sizeof(t), bpm > 0 ? "clk %.1f" : "no clock", bpm);
+    else               snprintf(t, sizeof(t), "free");
+    TFT_print(t, x + 34, y - fh);
+    TFT_setFont(DEFAULT_FONT, NULL);
+
+    static const char *lab[KL_LFO_N] = { "sync", "div", "shape", "amt", "dest" };
+    char val[KL_LFO_N][12];
+    snprintf(val[0], 12, "%s", inst.lfo_sync ? "on" : "off");
+    if (inst.lfo_sync) snprintf(val[1], 12, "%s", lfo_div_name(inst.lfo_div));
+    else               snprintf(val[1], 12, "%.1fHz", inst.lfo_rate);
+    snprintf(val[2], 12, "%s", lfo_shape_name(inst.lfo_shape));
+    snprintf(val[3], 12, "%.0f%%", inst.lfo_depth * 100.0f);
+    snprintf(val[4], 12, "%s", inst.lfo_dest == LFO_CUT ? "cutoff"
+                             : inst.lfo_dest == LFO_PITCH ? "pitch" : "off");
+
+    int cw = w / KL_LFO_N;
+    for (int i = 0; i < KL_LFO_N; i++) {
+        int cx = x + i * cw + cw / 2, f = (s_live_sel == KL_PARAM0 + i);
+        _fg = f ? (color_t){130,130,140} : (color_t){80,80,90};
+        TFT_setFont(DEF_SMALL_FONT, NULL);
+        int lw = TFT_getStringWidth((char*)lab[i]);
+        TFT_print((char*)lab[i], cx - lw / 2, y + 2);
+        TFT_setFont(DEFAULT_FONT, NULL);
+        // a dest of "off" means the LFO is audible nowhere — say so by dimming
+        bool dim = (inst.lfo_dest == LFO_OFF) && i != 4;
+        _fg = f ? (s_live_edit ? (color_t){130,255,150} : (color_t){160,240,255})
+                : dim ? (color_t){70,70,80} : (color_t){190,190,200};
+        int vw = TFT_getStringWidth(val[i]);
+        TFT_print(val[i], cx - vw / 2, y + 16);
+    }
+}
+static unsigned lfo_sig(void)
+{
+    return (unsigned)inst.lfo_sync * 3u + (unsigned)inst.lfo_div * 7u
+         + (unsigned)inst.lfo_shape * 13u + (unsigned)(inst.lfo_depth * 1000.0f) * 17u
+         + (unsigned)inst.lfo_dest * 19u + (unsigned)(inst.lfo_rate * 100.0f) * 23u;
+}
+// one entry point for the bottom strip, whichever view it is showing
+static void draw_bottom(void) { if (s_env_view) draw_lfo(); else draw_adsr(); }
+static unsigned bottom_sig(void) { return s_env_view ? lfo_sig() : adsr_sig(); }
 static unsigned wave_sig(void)
 {
     unsigned h = kl_z()->frames * 2654435761u;
@@ -525,7 +596,7 @@ static void live_full_redraw(void)
     draw_wave();    s_sig_wave = wave_sig();
     draw_playhead();
     draw_dials();
-    draw_adsr();    s_sig_adsr = adsr_sig();
+    draw_bottom();    s_sig_adsr = bottom_sig();
     s_skip_clear = false;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
@@ -543,11 +614,44 @@ static void klive_edit(int dir)
         case 2: inst.cutoff_base = clampf(inst.cutoff_base * (dir > 0 ? 1.06f : 0.94f), 30.0f, 12000.0f); break;
         case 3: inst.res01       = clampf(inst.res01 + d * 0.05f, 0.0f, 1.0f); break;
         case 4: inst.env_to_cut  = clampf(inst.env_to_cut + d * 0.05f, 0.0f, 1.0f); break;
-        case 5: inst.atk = clampf(inst.atk + d * 0.005f, 0.0005f, 2.0f); break;
-        case 6: inst.dec = clampf(inst.dec + d * 0.01f, 0.001f, 2.0f); break;
-        case 7: inst.sus = clampf(inst.sus + d * 0.05f, 0.0f, 1.0f); break;
-        case 8: inst.rel = clampf(inst.rel + d * 0.02f, 0.001f, 3.0f); break;
-        case KL_LOOPS: case KL_LOOPE: {
+        case KL_SAMPLE: break;            // the browser opens on press; turning does nothing
+        case KL_BOTTOM: break;            // header: press switches view, turning does nothing
+        default: {
+            // the bottom strip's params, then the two loop edges after them
+            if (s_live_sel >= KL_PARAM0 && s_live_sel < kl_loops()) {
+                int k = s_live_sel - KL_PARAM0;
+                if (!s_env_view) {                       // ENV view: A D S R
+                    switch (k) {
+                        case 0: inst.atk = clampf(inst.atk + d * 0.005f, 0.0005f, 2.0f); break;
+                        case 1: inst.dec = clampf(inst.dec + d * 0.01f, 0.001f, 2.0f); break;
+                        case 2: inst.sus = clampf(inst.sus + d * 0.05f, 0.0f, 1.0f); break;
+                        case 3: inst.rel = clampf(inst.rel + d * 0.02f, 0.001f, 3.0f); break;
+                    }
+                } else {                                 // LFO view
+                    switch (k) {
+                        case 0: inst.lfo_sync = !inst.lfo_sync; break;
+                        case 1:
+                            // one cell, two controls: a division when synced, a
+                            // free rate when not — the cell relabels itself
+                            if (inst.lfo_sync) { inst.lfo_div += dir;
+                                                 if (inst.lfo_div < 0) inst.lfo_div = LFO_DIV_N - 1;
+                                                 if (inst.lfo_div >= LFO_DIV_N) inst.lfo_div = 0; }
+                            else inst.lfo_rate = clampf(inst.lfo_rate + d * 0.25f, 0.05f, 20.0f);
+                            break;
+                        case 2: inst.lfo_shape += dir;
+                                if (inst.lfo_shape < 0) inst.lfo_shape = LFO_SHAPE_N - 1;
+                                if (inst.lfo_shape >= LFO_SHAPE_N) inst.lfo_shape = 0;
+                                break;
+                        case 3: inst.lfo_depth = clampf(inst.lfo_depth + d * 0.05f, 0.0f, 1.0f); break;
+                        case 4: inst.lfo_dest += dir;
+                                if (inst.lfo_dest < 0) inst.lfo_dest = LFO_PITCH;
+                                if (inst.lfo_dest > LFO_PITCH) inst.lfo_dest = LFO_OFF;
+                                break;
+                    }
+                }
+                break;
+            }
+            // the two loop edges
             is_zone_t *z = kl_z();
             if (!z->frames) break;
             // ONE DETENT ~= ONE PIXEL of the strip. This is the by-eye control —
@@ -557,7 +661,7 @@ static void klive_edit(int dir)
             long step = (long)(z->frames / (uint32_t)L_WW);
             long floor_step = IS_RATE / 200;
             if (step < floor_step) step = floor_step;
-            if (s_live_sel == KL_LOOPS) {
+            if (s_live_sel == kl_loops()) {
                 long v = (long)z->loop_start + dir * step;
                 if (v < 0) v = 0;
                 if (v > (long)z->loop_end - 64) v = (long)z->loop_end - 64;
@@ -596,7 +700,7 @@ static void klive_repaint_el(int e)
 {
     if (e == 0 || kl_is_loop(e)) { draw_tag(true); s_sig_hdr = hdr_sig(); draw_wave(); s_sig_wave = wave_sig(); draw_playhead(); }
     else if (e <= 4)             { draw_dial(e - 1); }
-    else                         { draw_adsr(); s_sig_adsr = adsr_sig(); }
+    else                         { draw_bottom(); s_sig_adsr = bottom_sig(); }
 }
 static void klive_repaint(int prev_sel)
 {
@@ -605,7 +709,7 @@ static void klive_repaint(int prev_sel)
     // an edit can move values other elements show
     draw_dials_changed();
     unsigned ws = wave_sig(); if (ws != s_sig_wave) { draw_wave(); s_sig_wave = ws; draw_playhead(); }
-    unsigned as = adsr_sig(); if (as != s_sig_adsr) { draw_adsr(); s_sig_adsr = as; }
+    unsigned as = bottom_sig(); if (as != s_sig_adsr) { draw_bottom(); s_sig_adsr = as; }
 }
 
 static int keys_live_handler(int it_id, int event, void *ev_data)
@@ -635,26 +739,35 @@ static int keys_live_handler(int it_id, int event, void *ev_data)
             if (ws != s_sig_wave) { draw_wave(); s_sig_wave = ws; }
             draw_playhead();
             draw_dials_changed();                          // one dial per knob move, not four
-            unsigned as = adsr_sig();
-            if (as != s_sig_adsr) { draw_adsr(); s_sig_adsr = as; }
+            unsigned as = bottom_sig();
+            if (as != s_sig_adsr) { draw_bottom(); s_sig_adsr = as; }
             break;
         }
         case EV_FWD: {
             int prev = s_live_sel;
             if (s_live_edit) klive_edit(+1);
-            else s_live_sel = (s_live_sel + 1) % KLIVE_N;
+            else s_live_sel = (s_live_sel + 1) % klive_n();
             klive_repaint(prev);
             break;
         }
         case EV_BWD: {
             int prev = s_live_sel;
             if (s_live_edit) klive_edit(-1);
-            else s_live_sel = (s_live_sel + KLIVE_N - 1) % KLIVE_N;
+            else s_live_sel = (s_live_sel + klive_n() - 1) % klive_n();
             klive_repaint(prev);
             break;
         }
         case EV_SHORT_PRESS:
             if (s_live_sel == KL_SAMPLE) return M_ISMP_LOAD;   // Sample -> browser
+            if (s_live_sel == KL_BOTTOM) {
+                // the header is a SWITCH, not a value: flip ENV <-> LFO and keep
+                // the focus on it (the two views have different element counts,
+                // so landing anywhere else would need clamping anyway)
+                s_env_view = !s_env_view;
+                s_live_edit = false;
+                draw_bottom(); s_sig_adsr = bottom_sig();
+                break;
+            }
             // Clicking INTO a loop edge turns looping on. Browsing to it only
             // shows you where the window sits (dim); committing to edit it is an
             // unambiguous statement that you want a loop, and without this the
@@ -686,7 +799,9 @@ enum {
     KR_ROOT, KR_FINE, KR_AUTOTUNE, KR_TUNELOAD,
     KR_BASE, KR_QUANT,
     KR_LOOPMODE, KR_LOOPSTART, KR_LOOPEND, KR_LOOPXFADE,
-    KR_ATK, KR_DEC, KR_SUS, KR_REL, KR_ENVCUT, KR_GLIDE, KR_LEVEL,
+    KR_ATK, KR_DEC, KR_SUS, KR_REL, KR_ENVCUT, KR_GLIDE,
+    KR_LFORATE, KR_LFODEPTH, KR_LFODEST, KR_LFOSYNC, KR_LFODIV, KR_LFOSHAPE,
+    KR_LEVEL,
     KR_MATRIX, KR_FX1, KR_FX2, KR_FX3, KR_SAVE, KR_LOADPAT,
     KR_N
 };
@@ -705,6 +820,8 @@ static const setup_item_t ks_setup_items[] = {
     {"Loop End",     ST_RANGE},  {"Loop Xfade",  ST_RANGE},
     {"Attack",       ST_RANGE},  {"Decay",       ST_RANGE},  {"Sustain",   ST_RANGE},
     {"Release",      ST_RANGE},  {"Env>Cut",     ST_RANGE},  {"Glide",     ST_RANGE},
+    {"LFO Rate",     ST_RANGE},  {"LFO Depth",   ST_RANGE},  {"LFO Dest",  ST_TOGGLE},
+    {"LFO Sync",     ST_TOGGLE}, {"LFO Div",     ST_TOGGLE},  {"LFO Shape", ST_TOGGLE},
     {"Level",        ST_RANGE},
     {"CV Matrix",    ST_ACTION},
     {"FX1",          ST_ACTION}, {"FX2",         ST_ACTION}, {"FX3 Reverb", ST_ACTION},
@@ -795,6 +912,13 @@ static void ks_val(int i, char *v, size_t n)
         case KR_REL: snprintf(v, n, "%d ms", (int)(inst.rel * 1000.0f)); break;
         case KR_ENVCUT: snprintf(v, n, "%.0f%%", inst.env_to_cut * 100.0f); break;
         case KR_GLIDE: snprintf(v, n, "%d ms", (int)(inst.glide * 1000.0f)); break;
+        case KR_LFORATE: snprintf(v, n, "%.1f Hz", inst.lfo_rate); break;
+        case KR_LFODEPTH: snprintf(v, n, "%.0f%%", inst.lfo_depth * 100.0f); break;
+        case KR_LFODEST: snprintf(v, n, "%s", inst.lfo_dest == LFO_CUT ? "cutoff"
+                                            : inst.lfo_dest == LFO_PITCH ? "pitch" : "off"); break;
+        case KR_LFOSYNC: snprintf(v, n, "%s", inst.lfo_sync ? "ON" : "OFF"); break;
+        case KR_LFODIV: snprintf(v, n, "%s", lfo_div_name(inst.lfo_div)); break;
+        case KR_LFOSHAPE: snprintf(v, n, "%s", lfo_shape_name(inst.lfo_shape)); break;
         case KR_LEVEL: snprintf(v, n, "%.0f%%", inst.level * 100.0f); break;
         case KR_MATRIX: { int on = 0; for (int d = 0; d < ISM_N; d++) if (inst.mtx.src[d] >= 0) on++;
                    if (on) snprintf(v, n, "%d on >", on); else snprintf(v, n, "edit >"); break; }
@@ -848,6 +972,24 @@ static void ks_adj(int i, int dir)
         case KR_REL: inst.rel = clampf(inst.rel + d * 0.02f, 0.001f, 3.0f); break;
         case KR_ENVCUT: inst.env_to_cut = clampf(inst.env_to_cut + d * 0.05f, 0.0f, 1.0f); break;
         case KR_GLIDE: inst.glide = clampf(inst.glide + d * 0.02f, 0.0f, 2.0f); break;
+        case KR_LFORATE: inst.lfo_rate = clampf(inst.lfo_rate + d * 0.25f, 0.05f, 20.0f); break;
+        case KR_LFODEPTH: inst.lfo_depth = clampf(inst.lfo_depth + d * 0.05f, 0.0f, 1.0f); break;
+        case KR_LFODEST: {
+            inst.lfo_dest += dir;
+            if (inst.lfo_dest < 0) inst.lfo_dest = LFO_PITCH;
+            else if (inst.lfo_dest > LFO_PITCH) inst.lfo_dest = LFO_OFF;
+        } break;
+        case KR_LFOSYNC: inst.lfo_sync = !inst.lfo_sync; break;
+        case KR_LFODIV: {
+            inst.lfo_div += dir;
+            if (inst.lfo_div < 0) inst.lfo_div = LFO_DIV_N - 1;
+            else if (inst.lfo_div >= LFO_DIV_N) inst.lfo_div = 0;
+        } break;
+        case KR_LFOSHAPE: {
+            inst.lfo_shape += dir;
+            if (inst.lfo_shape < 0) inst.lfo_shape = LFO_SHAPE_N - 1;
+            else if (inst.lfo_shape >= LFO_SHAPE_N) inst.lfo_shape = 0;
+        } break;
         case KR_LEVEL: inst.level = clampf(inst.level + d * 0.05f, 0.0f, 1.0f); break;
     }
 }

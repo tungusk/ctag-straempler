@@ -9,6 +9,41 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 (later) — the LFO lifted to Keys, via a shared util/lfo
+
+Owed from the Synth LFO session. **Keys had NO LFO at all** — the "lift" was a
+build, not a UI copy — so the engine went into `util/lfo.{c,h}` and BOTH
+machines run it now.
+
+- `util/lfo.h`: the shapes (`LFO_SINE..LFO_RND`), the divisions (`lfo_beats`,
+  beats per cycle, `lfo_div_name`), `lfo_shape_name`, and `lfo_tick()` — one
+  block of phase advance + sync + S&H, returning -1..1. It takes the tempo as
+  ARGUMENTS (`bpm`, `pulses`, `ppb`) instead of calling `clock_core_*` itself:
+  `util` cannot REQUIRE `machine`, and it keeps the thing testable off-target.
+  Synth's behaviour is preserved exactly — `sy_lfo_val`/`sy_lfo_beats`/
+  `SY_LFO_DIV_N` are gone, `sy.lfo_phase/rnd/cyc` collapsed into one `lfo_t`.
+- Keys: `lfo_rate/depth/dest/sync/div/shape` + `lfo_t`, same preset keys as
+  Synth (`lfr lfd lfx lfs lfv lfw`) — absent from old patches, so the init
+  defaults stand and there is no migration. Dest OFF by default: silent until
+  asked for. Cutoff is multiplicative (`* lfo_cut`), pitch rides on the
+  matrix's semitone offset, both scaled exactly as Synth, so a setting reads
+  the same on either machine. Six Setup rows after Glide.
+- **Keys Live: the bottom strip is now two views**, like Synth. `KL_BOTTOM` (5)
+  is the ENV/LFO header and press switches; params start at `KL_PARAM0` (6).
+  The two views are different LENGTHS, so **`KLIVE_N` is gone** — the element
+  count and the two loop-edge indices are FUNCTIONS (`klive_n()`, `kl_loops()`,
+  `kl_loope()`), since the loop edges nav after the strip and move with it.
+  Every 5..8 literal in `draw_adsr`/`klive_edit` is now `KL_PARAM0 + k`.
+- Not done on purpose: **no LFO Rate/Depth entries in the Keys CV matrix**
+  (Synth has `SYM_LFORATE`/`SYM_LFODEPTH`). That changes `ISM_N` and the web
+  badge row, and belongs with a matrix pass, not this one.
+- Builds clean. **UNTESTED — the unit was offline**, so nothing here has been
+  seen on the TFT, let alone heard. Owed by eye: the ENV/LFO switch, the five
+  cells highlighting when scrolled, and that the loop edges still nav and drag
+  correctly in BOTH views (the renumbering is where a bug would hide). Owed by
+  ear: a real clock into CV4 against the divisions — same test the Synth LFO
+  still owes.
+
 ## 2026-09-10 — WEB card (browser-side prefs) + the phantom pad above BOUNCE
 
 Remote tab. **.85 runs it.** Arlo asked whether a 4th settings card would

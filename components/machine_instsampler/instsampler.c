@@ -16,6 +16,7 @@
 #include "pitch_detect.h"
 #include "preset_store.h"
 #include "fxchain.h"
+#include "clock.h"        // core clock: LFO tempo sync
 #include "instsampler_priv.h"
 
 is_state_t inst;
@@ -374,6 +375,12 @@ static esp_err_t keys_start(void)
     inst.res01 = 0.15f;
     inst.glide = 0.0f;
     inst.level = 0.85f;
+    inst.lfo_rate = 5.0f;
+    inst.lfo_depth = 0.0f;
+    inst.lfo_dest = LFO_OFF;     // silent until asked for, as on Synth
+    inst.lfo_sync = false;
+    inst.lfo_div = 4;            // one beat per cycle
+    inst.lfo_shape = LFO_SINE;
     inst.start_frac = 0.0f;
     inst.pitch_src = 0; inst.gate_src = 8;   // CV1 / TR1 unless the preset says otherwise
     cvmtx_init(&inst.mtx, keys_mtx_labels, ISM_N, keys_mtx_defaults);   // knobs as ABS entries, floors armed
@@ -482,6 +489,16 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     float e2c_eff = inst.env_to_cut + m_e2c; if (e2c_eff < 0) e2c_eff = 0; else if (e2c_eff > 1) e2c_eff = 1;
     float lvl_eff = inst.level + m_lvl;      if (lvl_eff < 0) lvl_eff = 0; else if (lvl_eff > 1.2f) lvl_eff = 1.2f;
 
+    // LFO (per block — sub-audio, so block granularity is smooth) -> cutoff or
+    // pitch. Sync/division/shape live in util/lfo, shared with Synth; depth and
+    // the two destination scalings match it too, so a patch reads the same on
+    // both machines.
+    float lfo = lfo_tick(&inst.lfo, inst.lfo_shape, inst.lfo_rate, inst.lfo_sync,
+                         inst.lfo_div, clock_core_beat_bpm(), clock_core_pulses(),
+                         clock_core_ppb(), (float)(MACHINE_BLOCK / 2) / IS_RATE);
+    float lfo_cut  = (inst.lfo_dest == LFO_CUT)   ? (1.0f + lfo * inst.lfo_depth * 0.8f) : 1.0f;
+    float lfo_semi = (inst.lfo_dest == LFO_PITCH) ? (lfo * inst.lfo_depth * 2.0f) : 0.0f;
+
     // effective loop window (matrix LOOPMOV shifts it, LOOPLEN scales it)
     long ls = (long)z->loop_start, le = (long)z->loop_end;
     if (z->loop_mode != LOOP_OFF && z->frames > 0) {
@@ -527,7 +544,7 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
     } else {
         v->cur_note = note;
     }
-    float pnote = v->cur_note + m_semi;
+    float pnote = v->cur_note + m_semi + lfo_semi;
     float inc = exp2f((pnote - ((float)z->root + z->fine)) / 12.0f);
     if (inc < 0.25f) inc = 0.25f; else if (inc > 4.0f) inc = 4.0f;   // +/-2 octaves
 
@@ -580,7 +597,7 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
                 v->env_stage = ENV_IDLE; v->env = 0.0f; v->active = false;
             }
 
-            float fc = cutoff_eff + v->env * e2c_eff * 5000.0f;
+            float fc = (cutoff_eff + v->env * e2c_eff * 5000.0f) * lfo_cut;
             if (fc < 8.0f) fc = 8.0f;
             float coef = svf_coef(fc, IS_RATE, 1.0f);
             float lp;
@@ -615,6 +632,12 @@ static cJSON *keys_preset_save(void)
     cJSON_AddNumberToObject(o, "res", inst.res01);
     cJSON_AddNumberToObject(o, "gld", inst.glide);
     cJSON_AddNumberToObject(o, "lvl", inst.level);
+    cJSON_AddNumberToObject(o, "lfr", inst.lfo_rate);
+    cJSON_AddNumberToObject(o, "lfd", inst.lfo_depth);
+    cJSON_AddNumberToObject(o, "lfx", inst.lfo_dest);
+    cJSON_AddNumberToObject(o, "lfs", inst.lfo_sync ? 1 : 0);
+    cJSON_AddNumberToObject(o, "lfv", inst.lfo_div);
+    cJSON_AddNumberToObject(o, "lfw", inst.lfo_shape);
     fxrack_save(&inst_rk, o);   // slots + every effect param (shared FX rack)
     // ZONES array. The legacy flat keys (smp/root/fn/lm/ls/le/lx) are still
     // written for zone 0 so an older build — or a patch file read by one — still
@@ -679,6 +702,12 @@ static void keys_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "res"))   && cJSON_IsNumber(j)) inst.res01 = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) inst.glide = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) inst.level = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfr"))   && cJSON_IsNumber(j)) inst.lfo_rate = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfd"))   && cJSON_IsNumber(j)) inst.lfo_depth = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfx"))   && cJSON_IsNumber(j)) inst.lfo_dest = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfs"))   && cJSON_IsNumber(j)) inst.lfo_sync = j->valueint != 0;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfv"))   && cJSON_IsNumber(j)) inst.lfo_div = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfw"))   && cJSON_IsNumber(j)) inst.lfo_shape = j->valueint;
     // ZONES array wins when present: clear, then append each entry and restore
     // its tuning and loop after the load (loading resets both). Falls back to
     // the legacy single "smp" key so every existing patch and autosave still
