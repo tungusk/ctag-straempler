@@ -9,6 +9,39 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — WEB card (browser-side prefs) + the phantom pad above BOUNCE
+
+Remote tab. **.85 runs it.** Arlo asked whether a 4th settings card would
+balance the layout and wanted the page reviewed as a whole.
+
+- **The page is ALREADY sectioned** the way "panel / settings / bounce+stream"
+  describes: `.remcols.remtop`, `.remcols.remset`, then a plain `.remcols`.
+  Section headers were offered to mark the seams and Arlo said not needed.
+- **The pad above BOUNCE was a bug**: `<div class="msg" id="rm">` (the ADVANCED
+  Apply result line) is empty almost always, and `.msg` carries
+  `min-height:16px` + 4 px margin, so it reserved 20 px permanently. Fixed with
+  `.msg:empty{display:none}` — measured 20 px -> 0, `remset` now ends exactly
+  where the bounce row starts.
+- **WEB card** (`webCard()`, TFT-screen look like MACHINE SETUP / GLOBAL) joins
+  MACHINE SETUP in the LEFT column, so folded the settings zone is 2+2 —
+  measured 81 px per column, dead even. Rows, all previously hardcoded or
+  hidden: **Screen at load** (new — `auto` used to reset on every close and a
+  shot needed a click every page load), **Auto refresh** OFF/3/5/10 s (was a
+  literal 3000 in `scrPoll`), **Poll** LIVE/PAUSED, **Screen size** 60/90 %
+  (mirrors the image-click, same `scrzoom` key), **Status bar** on Remote.
+  Stored under `web_*` in localStorage; folded by default like the others.
+- **Poll PAUSED stops ALL REST traffic from the page** — measured 16 fetches
+  per 2 s live, 0 paused, 19 on resume. For judging audio without closing the
+  tab (the old advice was "never poll /status while judging audio"). It is
+  deliberately NOT persisted: a page that comes back frozen reads as broken.
+  A red POLLING PAUSED chip sits in the header so it is visible at any scroll.
+- **Not fixed, by choice**: the ~151 px gap under the panel card. `.remtop` is
+  sized by its taller column, and which column is taller FLIPS per machine —
+  measured left 660 vs right 811 on Tape, but left 917 vs right 811 on
+  Synth/Keys where the PLAY-MIDI card shows. No card ordering fixes that; only
+  a masonry flow would, and that would break the "bounce and stream last"
+  reading. A 4th settings card does NOT fill it (different flex row).
+
 ## 2026-09-10 — /screenshot READS THE PANEL (GRAM readback), shadow FB retired on bridged units
 
 `/screenshot` now reads the panel's own GRAM over MISO instead of the PSRAM

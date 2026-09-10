@@ -37,6 +37,8 @@ input[type=checkbox]{color-scheme:dark;accent-color:#2f5566;opacity:.8}
 .dz.ov{border-color:#0af;color:#0af}
 progress{width:100%;height:6px;margin-top:6px;display:none}
 .msg{color:#777;font-size:11px;margin-top:4px;min-height:16px}
+.msg:empty{display:none}   /* an empty status line must not reserve 20 px (it sat above BOUNCE) */
+.ptag{background:#3a1010;border:1px solid #a33;color:#f88;border-radius:3px;padding:2px 8px;font-size:11px;letter-spacing:.05em}   /* polling paused: in the header so it is visible at any scroll */
 .ok{color:#4a4}
 .er{color:#a44}
 body.nosbar{padding-bottom:0}
@@ -237,6 +239,7 @@ body.nosbar .sbar{display:none}
 <body class="nosbar">
 <header>
   <h1>Strämpler</h1>
+  <span class="ptag" id="ptag" hidden>POLLING PAUSED</span>
   <div class="tabs">
     <div class="tab on" id="t3" onclick="tab(3)">Remote</div>
     <div class="tab" id="t5" onclick="tab(5)">Listener</div>
@@ -418,7 +421,7 @@ body.nosbar .sbar{display:none}
   </div>
   <!-- the three settings cards: a row of their own, flowing side by side when the window allows -->
   <div class="remcols remset">
-    <div class="rcol"><div id="rsetup"></div></div>
+    <div class="rcol"><div id="rsetup"></div><div id="rweb"></div></div>
     <div class="rcol"><div id="rglob"></div><div id="rparams"></div></div>
   </div>
   <div class="msg" id="rm"></div>
@@ -579,9 +582,9 @@ function tab(n){
     document.getElementById('t'+i).className='tab'+(i===n?' on':'');
     document.getElementById('p'+i).className='pane'+(i===n?' on':'');
   }
-  document.body.className=(n===3)?'nosbar':'';   // Remote: the perform page, no status bar
+  document.body.className=(n===3&&!WEB.sbar)?'nosbar':'';   // Remote: the perform page, status bar off unless asked
   if(n===0)loadFiles();
-  if(n===3)loadRemote();
+  if(n===3){loadRemote();if(WEB.scrload)setTimeout(function(){scrShot(3);},300);}
   if(n===4)loadSet();
   if(n===6){rdState();rdTimer=rdTimer||setInterval(rdState,1000);}
   else if(rdTimer){clearInterval(rdTimer);rdTimer=null;}
@@ -1548,6 +1551,57 @@ function rpTable(o,path){
 function plainCard(title,body){return '<div class="card pnl"><b class="ph" style="margin:0">'+title+'</b>'+body+'</div>';}
 function setupCard(){return foldCard('setup','MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>');}
 function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>');}
+// ---- WEB card: preferences that live in this BROWSER, not on the module ----
+// Everything here was hardcoded or hidden before: the auto-refresh interval was
+// a literal 3000 in scrPoll, the status poll a literal 500, the screen size only
+// reachable by clicking the image, and "auto" reset itself every time the shot
+// was closed. Stored per browser in localStorage, except Poll — a hard pause is
+// a "quiet while I listen" action, so it deliberately does NOT survive a reload
+// (a page that comes back frozen reads as broken).
+var WEB={scrload:0,scrint:3,poll:1,size:0,sbar:0},webPaused=false;
+var WEB_INT=[0,3,5,10];                            // auto-refresh choices, seconds (0 = off)
+function webLoad(){
+  try{
+    WEB.scrload=+localStorage.getItem('web_scrload')||0;
+    var si=localStorage.getItem('web_scrint'); WEB.scrint=(si===null)?3:+si;
+    WEB.size=(localStorage.getItem('scrzoom')==='1')?1:0;      // the existing key, unchanged
+    WEB.sbar=+localStorage.getItem('web_sbar')||0;
+  }catch(e){}
+}
+function webSave(){
+  try{
+    localStorage.setItem('web_scrload',WEB.scrload?'1':'0');
+    localStorage.setItem('web_scrint',String(WEB.scrint));
+    localStorage.setItem('web_sbar',WEB.sbar?'1':'0');
+  }catch(e){}
+}
+function webCard(){
+  var h='<div class="tft"><div class="tt"><span>Web</span><span class="aff">this browser</span></div>';
+  h+=tftRow('tog','Screen at load',WEB.scrload?'ON':'OFF','webScrLoad',1);
+  h+=tftRow('tog','Auto refresh',WEB.scrint?WEB.scrint+'s':'OFF','webScrInt',1);
+  h+=tftRow('tog','Poll',webPaused?'PAUSED':'LIVE','webPoll',1);
+  h+=tftRow('tog','Screen size',WEB.size?'90%':'60%','webSize',1);
+  h+=tftRow('tog','Status bar',WEB.sbar?'SHOW':'HIDE','webSbar',1);
+  return h+'<div style="color:#555;font-size:10px;margin:8px 4px 0">Kept in this browser only. '
+        +'Poll PAUSED stops all REST traffic from this page \u2014 the panel stops updating until you set it back.</div></div>';
+}
+function webDraw(){var el=document.getElementById('rweb');if(el)el.innerHTML=foldCard('web','WEB',webCard());}
+function webScrLoad(){WEB.scrload=WEB.scrload?0:1;webSave();webDraw();}
+function webScrInt(){
+  var i=WEB_INT.indexOf(WEB.scrint); WEB.scrint=WEB_INT[(i<0?0:i+1)%WEB_INT.length];
+  webSave();
+  var cb=document.getElementById('scrauto'); if(cb)cb.checked=!!WEB.scrint;   // the panel checkbox is the same switch
+  webDraw();
+}
+function webPoll(){
+  webPaused=!webPaused;
+  document.getElementById('ptag').hidden=!webPaused;
+  webDraw();
+  if(!webPaused)pollStatus();                       // catch up immediately on resume
+}
+function webSize(){scrZoom();}      // scrZoom updates WEB.size and redraws
+function webSbar(){WEB.sbar=WEB.sbar?0:1;webSave();webApplySbar();webDraw();}
+function webApplySbar(){if(document.getElementById('p3').className.indexOf('on')>=0)document.body.className=WEB.sbar?'':'nosbar';}
 function advCard(inner,asTable){
   var adv=asTable?'<table class="adv">'+inner+'</table>':inner;
   return foldCard('adv','ADVANCED','<div class="tftw"><div class="tft adv">'+adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div></div></div>');
@@ -1555,6 +1609,7 @@ function advCard(inner,asTable){
 function rpSetCard(inner,asTable){
   document.getElementById('rsetup').innerHTML=setupCard();
   document.getElementById('rglob').innerHTML=globCard();
+  webDraw();
   return advCard(inner,asTable);
 }
 function rpLoad(retry){
@@ -1832,6 +1887,7 @@ function scrZoom(){
   i.style.margin=big?'6px 0 0':'8px 0 6px';   // the small screen gets a little air above and below
   document.getElementById('panel').className='card pnl'+(big?' big':'');   // dressing only beside the small screen
   try{localStorage.setItem('scrzoom',big?'1':'0');}catch(e){}
+  WEB.size=big?1:0; webDraw();      // clicking the image and the WEB row are the same switch
 }
 try{if(localStorage.getItem('scrzoom')==='1'){document.getElementById('scrbox').style.width='90%';document.getElementById('panel').className='card pnl big';var _si=document.getElementById('scrimg');_si.style.margin='6px 0 0';_si.style.cursor='zoom-out';}}catch(e){}
 function scrShot(retry){   // retry: the first call after a boot answers 503 Warming (lazy shadow FB)
@@ -1845,6 +1901,7 @@ function scrShot(retry){   // retry: the first call after a boot answers 503 War
     document.getElementById('scrbtn').textContent='Refresh';
     document.getElementById('scrbtn').className='btn';
     document.getElementById('scrbox').className='';
+    document.getElementById('scrauto').checked=!!WEB.scrint;   // remembered, not reset on every open
     scrBusy=false;
   };
   next.onerror=function(){scrBusy=false;if(retry>0)setTimeout(function(){scrShot(retry-1);},1500);};
@@ -1860,9 +1917,9 @@ function scrClose(){          // collapse back to the header line; stop auto too
   document.getElementById('scrauto').checked=false;
 }
 function scrPoll(){
-  if(!document.getElementById('scrauto').checked)return;
+  if(!document.getElementById('scrauto').checked||!WEB.scrint)return;
   var now=Date.now();
-  if(now-scrLast<3000)return;
+  if(now-scrLast<WEB.scrint*1000)return;
   scrLast=now; scrShot();
 }
 // ---- MIDI bridge: WS (fallback POST) -> the module's soft-MIDI note stack ----
@@ -2178,6 +2235,7 @@ function updateScope(cv){
 }
 
 function pollStatus(){
+  if(webPaused)return;            // WEB card: quiet while judging audio
   fetch('/status').then(function(r){return r.json();}).then(function(d){
     curMach=d.machine||'';
     var cv=d.cv||[],h='';
@@ -2206,6 +2264,7 @@ setInterval(pollStatus,500);
 pollImport();
 // (perform faders are built into the input-meter columns by loadRemote)
 bcastInit();     // broadcast Listen link + player URL (:8000)
+webLoad();       // browser-side prefs before the first render
 tab(3);          // Remote is the default tab
 pollStatus();
 </script>
