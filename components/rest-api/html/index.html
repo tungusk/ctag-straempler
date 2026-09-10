@@ -363,7 +363,7 @@ body.nosbar .sbar{display:none}
   </div>
   </div>
   <div id="rparams"></div>
-  <div class="row">
+  <div class="row" id="rprow">
     <button class="btn" onclick="rpLoad()">Reload settings</button>
     <button class="btn" onclick="rpApply()">Apply</button>
   </div>
@@ -1316,6 +1316,23 @@ function rpStep(i,d){
 }
 
 
+// SETTINGS card, collapsible: click the heading to fold the form away (Arlo,
+// 2026-09-09 — the long form buries the machine grid). Remembered per browser;
+// starts folded.
+function rpSetOpen(){try{return localStorage.getItem('rpsetopen')==='1';}catch(e){return false;}}
+function rpSetToggle(){
+  var b=document.getElementById('rpsetbody'),h=document.getElementById('rpsethdr');
+  if(!b)return; var open=b.style.display==='none';
+  b.style.display=open?'':'none'; h.textContent=(open?'\u25BE ':'\u25B8 ')+'SETTINGS';
+  var r=document.getElementById('rprow'); if(r)r.style.display=open?'':'none';   // Reload/Apply belong to the form
+  try{localStorage.setItem('rpsetopen',open?'1':'0');}catch(e){}
+}
+function rpSetCard(inner){
+  var open=rpSetOpen();
+  var r=document.getElementById('rprow'); if(r)r.style.display=open?'':'none';
+  return '<div class="card"><b class="ph" id="rpsethdr" style="cursor:pointer;user-select:none" onclick="rpSetToggle()">'
+        +(open?'\u25BE ':'\u25B8 ')+'SETTINGS</b><div class="rpcols" id="rpsetbody"'+(open?'':' style="display:none"')+'>'+inner+'</div></div>';
+}
 function rpLoad(retry){
   fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
     if(d.error){document.getElementById('rmatrix').innerHTML='';document.getElementById('rparams').innerHTML='<div class="msg er">'+esc(d.error)+'</div>';return;}
@@ -1326,8 +1343,8 @@ function rpLoad(retry){
       fetch('/files').then(function(r){return r.json();}).then(function(fd){
         var names=(fd.files||[]).map(function(f){return f.name;}).sort();
         document.getElementById('rmatrix').innerHTML=rpMatrix(d);
-        el.innerHTML='<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpDrumForm(rpRest(d),names)+'</div></div>';
-      }).catch(function(){document.getElementById('rmatrix').innerHTML=rpMatrix(d);el.innerHTML='<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpDrumForm(rpRest(d),[])+'</div></div>';});
+        el.innerHTML=rpSetCard(rpDrumForm(rpRest(d),names));
+      }).catch(function(){document.getElementById('rmatrix').innerHTML=rpMatrix(d);el.innerHTML=rpSetCard(rpDrumForm(rpRest(d),[]));});
       return;
     }
     document.getElementById('rmatrix').innerHTML=rpMatrix(d);   // first: the file list below can take seconds after a boot
@@ -1338,7 +1355,7 @@ function rpLoad(retry){
                        :(fd.files||[]).map(function(f){return f.name;})).sort();
     }).catch(function(){rpFileOpts=[];}).then(function(){
       var rest=rpRest(d),mx=document.getElementById('rmatrix').innerHTML;
-      el.innerHTML=Object.keys(rest).length?'<div class="card"><b class="ph">SETTINGS</b><div class="rpcols">'+rpForm(rest,'')+'</div></div>':(mx?'':'<div class="msg">this machine has no settings</div>');
+      el.innerHTML=Object.keys(rest).length?rpSetCard(rpForm(rest,'')):(mx?'':'<div class="msg">this machine has no settings</div>');
     });
   }).catch(function(){if(!retry)setTimeout(function(){rpLoad(true);},1500);});
 }
