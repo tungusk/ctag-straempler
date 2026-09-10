@@ -42,6 +42,27 @@ balance the layout and wanted the page reviewed as a whole.
   a masonry flow would, and that would break the "bounce and stream last"
   reading. A 4th settings card does NOT fill it (different flex row).
 
+## 2026-09-10 — every Remote card folds (except the panel); the stream row aligns
+
+- **`makeFold(card,key,def)`** converts a card that was NOT built by
+  `foldCard()`: everything after the header row becomes `#<key>_body`, an arrow
+  span goes in front of the `.ph` label, the label becomes the toggle. Safe to
+  re-run, which matters because `rpLoad()` rebuilds the matrix and FX cards from
+  scratch — `foldAll()` runs at the end of `rpSetCard()` and the state survives
+  (verified: CV MATRIX folded, `rpLoad()`, still folded).
+- `foldOpen(key,def)` gained a default: these eight (MACHINE, PLAY-MIDI,
+  CV MATRIX, FX, CLOCK, BOUNCE, ICECAST, BROADCAST) start **open**, unlike the
+  four settings cards which start closed. `foldSet()` moves the arrow only when
+  a card has one, so a title can hold other markup — the `.hlp` tooltip span
+  would otherwise be wiped by the old `textContent` toggle.
+- **The panel is deliberately excluded** (it is the instrument, not a section).
+- **PLAY-MIDI's title was a bare `<b>`**, not `.ph` — the only card header that
+  was not, which is why it alone failed to convert. Now matches the others.
+- **Stream row alignment**: `.remstream` makes the two columns equal height and
+  lets the last card in the short column absorb the difference, rather than
+  hard-coding a pad — so it stays aligned as cards fold. Measured 166/166 with
+  everything open, 158/158 with BROADCAST collapsed.
+
 ## 2026-09-10 — BOUNCE / ICECAST / BROADCAST explainers move to a title hover
 
 The three help paragraphs at the bottom of the Remote tab are now the card

@@ -168,6 +168,11 @@ body.nosbar .sbar{display:none}
 .remset{align-items:flex-start;justify-content:flex-start;width:1016px;max-width:calc(100vw - 24px);margin:0 auto}   /* the settings zone: two across on the column grid, the odd one stays LEFT */
 .remset>.rcol{flex:0 0 502px;max-width:100%}   /* left: MACHINE SETUP; right: GLOBAL then ADVANCED */
 @media (max-width:1040px){.remset{justify-content:center}}
+/* BOUNCE + PUSH -> ICECAST against BROADCAST: equal-height columns, the last card in the
+   short column absorbs the difference, so the row stays aligned as cards fold */
+.remstream{align-items:stretch}
+.remstream>.rcol{display:flex;flex-direction:column}
+.remstream>.rcol>.card:last-child{flex:1 1 auto}
 /* ADVANCED: the raw-key table inside the same dark frame as the two screens */
 .tft.adv{min-height:0}
 .tft table.adv{font-family:inherit;font-size:12px}
@@ -388,7 +393,7 @@ body.nosbar .sbar{display:none}
   </div>
   <div class="card pnl" id="midicard" style="display:none">
     <div class="row tight" style="align-items:center">
-      <b style="flex:1;color:#0af">PLAY &#8212; MIDI</b>
+      <b class="ph" style="flex:1;padding:0;margin:0">PLAY &#8212; MIDI</b>
       <span id="midist" style="color:#888;margin-right:8px">off</span>
       <select id="mididev" style="flex:0 0 130px;display:none"></select>
       <button class="btn" style="flex:0 0 64px;margin-left:6px" onclick="midiSend('x');midiHeldClear()">All off</button>
@@ -430,7 +435,7 @@ body.nosbar .sbar{display:none}
     <div class="rcol"><div id="rglob"></div><div id="rparams"></div></div>
   </div>
   <div class="msg" id="rm"></div>
-  <div class="remcols">
+  <div class="remcols remstream">
   <div class="rcol">
   <div class="card pnl" id="bouncecard">
     <div class="row tight" style="align-items:center;margin-top:0">
@@ -1455,12 +1460,46 @@ function rpStep(i,d){
 var rpSetup=null,rpGlob=null;
 // fold cards: heading toggles the body; per-card state in localStorage, folded by default
 function foldInit(key){if(foldOpen(key)){var b=document.getElementById(key+'_body'),h=document.getElementById(key+'_hdr');if(b){b.style.display='';h.textContent='\u25BE '+h.getAttribute('data-t');}}}
-function foldOpen(key){try{return localStorage.getItem('fold_'+key)==='1';}catch(e){return false;}}
-function foldToggle(key){
-  var b=document.getElementById(key+'_body'),h=document.getElementById(key+'_hdr');
-  if(!b)return; var open=b.style.display==='none';
-  b.style.display=open?'':'none'; h.textContent=(open?'\u25BE ':'\u25B8 ')+h.getAttribute('data-t');
+function foldOpen(key,def){try{var v=localStorage.getItem('fold_'+key);return v===null?!!def:v==='1';}catch(e){return !!def;}}
+function foldSet(key,open){
+  var b=document.getElementById(key+'_body'),a=document.getElementById(key+'_arw'),h=document.getElementById(key+'_hdr');
+  if(!b)return;
+  b.style.display=open?'':'none';
+  if(a)a.textContent=open?'\u25BE ':'\u25B8 ';                       // converted card: only the arrow changes
+  else if(h)h.textContent=(open?'\u25BE ':'\u25B8 ')+h.getAttribute('data-t');   // foldCard(): the whole label
   try{localStorage.setItem('fold_'+key,open?'1':'0');}catch(e){}
+}
+function foldToggle(key){var b=document.getElementById(key+'_body');if(b)foldSet(key,b.style.display==='none');}
+// Turn a card that was NOT built by foldCard() into a fold card: everything after
+// the header row becomes the body. Safe to re-run — cards rebuilt by rpLoad (the
+// matrix and FX) come back unwrapped and are converted again. Default OPEN: these
+// are the working controls, unlike the settings cards which start closed.
+function makeFold(card,key,def){
+  if(!card)return;
+  var ph=card.querySelector('.ph'); if(!ph||document.getElementById(key+'_arw'))return;
+  var top=ph; while(top.parentNode&&top.parentNode!==card)top=top.parentNode;
+  if(top.parentNode!==card)return;
+  var body=document.createElement('div'); body.id=key+'_body';
+  var n=top.nextSibling;
+  while(n){var nx=n.nextSibling; body.appendChild(n); n=nx;}
+  card.appendChild(body);
+  var open=foldOpen(key,def===undefined?true:def);
+  body.style.display=open?'':'none';
+  var arw=document.createElement('span');
+  arw.id=key+'_arw'; arw.textContent=open?'\u25BE ':'\u25B8 ';
+  ph.insertBefore(arw,ph.firstChild);
+  ph.style.cursor='pointer'; ph.style.userSelect='none';
+  ph.onclick=function(){foldToggle(key);};
+}
+// every Remote card except the panel folds; state per browser, open until told otherwise
+var FOLDABLE=[['machcard','mach'],['midicard','midi'],['rmatrix','mtx'],['rfx','fx'],
+              ['clkcard','clk'],['bouncecard','bnc'],['icecard','ice'],['bcastcard','bc']];
+function foldAll(){
+  FOLDABLE.forEach(function(f){
+    var host=document.getElementById(f[0]);
+    if(host&&!host.classList.contains('card'))host=host.querySelector('.card');   // #rmatrix / #rfx are wrappers
+    makeFold(host,f[1],true);
+  });
 }
 function foldCard(key,title,body,cls){
   var open=foldOpen(key);
@@ -1612,6 +1651,7 @@ function rpSetCard(inner,asTable){
   document.getElementById('rsetup').innerHTML=setupCard();
   document.getElementById('rglob').innerHTML=globCard();
   webDraw();
+  foldAll();                     // the matrix / FX cards were just rebuilt
   return advCard(inner,asTable);
 }
 function rpLoad(retry){
@@ -2268,6 +2308,7 @@ pollImport();
 bcastInit();     // broadcast Listen link + player URL (:8000)
 webLoad();       // browser-side prefs before the first render
 tab(3);          // Remote is the default tab
+foldAll();       // MACHINE / PLAY-MIDI / CLOCK / BOUNCE / ICECAST / BROADCAST fold too
 pollStatus();
 </script>
 </body>
