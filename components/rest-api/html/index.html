@@ -376,6 +376,7 @@ body.nosbar .sbar{display:none}
     <div class="msg" style="margin-top:4px">Plays <b>Synth</b> / <b>Keys</b> (MIDI wins over CV while a note is held). Type on this page, click the keys, or pick a MIDI device (Chrome).</div>
   </div>
   <div id="rsetup"></div>
+  <div id="rparams"></div>
   </div>
   <div class="rcol">
   <div id="rmatrix"></div>
@@ -400,7 +401,6 @@ body.nosbar .sbar{display:none}
   <div id="rglob"></div>
   </div>
   </div>
-  <div id="rparams"></div>
   <div class="msg" id="rm"></div>
   <div class="remcols">
   <div class="rcol">
@@ -1522,12 +1522,12 @@ function rpTable(o,path){
   return h;
 }
 // the three cards: MACHINE SETUP (left column, under the keyboard), SETTINGS
-// (right column, under the machine grid), ADVANCED (full width, raw keys)
+// (right column, under the machine grid), ADVANCED (left column, raw keys)
 function setupCard(){return foldCard('setup','MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>');}
 function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>');}
 function advCard(inner,asTable){
   var adv=asTable?'<table class="adv" style="margin-top:6px">'+inner+'</table>':inner;
-  return foldCard('adv','ADVANCED &#8212; raw preset keys',adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div>','');
+  return foldCard('adv','ADVANCED &#8212; raw preset keys',adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div>');
 }
 function rpSetCard(inner,asTable){
   document.getElementById('rsetup').innerHTML=setupCard();
