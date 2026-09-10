@@ -161,6 +161,8 @@ body.nosbar .sbar{display:none}
 .tft .aff{color:#0af;font-size:12px}
 .tft .r{display:flex;justify-content:space-between;align-items:center;padding:2px 6px;border-radius:2px;line-height:1.35}
 .tft .r.cur{background:#0a1238}
+.tft .r:hover{background:#0a1238}              /* the bar follows the mouse... */
+.tft:hover .r.cur:not(:hover){background:transparent}   /* ...and the device cursor yields while the mouse is inside */
 .tft .r .l{color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tft .r .vv{display:flex;align-items:center;white-space:nowrap}
 .tft .r .v{color:#ddd;min-width:44px;text-align:right}
