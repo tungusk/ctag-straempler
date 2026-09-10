@@ -42,6 +42,11 @@ static int s_last_barx = -1;
 static char s_info1[96] = "", s_info2[64] = "";
 static char s_last_track[DK_NAME_LEN] = "";   // detect track changes (e.g. via remote)
 static int s_last_dbpm = -1;
+// Redraw-speed discipline (2026-09-09): a FULL redraw clears the screen once;
+// the black per-element clears are skipped then (they repainted ~40k px on
+// top of the 77k px fillScreen).
+static bool s_skip_clear = false;
+#define CLEAR_RECT(x, y, w, h) do { if (!s_skip_clear) TFT_fillRect((x), (y), (w), (h), TFT_BLACK); } while (0)
 
 // display-side smoothing of the measured external bpm: clock edges are
 // quantized to the 64-frame audio block (~1.45 ms), so the raw per-pulse
@@ -86,7 +91,7 @@ static void draw_big_bpm(void){
     TFT_setFont(DEJAVU24_FONT, NULL);
     int bw = 120, bh = TFT_getfontheight() + 4;
     _bg = TFT_BLACK;
-    TFT_fillRect(_width - bw, 2, bw, bh, _bg);
+    CLEAR_RECT(_width - bw, 2, bw, bh);
     _fg = (dk.sync && clock_core()->clk.locked) ? (color_t){40, 200, 90} : TFT_WHITE;
     TFT_print(s, _width - TFT_getStringWidth(s) - 8, 4);
     cfont = f;
@@ -123,13 +128,13 @@ static void draw_info(void){
     } else s2[0] = 0;
     if (strcmp(s1, s_info1) != 0){
         strcpy(s_info1, s1);
-        _bg = TFT_BLACK; TFT_fillRect(0, y, _width, fh + 4, _bg);
+        _bg = TFT_BLACK; CLEAR_RECT(0, y, _width, fh + 4);
         _fg = TFT_WHITE;
         TFT_print(s1, 8, y);
     }
     if (strcmp(s2, s_info2) != 0){
         strcpy(s_info2, s2);
-        _bg = TFT_BLACK; TFT_fillRect(0, y + fh + 6, _width, fh + 4, _bg);
+        _bg = TFT_BLACK; CLEAR_RECT(0, y + fh + 6, _width, fh + 4);
         _fg = clock_core()->clk.locked ? (color_t){40, 200, 90} : TFT_LIGHTGREY;
         if (s2[0]) TFT_print(s2, 8, y + fh + 6);
     }
@@ -169,7 +174,7 @@ static color_t tbar_bg(void){
 static const color_t WF_GREY = {125, 125, 135};   // waveform: reads under the white playhead
 
 static void tbar_paint_slice(int x, int w){
-    TFT_fillRect(x, TBAR_Y + TBAR_BW, w, TBAR_H - 2 * TBAR_BW, (color_t){0, 0, 0});
+    CLEAR_RECT(x, TBAR_Y + TBAR_BW, w, TBAR_H - 2 * TBAR_BW);
     if (dk.wf_state == 2){
         int wx = TBAR_X + TBAR_BW + 1, ww = TBAR_W - 2 * TBAR_BW - 2;
         int wy = TBAR_Y + TBAR_BW + 1, wh = TBAR_H - 2 * TBAR_BW - 2;
@@ -231,7 +236,7 @@ static void draw_posbar_frame(void){
         // no full-width border while looping: the canvas goes edge to edge and
         // the ONLY box is the loop window (drawn by the caller). Black frame
         // fill wipes the previous full border away.
-        TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, (color_t){0, 0, 0});
+        CLEAR_RECT(TBAR_X, TBAR_Y, TBAR_W, TBAR_H);
         tbar_paint_slice(TBAR_X, TBAR_W);
     } else {
         TFT_fillRect(TBAR_X, TBAR_Y, TBAR_W, TBAR_H, tbar_bg());   // border color
@@ -276,6 +281,7 @@ static void live_full_redraw(void){
     TFT_print(nm, 8, TFT_getfontheight() + 4);
     cfont = f;
     strlcpy(s_last_track, dk.track, sizeof(s_last_track));
+    s_skip_clear = true;     // the screen is already black
     s_last_dbpm = -1;
     draw_big_bpm();
     s_info1[0] = 0;
@@ -283,6 +289,7 @@ static void live_full_redraw(void){
     draw_info();
     s_bar_state = -1;        // force the first frame paint
     draw_posbar();
+    s_skip_clear = false;
     // total track length, right-justified under the transport bar
     if (dk.file_frames){
         char tl[12];
