@@ -569,6 +569,15 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
 static void put_le32(uint8_t *p, uint32_t v){ p[0]=v; p[1]=v>>8; p[2]=v>>16; p[3]=v>>24; }
 static void put_le16(uint8_t *p, uint16_t v){ p[0]=v; p[1]=v>>8; }
 
+// Screenshot cost matters for AUDIO, not just latency (2026-09-09, Arlo:
+// "it's the auto refresh on the web page" — crackling while Tape played).
+// PSRAM and flash share one SPI bus; Tape streams its audio from PSRAM, and
+// the old handler read 230 KB of shadow out of PSRAM, wrote the converted rows
+// BACK into a PSRAM buffer, and pushed 240 one-row HTTP chunks over ~0.9 s.
+// Now: RGB565 (16 bpp BMP with BI_BITFIELDS — the panel is 18-bit, nothing
+// visible is lost; 153 KB), the row buffer in internal RAM (no PSRAM writes),
+// eight rows per chunk (30 sends), same sparse yields.
+#define SS_ROWS_PER_CHUNK 8
 static esp_err_t screenshot_get_handler(httpd_req_t *req)
 {
     int w = _width, h = _height;
@@ -576,30 +585,31 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "bad display dims");
         return ESP_FAIL;
     }
-    uint32_t row_bytes = (uint32_t)w * 3;            // 24bpp (w=320 -> 960, already 4-aligned)
+    uint32_t row_bytes = (uint32_t)w * 2;            // 16bpp (w=320 -> 640, 4-aligned)
     uint32_t pad = (4 - (row_bytes & 3)) & 3;        // BMP rows pad to 4 bytes
-    uint32_t img = (row_bytes + pad) * (uint32_t)h;
-    uint32_t filesz = 54 + img;
+    uint32_t stride = row_bytes + pad;
+    uint32_t img = stride * (uint32_t)h;
+    const uint32_t hdr_len = 54 + 12;                // BITMAPINFOHEADER + 3 channel masks
+    uint32_t filesz = hdr_len + img;
 
-    uint8_t hdr[54] = {0};
+    uint8_t hdr[66] = {0};
     hdr[0] = 'B'; hdr[1] = 'M';
     put_le32(hdr + 2,  filesz);
-    put_le32(hdr + 10, 54);       // pixel-data offset
+    put_le32(hdr + 10, hdr_len);  // pixel-data offset
     put_le32(hdr + 14, 40);       // DIB header size (BITMAPINFOHEADER)
     put_le32(hdr + 18, (uint32_t)w);
     put_le32(hdr + 22, (uint32_t)h);  // positive height => bottom-up
     put_le16(hdr + 26, 1);        // planes
-    put_le16(hdr + 28, 24);       // bpp
-    put_le32(hdr + 30, 0);        // BI_RGB (uncompressed)
+    put_le16(hdr + 28, 16);       // bpp
+    put_le32(hdr + 30, 3);        // BI_BITFIELDS
     put_le32(hdr + 34, img);
     put_le32(hdr + 38, 2835);     // ~72 dpi
     put_le32(hdr + 42, 2835);
+    put_le32(hdr + 54, 0xF800);   // R mask
+    put_le32(hdr + 58, 0x07E0);   // G mask
+    put_le32(hdr + 62, 0x001F);   // B mask
 
     if (!tft_shadow) {
-        // LAZY shadow FB: allocating 230 KB PSRAM at boot starved libxmp
-        // (tracker "no memory"), so the first /screenshot pays instead. The
-        // shadow only mirrors draws made AFTER allocation — kick a redraw of
-        // the current page and tell the caller to retry for a full frame.
         tft_shadow_init();
         if (!tft_shadow) {
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "shadow fb alloc failed");
@@ -612,12 +622,12 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "shadow fb allocated - redrawing, retry in ~1s\n");
         return ESP_OK;
     }
-    uint8_t *out = heap_caps_malloc(row_bytes + pad, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    // INTERNAL RAM on purpose: the only PSRAM traffic is the shadow read itself
+    uint8_t *out = heap_caps_malloc(stride * SS_ROWS_PER_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!out) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
     }
-    if (pad) memset(out + row_bytes, 0, pad);
 
     char len_str[16];
     snprintf(len_str, sizeof(len_str), "%u", (unsigned)filesz);
@@ -625,24 +635,31 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Content-Length", len_str);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
-    esp_err_t rc = httpd_resp_send_chunk(req, (const char *)hdr, sizeof(hdr));
-    for (int y = h - 1; y >= 0 && rc == ESP_OK; y--) {   // bottom-up
-        disp_lock_take();
-        const color_t *row = tft_shadow + (size_t)y * w;
-        for (int x = 0; x < w; x++) {
-            uint8_t *o = out + x * 3;
-            o[0] = row[x].b;
-            o[1] = row[x].g;
-            o[2] = row[x].r;
+    esp_err_t rc = httpd_resp_send_chunk(req, (const char *)hdr, hdr_len);
+    int y = h - 1;                                   // bottom-up
+    while (y >= 0 && rc == ESP_OK) {
+        int n = 0;
+        while (n < SS_ROWS_PER_CHUNK && y >= 0) {
+            uint8_t *o = out + (size_t)n * stride;
+            disp_lock_take();
+            const color_t *row = tft_shadow + (size_t)y * w;
+            for (int x = 0; x < w; x++) {
+                uint16_t px = (uint16_t)(((row[x].r & 0xF8) << 8) | ((row[x].g & 0xFC) << 3) | (row[x].b >> 3));
+                o[x * 2]     = (uint8_t)(px & 0xFF);
+                o[x * 2 + 1] = (uint8_t)(px >> 8);
+            }
+            disp_lock_give();
+            if (pad) memset(o + row_bytes, 0, pad);
+            y--; n++;
         }
-        disp_lock_give();
-        rc = httpd_resp_send_chunk(req, (const char *)out, row_bytes + pad);
-        if ((y & 15) == 0) vTaskDelay(1);   // shadow reads are RAM-fast; sparse yields suffice
+        rc = httpd_resp_send_chunk(req, (const char *)out, (size_t)n * stride);
+        if (((h - 1 - y) & 15) == 0) vTaskDelay(1);  // sparse yields, as before
     }
     httpd_resp_send_chunk(req, NULL, 0);
     free(out);
     return ESP_OK;
 }
+
 
 // ─── /tftread — ILI9341 readback probe (is the MISO path alive?) ───────────
 // Hardware: the panel's SDO (P3 pin 9) reaches ESP32 IO19 (the SPI MISO the
