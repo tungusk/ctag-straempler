@@ -1,1 +1,1 @@
-v0.10-beta1-20260905 (first public beta: encoder-config-v2 firmware, images free of build-host paths, notes on the GitHub release)
+v0.10-beta2-20260909 (second public beta: Remote tab laid out as the panel, the core clock, CV matrix knob mode)
