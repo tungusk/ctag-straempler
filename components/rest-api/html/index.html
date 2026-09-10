@@ -153,6 +153,18 @@ body.nosbar .sbar{display:none}
 .mxp select{width:82px}
 .mxcard .mtx{width:100%}
 .mxcard .mtx input[type=range]{width:96px}
+.fxslots{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin:2px 0 4px}
+.fxslots label{color:#888;font-size:11px;white-space:nowrap}
+.fxslots select{width:auto;min-width:96px}
+.fxgs{display:flex;flex-wrap:wrap;gap:8px}
+.fxg{flex:1 1 250px;border:1px solid #2a2a2a;border-radius:3px;padding:4px 8px 6px}
+.fxg b{display:block;color:#666;font-size:10px;letter-spacing:1px;margin-bottom:2px}
+.fxp{display:flex;align-items:center;gap:6px;margin:2px 0}
+.fxp label{flex:0 0 66px;color:#888;font-size:11px;white-space:nowrap}
+.fxp input[type=range]{flex:1;min-width:60px}
+.fxp select{width:auto;flex:1}
+.fxp input[type=checkbox]{width:auto;margin:0}
+.fxv{flex:0 0 58px;text-align:right;color:#aaa;font-size:11px;font-family:monospace}
 .mxcard .mtx select{width:104px}
 .mxcard .mtx .amt{width:38px}
 .mxf{display:inline-block;margin:1px 0;padding:2px 8px;border:1px solid #2e3e4a;border-radius:3px;background:#12181c;color:#7fb2cc;font-size:11px}
@@ -332,17 +344,18 @@ body.nosbar .sbar{display:none}
       <select id="mididev" style="flex:0 0 130px;display:none"></select>
       <button class="btn" style="flex:0 0 64px;margin-left:6px" onclick="midiSend('x');midiHeldClear()">All off</button>
     </div>
-    <div id="midikbd" style="margin-top:6px"></div>
-    <div class="row tight" style="margin-top:4px;align-items:center">
-      <label style="color:#888"><input type="checkbox" id="midityping" checked> musical typing</label>
-      <span id="midioct" style="color:#888;margin-left:12px">oct C4</span>
-      <span style="color:#555;margin-left:12px;font-size:11px">A-; keys &#183; Z/X octave &#183; Space release &#183; Esc panic</span>
+    <div id="midikbd" style="margin-top:6px;max-width:100%;overflow-x:auto"></div>
+    <div class="row tight" style="margin-top:4px;align-items:center;flex-wrap:wrap;row-gap:2px">
+      <label style="color:#888;white-space:nowrap"><input type="checkbox" id="midityping" checked> musical typing</label>
+      <span id="midioct" style="color:#888;margin-left:12px;white-space:nowrap">oct C4</span>
+      <span style="color:#555;margin-left:12px;font-size:11px;min-width:0">A-; keys &#183; Z/X octave &#183; Space release &#183; Esc panic</span>
     </div>
     <div class="msg" style="margin-top:4px">Plays <b>Synth</b> / <b>Keys</b> (MIDI wins over CV while a note is held). Type on this page, click the keys, or pick a MIDI device (Chrome).</div>
   </div>
   </div>
   <div class="rcol">
   <div id="rmatrix"></div>
+  <div id="rfx"></div>
   <div class="card pnl" id="clkcard">
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0">CLOCK</b>
@@ -1133,6 +1146,76 @@ function rpForm(o,path){
 // older builds get numbered rows). Rendered FIRST in the settings; the raw
 // arrays are kept out of the generic form.
 var MTX_KEYS=['mxs','mxa','mxl','mxm','mxd','cvr','imap'];
+// ---- FX card: the fxrack's two generic slots + the reverb slot, rendered as
+// controls instead of raw numbers (Arlo 2026-09-09). Keys are the same preset
+// keys the SETTINGS form used; they are kept OUT of that form. Both generic
+// slots share one parameter set per effect kind, so each kind's group is
+// rendered once, for the kinds currently in a slot. Apply = the same
+// /remote/params POST as everything else (rpApply harvests data-rp inputs).
+var FXK=['Off','Overdrive','Flanger','Tremolo','Delay','Filter','Band'];
+var FXDIV=['1/16','1/8T','1/8','1/8.','1/4','1/4.','1/2'];
+var FXRV=['Off','Room','Hall','Plate'];
+var FXP={
+ 1:[['oddr','drive',0,100],['odtn','tone',0,100],['odbs','bias',-100,100],['odlv','level',0,100]],
+ 2:[['flgrt','rate',1,1000],['flgdp','depth',0,100],['flgfb','feedback',-95,95],['flgmx','mix',0,100],['flgsy','sync','b'],['flgdv','div','d']],
+ 3:[['trmrt','rate',5,2000],['trmdp','depth',0,100],['trmsh','shape','s',['Sine','Tri','Sqr']],['trmst','stereo','b'],['trmsy','sync','b'],['trmdv','div','d']],
+ 4:[['dlyt','time',1,1000],['dlyfb','feedback',0,100],['dlymx','mix',0,100],['dlytn','tone',0,100],['dlypp','ping-pong','b'],['dlysy','sync','b'],['dlydv','div','d']],
+ 5:[['fim','mode','s',['LP','HP','BP']],['fic','cutoff',0,100],['fiq','q',0,100]],
+ 6:[['bnb','band',0,100],['bnw','width',0,100]]};
+var FX_KEYS=['fxsl','rv','rvmx'];
+for(var _k in FXP)FXP[_k].forEach(function(p){FX_KEYS.push(p[0]);});
+function fxFmt(k,v){
+  v=+v;
+  if(k==='flgrt'||k==='trmrt')return (v/100).toFixed(2)+' Hz';
+  if(k==='dlyt')return v+' ms';
+  return v+(k==='odbs'||k==='flgfb'?'':'%');
+}
+function fxv(inp){var sp=inp.nextElementSibling;if(sp)sp.textContent=fxFmt(inp.getAttribute('data-rp'),inp.value);}
+function fxSel(name,cur,list,attr){
+  var h='<select '+attr+'>';
+  list.forEach(function(n,i){h+='<option value="'+i+'"'+(i===cur?' selected':'')+'>'+n+'</option>';});
+  return h+'</select>';
+}
+function fxGroup(kind,d){
+  if(!kind||!FXP[kind])return '';
+  var h='<div class="fxg"><b>'+FXK[kind].toUpperCase()+'</b>';
+  FXP[kind].forEach(function(p){
+    var k=p[0],v=d[k];
+    if(v===undefined)return;
+    h+='<div class="fxp"><label>'+p[1]+'</label>';
+    if(p[2]==='b')h+='<input type="checkbox" data-rp="'+k+'"'+(v?' checked':'')+'>';
+    else if(p[2]==='d')h+=fxSel(k,+v,FXDIV,'data-rp="'+k+'"');
+    else if(p[2]==='s')h+=fxSel(k,+v,p[3],'data-rp="'+k+'"');
+    else h+='<input type="range" data-rp="'+k+'" min="'+p[2]+'" max="'+p[3]+'" value="'+v+'" oninput="fxv(this)"><span class="fxv">'+fxFmt(k,v)+'</span>';
+    h+='</div>';
+  });
+  return h+'</div>';
+}
+function fxGroups(d){
+  var seen={},h='';
+  (d.fxsl||[]).forEach(function(k){k=+k;if(k&&!seen[k]){seen[k]=1;h+=fxGroup(k,d);}});
+  return h||'<div class="msg" style="margin:2px 0">no effect in FX1 / FX2</div>';
+}
+// a slot pick re-renders the groups; unsaved slider moves are carried over first
+function fxHarvest(){
+  if(!rpData)return;
+  document.querySelectorAll('#fxcard [data-rp]').forEach(function(inp){
+    var k=inp.getAttribute('data-rp');
+    if(k.indexOf('fxsl.')===0){rpData.fxsl[+k.split('.')[1]]=+inp.value;return;}
+    if(inp.type==='checkbox')rpData[k]=inp.checked;else rpData[k]=parseFloat(inp.value)||0;
+  });
+}
+function fxSlotPick(){fxHarvest();var g=document.getElementById('fxgroups');if(g)g.innerHTML=fxGroups(rpData);}
+function fxCard(d){
+  if(!Array.isArray(d.fxsl))return '';
+  var h='<div class="card pnl" id="fxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">FX</b>'
+       +'<button class="btn" style="flex:0 0 auto" onclick="rpApply()">Apply</button></div><div class="fxslots">';
+  d.fxsl.forEach(function(k,i){h+='<label>FX'+(i+1)+' '+fxSel('fxsl.'+i,+k,FXK,'data-rp="fxsl.'+i+'" onchange="fxSlotPick()"')+'</label>';});
+  if(d.rv!==undefined)h+='<label>FX3 '+fxSel('rv',+d.rv,FXRV,'data-rp="rv"')+'</label>';
+  if(d.rvmx!==undefined)h+='<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:150px">mix <input type="range" data-rp="rvmx" min="0" max="100" value="'+d.rvmx+'" oninput="fxv(this)" style="flex:1"><span class="fxv">'+fxFmt('rvmx',d.rvmx)+'</span></label>';
+  h+='</div><div class="fxgs" id="fxgroups">'+fxGroups(d)+'</div></div>';
+  return h;
+}
 // CV MATRIX, transposed: one row per input (CV 1-8, TR 1-2, plus a "no jack" row
 // for clocks on AUDIO/INT/OFF). A row lists the machine's INPUT MAP entries on
 // that channel ("imap" from the firmware): a FIXED job is a plain chip; an
@@ -1242,6 +1325,7 @@ function rpMatrix(d){
   mxLabs=d.mxl||[];mxN=hasM?d.mxs.length:0;mxDef=Array.isArray(d.mxd)?d.mxd:[];
   var mxm=Array.isArray(d.mxm)?d.mxm:[];
   var h='<div class="card pnl mxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">CV MATRIX</b>'
+    +'<button class="btn" style="flex:0 0 auto;margin-right:6px" onclick="rpApply()">Apply</button>'
     +'<button class="btn" style="flex:0 0 auto" title="picks back to their defaults, assignable matrix cleared, applied" onclick="mxReset()">Reset</button></div><table class="mtx">';
   for(var ch=0;ch<11;ch++){
     var name=ch<8?'CV '+(ch+1):ch<10?'TR '+(ch-7):'clock',cells='',chips='';
@@ -1271,7 +1355,7 @@ function mxReset(){   // picks to their defaults, matrix = the panel-knob defaul
   mxRerender(a);
   rpApply();
 }
-function rpRest(d){var own={};(Array.isArray(d.imap)?d.imap:[]).forEach(function(e){if(e.k)own[e.k]=1;});var r={};for(var k in d)if(MTX_KEYS.indexOf(k)<0&&!own[k])r[k]=d[k];return r;}
+function rpRest(d){var own={};(Array.isArray(d.imap)?d.imap:[]).forEach(function(e){if(e.k)own[e.k]=1;});var hasfx=Array.isArray(d.fxsl);var r={};for(var k in d)if(MTX_KEYS.indexOf(k)<0&&!own[k]&&!(hasfx&&FX_KEYS.indexOf(k)>=0))r[k]=d[k];return r;}
 
 // dedicated pad editor for the Drums machine: sample dropdowns from the
 // library, trig routing, level/pan sliders, decay, enable
@@ -1342,12 +1426,13 @@ function rpLoad(retry){
     if(curMach==='Drums'&&d.pad){
       fetch('/files').then(function(r){return r.json();}).then(function(fd){
         var names=(fd.files||[]).map(function(f){return f.name;}).sort();
-        document.getElementById('rmatrix').innerHTML=rpMatrix(d);
+        document.getElementById('rmatrix').innerHTML=rpMatrix(d);document.getElementById('rfx').innerHTML=fxCard(d);
         el.innerHTML=rpSetCard(rpDrumForm(rpRest(d),names));
-      }).catch(function(){document.getElementById('rmatrix').innerHTML=rpMatrix(d);el.innerHTML=rpSetCard(rpDrumForm(rpRest(d),[]));});
+      }).catch(function(){document.getElementById('rmatrix').innerHTML=rpMatrix(d);document.getElementById('rfx').innerHTML=fxCard(d);el.innerHTML=rpSetCard(rpDrumForm(rpRest(d),[]));});
       return;
     }
     document.getElementById('rmatrix').innerHTML=rpMatrix(d);   // first: the file list below can take seconds after a boot
+    document.getElementById('rfx').innerHTML=fxCard(d);
     // populate the file-field dropdown: modules for Tracker, samples otherwise
     var isMod=(curMach==='Tracker');
     fetch(isMod?'/trk/list':'/files').then(function(r){return r.json();}).then(function(fd){
