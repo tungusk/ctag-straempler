@@ -1877,7 +1877,7 @@ function remMach(n){
     var m=document.getElementById('rm');
     m.className='msg '+(d.error?'er':'ok');
     m.textContent=d.error||('Switching to '+n+'…');
-    if(!d.error)setTimeout(rpLoad,2500);   // refresh the form for the new machine
+    if(!d.error)setTimeout(function(){rpLoad();m.textContent='';m.className='msg';},2500);   // refresh the form for the new machine; the notice was sticking
   }).catch(function(){});
 }
 
