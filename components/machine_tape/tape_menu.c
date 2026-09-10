@@ -123,21 +123,55 @@ static const char *header_name(char *buf, size_t n)
 
 // row A: machine name (left) + state/pos/bpm (right), small. Repainted on the
 // fast tick — must NOT touch row B's rows.
+// Row A's readout is three FIXED-WIDTH fields, right to left: bpm/clock,
+// position, state word. Only the position field changes while rolling, so the
+// fast tick repaints that one field (~1k px + 8 small glyphs) instead of the
+// whole row (4k px + ~25 glyphs, ~7 ms every 300 ms — redraw-speed work
+// 2026-09-09). Same reading order as before: "PLAY  12.3/30s   120 CLK".
+static void status_fields_x(int *xs, int *xp, int *xb, int *sw, int *pw, int *bw)
+{
+    // small font is current when called
+    *bw = TFT_getStringWidth("999 CLK");
+    *pw = TFT_getStringWidth(tp.rec_dest == TPD_CARD ? "0000.0s" : "00.0/00s");
+    *sw = TFT_getStringWidth("STOP");
+    const int gap = 10;
+    *xb = _width - 6 - *bw;
+    *xp = *xb - gap - *pw;
+    *xs = *xp - gap - *sw;
+}
+static void draw_status_fields(bool state_f, bool pos_f)
+{
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    int xs, xp, xb, sw, pw, bw;
+    status_fields_x(&xs, &xp, &xb, &sw, &pw, &bw);
+    tape_beat_frames();
+    _bg = TFT_BLACK;
+    _fg = tp.recording ? REC_COL : tp.playing ? (color_t){40, 200, 90} : (color_t){140, 145, 160};
+    char b[24];
+    if (state_f) {
+        const char *st = tp.recording ? "REC" : tp.playing ? "PLAY" : "STOP";
+        CLEAR_RECT(xs, 0, sw, HDR_A_H);
+        TFT_print((char *)st, xs, 2);
+        snprintf(b, sizeof(b), "%.0f %s", tp.disp_bpm, tp.disp_clk ? "CLK" : "man");
+        CLEAR_RECT(xb, 0, bw, HDR_A_H);
+        TFT_print(b, _width - 6 - TFT_getStringWidth(b), 2);
+    }
+    if (pos_f) {
+        if (tp.rec_dest == TPD_CARD) snprintf(b, sizeof(b), "%.1fs", (float)tp.pos / TP_RATE);
+        else snprintf(b, sizeof(b), "%.1f/%.0fs", (float)tp.pos / TP_RATE, (float)tp.cap / TP_RATE);
+        int w = TFT_getStringWidth(b);
+        CLEAR_RECT(xp, 0, pw, HDR_A_H);
+        TFT_print(b, xp + pw - w, 2);          // right-aligned inside its field
+    }
+    TFT_setFont(DEFAULT_FONT, NULL);
+}
+
 static void draw_header_status(void)
 {
     _bg = TFT_BLACK; CLEAR_RECT(0, 0, _width, HDR_A_H);
     TFT_setFont(DEF_SMALL_FONT, NULL);
     _fg = (color_t){150, 155, 172}; TFT_print("Tape", 6, 2);
-    tape_beat_frames();
-    const char *st = tp.recording ? "REC" : tp.playing ? "PLAY" : "STOP";
-    char b[48];                                      // compact status (elapsed time); beats live UNDER THE BAR while recording
-    if (tp.rec_dest == TPD_CARD) snprintf(b, sizeof(b), "%s  %.1fs   %.0f %s", st,
-        (float)tp.pos / TP_RATE, tp.disp_bpm, tp.disp_clk ? "CLK" : "man");
-    else snprintf(b, sizeof(b), "%s  %.1f/%.0fs   %.0f %s", st,
-        (float)tp.pos / TP_RATE, (float)tp.cap / TP_RATE, tp.disp_bpm, tp.disp_clk ? "CLK" : "man");
-    _fg = tp.recording ? REC_COL : tp.playing ? (color_t){40, 200, 90} : (color_t){140, 145, 160};
-    TFT_print(b, _width - 6 - TFT_getStringWidth(b), 2);
-    TFT_setFont(DEFAULT_FONT, NULL);
+    draw_status_fields(true, true);
 }
 
 // row B: the big filename + saved check + selection box. Repainted only when its
@@ -527,12 +561,14 @@ static void draw_hint(void)
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
-static unsigned head_sig(void)
+static unsigned head_sig(void)          // state word + bpm/clock fields (colour too)
 {
-    // position at 0.1 s resolution so the readout visibly counts while rolling
     return (tp.playing ? 1u : 0u) + (tp.recording ? 2u : 0u)
-         + (unsigned)tp.disp_bpm * 8u + ((unsigned)((float)tp.pos * 10.0f / TP_RATE) << 8);
+         + (unsigned)tp.disp_bpm * 8u + (tp.disp_clk ? 4u : 0u) + ((unsigned)tp.rec_dest << 16);
 }
+// position at 0.1 s resolution so the readout visibly counts while rolling
+static unsigned pos_sig(void) { return (unsigned)((float)tp.pos * 10.0f / TP_RATE); }
+static unsigned s_sig_pos = 0;
 static unsigned crop_sig(void)
 {
     uint32_t ein, eout; tape_eff_window(&ein, &eout);
@@ -676,11 +712,15 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             tape_autosave_kick();
             tape_drop_adopt_kick();          // finish a crop once its file is closed
             tape_card_service();
-            unsigned hs = head_sig();
+            unsigned hs = head_sig(), ps = pos_sig();
             if (hs != s_sig_head) {
                 draw_header_status();                    // STATUS row only — repainting the
-                s_sig_head = hs;                         //   name here is what made it flash
+                s_sig_head = hs; s_sig_pos = ps;         //   name here is what made it flash
                 if (tp.recording) draw_crop_readout();   // live elapsed/beats under the bar
+            } else if (ps != s_sig_pos) {
+                draw_status_fields(false, true);         // the position field only
+                s_sig_pos = ps;
+                if (tp.recording) draw_crop_readout();
             }
             unsigned ns = name_sig();                    // cheap; no TFT writes unless it moved
             if (ns != s_sig_name) { draw_header_name(); s_sig_name = ns; }
