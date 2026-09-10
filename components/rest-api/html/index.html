@@ -438,7 +438,7 @@ body.nosbar .sbar{display:none}
       <button class="btn octb" onclick="midiOct(1)" title="octave up (=)">&#9656;</button></span>
       <span style="flex:1"></span>
       <span id="midiaux"><span id="midist" class="mdot" title="transport"></span>
-      <button class="btn" id="midiwbtn" onclick="midiWideCycle()" title="card width: auto follows the window">auto</button>
+      <button class="btn" id="midiwbtn" onclick="midiWideToggle()" title="card width">full</button>
       <button class="btn" onclick="midiSend('x');midiHeldClear()">Panic</button></span>
     </div>
     <div class="row tight" id="midirow" style="gap:4px;align-items:stretch;margin-top:6px">
@@ -2098,26 +2098,25 @@ function midiShift(d){
 // the Remote tab uses: at or above it the page is two 502 px columns, so a
 // 1016 px band fits and the whole two-manual span is shown; below it the page
 // is single-column and the card sits in the flow at panel width.
-// Width is one of three settings, cycled by the button and kept per browser:
-// auto (follow the window at the 1040 px breakpoint), full, half. Auto is the
-// default; the other two pin it when you want to override what the window says.
-function midiWidthMode(){
+// Width is a plain full/half choice, kept per browser — but full only exists
+// when the window can hold the 1016 px band, so below that breakpoint the card
+// is half and the button is HIDDEN rather than offering something impossible.
+// The choice survives a trip through a narrow window.
+function midiWidthPref(){
   var v=null;
   try{v=localStorage.getItem('web_midiw');}catch(e){}
-  // anything unrecognised means auto — including the '1'/'0' this key held when
-  // the width was a plain toggle, which would otherwise wedge the cycle
-  return (v==='full'||v==='half')?v:'auto';
+  return (v==='half'||v==='0')?'half':'full';    // '1'/'0' is the legacy spelling
 }
-function midiWideCycle(){
-  var next={auto:'full',full:'half',half:'auto'}[midiWidthMode()];
-  try{localStorage.setItem('web_midiw',next);}catch(e){}
+function midiWideToggle(){
+  try{localStorage.setItem('web_midiw',midiWidthPref()==='full'?'half':'full');}catch(e){}
   midiAuto();
 }
 function midiAuto(){
   var card=document.getElementById('midicard'); if(!card)return;
-  var mode=midiWidthMode();
-  var wide=(mode==='auto')?(window.innerWidth>=1040):(mode==='full');
-  var wb=document.getElementById('midiwbtn'); if(wb)wb.textContent=mode;
+  var fits=window.innerWidth>=1040;               // room for the full-width band?
+  var wide=fits&&midiWidthPref()==='full';
+  var wb=document.getElementById('midiwbtn');
+  if(wb){wb.style.display=fits?'':'none';wb.textContent=wide?'half':'full';}
   if(card.classList.contains('wide')!==wide){
     card.classList.toggle('wide',wide);
     (wide?document.getElementById('midiband'):document.getElementById('midihome')).appendChild(card);
