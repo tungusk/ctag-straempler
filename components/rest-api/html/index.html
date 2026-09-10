@@ -345,10 +345,10 @@ body.nosbar .sbar{display:none}
       <button class="btn" style="flex:0 0 64px;margin-left:6px" onclick="midiSend('x');midiHeldClear()">All off</button>
     </div>
     <div id="midikbd" style="margin-top:6px;max-width:100%;overflow-x:auto"></div>
-    <div class="row tight" style="margin-top:4px;align-items:center;flex-wrap:wrap;row-gap:2px">
-      <label style="color:#888;white-space:nowrap"><input type="checkbox" id="midityping" checked> musical typing</label>
-      <span id="midioct" style="color:#888;margin-left:12px;white-space:nowrap">oct C4</span>
-      <span style="color:#555;margin-left:12px;font-size:11px;min-width:0">A-; keys &#183; Z/X octave &#183; Space release &#183; Esc panic</span>
+    <div style="margin-top:4px;color:#888;font-size:12px;line-height:1.7">
+      <label style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap"><input type="checkbox" id="midityping" checked style="width:auto;margin:0"> musical typing</label>
+      <span id="midioct" style="margin-left:12px;white-space:nowrap">oct C4</span>
+      <span style="color:#555;margin-left:12px;font-size:11px">A-; keys &#183; Z/X octave &#183; Space release &#183; Esc panic</span>
     </div>
     <div class="msg" style="margin-top:4px">Plays <b>Synth</b> / <b>Keys</b> (MIDI wins over CV while a note is held). Type on this page, click the keys, or pick a MIDI device (Chrome).</div>
   </div>
