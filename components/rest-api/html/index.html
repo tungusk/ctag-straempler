@@ -163,7 +163,7 @@ body.nosbar .sbar{display:none}
   #panel{order:1}#midicard{order:2}#rmatrix{order:3}#rfx{order:4}#clkcard{order:5}#machcard{order:6}
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
-.remset{align-items:flex-start;width:1016px;max-width:calc(100vw - 24px);margin:0 auto;justify-content:flex-start}   /* sticks to the two-column grid: two across, the third under the first */
+.remset{align-items:flex-start;justify-content:flex-start;width:1016px;max-width:calc(100vw - 24px);margin:0 auto}   /* the settings zone: two across on the column grid, the odd one stays LEFT */
 .remset>div{flex:0 0 502px;max-width:100%}
 @media (max-width:1040px){.remset{justify-content:center}}
 /* ADVANCED: the raw-key table inside the same dark frame as the two screens */
@@ -1450,6 +1450,7 @@ function rpStep(i,d){
 // in a table. Folded state remembered per browser; starts folded.
 var rpSetup=null,rpGlob=null;
 // fold cards: heading toggles the body; per-card state in localStorage, folded by default
+function foldInit(key){if(foldOpen(key)){var b=document.getElementById(key+'_body'),h=document.getElementById(key+'_hdr');if(b){b.style.display='';h.textContent='\u25BE '+h.getAttribute('data-t');}}}
 function foldOpen(key){try{return localStorage.getItem('fold_'+key)==='1';}catch(e){return false;}}
 function foldToggle(key){
   var b=document.getElementById(key+'_body'),h=document.getElementById(key+'_hdr');
@@ -1542,10 +1543,12 @@ function rpTable(o,path){
   }
   return h;
 }
-// the three cards, all in the left column under the keyboard: MACHINE SETUP,
-// GLOBAL, ADVANCED (raw keys)
-function setupCard(){return foldCard('setup','MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>');}
-function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>');}
+// SETTINGS card (folds as a whole, closed on first launch): the machine Setup
+// screen and the global Settings screen side by side, then the ADVANCED fold
+// MACHINE SETUP and GLOBAL are plain cards (always open); ADVANCED folds
+function plainCard(title,body){return '<div class="card pnl"><b class="ph" style="margin:0">'+title+'</b>'+body+'</div>';}
+function setupCard(){return plainCard('MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>');}
+function globCard(){return plainCard('GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>');}
 function advCard(inner,asTable){
   var adv=asTable?'<table class="adv">'+inner+'</table>':inner;
   return foldCard('adv','ADVANCED','<div class="tftw"><div class="tft adv">'+adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div></div></div>');
