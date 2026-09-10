@@ -248,7 +248,7 @@ body.nosbar .sbar{display:none}
    — the card loses a whole row of height (Arlo 2026-09-10). */
 #midiaux{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .row.tight>#midiaux{padding:0}
-#midiaux .btn{flex:0 0 52px;padding:3px 8px}
+#midiaux .btn{flex:0 0 auto;width:52px;padding:1px 8px;line-height:1.4;text-align:center}   /* width, not flex-basis: #midiaux is a COLUMN when wide */
 #midicard.wide{display:flex;align-items:center;gap:12px}
 #midicard.wide>.row.tight:first-child{flex:0 0 118px;flex-direction:column;align-items:flex-start;gap:8px;margin:0}
 #midicard.wide>.row.tight:first-child>span[style*="flex:1"]{display:none}
@@ -2116,7 +2116,7 @@ function midiAuto(){
   var fits=window.innerWidth>=1040;               // room for the full-width band?
   var wide=fits&&midiWidthPref()==='full';
   var wb=document.getElementById('midiwbtn');
-  if(wb){wb.style.display=fits?'':'none';wb.textContent=wide?'half':'full';}
+  if(wb){wb.style.display=fits?'':'none';wb.textContent=wide?'1/2':'full';}
   if(card.classList.contains('wide')!==wide){
     card.classList.toggle('wide',wide);
     (wide?document.getElementById('midiband'):document.getElementById('midihome')).appendChild(card);
