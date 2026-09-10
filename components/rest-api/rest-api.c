@@ -939,7 +939,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     if ((j = cJSON_GetObjectItem(settings, "txpwr")))   cJSON_AddNumberToObject(out, "txpwr", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "encres")))  cJSON_AddNumberToObject(out, "encres", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "encdir")))  cJSON_AddNumberToObject(out, "encdir", j->valuedouble);
-    // display SPI write clock: the LIVE value (persisted tftclk, or the library
+    // display SPI write clock: the LIVE value (persisted tftclk, or our 40 MHz
     // default when the key is absent)
     cJSON_AddNumberToObject(out, "tftclk", (int)(spi_lobo_get_speed(disp_spi) / 1000000u));
     // the CORE clock (clock.h): report the LIVE values, which equal the persisted

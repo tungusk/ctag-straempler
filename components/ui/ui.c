@@ -90,9 +90,14 @@ static inline void tft_stat_note(int ev, uint32_t dt)
     s_tft_events++;
 }
 
-// Display SPI write clock, live. settings.tftclk (MHz) is read at boot in
-// configDisplay; POST /settings applies it here under the display lock so it
-// never lands mid-transaction. Returns the clock actually set (Hz), 0 if refused.
+// Display SPI write clock. TFT_CLOCK_DEFAULT_MHZ is what a unit runs with no
+// settings.tftclk key on the card (see configDisplay for why it is 40, not the
+// library's 26).
+#define TFT_CLOCK_DEFAULT_MHZ 40
+
+// Live setter. settings.tftclk (MHz) is read at boot in configDisplay; POST
+// /settings applies it here under the display lock so it never lands
+// mid-transaction. Returns the clock actually set (Hz), 0 if refused.
 uint32_t ui_tft_set_clock_hz(uint32_t hz)
 {
     if (hz < 8000000 || hz > 80000000) return 0;
@@ -223,12 +228,17 @@ void configDisplay(){
 	printf("SPI: Max rd speed = %u\r\n", max_rdclock);
 
     // ==== Set SPI clock used for display operations ====
-    // settings.tftclk (MHz, per unit; default = the library's 26). 40 is the
-    // usual ILI9341 overclock; prove it on a unit with GET /tftread?pattern=1
-    // (pixel readback, needs SJ1 bridged) before persisting it there.
+    // settings.tftclk (MHz, per unit). WE default to 40, not the library's 26:
+    // 40 is the usual ILI9341 overclock, ~27% quicker on a full repaint, and
+    // bit-exact 25/25 here once the driver's dummy-clock bug was fixed (lib
+    // LB_SPI_DEVICE_NO_DUMMY). Note the GPIO-matrix 40 MHz ceiling does NOT
+    // apply: tftspi.c clocks every READ down to max_rdclock and restores this
+    // write clock after. If a panel ever speckles or tears at 40, set 26 (or
+    // any of 26/40/80 — the only real dividers) over POST /settings, and
+    // prove a unit with GET /tftread?pattern=1 (needs SJ1 bridged).
     {
-        int mhz = configGetIntSetting("tftclk", DEFAULT_SPI_CLOCK / 1000000);
-        if (mhz < 8 || mhz > 80) mhz = DEFAULT_SPI_CLOCK / 1000000;
+        int mhz = configGetIntSetting("tftclk", TFT_CLOCK_DEFAULT_MHZ);
+        if (mhz < 8 || mhz > 80) mhz = TFT_CLOCK_DEFAULT_MHZ;
         spi_lobo_set_speed(spi, (uint32_t)mhz * 1000000u);
     }
     printf("SPI: Changed speed to %u\r\n", spi_lobo_get_speed(spi));

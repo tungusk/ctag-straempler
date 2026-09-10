@@ -159,10 +159,19 @@ read at boot into initGPIO, settable live via POST /settings).
 11; the default), 4 = the EC11-class parts on new-build units (rest at one
 state — on setting 2 they double-step per click). `settings.encdir`: 1 =
 reversed lot (the new-build parts also count backwards; default 0).
-`settings.tftclk`: display SPI write clock in MHz (default 26 = the
-library's; 40 is bit-exact on the new-build panel — PROVE it per unit with
-`GET /tftread?pattern=1&clk=40` (needs SJ1 bridged), then persist over
-`POST /settings`). Real dividers are 26.7/40/80 only. Redraw timing lives in
+`settings.tftclk`: display SPI write clock in MHz. **We ship 40, not the
+library's 26** (`TFT_CLOCK_DEFAULT_MHZ` in `ui.c`) — ~27% off a full repaint
+(Synth machine switch 409 -> 297 ms), bit-exact 25/25 on .85 at 26/40/80, and
+the audio gate is indifferent to the clock. The GPIO-matrix 40 MHz ceiling is
+an INPUT-sampling limit and does not apply: `tftspi.c` drops to `max_rdclock`
+for every read and restores the write clock after, so reads never run at 40.
+26 was never the "in-spec" value either — the ILI9341's own write cycle is
+~10 MHz, so both numbers are overclocks. Real dividers are 26.7/40/80 only;
+80 is bit-exact here but don't ship it. If a panel ever speckles or tears,
+`POST /settings {"tftclk":26}` — a wrong clock garbles the screen but does
+not crash the unit, and REST still answers (recoverable from the web remote,
+or by putting the key in `CONFIG.JSN` on the card). Prove a unit with
+`GET /tftread?pattern=1&clk=40` (needs SJ1 bridged). Redraw timing lives in
 `/sysinfo` `"tft"` (see HANDOFF 2026-09-09 late).
 
 **Sleep at least one tick.** `CONFIG_FREERTOS_HZ=100`: one tick is 10 ms, so

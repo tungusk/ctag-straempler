@@ -154,9 +154,26 @@ is not worth it. Commits `ce2aa07..` on `v09-machines` + fork lib `7b30a32`,
   calibration — worth a cable check before the next serious hunt.
 - **Bench gotcha**: `/remote/event?ev=enter` now exists (full repaint on
   demand). The rig scripts default to unit 1's IP — `STRAEMPLER_IP=192.168.3.85`.
-- **Open**: (a) default `tftclk` in firmware stays 26 — decide whether the
-  shipped default becomes 40 (proof per unit via the pattern test; 80 is out
-  of the ESP32 GPIO-matrix spec though bit-exact here); (b) stage 3 = fewer
+- **DECIDED 2026-09-10 (Arlo): the shipped default IS 40** (`TFT_CLOCK_DEFAULT_MHZ`
+  in `ui.c`; the library's 26 is no longer the fallback). First pass at this
+  argued for keeping 26 on margin grounds — that was wrong on the facts:
+  the GPIO-matrix 40 MHz ceiling is an INPUT-sampling limit, and `tftspi.c`
+  (:564/:587) already drops every read to `max_rdclock` and restores the write
+  clock after, so display writes never depend on it. Nor is 26 an "in-spec"
+  number — the ILI9341's own serial write cycle is ~10 MHz, so 26 is already a
+  2.6x overclock the library happened to pick. The only 40 MHz failure we ever
+  saw was the driver's dummy-clock bug (fixed, `LB_SPI_DEVICE_NO_DUMMY`);
+  after it, 26/40/80 were bit-exact 25/25. Arlo: SJ1 gets bridged on every
+  unit at build time (put it in the build notes) so `/tftread` proof is always
+  available; unit 1 is a one-off, not a lot, so it is not evidence either way;
+  and "if things get ugly we can revert it later — nobody's paying attention
+  to our project yet." A boot-time auto-probe (try 40, verify readback, fall
+  back to 26) was offered and declined as unnecessary for now — it stays the
+  obvious move if a panel ever does fail in the field. Recovery from a garbled
+  screen: `POST /settings {"tftclk":26}` or the key in `CONFIG.JSN` — a wrong
+  clock does not crash the unit and REST keeps answering. Beta notes must
+  carry the setting and the recovery line (`plans/beta-notes-next.md`).
+- **Open**: (b) stage 3 = fewer
   pixels per page (use `tft.ev`/`tickw` to rank; Tracker/Deck/DoubleDecker/
   Looper repaint unconditionally every 300 ms); (c) with readback working,
   `/screenshot` could read GRAM directly and skip the shadow FB entirely on
