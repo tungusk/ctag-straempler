@@ -163,8 +163,9 @@ body.nosbar .sbar{display:none}
   #panel{order:1}#midicard{order:2}#rmatrix{order:3}#rfx{order:4}#clkcard{order:5}#machcard{order:6}
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
-.remset{align-items:flex-start}
+.remset{align-items:flex-start;width:1016px;max-width:calc(100vw - 24px);margin:0 auto;justify-content:flex-start}   /* sticks to the two-column grid: two across, the third under the first */
 .remset>div{flex:0 0 502px;max-width:100%}
+@media (max-width:1040px){.remset{justify-content:center}}
 /* ADVANCED: the raw-key table inside the same dark frame as the two screens */
 .tft.adv{min-height:0}
 .tft table.adv{font-family:inherit;font-size:12px}
