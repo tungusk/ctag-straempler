@@ -73,6 +73,11 @@ static int s_last_dbpm = -1;
 // external clock tempo, BIG in the top-right corner (green = locked; blank
 // when no clock). EMA-smoothed: clock edges are block-quantized, so the raw
 // per-pulse figure dances a few tenths (deck lesson); snaps on real changes.
+// Redraw-speed discipline (2026-09-09): a FULL redraw clears the screen once;
+// the black per-element clears are skipped then.
+static bool s_skip_clear = false;
+#define CLEAR_RECT(x, y, w, h) do { if (!s_skip_clear) TFT_fillRect((x), (y), (w), (h), TFT_BLACK); } while (0)
+
 static void draw_clock_bpm(void){
     // external clock (green) wins; internal clock (grey) otherwise
     float bpm = clock_core_beat_bpm();      // the core clock (INT locks too)
@@ -98,7 +103,7 @@ static void draw_clock_bpm(void){
     TFT_setFont(DEJAVU24_FONT, NULL);
     int bw = 110, bh = TFT_getfontheight() + 4;
     _bg = TFT_BLACK;
-    TFT_fillRect(_width - bw, 0, bw, bh, _bg);
+    CLEAR_RECT(_width - bw, 0, bw, bh);
     if (d > 0){
         char s[16];
         snprintf(s, sizeof(s), "%d.%d", d / 10, d % 10);
@@ -304,7 +309,7 @@ static void draw_banner(void){
     s_banner_state = st;
     int fh = TFT_getfontheight();
     _bg = TFT_BLACK;
-    TFT_fillRect(0, BANNER_Y, _width, fh + 6, _bg);
+    CLEAR_RECT(0, BANNER_Y, _width, fh + 6);
     char b[64];
     switch (st){
         case 6:
@@ -341,12 +346,14 @@ static void live_full_redraw(void){
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
     TFT_print("Sampler", 6, 4);
+    s_skip_clear = true;        // the screen is already black
     s_last_dbpm = -1;           // corner = external clock tempo (panels carry
     draw_clock_bpm();           // their own numerals now)
     s_banner_state = -1;
     s_last_sel = s_voice_sel;
     for (int i = 0; i < S3_NVOICES; i++) { s_lane_state[i] = -1; draw_lane(i, true); }
     draw_banner();
+    s_skip_clear = false;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     TFT_print("turn:voice press:load hold:setup TRhold:arm", 6, _height - TFT_getfontheight() - 1);

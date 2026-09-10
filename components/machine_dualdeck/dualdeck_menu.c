@@ -44,6 +44,10 @@ static const color_t WF_GREY  = {125, 125, 135};
 //
 // Shared: the tempo readout, the fader, the state->colour mapping. Nothing else.
 
+// Redraw-speed discipline (2026-09-09): a FULL redraw clears the screen once;
+// the black per-element clears are skipped then (coloured fills stay).
+static bool s_skip_clear = false;
+#define CLEAR_RECT(x, y, w, h) do { if (!s_skip_clear) TFT_fillRect((x), (y), (w), (h), TFT_BLACK); } while (0)
 static int  s_last_focus = -1;
 static int  s_last_barx[2] = {-1, -1};
 static int  s_bar_state[2] = {-1, -1};
@@ -134,7 +138,7 @@ static void draw_big_bpm(void){
     TFT_setFont(DEJAVU24_FONT, NULL);
     int bw = 120, bh = TFT_getfontheight() + 4;
     _bg = TFT_BLACK;
-    TFT_fillRect(_width - bw, 2, bw, bh, _bg);
+    CLEAR_RECT(_width - bw, 2, bw, bh);
     _fg = clock_core()->clk.locked ? (color_t){40, 200, 90} : TFT_WHITE;
     TFT_print(s, _width - TFT_getStringWidth(s) - 8, 4);
     cfont = f;
@@ -270,7 +274,7 @@ static void v_hdr(int i, bool full){
     int ny = (i == 0) ? V_A_NAME : V_B_NAME;
     int iy = (i == 0) ? V_A_INFO : V_B_INFO;
     _bg = TFT_BLACK;
-    TFT_fillRect(0, ny - 2, _width, V_NAME_H, _bg);
+    CLEAR_RECT(0, ny - 2, _width, V_NAME_H);
 
     // THE NUMBER IS THE SELECTION (Arlo): the focused deck wears its number as
     // BLACK ON A WHITE SQUARE — unmissable at a glance, which is what focus has
@@ -308,7 +312,7 @@ static void v_hdr(int i, bool full){
     cfont = f;
 
     int fh = TFT_getfontheight();
-    TFT_fillRect(0, iy - 1, _width, fh + 2, _bg);
+    CLEAR_RECT(0, iy - 1, _width, fh + 2);
     _fg = (color_t){120, 130, 160};
     TFT_print(info, inf_right ? V_TB_X + V_TB_W - TFT_getStringWidth(info) : V_TB_X, iy);
 }
@@ -449,6 +453,7 @@ static void live_full_redraw(void){
         s_last_barx[i] = -1;
         s_last_hdr[i][0] = 0;
     }
+    s_skip_clear = true;                 // the screen is already black
     draw_big_bpm();
     for (int i = 0; i < 2; i++){
         if (dd.layout == DD_LAY_V){ v_hdr(i, true); v_bar(i); }
@@ -456,6 +461,7 @@ static void live_full_redraw(void){
     }
     s_last_focus = dd.focus;
     draw_xfade(true);
+    s_skip_clear = false;
     _bg = TFT_BLACK; _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     {
