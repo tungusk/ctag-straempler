@@ -683,8 +683,119 @@ static int tft_read_px_ok(int x, int y, const color_t *want)
            ((rb[3] & 0xFC) == (want->b & 0xFC));
 }
 
+// redraw timing + live write clock live in ui.c (no REQUIRES edge to ui —
+// same reason as gpioSetEncoderResolution below: it would cycle via menu)
+extern uint32_t ui_tft_stat(int which);
+extern void     ui_tft_stats_clear(void);
+extern uint32_t ui_tft_set_clock_hz(uint32_t hz);
+
+// GET /tftread?pattern=1[&clk=MHz] — prove a display WRITE clock is clean.
+// Writes 4 rows (1280 px) of bit-stress patterns through the normal DMA
+// path at the current (or the requested, temporary) write clock, reads them
+// back at 1 MHz, and counts pixels that differ (RGB666: low 2 bits masked).
+// The rows are restored from the shadow FB when it exists, else the UI is
+// asked to redraw. This is the pass/fail for settings.tftclk on a unit.
+static esp_err_t tftread_pattern(httpd_req_t *req, int clk_mhz)
+{
+    const int rows = 4, w = _width, n = rows * w;
+    color_t *pat   = heap_caps_malloc((size_t)n * sizeof(color_t), MALLOC_CAP_DMA);
+    color_t *saved = tft_shadow ? heap_caps_malloc((size_t)n * sizeof(color_t), MALLOC_CAP_DMA) : NULL;
+    uint8_t *rd    = malloc((size_t)w * sizeof(color_t) + 1);
+    if (!pat || !rd || (tft_shadow && !saved)) {
+        free(pat); free(saved); free(rd);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    // row 0: byte-alternating extremes; row 1: ramp; row 2: 1010/0101 bit
+    // stress; row 3: LCG noise. All channels pre-masked to the panel's 6 bits.
+    uint32_t lcg = 0x2545F491u;
+    for (int i = 0; i < n; i++) {
+        int y = i / w, x = i % w;
+        color_t c;
+        switch (y) {
+            case 0: c.r = (x & 1) ? 0xFC : 0x00; c.g = (x & 1) ? 0x00 : 0xFC; c.b = (x & 2) ? 0xFC : 0x00; break;
+            case 1: c.r = (x << 2) & 0xFC; c.g = (255 - x) & 0xFC; c.b = (x << 4) & 0xFC; break;
+            case 2: c.r = (x & 1) ? 0xA8 : 0x54; c.g = (x & 1) ? 0x54 : 0xA8; c.b = 0xA8; break;
+            default: lcg = lcg * 1664525u + 1013904223u;
+                     c.r = (lcg >> 8) & 0xFC; c.g = (lcg >> 16) & 0xFC; c.b = (lcg >> 24) & 0xFC; break;
+        }
+        pat[i] = c;
+    }
+
+    disp_lock_take();
+    uint32_t clk0 = spi_lobo_get_speed(disp_spi);
+    uint32_t clk_used = clk0;
+    if (clk_mhz > 0) {
+        uint32_t got = spi_lobo_set_speed(disp_spi, (uint32_t)clk_mhz * 1000000u);
+        if (got) clk_used = got;
+    }
+    if (saved) memcpy(saved, tft_shadow, (size_t)n * sizeof(color_t));   // rows 0..3 are contiguous
+
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t sel = disp_select();
+    if (sel == ESP_OK) {
+        send_data(0, 0, w - 1, rows - 1, n, pat);   // one address window, DMA
+        disp_deselect();                            // waits for the transfer
+    }
+    uint32_t write_us = (uint32_t)(esp_timer_get_time() - t0);
+
+    // read back at a conservative clock, row by row
+    spi_lobo_set_speed(disp_spi, 1000000);
+    int mismatch = 0, first_y = -1, first_x = -1;
+    uint8_t first_w[3] = {0}, first_r[3] = {0};
+    esp_err_t rerr = ESP_OK;
+    for (int y = 0; y < rows && rerr == ESP_OK; y++) {
+        rerr = read_data(0, y, w - 1, y, w, rd, 0);
+        if (rerr != ESP_OK) break;
+        for (int x = 0; x < w; x++) {
+            const color_t *c = &pat[y * w + x];
+            const uint8_t *q = rd + 1 + x * 3;
+            if (((q[0] ^ c->r) & 0xFC) || ((q[1] ^ c->g) & 0xFC) || ((q[2] ^ c->b) & 0xFC)) {
+                if (mismatch == 0) {
+                    first_y = y; first_x = x;
+                    first_w[0] = c->r; first_w[1] = c->g; first_w[2] = c->b;
+                    first_r[0] = q[0]; first_r[1] = q[1]; first_r[2] = q[2];
+                }
+                mismatch++;
+            }
+        }
+    }
+
+    spi_lobo_set_speed(disp_spi, clk0);            // never persist the trial clock here
+    if (saved && disp_select() == ESP_OK) {
+        send_data(0, 0, w - 1, rows - 1, n, saved);
+        disp_deselect();
+    }
+    disp_lock_give();
+
+    if (!saved) {
+        ui_ev_ts_t ev = { .event = EV_ENTERED_MENU, .event_data = NULL };
+        if (ui_ev_queue) xQueueSend(ui_ev_queue, &ev, 0);
+    }
+
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+        "{\"pattern\":true,\"clk_mhz\":%u,\"pixels\":%d,\"write_us\":%u,"
+        "\"mismatch\":%d,\"first\":{\"y\":%d,\"x\":%d,\"wrote\":\"%02X%02X%02X\",\"read\":\"%02X%02X%02X\"},"
+        "\"read_err\":%d,\"sel_err\":%d,\"restored_from_shadow\":%s,\"verdict\":\"%s\"}",
+        (unsigned)(clk_used / 1000000u), n, write_us, mismatch, first_y, first_x,
+        first_w[0], first_w[1], first_w[2], first_r[0], first_r[1], first_r[2],
+        (int)rerr, (int)sel, saved ? "true" : "false",
+        (sel != ESP_OK || rerr != ESP_OK) ? "NO READBACK (bus error)" :
+        mismatch == 0 ? "CLEAN" : "DIRTY — do not run this unit at this clock");
+    free(pat); free(saved); free(rd);
+    return send_json(req, buf);
+}
+
 static esp_err_t tftread_get_handler(httpd_req_t *req)
 {
+    {
+        char q[12];
+        if (get_query_param(req, "pattern", q, sizeof(q)) && atoi(q)) {
+            int clk = get_query_param(req, "clk", q, sizeof(q)) ? atoi(q) : 0;
+            return tftread_pattern(req, clk);
+        }
+    }
     static const color_t test[4] = {
         {0xEC, 0xA8, 0x74}, {0x00, 0xFC, 0x00}, {0xFC, 0x00, 0x00}, {0x00, 0x00, 0xFC}
     };
@@ -803,6 +914,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     if ((j = cJSON_GetObjectItem(settings, "txpwr")))   cJSON_AddNumberToObject(out, "txpwr", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "encres")))  cJSON_AddNumberToObject(out, "encres", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "encdir")))  cJSON_AddNumberToObject(out, "encdir", j->valuedouble);
+    // display SPI write clock: the LIVE value (persisted tftclk, or the library
+    // default when the key is absent)
+    cJSON_AddNumberToObject(out, "tftclk", (int)(spi_lobo_get_speed(disp_spi) / 1000000u));
     // the CORE clock (clock.h): report the LIVE values, which equal the persisted
     // ones except on a fresh card where the defaults apply
     cJSON_AddNumberToObject(out, "clk_src",  clock_core_src());
@@ -922,6 +1036,19 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         else
             cJSON_AddNumberToObject(settings, "encdir", rev);
         gpioSetEncoderDirection(rev);
+    }
+
+    // display SPI write clock in MHz (per unit; 26 = library default, 40 = the
+    // usual ILI9341 overclock). Applied live under the display lock and
+    // persisted; PROVE it first with GET /tftread?pattern=1&clk=N (readback).
+    if ((j = cJSON_GetObjectItem(in, "tftclk")) && cJSON_IsNumber(j) &&
+        j->valueint >= 8 && j->valueint <= 80) {
+        if (ui_tft_set_clock_hz((uint32_t)j->valueint * 1000000u)) {
+            if (cJSON_GetObjectItem(settings, "tftclk"))
+                cJSON_ReplaceItemInObject(settings, "tftclk", cJSON_CreateNumber(j->valueint));
+            else
+                cJSON_AddNumberToObject(settings, "tftclk", j->valueint);
+        }
     }
 
     // the CORE clock's global settings (clock.h): applied live, persisted.
@@ -1256,19 +1383,32 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
     }
     unsigned uptime_s = (unsigned)(esp_timer_get_time() / 1000000ULL);
 
-    char buf[820];
+    // display redraw timing (ui.c): ev = last user-driven draw (a machine
+    // switch is a full repaint), tick = last/worst timer-tick repaint, avg over
+    // all events, wev = event id of the worst. ?tftclear=1 resets the counters.
+    {
+        char q[4];
+        if (get_query_param(req, "tftclear", q, sizeof(q)) && atoi(q)) ui_tft_stats_clear();
+    }
+
+    char buf[1024];
     snprintf(buf, sizeof(buf),
              "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu,\"remote\":%d,"
              "\"version\":\"%s\",\"blisten\":%d,\"blout\":%d,"
              "\"psram\":{\"free\":%u,\"big\":%u,\"total\":%u},"
              "\"iram\":{\"free\":%u,\"big\":%u},"
              "\"uptime\":%u,\"reset\":\"%s\","
+             "\"tft\":{\"clk\":%u,\"shadow\":%d,\"ev\":%u,\"worst\":%u,\"wev\":%d,"
+             "\"tick\":%u,\"tickw\":%u,\"avg\":%u,\"n\":%u},"
              "\"time\":%ld,\"tz\":%d,\"machines\":[%s]}",
              ip, (unsigned long long)freeb, (unsigned long long)totb,
              s_remote_on ? 1 : 0,
              STRAMPLER_FW_VERSION, beatlisten_get_mode(), beatlisten_get_out(),
              pfree, pbig, ptot, ifree, ibig,
              uptime_s, rr,
+             (unsigned)(spi_lobo_get_speed(disp_spi) / 1000000u), tft_shadow ? 1 : 0,
+             (unsigned)ui_tft_stat(0), (unsigned)ui_tft_stat(1), (int)ui_tft_stat(6),
+             (unsigned)ui_tft_stat(2), (unsigned)ui_tft_stat(3), (unsigned)ui_tft_stat(5), (unsigned)ui_tft_stat(4),
              (long)time(NULL), tzs, machines);
     send_json(req, buf);
     return ESP_OK;

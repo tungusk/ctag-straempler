@@ -22,6 +22,7 @@
 #include "mp3.h"
 #include "wifi.h"
 #include "esp_ota_ops.h"
+#include "esp_timer.h"     // redraw timing (ui_tft_stat)
 #include "c_timeutils.h"
 #include "timer_utils.h"
 #include "audio.h"
@@ -42,6 +43,65 @@ static xQueueHandle matrix_event_queue = NULL;
 
 xQueueHandle uiGetEventQueue(void){ return ui_ev_queue; }
 
+// ---- Display redraw timing (redraw-speed work, 2026-09-09) -----------------
+// Every draw funnels through menuProcessEvent inside ui_ev_loop, so timing the
+// event there measures the whole repaint: PSRAM shadow mirror + SPI wire.
+// Timer ticks (300 ms fast / 1000 ms slow) are tracked separately from
+// user-driven events (a machine switch is a full repaint; a tick is the
+// per-machine live update, the thing that makes the screen feel choppy).
+// Read via /sysinfo "tft"; cleared with /sysinfo?tftclear=1.
+static uint32_t s_tft_ev_us, s_tft_worst_us, s_tft_tick_us, s_tft_tick_worst_us;
+static uint32_t s_tft_events;
+static uint64_t s_tft_total_us;
+static int      s_tft_worst_ev = 0;
+
+// which: 0 last non-tick event us, 1 worst us (any), 2 last tick us,
+//        3 worst tick us, 4 events counted, 5 average us, 6 event id of the worst
+uint32_t ui_tft_stat(int which)
+{
+    switch (which) {
+        case 0: return s_tft_ev_us;
+        case 1: return s_tft_worst_us;
+        case 2: return s_tft_tick_us;
+        case 3: return s_tft_tick_worst_us;
+        case 4: return s_tft_events;
+        case 5: return s_tft_events ? (uint32_t)(s_tft_total_us / s_tft_events) : 0;
+        case 6: return (uint32_t)s_tft_worst_ev;
+        default: return 0;
+    }
+}
+
+void ui_tft_stats_clear(void)
+{
+    s_tft_ev_us = s_tft_worst_us = s_tft_tick_us = s_tft_tick_worst_us = 0;
+    s_tft_events = 0; s_tft_total_us = 0; s_tft_worst_ev = 0;
+}
+
+static inline void tft_stat_note(int ev, uint32_t dt)
+{
+    if (ev == EV_TIMER_REPEATING_FAST || ev == EV_TIMER_REPEATING_SLOW) {
+        s_tft_tick_us = dt;
+        if (dt > s_tft_tick_worst_us) s_tft_tick_worst_us = dt;
+    } else {
+        s_tft_ev_us = dt;
+    }
+    if (dt > s_tft_worst_us) { s_tft_worst_us = dt; s_tft_worst_ev = ev; }
+    s_tft_total_us += dt;
+    s_tft_events++;
+}
+
+// Display SPI write clock, live. settings.tftclk (MHz) is read at boot in
+// configDisplay; POST /settings applies it here under the display lock so it
+// never lands mid-transaction. Returns the clock actually set (Hz), 0 if refused.
+uint32_t ui_tft_set_clock_hz(uint32_t hz)
+{
+    if (hz < 8000000 || hz > 80000000) return 0;
+    disp_lock_take();
+    uint32_t got = spi_lobo_set_speed(disp_spi, hz);
+    disp_lock_give();
+    return got;
+}
+
 static void ui_ev_loop(void* pvParams)
 {
     ui_handler_param_t *params = pvParams;
@@ -61,6 +121,7 @@ static void ui_ev_loop(void* pvParams)
             // SPI transactions with a draw (released between events — a capture
             // waits at most one event).
             disp_lock_take();
+            int64_t t_draw0 = esp_timer_get_time();
             switch(ev.event){
                 case EV_ENC1_FWD:
                     menuProcessEvent(EV_FWD, NULL);
@@ -105,6 +166,7 @@ static void ui_ev_loop(void* pvParams)
                     menuProcessEvent(ev.event, ev.event_data);
                     break;
             }
+            tft_stat_note(ev.event, (uint32_t)(esp_timer_get_time() - t_draw0));
             disp_lock_give();
         }
     }
@@ -160,7 +222,14 @@ void configDisplay(){
 	printf("SPI: Max rd speed = %u\r\n", max_rdclock);
 
     // ==== Set SPI clock used for display operations ====
-	spi_lobo_set_speed(spi, DEFAULT_SPI_CLOCK);
+    // settings.tftclk (MHz, per unit; default = the library's 26). 40 is the
+    // usual ILI9341 overclock; prove it on a unit with GET /tftread?pattern=1
+    // (pixel readback, needs SJ1 bridged) before persisting it there.
+    {
+        int mhz = configGetIntSetting("tftclk", DEFAULT_SPI_CLOCK / 1000000);
+        if (mhz < 8 || mhz > 80) mhz = DEFAULT_SPI_CLOCK / 1000000;
+        spi_lobo_set_speed(spi, (uint32_t)mhz * 1000000u);
+    }
     printf("SPI: Changed speed to %u\r\n", spi_lobo_get_speed(spi));
     TFT_setGammaCurve(DEFAULT_GAMMA_CURVE);
 	TFT_setRotation(LANDSCAPE_FLIP);
