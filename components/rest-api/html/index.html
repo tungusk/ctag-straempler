@@ -155,6 +155,21 @@ body.nosbar .sbar{display:none}
 .mxcard .mtx input[type=range]{width:96px}
 /* SETTINGS card: two TFT-style screens (machine Setup / global Settings) */
 .tftw{display:flex;margin-top:4px}   /* one screen per card; the card is the panel-column width */
+/* narrow window (one column): panel, keyboard, then CV MATRIX / FX / CLOCK / MACHINE,
+   then MACHINE SETUP / GLOBAL / ADVANCED — regardless of the two-column DOM order */
+@media (max-width:1040px){
+  .remtop{display:flex;flex-direction:column;align-items:center}
+  .remtop .rcol{display:contents}
+  #panel{order:1}#midicard{order:2}#rmatrix{order:3}#rfx{order:4}#clkcard{order:5}#machcard{order:6}#rsetup{order:7}#rglob{order:8}#rparams{order:9}
+  .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
+}
+/* ADVANCED: the raw-key table inside the same dark frame as the two screens */
+.tft.adv{min-height:0}
+.tft table.adv{font-family:inherit;font-size:12px}
+.tft table.adv td{border-bottom:1px solid #1c1c1c;color:#ddd}
+.tft table.adv td:first-child{color:#9aa}
+.tft table.adv input,.tft table.adv select{background:#0b0b0b;border:1px solid #2a2a2a;color:#eee;width:100%}
+.tft .row .btn{background:#111;border-color:#333;color:#aaa}
 .tftw .tft{flex:1 1 auto}
 .tft{background:#000;border:1px solid #2c2c2c;border-radius:4px;padding:7px 9px 8px;font-family:"DejaVu Sans Mono",Menlo,monospace;color:#eee;font-size:13px;min-height:180px}
 .tft .tt{display:flex;justify-content:space-between;align-items:baseline;margin:0 4px 6px;color:#fff}
@@ -380,6 +395,9 @@ body.nosbar .sbar{display:none}
   <div id="rparams"></div>
   </div>
   <div class="rcol">
+  <div class="card pnl" id="machcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">MACHINE</b><span id="rmnote" style="color:#888;font-size:11px"></span></div>
+    <div id="rmach"></div>
+  </div>
   <div id="rmatrix"></div>
   <div id="rfx"></div>
   <div class="card pnl" id="clkcard">
@@ -395,9 +413,6 @@ body.nosbar .sbar{display:none}
       <label style="color:#888;font-size:11px" title="INT stands in while the external source is unlocked; the jack wins back on its first edge"><input type="checkbox" id="clkauto" style="width:auto"> fallback</label>
     </div>
     <div class="msg" id="clkmsg" style="display:none"></div>
-  </div>
-  <div class="card pnl"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">MACHINE</b><span id="rmnote" style="color:#888;font-size:11px"></span></div>
-    <div id="rmach"></div>
   </div>
   </div>
   </div>
@@ -1526,8 +1541,8 @@ function rpTable(o,path){
 function setupCard(){return foldCard('setup','MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>');}
 function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>');}
 function advCard(inner,asTable){
-  var adv=asTable?'<table class="adv" style="margin-top:6px">'+inner+'</table>':inner;
-  return foldCard('adv','ADVANCED',adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div>');
+  var adv=asTable?'<table class="adv">'+inner+'</table>':inner;
+  return foldCard('adv','ADVANCED','<div class="tftw"><div class="tft adv">'+adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div></div></div>');
 }
 function rpSetCard(inner,asTable){
   document.getElementById('rsetup').innerHTML=setupCard();
