@@ -73,7 +73,10 @@ half mode, and **typing works whether or not a key is on screen**. .85 runs it.
   legacy `'1'`/`'0'` still read) SURVIVES the trip: pin full, narrow to 900 ->
   half with the button hidden and the pref intact, widen to 1250 -> full comes
   back on its own. The button lives in `#midiaux`, so it rides into the gutter
-  in wide mode. Verified 1101 -> wide/midiband/29 keys, 900 ->
+  in wide mode; it reads `full` / `1/2` and matches Panic at 52x19. **Size those
+  with `width`, NOT `flex:0 0 52px`** — `#midiaux` is a COLUMN in wide mode, so
+  a flex basis sets the HEIGHT there and the two buttons come out different
+  widths. Verified 1101 -> wide/midiband/29 keys, 900 ->
   half/midihome/17 keys/nav shown, and back. **Consequence, accepted by Arlo:** in full width the left
   column loses its tallest card, so the ~150 px gap under the panel returns.
 - **`#midihome` MUST be `display:contents`.** Wrapping the card in it made the
