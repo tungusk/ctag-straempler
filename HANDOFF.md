@@ -47,9 +47,9 @@ with the shadow FB allocated (the pessimistic case), from `/sysinfo` `tft`.
 alone on purpose**: its lanes are coloured fills over black, so there is no
 redundant clear to skip; entry stays ~151 ms and its ticks are ≤ 5 ms.
 
-**Left**: Tape's playing fast tick (~7 ms) = header status row repainted
-every tick for the position readout + the playhead erase; could clear just
-the readout field. Keys' per-note tick (16 ms) = note field + zone tag
+**Tape's playing tick fixed (`dff6a01`)**: the status row is three fixed-
+width fields, only the position field repaints per tick — 7.6 → 2.5 ms avg.
+**Left**: Keys' per-note tick (16 ms) = note field + zone tag
 recolour + playhead. `/screenshot` via GRAM readback (no shadow) is still the
 way to kill the ~95 ms shadow tax on Remote-tab days. Machine-switch time is
 now dominated by machine start (preset load, SD), not drawing.
