@@ -155,7 +155,8 @@ body.nosbar .sbar{display:none}
 .mxcard .mtx input[type=range]{width:96px}
 /* SETTINGS card: two TFT-style screens (machine Setup / global Settings) */
 .scrs{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px}
-.tftw{flex:1 1 300px;min-width:0}
+.tftw{flex:1 1 300px;min-width:0;display:flex}
+.tftw .tft{flex:1 1 auto}
 .tft{background:#000;border:1px solid #2c2c2c;border-radius:4px;padding:7px 9px 8px;font-family:"DejaVu Sans Mono",Menlo,monospace;color:#eee;font-size:13px;min-height:180px}
 .tft .tt{display:flex;justify-content:space-between;align-items:baseline;margin:0 4px 6px;color:#fff}
 .tft .aff{color:#0af;font-size:12px}
@@ -393,7 +394,7 @@ body.nosbar .sbar{display:none}
     </div>
     <div class="msg" id="clkmsg" style="display:none"></div>
   </div>
-  <div class="card pnl"><b class="ph">MACHINE</b>
+  <div class="card pnl"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">MACHINE</b><span id="rmnote" style="color:#888;font-size:11px"></span></div>
     <div id="rmach"></div>
   </div>
   </div>
@@ -1424,9 +1425,9 @@ function rpStep(i,d){
 // order and value strings; click a toggle to cycle it, ◂ ▸ step a range, shift
 // = x10; ACTION rows open on the device) and the global Settings page (the
 // System > Settings rows) — plus an "advanced" fold with the raw preset keys
-// in a table. Folded state remembered per browser; starts open.
+// in a table. Folded state remembered per browser; starts folded.
 var rpSetup=null,rpGlob=null;
-function rpSetOpen(){try{return localStorage.getItem('rpsetopen')!=='0';}catch(e){return true;}}
+function rpSetOpen(){try{return localStorage.getItem('rpsetopen')==='1';}catch(e){return false;}}
 function rpSetToggle(){
   var b=document.getElementById('rpsetbody'),h=document.getElementById('rpsethdr');
   if(!b)return; var open=b.style.display==='none';
@@ -1987,10 +1988,10 @@ function edApply(op){
 }
 function remMach(n){
   fetch('/remote/machine?name='+encodeURIComponent(n),{method:'POST'}).then(function(r){return r.json();}).then(function(d){
-    var m=document.getElementById('rm');
-    m.className='msg '+(d.error?'er':'ok');
-    m.textContent=d.error||('Switching to '+n+'…');
-    if(!d.error)setTimeout(function(){rpLoad();m.textContent='';m.className='msg';},2500);   // refresh the form for the new machine; the notice was sticking
+    var m=document.getElementById('rmnote');
+    m.style.color=d.error?'#e66':'#888';
+    m.textContent=d.error||('switching to '+n+'\u2026');
+    if(!d.error)setTimeout(function(){rpLoad();m.textContent='';},2500);   // refresh the form for the new machine
   }).catch(function(){});
 }
 
