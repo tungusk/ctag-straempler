@@ -82,7 +82,7 @@ body.nosbar .sbar{display:none}
 .pspace{flex:1 1 0;display:flex;flex-direction:column;justify-content:center}
 .pbody{margin:0}
 /* everything under the two columns spans them: 502 + 12 + 502 */
-#p3>.card,#p3>.row,#rparams>.card{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
+#p3>.card,#p3>.row{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}   /* (#rparams>.card was here: the ADVANCED card now lives in the left column at panel width) */
 #rparams .rpcols{columns:2 300px;column-gap:12px}
 .psec{margin-top:6px}
 .pnl{padding:8px 14px 10px;background:#141414;border:1px solid #262626}   /* the panel card stays near-black */
@@ -1527,7 +1527,7 @@ function setupCard(){return foldCard('setup','MACHINE SETUP','<div class="tftw" 
 function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>');}
 function advCard(inner,asTable){
   var adv=asTable?'<table class="adv" style="margin-top:6px">'+inner+'</table>':inner;
-  return foldCard('adv','ADVANCED &#8212; raw preset keys',adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div>');
+  return foldCard('adv','ADVANCED',adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div>');
 }
 function rpSetCard(inner,asTable){
   document.getElementById('rsetup').innerHTML=setupCard();
