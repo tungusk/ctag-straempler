@@ -9,6 +9,25 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-09 — SECOND PUBLIC BETA: `v0.10-beta2` (tag at `73d8828`)
+
+Ear pass PASSED on .85 (clock into CV4 → Deck LOCK, lock rides Deck→Tape→
+Looper, Tracker sync, Glitch divisions, K5-K7 knob feel on Synth/Keys).
+Tag `v0.10-beta2` = `73d8828` (version.txt bump on top of the 09-09 web
+polish `d49f957`/`de37795` and the refreshed `docs/remote-tab.jpg`).
+Built CLEAN in a throwaway worktree at `/private/tmp/straempler-beta2`
+(fresh sdkconfig from defaults; submodules need `git submodule update
+--init --recursive` in a new worktree or the tft component fails to
+configure). **Worktree path matters**: the `$HOME`→`~` prefix-map from
+`ac5b756` does not cover a scratch path that carries the username — the
+first build under `…/-Users-arlo-claude09/…` put 6 copies of it into the
+app image via `__FILE__`. Build release images under a neutral path.
+Assets = four images + `flash.sh` + `SHA256SUMS.txt` + zip; app image
+sha256 `7d839ade…`. **.85 OTA'd to the release image** (slot ota_0,
+`reset=sw`, `pixel_ok`). Release notes in the session scratchpad
+(`release-notes-beta2.md`). Owed: the power-cycle rollback check on .85
+(stays on ota_0 after a cold boot).
+
 ## 2026-09-08 — WEB REMOTE REWORK (Antumbra-panel layout + CV matrix / input map)
 
 Commits `644b777..9e7e031` on `v09-machines`, all PUSHED; **.85 runs `9e7e031`**
