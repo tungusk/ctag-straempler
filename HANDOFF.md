@@ -70,6 +70,15 @@ half mode, and **typing works whether or not a key is on screen**. .85 runs it.
 - **Typing is independent of the view** — proved with the transport stubbed:
   with the view at 60..77, pressing `P` still emitted note 88 (base+28).
   `<` `>` shift by an octave (7 white keys) and clamp at both ends (view 0..7).
+- **Octave is two `.btn`s** flanking the reading, and the `<` `>` nav buttons are
+  16x30 centred rather than full-bleed (Arlo, 09-10).
+- **Trap, cost an hour of squinting**: `midiDraw()` read `#midikbd.clientWidth`
+  and only THEN showed/hid the nav buttons, so the keys were sized to a width
+  the buttons immediately took away — a half-drawn white key at the right edge.
+  It now measures `#midirow` and subtracts the nav cost (2x16 + 2x4 = 40 px)
+  BEFORE laying out, and returns early when the row has no width (card hidden);
+  `updateRemote()` redraws on the hidden -> shown edge. Verified no overflow in
+  half, full, and after a shift.
 - Labels: upper-manual key on top of each drawn key, lower-manual key beneath,
   mirroring where the rows sit under your hands. Transport `ws`/`http` became a
   coloured dot (`.mdot`) — note `.row.tight>*` sets padding on every child, so

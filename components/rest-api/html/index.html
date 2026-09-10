@@ -230,12 +230,13 @@ body.nosbar .sbar{display:none}
 .btn.cur{background:var(--acc);color:#000;border-color:var(--acc)}   /* the machine selector's current machine */
 .ren{cursor:pointer;border-bottom:1px dotted #555}
 /* MIDI card: octave arrows, transport dot, view-shift buttons, full-width mode */
-.oarr{color:var(--acc);cursor:pointer;padding:0 5px;user-select:none}
-.oarr:hover{color:#fff}
+/* .row.tight>* forces padding:3px 14px on every child — these need their own */
+.row.tight>.octb{flex:0 0 auto;padding:2px 7px;font-size:11px;line-height:1.3}
+.row.tight>#midioct{flex:0 0 30px;padding:0;color:#ccc;font-size:11px;text-align:center}
 .row.tight>.mdot{width:8px;height:8px;border-radius:50%;background:#555;display:inline-block;flex:0 0 8px;padding:0}
 .mdot.ws{background:#3fcf8f;box-shadow:0 0 5px #3fcf8f}
 .mdot.http{background:#fa0;box-shadow:0 0 5px #a70}
-.btn.kbnav{flex:0 0 18px;padding:0;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center}
+.btn.kbnav{flex:0 0 16px;align-self:center;height:30px;padding:0;font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center}
 .card.pnl.wide{width:1016px}
 .mkey{border:1px solid #333;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;
   justify-content:space-between;padding:3px 0 4px;font-size:9px;cursor:pointer;user-select:none;-webkit-user-select:none;position:absolute;top:0}
@@ -414,8 +415,9 @@ body.nosbar .sbar{display:none}
     <div class="row tight" style="align-items:center">
       <b class="ph" style="flex:0 0 auto;padding:0;margin:0"><span class="hlp" data-h="Impulse Tracker layout, two manuals an octave apart: Z S X D C V G B H N J M , L . ; / is the lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P the upper. Octave on - and = &#183; Space releases held notes &#183; Esc panics. Typing plays whether or not a key is on screen &#8212; &#8249; &#8250; only move the view. Plays Synth / Keys; MIDI wins over CV while a note is held.">MIDI</span></b>
       <label style="flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;margin:0 0 0 14px;color:#888;font-size:11px"><input type="checkbox" id="midityping" checked style="width:auto;margin:0"> typing</label>
-      <span style="flex:0 0 auto;margin-left:14px;white-space:nowrap;color:#888;font-size:11px">
-        <span class="oarr" onclick="midiOct(-1)">&#9666;</span><span id="midioct" style="color:#ccc">C4</span><span class="oarr" onclick="midiOct(1)">&#9656;</span></span>
+      <button class="btn octb" style="margin-left:14px" onclick="midiOct(-1)" title="octave down (-)">&#9666;</button>
+      <span id="midioct">C4</span>
+      <button class="btn octb" onclick="midiOct(1)" title="octave up (=)">&#9656;</button>
       <span style="flex:1"></span>
       <span id="midist" class="mdot" title="transport"></span>
       <button class="btn" id="midiwbtn" style="flex:0 0 52px;margin-left:8px" onclick="midiWide()">full</button>
@@ -2068,8 +2070,9 @@ function midiWhiteMap(){
   return {idx:idx,n:n};
 }
 function midiShift(d){
-  var m=midiWhiteMap(),el=document.getElementById('midikbd');
-  var vis=Math.max(1,Math.floor((el?el.clientWidth:502)/MIDI_KEYW));
+  var m=midiWhiteMap(),row=document.getElementById('midirow');
+  var rowW=(row&&row.clientWidth)||502;
+  var vis=Math.max(1,Math.floor((((m.n*MIDI_KEYW)<=rowW)?rowW:rowW-40)/MIDI_KEYW));
   midiView=Math.max(0,Math.min(m.n-vis,midiView+d*7));   // an octave per click
   midiDraw();
 }
@@ -2087,9 +2090,16 @@ function midiWideInit(){
 }
 function midiDraw(){
   var el=document.getElementById('midikbd');if(!el)return;
-  var m=midiWhiteMap(),avail=el.clientWidth||502;
+  var m=midiWhiteMap();
+  // Decide the nav buttons BEFORE measuring: reading #midikbd first and showing
+  // them after sized the keys to a width the buttons then took away, leaving a
+  // half-key sliver at the right edge. Measure the ROW, subtract what nav costs.
+  var row=document.getElementById('midirow');
+  var rowW=row?row.clientWidth:0;
+  if(!rowW)return;                               // card still hidden: updateRemote redraws when it shows
+  var all=(m.n*MIDI_KEYW)<=rowW;                 // whole span fits: no nav needed
+  var avail=all?rowW:rowW-40;                    // two 16 px buttons + two 4 px gaps
   var vis=Math.max(1,Math.min(m.n,Math.floor(avail/MIDI_KEYW)));
-  var all=vis>=m.n;
   midiView=Math.max(0,Math.min(m.n-vis,midiView));
   var nav=all?'none':'flex';
   var pv=document.getElementById('midiprev'),nx=document.getElementById('midinext');
@@ -2198,7 +2208,13 @@ function remMach(n){
 function updateRemote(d){
   if(!document.getElementById('p3').className.match(/on/))return;
   var mc=document.getElementById('midicard');
-  if(mc)mc.style.display=(d.machine=='Synth'||d.machine=='Keys')?'':'none';
+  if(mc){
+    var want=(d.machine=='Synth'||d.machine=='Keys')?'':'none';
+    if(mc.style.display!==want){
+      mc.style.display=want;
+      if(want==='')midiDraw();   // it could not be measured while hidden — size it now it is real
+    }
+  }
   var cv=d.cv||[];
   knFollow(cv);
   clkReadout(d.clk);
