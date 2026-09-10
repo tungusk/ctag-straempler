@@ -559,15 +559,68 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// ─── /screenshot — the live TFT display as a 24-bit BMP ─────────────────────
-// The panel's GRAM readback is DEAD on this unit (MISO idles high — the first
-// /screenshot attempt came back solid white), so this reads the PSRAM SHADOW
-// FRAMEBUFFER instead: tftspi.c write-through hooks keep tft_shadow an exact
-// copy of every draw. disp_lock is taken PER ROW purely against tearing (the
-// UI task holds it around menuProcessEvent), released between rows so a slow
-// client can't freeze the UI. BMP wants B,G,R bottom-up.
+// ─── /screenshot — the live TFT display as a BMP ────────────────────────────
+// TWO SOURCES, picked once per boot by gram_readback_probe():
+//
+//  * GRAM READBACK (preferred, needs SJ1 bridged). Reads the panel's own
+//    memory back over MISO. Costs NO PSRAM traffic and — the real win — means
+//    the shadow framebuffer is never allocated, so every subsequent draw skips
+//    the ~95 ms/full-page write-through tax that used to arrive with the first
+//    screenshot and stay for the rest of the boot. 230 KB of PSRAM stays free.
+//  * PSRAM SHADOW (fallback, SJ1 open — unit 1 and any untouched board).
+//    tftspi.c write-through hooks keep tft_shadow an exact copy of every draw.
+//
+// Either way disp_lock is taken PER CHUNK, not for the whole image: the UI
+// task holds it around menuProcessEvent, so a slow client must never be able
+// to freeze the panel. BMP wants bottom-up rows.
 static void put_le32(uint8_t *p, uint32_t v){ p[0]=v; p[1]=v>>8; p[2]=v>>16; p[3]=v>>24; }
 static void put_le16(uint8_t *p, uint16_t v){ p[0]=v; p[1]=v>>8; }
+
+// GRAM readback capability, probed once per boot and cached. -1 = not probed,
+// 0 = no MISO path (SJ1 open) or the panel doesn't verify, 1 = reads are good.
+// /tftread is the full diagnosis; this is just the yes/no /screenshot needs.
+static int s_gram_rd = -1;
+
+// Writes four known pixels top-left, reads them back, puts the originals back.
+// The originals are READ first: on a dead-MISO unit they come back as garbage,
+// but there the probe fails anyway and we ask the UI to repaint instead of
+// restoring. Call WITHOUT disp_lock held. Reads use set_sp=1, i.e. the same
+// max_rdclock the screenshot loop uses — we verify at the speed we run at.
+static int gram_readback_probe(void)
+{
+    static const color_t test[4] = {
+        {0xEC, 0xA8, 0x74}, {0x00, 0xFC, 0x00}, {0xFC, 0x00, 0x00}, {0x00, 0x00, 0xFC}
+    };
+    color_t orig[4];
+    int ok = 1;
+
+    disp_lock_take();
+    for (int i = 0; i < 4; i++) {
+        uint8_t b[sizeof(color_t) + 1] = {0};
+        read_data(i, 0, i + 1, 1, 1, b, 1);
+        orig[i] = (color_t){ b[1], b[2], b[3] };
+    }
+    for (int i = 0; i < 4; i++) drawPixel(i, 0, test[i], 1);
+    for (int i = 0; i < 4; i++) {
+        uint8_t b[sizeof(color_t) + 1] = {0};
+        if (read_data(i, 0, i + 1, 1, 1, b, 1) != ESP_OK) { ok = 0; break; }
+        if (((b[1] ^ test[i].r) & 0xFC) ||          // low 2 bits are not real
+            ((b[2] ^ test[i].g) & 0xFC) ||
+            ((b[3] ^ test[i].b) & 0xFC)) { ok = 0; break; }
+    }
+    if (ok) for (int i = 0; i < 4; i++) drawPixel(i, 0, orig[i], 1);
+    disp_lock_give();
+
+    if (!ok) {                                      // can't trust orig — repaint
+        ui_ev_ts_t ev = { .event = EV_ENTERED_MENU, .event_data = NULL };
+        if (ui_ev_queue) xQueueSend(ui_ev_queue, &ev, 0);
+    }
+    ESP_LOGI(TAG, "GRAM readback probe: %s (max_rdclock %u MHz)",
+             ok ? "OK - screenshots read the panel, no shadow FB" :
+                  "no readback - screenshots use the PSRAM shadow FB",
+             (unsigned)(max_rdclock / 1000000u));
+    return ok;
+}
 
 // Screenshot cost matters for AUDIO, not just latency (2026-09-09, Arlo:
 // "it's the auto refresh on the web page" — crackling while Tape played).
@@ -609,7 +662,12 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
     put_le32(hdr + 58, 0x07E0);   // G mask
     put_le32(hdr + 62, 0x001F);   // B mask
 
-    if (!tft_shadow) {
+    if (s_gram_rd < 0) s_gram_rd = gram_readback_probe();
+
+    // No readback path: fall back to the shadow, allocating it on first use.
+    // That first request answers 503 because the freshly calloc'd buffer is
+    // black until the UI has repainted into it.
+    if (!s_gram_rd && !tft_shadow) {
         tft_shadow_init();
         if (!tft_shadow) {
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "shadow fb alloc failed");
@@ -622,9 +680,13 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "shadow fb allocated - redrawing, retry in ~1s\n");
         return ESP_OK;
     }
-    // INTERNAL RAM on purpose: the only PSRAM traffic is the shadow read itself
+    // INTERNAL RAM on purpose: on the shadow path the only PSRAM traffic is the
+    // shadow read itself; on the GRAM path there is none at all.
     uint8_t *out = heap_caps_malloc(stride * SS_ROWS_PER_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!out) {
+    uint8_t *rd  = s_gram_rd ? heap_caps_malloc((size_t)w * sizeof(color_t) + 1,
+                                                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) : NULL;
+    if (!out || (s_gram_rd && !rd)) {
+        free(out); free(rd);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
     }
@@ -639,24 +701,47 @@ static esp_err_t screenshot_get_handler(httpd_req_t *req)
     int y = h - 1;                                   // bottom-up
     while (y >= 0 && rc == ESP_OK) {
         int n = 0;
+        // ONE lock for the whole chunk on the GRAM path (~6 ms held at 10 MHz)
+        // so the read clock is switched 30 times per image, not 240; the UI
+        // still gets the bus back between chunks.
+        disp_lock_take();
+        uint32_t clk0 = 0;
+        if (s_gram_rd) {
+            clk0 = spi_lobo_get_speed(disp_spi);
+            if (max_rdclock < clk0) spi_lobo_set_speed(disp_spi, max_rdclock);
+        }
         while (n < SS_ROWS_PER_CHUNK && y >= 0) {
             uint8_t *o = out + (size_t)n * stride;
-            disp_lock_take();
-            const color_t *row = tft_shadow + (size_t)y * w;
+            const color_t *row;
+            if (s_gram_rd) {
+                if (read_data(0, y, w - 1, y, w, rd, 0) != ESP_OK) {
+                    s_gram_rd = 0;                   // bus fault: shadow from now on
+                    rc = ESP_FAIL;
+                    break;
+                }
+                row = (const color_t *)(rd + 1);     // byte 0 is the dummy read
+            } else {
+                row = tft_shadow + (size_t)y * w;
+            }
             for (int x = 0; x < w; x++) {
+                // the panel's low 2 bits per channel are not real — 565 drops
+                // exactly those for R and B, and green keeps its top 6
                 uint16_t px = (uint16_t)(((row[x].r & 0xF8) << 8) | ((row[x].g & 0xFC) << 3) | (row[x].b >> 3));
                 o[x * 2]     = (uint8_t)(px & 0xFF);
                 o[x * 2 + 1] = (uint8_t)(px >> 8);
             }
-            disp_lock_give();
             if (pad) memset(o + row_bytes, 0, pad);
             y--; n++;
         }
+        if (clk0) spi_lobo_set_speed(disp_spi, clk0);   // ALWAYS: s_gram_rd may have just been cleared
+        disp_lock_give();
+        if (rc != ESP_OK) break;
         rc = httpd_resp_send_chunk(req, (const char *)out, (size_t)n * stride);
         if (((h - 1 - y) & 15) == 0) vTaskDelay(1);  // sparse yields, as before
     }
     httpd_resp_send_chunk(req, NULL, 0);
     free(out);
+    free(rd);
     return ESP_OK;
 }
 
@@ -1423,7 +1508,7 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
              "\"psram\":{\"free\":%u,\"big\":%u,\"total\":%u},"
              "\"iram\":{\"free\":%u,\"big\":%u},"
              "\"uptime\":%u,\"reset\":\"%s\","
-             "\"tft\":{\"clk\":%u,\"shadow\":%d,\"ev\":%u,\"worst\":%u,\"wev\":%d,"
+             "\"tft\":{\"clk\":%u,\"shadow\":%d,\"gramrd\":%d,\"ev\":%u,\"worst\":%u,\"wev\":%d,"
              "\"tick\":%u,\"tickw\":%u,\"avg\":%u,\"n\":%u},"
              "\"time\":%ld,\"tz\":%d,\"machines\":[%s]}",
              ip, (unsigned long long)freeb, (unsigned long long)totb,
@@ -1431,7 +1516,7 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
              STRAMPLER_FW_VERSION, beatlisten_get_mode(), beatlisten_get_out(),
              pfree, pbig, ptot, ifree, ibig,
              uptime_s, rr,
-             (unsigned)(spi_lobo_get_speed(disp_spi) / 1000000u), tft_shadow ? 1 : 0,
+             (unsigned)(spi_lobo_get_speed(disp_spi) / 1000000u), tft_shadow ? 1 : 0, s_gram_rd,
              (unsigned)ui_tft_stat(0), (unsigned)ui_tft_stat(1), (int)ui_tft_stat(6),
              (unsigned)ui_tft_stat(2), (unsigned)ui_tft_stat(3), (unsigned)ui_tft_stat(5), (unsigned)ui_tft_stat(4),
              (long)time(NULL), tzs, machines);

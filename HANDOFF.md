@@ -9,6 +9,40 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — /screenshot READS THE PANEL (GRAM readback), shadow FB retired on bridged units
+
+`/screenshot` now reads the panel's own GRAM over MISO instead of the PSRAM
+shadow framebuffer, on any unit whose readback verifies. **.85 runs it.**
+
+- **Why**: the shadow FB was the expensive part, and not only during a
+  screenshot — once allocated it stayed for the boot and taxed EVERY draw with
+  its write-through (~95 ms on a full page after the stage-2 fix, and it is the
+  PSRAM traffic that made Tape crackle with the Remote tab's auto refresh).
+  Reading GRAM costs zero PSRAM traffic and means the 230 KB is never claimed.
+- **`gram_readback_probe()`** (rest-api.c) runs once per boot on the first
+  `/screenshot`: writes 4 known pixels top-left, reads them back at
+  `max_rdclock`, restores the originals (which it read first). Result cached in
+  `s_gram_rd` and reported as `/sysinfo` `tft.gramrd` (-1 unprobed, 0 no, 1 yes).
+  Reads are verified at the same clock the row loop uses.
+- **Fallback is unchanged**: `gramrd` 0 (SJ1 open — unit 1, any untouched
+  board) takes the old shadow path, 503-warming allocation and all. A bus fault
+  mid-image clears `s_gram_rd` so later requests fall back too.
+- **Row loop**: one `disp_lock` per 8-row chunk, not per row — the read clock
+  is switched 30 times per image instead of 240, and the UI gets the bus back
+  between chunks (~6 ms held at 10 MHz). The write clock is restored on EVERY
+  exit from that block, including the fault path.
+- **Measured on .85** (`tftclk` 40, `max_read_clock_ok_hz` 10 MHz): a full
+  153,666-byte RGB565 BMP in 0.68-0.93 s, image verified correct by eye
+  (Tape page, waveform, text all legible). `tft.shadow` stays 0 and PSRAM free
+  stays 1.042 MB across 15 consecutive screenshots — no allocation, no leak
+  (+16 bytes over the last 10), no crash (`reset` stays `sw`).
+- **Owed by ear**: Tape playing with the Remote tab's auto refresh ON. That is
+  the test this change exists to pass — the crackle should now be gone rather
+  than merely smaller, because the PSRAM read is gone entirely.
+- Note `GET /remote/event?ev=enter` did NOT produce a full repaint when used to
+  measure this (0.1 ms, event id 17) — it is not the repaint trigger the
+  09-09 notes claim. Rank redraw work with a real machine switch instead.
+
 ## 2026-09-10 early — REMOTE TAB LAYOUT, settled "good enough, tighten later" (Arlo)
 
 Commits `1850c6e..d1ae189`, PUSHED; **.85 runs `d1ae189`**. Final shape of the

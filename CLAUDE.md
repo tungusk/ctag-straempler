@@ -174,6 +174,13 @@ or by putting the key in `CONFIG.JSN` on the card). Prove a unit with
 `GET /tftread?pattern=1&clk=40` (needs SJ1 bridged). Redraw timing lives in
 `/sysinfo` `"tft"` (see HANDOFF 2026-09-09 late).
 
+**`/screenshot` reads the panel, not a framebuffer**, wherever readback works
+(SJ1 bridged): `gram_readback_probe()` decides once per boot, `/sysinfo`
+`tft.gramrd` reports it (1 = GRAM, 0 = PSRAM shadow fallback, -1 = not probed
+yet). On a GRAM unit the shadow FB is NEVER allocated, so no 230 KB PSRAM
+claim and no per-draw write-through tax — that tax used to arrive with the
+first screenshot and stay for the whole boot.
+
 **Sleep at least one tick.** `CONFIG_FREERTOS_HZ=100`: one tick is 10 ms, so
 `pdMS_TO_TICKS(n)` for n<10 is ZERO and `vTaskDelay(0)` never yields to
 LOWER-priority tasks — an "idle" loop built on it is a busy-spin that starves
