@@ -96,7 +96,11 @@ static void draw_header(void)
 static void draw_osc(void)
 {
     int fh = TFT_getfontheight();
-    int x = 8, y0 = fh + 15, w = _width - 16, h = 26, cy = y0 + h / 2;
+    // h was 26 -> amp 11, which quantised the peaks of a high-ratio FM shape
+    // onto one pixel row and read as a FLAT, truncated top and bottom. The band
+    // now runs from just under the header (clear ends fh+12) to just above the
+    // dials' clear (starts fh+50), so amp is 14.
+    int x = 8, y0 = fh + 14, w = _width - 16, h = 32, cy = y0 + h / 2;
     _bg = TFT_BLACK; CLEAR_RECT(x - 1, y0 - 2, w + 2, h + 4);
     // encoder-nav focus = a BOLDER trace (2 px, brighter), not a box
     int foc = (s_live_sel == 0);
@@ -121,7 +125,7 @@ static void draw_osc(void)
             // one: ONE SPI transaction per column instead of a per-pixel
             // diagonal line (each pixel was its own address-window + write)
             int a = prevy < py ? prevy : py, b = prevy < py ? py : prevy;
-            TFT_drawFastVLine(x + i, a, b - a + 1 + (foc ? 1 : 0), wc);   // foc: thicken by a pixel
+            TFT_drawFastVLine(x + i, a, b - a + 2 + (foc ? 1 : 0), wc);   // 2 px trace, 3 px when focused
         }
         prevy = py;
     }
@@ -239,10 +243,16 @@ static void draw_adsr(void)
     // dim the envelope polyline unless it's the selected element
     color_t col = adsr_sel ? (color_t){60, 200, 120} : (color_t){30, 96, 58};
     int x1 = xb + aw, x2 = x1 + dw, x3 = x2 + sw, x4 = x3 + rw;
-    TFT_drawLine(xb, yb, x1, yt, col);
-    TFT_drawLine(x1, yt, x2, ys, col);
-    TFT_drawLine(x2, ys, x3, ys, col);
-    TFT_drawLine(x3, ys, x4, yb, col);
+    // 2 px: the same segment offset in y AND in x, so the near-vertical attack
+    // thickens too (a y-offset alone leaves a steep segment one pixel wide).
+    // Every offset point stays inside the cleared rect (bottom = y+h+2).
+    for (int o = 0; o < 3; o++) {
+        int dx = (o == 2) ? 1 : 0, dy = (o == 1) ? 1 : 0;
+        TFT_drawLine(xb + dx, yb + dy, x1 + dx, yt + dy, col);
+        TFT_drawLine(x1 + dx, yt + dy, x2 + dx, ys + dy, col);
+        TFT_drawLine(x2 + dx, ys + dy, x3 + dx, ys + dy, col);
+        TFT_drawLine(x3 + dx, ys + dy, x4 + dx, yb + dy, col);
+    }
     if (adsr_sel) {   // encoder-nav focus point (A/D/S/R)
         int mx = x1, my = yt;
         if (s_live_sel == 6) { mx = x2; my = ys; }
