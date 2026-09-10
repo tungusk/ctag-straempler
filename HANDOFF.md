@@ -9,6 +9,29 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 early — REMOTE TAB LAYOUT, settled "good enough, tighten later" (Arlo)
+
+Commits `1850c6e..d1ae189`, PUSHED; **.85 runs `d1ae189`**. Final shape of the
+Remote tab (all `index.html`; run `html/convert.sh` after every edit):
+
+- **Top pair** (two 502 px columns, independent heights — the panel card hugs
+  the jack field): left = panel + PLAY–MIDI; right = **MACHINE selector first**,
+  then CV MATRIX, FX, CLOCK.
+- **Settings zone** below, on the same two-column grid, never centred:
+  left = MACHINE SETUP; right = GLOBAL then ADVANCED. All three are fold
+  cards (`foldCard`/`foldToggle`, keys `fold_setup|glob|adv` in localStorage),
+  **closed on first launch**. MACHINE SETUP / GLOBAL are TFT-look screens
+  (`.tft`, highlight bar only under the mouse, no resting bar); ADVANCED is the
+  raw-key table inside the same dark frame + Reload/Apply.
+- **Single column** (window < 1040 px): panel, keyboard, matrix, FX, clock,
+  machine, then the settings cards (`display:contents` + `order` in the
+  media query).
+- Screen button = the screenshot frame's exact size and place; switching
+  notice lives in the MACHINE card header; SETTINGS rule/padding removed.
+- Trap: the old rule `#rparams>.card{width:1016px}` silently made the
+  ADVANCED card full width — removed. Watch for stale layout rules when a
+  card moves.
+
 ## 2026-09-09 late night — REMOTE TAB: screenshot cost, FX card, SETTINGS as two TFT screens
 
 Commits `46f4ae9..40719ce`, PUSHED; **.85 runs `40719ce`**.
