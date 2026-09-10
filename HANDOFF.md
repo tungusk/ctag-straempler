@@ -25,8 +25,11 @@ app image via `__FILE__`. Build release images under a neutral path.
 Assets = four images + `flash.sh` + `SHA256SUMS.txt` + zip; app image
 sha256 `7d839ade…`. **.85 OTA'd to the release image** (slot ota_0,
 `reset=sw`, `pixel_ok`). Release notes in the session scratchpad
-(`release-notes-beta2.md`). Owed: the power-cycle rollback check on .85
-(stays on ota_0 after a cold boot).
+(`release-notes-beta2.md`). **PUBLISHED** as a GitHub pre-release
+(https://github.com/tungusk/ctag-straempler/releases/tag/v0.10-beta2, seven
+assets, uploaded app sha256 matches SHA256SUMS). Note: `gh release create`
+is refused by Claude Code's auto-mode classifier — Arlo runs it himself.
+**Power-cycle rollback check PASSED** on .85 (`reset=poweron`, still ota_0).
 
 ## 2026-09-08 — WEB REMOTE REWORK (Antumbra-panel layout + CV matrix / input map)
 
