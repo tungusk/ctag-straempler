@@ -75,7 +75,7 @@ body.nosbar .sbar{display:none}
 .slot{left:8%;width:11px;height:96px;border:1px solid #333;border-radius:3px;background:#000}
 .ant{right:6%;width:34px;height:64px;fill:none;stroke:#555;stroke-width:1.6;stroke-linecap:round}
 #panel.big .deco,#scrarea:has(#scrbox.empty) .deco{display:none}   /* only beside a loaded, small screen */
-#scrbox .row #scrbtn.big{flex:1 1 auto;padding:14px 0;font-size:14px;letter-spacing:1px}   /* nothing loaded: one big Screen button */
+#scrbox .row #scrbtn.big{flex:1 1 auto;aspect-ratio:4/3;margin:29px 0 6px;padding:0;font-size:14px;letter-spacing:1px;border-color:#333}   /* nothing loaded: the Screen button IS the screenshot frame — same size and place, so nothing reflows when the shot lands */
 #panel .row .btn:hover{background:#1a1a1a;color:#aaa}
 /* two equal flexible spacers around the controls: controls centre in the frame's spare height,
    and the screen area (or the lone Screen button) centres inside the upper spacer */
