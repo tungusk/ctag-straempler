@@ -42,6 +42,18 @@ balance the layout and wanted the page reviewed as a whole.
   a masonry flow would, and that would break the "bounce and stream last"
   reading. A 4th settings card does NOT fill it (different flex row).
 
+## 2026-09-10 — green accent; MIDI card renamed and its help hidden
+
+- **`--acc` / `--accl` on `:root`** drive the card titles (`.ph`, `.card h4`),
+  the active tab and the machine selector's current machine (`.btn.cur`, used
+  nowhere else). Green now. The panel's BLUE IS DELIBERATE and separate:
+  jack ring meters, knob indicators, CV bars and the TFT screens are instrument
+  state, not chrome. Retuning the accent is one line.
+- **PLAY - MIDI is just MIDI**, and both pieces of its help moved onto the title
+  hover: the "plays Synth / Keys" paragraph and the `A-; / Z/X / Space / Esc`
+  shortcut line (which wrapped to a second row at 502 px). Same `.hlp` pattern
+  as the bounce/stream cards.
+
 ## 2026-09-10 — every Remote card folds (except the panel); the stream row aligns
 
 - **`makeFold(card,key,def)`** converts a card that was NOT built by

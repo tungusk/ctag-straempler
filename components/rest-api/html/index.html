@@ -6,12 +6,13 @@
 <title>Strämpler</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
+:root{--acc:#3fcf8f;--accl:#8fe6c0}   /* card titles + the active tab; the panel's data blue is separate */
 body{background:#2e2e2e;color:#ccc;font-family:monospace;font-size:13px;padding-bottom:36px}
 header{background:#1e1e1e;border-bottom:1px solid #333;padding:6px 12px;display:flex;align-items:center;gap:10px}
 h1{font-size:13px;color:#888;flex:1;letter-spacing:.05em}
 .tabs{display:flex;gap:4px}
 .tab{cursor:pointer;padding:3px 10px;border:1px solid #444;border-radius:3px;color:#888;font-size:12px}
-.tab.on{background:#0af;color:#000;border-color:#0af}
+.tab.on{background:var(--acc);color:#000;border-color:var(--acc)}
 .pane{display:none;padding:10px}
 .pane.on{display:block}
 table{width:100%;border-collapse:collapse}
@@ -89,7 +90,7 @@ body.nosbar .sbar{display:none}
 .psec{margin-top:6px}
 .pnl{padding:8px 14px 10px;background:#141414;border:1px solid #262626}   /* the panel card stays near-black */
 .pnl .msg{text-align:center;margin:4px auto 0}
-.ph{display:block;color:#0af;font-size:11px;letter-spacing:1px;margin-bottom:4px}
+.ph{display:block;color:var(--acc);font-size:11px;letter-spacing:1px;margin-bottom:4px}
 .pgrid4{display:grid;grid-template-columns:repeat(4,116px);justify-content:center}
 /* the perform row: label on a fixed line, the item centred in one fixed 64 px band
    whatever its size (GAIN 58, TR 48, DATA 54), with a little air between them */
@@ -226,7 +227,7 @@ body.nosbar .sbar{display:none}
 .knob{width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 50% 38%,#2c2c2c,#151515 70%);border:1px solid #3a3a3a;box-shadow:0 2px 4px #000;position:relative;cursor:ns-resize;touch-action:none;user-select:none;margin:6px 0 4px}
 .knob:hover{border-color:#555}
 .knob i{position:absolute;left:50%;top:50%;width:3px;height:28px;margin:-28px 0 0 -1.5px;transform-origin:50% 100%;background:linear-gradient(to bottom,#0af 50%,transparent 50%);border-radius:2px;pointer-events:none}
-.btn.cur{background:#0af;color:#000;border-color:#0af}
+.btn.cur{background:var(--acc);color:#000;border-color:var(--acc)}   /* the machine selector's current machine */
 .ren{cursor:pointer;border-bottom:1px dotted #555}
 /* card help: the explainer paragraph moves into a hover on the card title, dotted like .ren */
 .hlp{position:relative;border-bottom:1px dotted #2f5566;cursor:help}
@@ -237,7 +238,7 @@ body.nosbar .sbar{display:none}
 .bar{background:#181818;border:1px solid #333;height:14px;position:relative;margin:4px 0}
 .bar>i{display:block;height:100%;background:#0af}
 .card{border:none;background:#1c1c1c;padding:8px 10px;margin:8px 0}
-.card h4{margin:0 0 6px;color:#7fd4ff;font-weight:normal;font-size:12px;letter-spacing:1px}
+.card h4{margin:0 0 6px;color:var(--accl);font-weight:normal;font-size:12px;letter-spacing:1px}
 .kv{color:#9ab}.kv b{color:#ddd;font-weight:normal}
 .scope{width:100%;border-collapse:collapse;font-size:11px}
 .scope td{padding:2px 4px;border-bottom:1px solid #1c1c1c}
@@ -393,7 +394,7 @@ body.nosbar .sbar{display:none}
   </div>
   <div class="card pnl" id="midicard" style="display:none">
     <div class="row tight" style="align-items:center">
-      <b class="ph" style="flex:1;padding:0;margin:0">PLAY &#8212; MIDI</b>
+      <b class="ph" style="flex:1;padding:0;margin:0"><span class="hlp" data-h="Plays Synth / Keys &#8212; MIDI wins over CV while a note is held. Type on this page, click the keys, or pick a MIDI device (Chrome). Keys A&#8211;; &#183; Z/X octave &#183; Space release &#183; Esc panic">MIDI</span></b>
       <span id="midist" style="color:#888;margin-right:8px">off</span>
       <select id="mididev" style="flex:0 0 130px;display:none"></select>
       <button class="btn" style="flex:0 0 64px;margin-left:6px" onclick="midiSend('x');midiHeldClear()">All off</button>
@@ -402,9 +403,7 @@ body.nosbar .sbar{display:none}
     <div style="margin-top:4px;color:#888;font-size:12px;line-height:1.7">
       <label style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap"><input type="checkbox" id="midityping" checked style="width:auto;margin:0"> musical typing</label>
       <span id="midioct" style="margin-left:12px;white-space:nowrap">oct C4</span>
-      <span style="color:#555;margin-left:12px;font-size:11px">A-; keys &#183; Z/X octave &#183; Space release &#183; Esc panic</span>
     </div>
-    <div class="msg" style="margin-top:4px">Plays <b>Synth</b> / <b>Keys</b> (MIDI wins over CV while a note is held). Type on this page, click the keys, or pick a MIDI device (Chrome).</div>
   </div>
   </div>
   <div class="rcol">
