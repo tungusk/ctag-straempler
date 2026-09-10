@@ -9,6 +9,36 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-09 late night — REMOTE TAB: screenshot cost, FX card, SETTINGS as two TFT screens
+
+Commits `46f4ae9..40719ce`, PUSHED; **.85 runs `40719ce`**.
+
+- **Screenshot auto-refresh crackled Tape** (Arlo found it). PSRAM and flash
+  share one SPI bus; Tape streams from PSRAM. `/screenshot` is now RGB565
+  (16 bpp BMP, BI_BITFIELDS, 153 KB), converts into an INTERNAL-RAM buffer
+  (the shadow read is the only PSRAM traffic) and sends 8 rows per chunk.
+  Still to be judged by ear with auto on; next levers = a half-size image for
+  the small preview, slower auto interval.
+- **FX card** (under CV MATRIX): FX1/FX2 kind pickers, FX3 reverb + mix, one
+  control group per effect kind in a slot (`FXP` table in the html maps keys
+  → label/range/type). Keys kept out of the raw form (`FX_KEYS`). Apply =
+  the usual `/remote/params` POST. **CV MATRIX card has its own Apply.**
+- **SETTINGS card = two TFT-style screens** (Arlo's design): left = the
+  machine's Setup page, mirrored from **`GET/POST /remote/setup`** (new:
+  `machine_ui_t.setup` → the machine's `setup_menu_t`; `setup_menu_remote_json`
+  renders rows with the machine's own callbacks; POST `?i=&dir=&n=` queues
+  `EV_REMOTE_SETUP`, handled on the UI task like a press/turn, then
+  `EV_ENTERED_MENU` re-enters the current page with the Setup cursor on the
+  edited row). Right = System > Settings rows on the existing endpoints
+  (`/settings` tz/remote, `/blisten` mode/out, `/bounce/*`, `/bcast/enable`).
+  ACTION rows are read-only from the web. "ADVANCED" fold = raw keys as a
+  table + Reload/Apply. Card remembers folded state; starts open.
+- Also: PLAY–MIDI card hint row no longer bleeds; the "Switching to…" notice
+  clears after the reload.
+- Gotcha: `setup_menu_enter_at()` DRAWS — never call it from a remote path
+  (it would paint Setup over the Live page); set the cursor and let the
+  re-entry draw. `html/convert.sh` after every edit, still manual.
+
 ## 2026-09-09 night — DISPLAY REDRAW SPEED, stage 3 (fewer pixels), first four machines
 
 Commits `acaa662` Synth, `8883d36` Tracker, `2a2fc78` Deck, `5a79cf3` Tape —
