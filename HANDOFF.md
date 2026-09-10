@@ -40,13 +40,19 @@ with the shadow FB allocated (the pessimistic case), from `/sysinfo` `tft`.
 | Deck             | 118 → 97           | ticks ~1; state change 28      |
 | Tape             | 260 → 145          | play/stop recolour 150 → 67; playing tick ~7 |
 
-**Still on the list** (measured, untouched): DoubleDecker 150, Looper 151,
-Keys 165, Sampler 149 ms entry; idle ticks all ≤ 5 ms — they are already
-signature-gated, so the win there is the single-clear pattern (~40–60 ms
-each, mechanical). Tape's playing fast tick (~7 ms) = header status row
-repainted every tick for the position readout + the playhead erase; could
-clear just the readout field. `/screenshot` via GRAM readback (no shadow) is
-still the way to kill the ~95 ms shadow tax on Remote-tab days.
+**Second sweep (`5c36eb1`, .85 runs it):** Keys got the full Synth treatment
++ a band-blitted waveform (entry 165 → 108 ms; note 16, nav 15–18, knob
+7.5 ms), DoubleDecker single-clear (150 → 121), Sampler single-clear
+(149 → 142 — its panels are coloured fills, which must stay). **Looper left
+alone on purpose**: its lanes are coloured fills over black, so there is no
+redundant clear to skip; entry stays ~151 ms and its ticks are ≤ 5 ms.
+
+**Left**: Tape's playing fast tick (~7 ms) = header status row repainted
+every tick for the position readout + the playhead erase; could clear just
+the readout field. Keys' per-note tick (16 ms) = note field + zone tag
+recolour + playhead. `/screenshot` via GRAM readback (no shadow) is still the
+way to kill the ~95 ms shadow tax on Remote-tab days. Machine-switch time is
+now dominated by machine start (preset load, SD), not drawing.
 
 ## 2026-09-09 late — DISPLAY REDRAW SPEED, stages 1+2 (bail tag `pre-redraw-speed-20260909`)
 
