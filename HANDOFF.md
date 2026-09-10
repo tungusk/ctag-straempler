@@ -42,6 +42,14 @@ balance the layout and wanted the page reviewed as a whole.
   a masonry flow would, and that would break the "bounce and stream last"
   reading. A 4th settings card does NOT fill it (different flex row).
 
+## 2026-09-10 — BOUNCE / ICECAST / BROADCAST explainers move to a title hover
+
+The three help paragraphs at the bottom of the Remote tab are now the card
+titles' hover text (`.hlp` + `data-h`, dotted underline like the existing
+`.ren` idiom, CSS `:after` tooltip rather than a native `title` so it matches
+the dark panel and appears instantly). Cards shrank: BOUNCE 66 -> 37 px,
+PUSH -> ICECAST 131 -> 89, BROADCAST 204 -> 150. **.85 runs it.**
+
 ## 2026-09-10 — /screenshot READS THE PANEL (GRAM readback), shadow FB retired on bridged units
 
 `/screenshot` now reads the panel's own GRAM over MISO instead of the PSRAM

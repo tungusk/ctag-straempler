@@ -223,6 +223,11 @@ body.nosbar .sbar{display:none}
 .knob i{position:absolute;left:50%;top:50%;width:3px;height:28px;margin:-28px 0 0 -1.5px;transform-origin:50% 100%;background:linear-gradient(to bottom,#0af 50%,transparent 50%);border-radius:2px;pointer-events:none}
 .btn.cur{background:#0af;color:#000;border-color:#0af}
 .ren{cursor:pointer;border-bottom:1px dotted #555}
+/* card help: the explainer paragraph moves into a hover on the card title, dotted like .ren */
+.hlp{position:relative;border-bottom:1px dotted #2f5566;cursor:help}
+.hlp:hover:after{content:attr(data-h);position:absolute;left:0;top:20px;width:330px;max-width:min(70vw,330px);
+  background:#0b0b0b;border:1px solid #2f5566;border-radius:3px;padding:6px 8px;color:#9ab;font-size:11px;
+  font-weight:normal;line-height:1.45;letter-spacing:0;text-align:left;white-space:normal;z-index:30;box-shadow:0 4px 10px #000}
 .ren:hover{color:#0af;border-bottom-color:#0af}
 .bar{background:#181818;border:1px solid #333;height:14px;position:relative;margin:4px 0}
 .bar>i{display:block;height:100%;background:#0af}
@@ -429,15 +434,14 @@ body.nosbar .sbar{display:none}
   <div class="rcol">
   <div class="card pnl" id="bouncecard">
     <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">BOUNCE</b>
+      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span class="hlp" data-h="Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.">BOUNCE</span></b>
       <span id="bncstate" style="color:#888;margin-right:8px">idle</span>
       <button class="btn" id="bncbtn" style="flex:0 0 84px" onclick="bncToggle()">Record</button>
     </div>
-    <div class="msg" style="margin-top:4px">Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.</div>
   </div>
   <div class="card pnl" id="icecard">
     <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">PUSH &#8594; ICECAST</b>
+      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span class="hlp" data-h="Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.">PUSH &#8594; ICECAST</span></b>
       <span id="icestate" style="color:#888;margin-right:8px">off</span>
       <button class="btn" id="icebtn" style="flex:0 0 84px" onclick="iceToggle()">Start</button>
     </div>
@@ -450,13 +454,12 @@ body.nosbar .sbar{display:none}
       <input id="icepass" placeholder="source password" type="password" style="flex:1">
       <input id="icename" placeholder="stream name" style="flex:1">
     </div>
-    <div class="msg" style="margin-top:4px">Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.</div>
   </div>
   </div>
   <div class="rcol">
   <div class="card pnl" id="bcastcard">
     <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start">BROADCAST</b>
+      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span class="hlp" data-h="Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.">BROADCAST</span></b>
       <span id="bcstate" style="color:#888;margin-right:8px">off</span>
       <button class="btn" id="bcenbtn" style="flex:0 0 84px" onclick="bcastToggle()">Enable</button>
     </div>
@@ -471,7 +474,6 @@ body.nosbar .sbar{display:none}
       <a class="btn" id="bclinkin" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
     </div>
     <audio id="bcaudio" controls preload="none" style="width:100%;margin-top:6px;color-scheme:dark;opacity:.8;border-radius:3px"></audio>
-    <div class="msg" style="margin-top:4px">Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.</div>
   </div>
   </div>
   </div>
