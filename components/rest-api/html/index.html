@@ -154,8 +154,7 @@ body.nosbar .sbar{display:none}
 .mxcard .mtx{width:100%}
 .mxcard .mtx input[type=range]{width:96px}
 /* SETTINGS card: two TFT-style screens (machine Setup / global Settings) */
-.scrs{display:flex;flex-wrap:wrap;gap:12px;margin-top:4px;justify-content:center}
-.tftw{flex:0 0 502px;max-width:100%;min-width:0;display:flex}   /* fixed: one panel-column wide each, never scaled (Arlo) */
+.tftw{display:flex;margin-top:4px}   /* one screen per card; the card is the panel-column width */
 .tftw .tft{flex:1 1 auto}
 .tft{background:#000;border:1px solid #2c2c2c;border-radius:4px;padding:7px 9px 8px;font-family:"DejaVu Sans Mono",Menlo,monospace;color:#eee;font-size:13px;min-height:180px}
 .tft .tt{display:flex;justify-content:space-between;align-items:baseline;margin:0 4px 6px;color:#fff}
@@ -376,6 +375,7 @@ body.nosbar .sbar{display:none}
     </div>
     <div class="msg" style="margin-top:4px">Plays <b>Synth</b> / <b>Keys</b> (MIDI wins over CV while a note is held). Type on this page, click the keys, or pick a MIDI device (Chrome).</div>
   </div>
+  <div id="rsetup"></div>
   </div>
   <div class="rcol">
   <div id="rmatrix"></div>
@@ -397,6 +397,7 @@ body.nosbar .sbar{display:none}
   <div class="card pnl"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">MACHINE</b><span id="rmnote" style="color:#888;font-size:11px"></span></div>
     <div id="rmach"></div>
   </div>
+  <div id="rglob"></div>
   </div>
   </div>
   <div id="rparams"></div>
@@ -1427,17 +1428,18 @@ function rpStep(i,d){
 // System > Settings rows) — plus an "advanced" fold with the raw preset keys
 // in a table. Folded state remembered per browser; starts folded.
 var rpSetup=null,rpGlob=null;
-function rpSetOpen(){try{return localStorage.getItem('rpsetopen')==='1';}catch(e){return false;}}
-function rpSetToggle(){
-  var b=document.getElementById('rpsetbody'),h=document.getElementById('rpsethdr');
+// fold cards: heading toggles the body; per-card state in localStorage, folded by default
+function foldOpen(key){try{return localStorage.getItem('fold_'+key)==='1';}catch(e){return false;}}
+function foldToggle(key){
+  var b=document.getElementById(key+'_body'),h=document.getElementById(key+'_hdr');
   if(!b)return; var open=b.style.display==='none';
-  b.style.display=open?'':'none'; h.textContent=(open?'\u25BE ':'\u25B8 ')+'SETTINGS';
-  try{localStorage.setItem('rpsetopen',open?'1':'0');}catch(e){}
+  b.style.display=open?'':'none'; h.textContent=(open?'\u25BE ':'\u25B8 ')+h.getAttribute('data-t');
+  try{localStorage.setItem('fold_'+key,open?'1':'0');}catch(e){}
 }
-function advToggle(){
-  var b=document.getElementById('advbody'),a=document.getElementById('advarrow');
-  if(!b)return; var open=b.style.display==='none';
-  b.style.display=open?'':'none'; a.textContent=open?'\u25BE':'\u25B8';
+function foldCard(key,title,body,cls){
+  var open=foldOpen(key);
+  return '<div class="card '+(cls||'pnl')+'" id="'+key+'_card"><b class="ph" id="'+key+'_hdr" data-t="'+title+'" style="cursor:pointer;user-select:none;margin:0" onclick="foldToggle(\''+key+'\')">'
+        +(open?'\u25BE ':'\u25B8 ')+title+'</b><div id="'+key+'_body"'+(open?'':' style="display:none"')+'>'+body+'</div></div>';
 }
 function tftRow(cls,l,v,i,dir){   // dir: 0 = plain, 1 = toggle (click cycles), 2 = range (arrows), 3 = action, 4 = read-only
   var h='<div class="r '+cls+'"><span class="l">'+esc(l)+'</span><span class="vv">';
@@ -1519,17 +1521,18 @@ function rpTable(o,path){
   }
   return h;
 }
+// the three cards: MACHINE SETUP (left column, under the keyboard), SETTINGS
+// (right column, under the machine grid), ADVANCED (full width, raw keys)
+function setupCard(){return foldCard('setup','MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>');}
+function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>');}
+function advCard(inner,asTable){
+  var adv=asTable?'<table class="adv" style="margin-top:6px">'+inner+'</table>':inner;
+  return foldCard('adv','ADVANCED &#8212; raw preset keys',adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div>','');
+}
 function rpSetCard(inner,asTable){
-  var open=rpSetOpen();
-  var adv=asTable?'<table class="adv">'+inner+'</table>':inner;
-  return '<div class="card" id="setcard"><b class="ph" id="rpsethdr" style="cursor:pointer;user-select:none" onclick="rpSetToggle()">'
-        +(open?'\u25BE ':'\u25B8 ')+'SETTINGS</b><div id="rpsetbody"'+(open?'':' style="display:none"')+'>'
-        +'<div class="scrs"><div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>'
-        +'<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div></div>'
-        +'<div class="advh" onclick="advToggle()"><span id="advarrow">\u25B8</span> ADVANCED &#8212; raw preset keys</div>'
-        +'<div id="advbody" style="display:none">'+adv
-        +'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div></div>'
-        +'</div></div>';
+  document.getElementById('rsetup').innerHTML=setupCard();
+  document.getElementById('rglob').innerHTML=globCard();
+  return advCard(inner,asTable);
 }
 function rpLoad(retry){
   fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
