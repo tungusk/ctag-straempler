@@ -146,6 +146,15 @@ half mode, and **typing works whether or not a key is on screen**. .85 runs it.
   hard-coding a pad — so it stays aligned as cards fold. Measured 166/166 with
   everything open, 158/158 with BROADCAST collapsed.
 
+## 2026-09-10 — FX sliders take the CV matrix's grey
+
+`#rfx input[type=range]` now wears the matrix's grey track and thumb instead of
+the blue `accent-color`, but with a PLAIN track: the matrix's centre notch marks
+zero on a bipolar amount, and FX params are unipolar, so copying it would have
+implied a centre that is not there. Thumb rules are shared with `.mtx`, tracks
+are separate. Vendor pseudo-elements cannot be grouped in one rule — a single
+invalid selector drops the whole block — so `-webkit-` and `-moz-` stay apart.
+
 ## 2026-09-10 — BOUNCE / ICECAST / BROADCAST explainers move to a title hover
 
 The three help paragraphs at the bottom of the Remote tab are now the card
