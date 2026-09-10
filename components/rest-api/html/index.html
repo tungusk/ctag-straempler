@@ -1545,10 +1545,10 @@ function rpTable(o,path){
 }
 // SETTINGS card (folds as a whole, closed on first launch): the machine Setup
 // screen and the global Settings screen side by side, then the ADVANCED fold
-// MACHINE SETUP and GLOBAL are plain cards (always open); ADVANCED folds
+// all three fold (closed on first launch, remembered per browser)
 function plainCard(title,body){return '<div class="card pnl"><b class="ph" style="margin:0">'+title+'</b>'+body+'</div>';}
-function setupCard(){return plainCard('MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>');}
-function globCard(){return plainCard('GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>');}
+function setupCard(){return foldCard('setup','MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>');}
+function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>');}
 function advCard(inner,asTable){
   var adv=asTable?'<table class="adv">'+inner+'</table>':inner;
   return foldCard('adv','ADVANCED','<div class="tftw"><div class="tft adv">'+adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div></div></div>');
