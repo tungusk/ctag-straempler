@@ -42,6 +42,39 @@ balance the layout and wanted the page reviewed as a whole.
   a masonry flow would, and that would break the "bounce and stream last"
   reading. A 4th settings card does NOT fill it (different flex row).
 
+## 2026-09-10 — MIDI card: Impulse Tracker keyboard, half / full width
+
+Arlo's spec (he is used to Scream/Impulse Tracker): the tracker note layout,
+a card that switches between half and full width, `<` `>` to move the view in
+half mode, and **typing works whether or not a key is on screen**. .85 runs it.
+
+- **Layout is IT/ST3's two manuals an octave apart, all four rows.** Lower on
+  the Z row with the home row as its black keys (`Z S X D C V G B H N J M , L
+  . ; /` = 0..16), upper on the Q row with the number row as its black keys
+  (`Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P` = 12..28). They OVERLAP by a fourth —
+  the Z row's `, . /` are the Q row's `Q W E` — which is how IT works; the
+  merged `MT_KEYS` keeps the upper row's entry there. Span is 29 semitones.
+  Verified: z=0 s=1 x=2 m=11 ,=12 q=12 2=13 i=24 p=28.
+- **Z and X were the octave shift** and are notes now: octave moved to `-` /
+  `=` plus the `◂ C4 ▸` arrows in the header (it was dead text before —
+  there was no way to change octave with a mouse at all).
+- **Key width is CONSTANT** (`MIDI_KEYW` 42 px). How many keys are visible
+  follows from the card width — that is the whole point of the two sizes. Half
+  (502) draws 10 whites + the blacks that fully fit; full (1016) draws all 17
+  whites / 29 semitones and hides the nav buttons. The keys are centred because
+  a constant width cannot fill 1016.
+- **Full width moves the card in the DOM**: `#midihome` (left column) <->
+  `#midiband`, a full-width band under the top pair. Remembered per browser
+  (`web_midiw`). **Consequence, accepted by Arlo:** in full width the left
+  column loses its tallest card, so the ~150 px gap under the panel returns.
+- **Typing is independent of the view** — proved with the transport stubbed:
+  with the view at 60..77, pressing `P` still emitted note 88 (base+28).
+  `<` `>` shift by an octave (7 white keys) and clamp at both ends (view 0..7).
+- Labels: upper-manual key on top of each drawn key, lower-manual key beneath,
+  mirroring where the rows sit under your hands. Transport `ws`/`http` became a
+  coloured dot (`.mdot`) — note `.row.tight>*` sets padding on every child, so
+  it needs `.row.tight>.mdot{padding:0}` or it renders as a wide ellipse.
+
 ## 2026-09-10 — green accent; MIDI card renamed and its help hidden
 
 - **`--acc` / `--accl` on `:root`** drive the card titles (`.ph`, `.card h4`),
