@@ -64,9 +64,17 @@ half mode, and **typing works whether or not a key is on screen**. .85 runs it.
   whites / 29 semitones and hides the nav buttons. The keys are centred because
   a constant width cannot fill 1016.
 - **Full width moves the card in the DOM**: `#midihome` (left column) <->
-  `#midiband`, a full-width band under the top pair. Remembered per browser
-  (`web_midiw`). **Consequence, accepted by Arlo:** in full width the left
+  `#midiband`, a full-width band under the top pair. **The mode follows the
+  WINDOW** (`midiAuto()`, `innerWidth>=1040` — the same breakpoint the rest of
+  the tab uses for one column vs two), so the manual full/half button is gone.
+  Verified 1101 -> wide/midiband/29 keys, 900 -> half/midihome/17 keys/nav
+  shown, and back. **Consequence, accepted by Arlo:** in full width the left
   column loses its tallest card, so the ~150 px gap under the panel returns.
+- **`#midihome` MUST be `display:contents`.** Wrapping the card in it made the
+  wrapper the flex item, so the single-column media query's `#midicard{order:2}`
+  stopped applying and the card would have sorted (order 0) ABOVE the panel.
+  With display:contents the card is the flex item again; narrow order verified
+  panel -> MIDI -> matrix -> FX -> clock -> machine.
 - **Typing is independent of the view** — proved with the transport stubbed:
   with the view at 60..77, pressing `P` still emitted note 88 (base+28).
   `<` `>` shift by an octave (7 white keys) and clamp at both ends (view 0..7).

@@ -238,6 +238,7 @@ body.nosbar .sbar{display:none}
 .mdot.http{background:#fa0;box-shadow:0 0 5px #a70}
 .btn.kbnav{flex:0 0 16px;align-self:center;height:30px;padding:0;font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center}
 .card.pnl.wide{width:1016px}
+#midihome{display:contents}   /* a box here would take #midicard's place as the flex item */
 .mkey{border:1px solid #333;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;
   justify-content:space-between;padding:3px 0 4px;font-size:9px;cursor:pointer;user-select:none;-webkit-user-select:none;position:absolute;top:0}
 .mkey .u{color:#888}
@@ -420,8 +421,7 @@ body.nosbar .sbar{display:none}
       <button class="btn octb" onclick="midiOct(1)" title="octave up (=)">&#9656;</button>
       <span style="flex:1"></span>
       <span id="midist" class="mdot" title="transport"></span>
-      <button class="btn" id="midiwbtn" style="flex:0 0 52px;margin-left:8px" onclick="midiWide()">full</button>
-      <button class="btn" style="flex:0 0 52px;margin-left:6px" onclick="midiSend('x');midiHeldClear()">Panic</button>
+      <button class="btn" style="flex:0 0 52px;margin-left:8px" onclick="midiSend('x');midiHeldClear()">Panic</button>
     </div>
     <div class="row tight" id="midirow" style="gap:4px;align-items:stretch;margin-top:6px">
       <button class="btn kbnav" id="midiprev" onclick="midiShift(-1)">&#8249;</button>
@@ -2076,17 +2076,19 @@ function midiShift(d){
   midiView=Math.max(0,Math.min(m.n-vis,midiView+d*7));   // an octave per click
   midiDraw();
 }
-function midiWide(){
-  var card=document.getElementById('midicard'),wide=!card.classList.contains('wide');
-  card.classList.toggle('wide',wide);
-  (wide?document.getElementById('midiband'):document.getElementById('midihome')).appendChild(card);
-  document.getElementById('midiwbtn').textContent=wide?'half':'full';
-  try{localStorage.setItem('web_midiw',wide?'1':'0');}catch(e){}
-  midiView=0; midiDraw();
-}
-function midiWideInit(){
-  var on=false; try{on=localStorage.getItem('web_midiw')==='1';}catch(e){}
-  if(on)midiWide();
+// Full or half follows the WINDOW, at the same 1040 px breakpoint the rest of
+// the Remote tab uses: at or above it the page is two 502 px columns, so a
+// 1016 px band fits and the whole two-manual span is shown; below it the page
+// is single-column and the card sits in the flow at panel width.
+function midiAuto(){
+  var card=document.getElementById('midicard'); if(!card)return;
+  var wide=window.innerWidth>=1040;
+  if(card.classList.contains('wide')!==wide){
+    card.classList.toggle('wide',wide);
+    (wide?document.getElementById('midiband'):document.getElementById('midihome')).appendChild(card);
+    midiView=0;
+  }
+  midiDraw();
 }
 function midiDraw(){
   var el=document.getElementById('midikbd');if(!el)return;
@@ -2135,7 +2137,7 @@ function midiDraw(){
   });
 }
 var midiRsz=null;
-window.addEventListener('resize',function(){clearTimeout(midiRsz);midiRsz=setTimeout(midiDraw,120);});
+window.addEventListener('resize',function(){clearTimeout(midiRsz);midiRsz=setTimeout(midiAuto,120);});
 // WebMIDI (Chrome): forward a hardware keyboard
 function midiDevices(){
   if(!navigator.requestMIDIAccess)return;
@@ -2212,7 +2214,7 @@ function updateRemote(d){
     var want=(d.machine=='Synth'||d.machine=='Keys')?'':'none';
     if(mc.style.display!==want){
       mc.style.display=want;
-      if(want==='')midiDraw();   // it could not be measured while hidden — size it now it is real
+      if(want==='')midiAuto();   // it could not be measured while hidden — size it now it is real
     }
   }
   var cv=d.cv||[];
@@ -2398,7 +2400,7 @@ pollImport();
 // (perform faders are built into the input-meter columns by loadRemote)
 bcastInit();     // broadcast Listen link + player URL (:8000)
 webLoad();       // browser-side prefs before the first render
-midiWideInit();  // MIDI card width, remembered per browser
+midiAuto();      // MIDI card width follows the window
 tab(3);          // Remote is the default tab
 foldAll();       // MACHINE / PLAY-MIDI / CLOCK / BOUNCE / ICECAST / BROADCAST fold too
 pollStatus();
