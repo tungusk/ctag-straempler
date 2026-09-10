@@ -58,11 +58,11 @@ body.nosbar .sbar{display:none}
 .rcol{flex:0 1 502px;max-width:100%}
 #rmach{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:4px}
 #rmach .btn{padding:4px 2px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* top pair: both columns share one height — the panel frame fills its column,
-   the matrix + machine column keeps its frames on the shared baseline */
-.remtop{align-items:stretch}
-.remtop .rcol{display:flex;flex-direction:column;justify-content:flex-end}
-#panel{flex:1 0 auto;background:#050505;display:flex;flex-direction:column}
+/* top pair: two independent columns — the panel frame stays tight to the jack
+   field however tall the matrix / FX / clock column gets */
+.remtop{align-items:flex-start}                /* columns keep their own height: the panel hugs its elements (Arlo 2026-09-10) */
+.remtop .rcol{display:flex;flex-direction:column}
+#panel{flex:0 0 auto;background:#050505;display:flex;flex-direction:column}
 #panel .row .btn{background:#050505;border-color:#2a2a2a;color:#777}
 #scrbox .row>*{padding:3px 10px}
 #scrbox .row>:last-child{margin-right:0}
