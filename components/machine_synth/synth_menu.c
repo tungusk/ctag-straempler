@@ -30,7 +30,14 @@ static void note_name(float freq, char *buf, size_t n)
 
 static bool s_last_gate;
 static int  s_last_note = -9999;
-static unsigned s_sig_dials = 0, s_sig_adsr = 0, s_sig_osc = 0;
+static unsigned s_sig_dial[4], s_sig_adsr = 0, s_sig_osc = 0;
+// Redraw-speed discipline (2026-09-09): every element clears its own rect so
+// it can be redrawn alone; a FULL redraw already cleared the screen, so the
+// per-element clears are skipped then (they were ~56k px of overdraw on top
+// of the 77k px fillScreen). Ticks redraw only the element that changed:
+// one dial, the note field, one ADSR strip.
+static bool s_skip_clear = false;
+#define CLEAR_RECT(x, y, w, h) do { if (!s_skip_clear) TFT_fillRect((x), (y), (w), (h), TFT_BLACK); } while (0)
 
 // two-level encoder nav (mirrors Keys Live): browse elements, click in to edit,
 // long-press to escape. Elements: 0=Wave (header tag), 1..4 = dials
@@ -47,10 +54,26 @@ static int cur_midi(void)
 }
 
 // ---- compact header: title + engine tag + note name (colour = gate) --------
+// the note name lives in its own field at the right edge of the header so a
+// note change repaints ~2k px (was the whole 8k px header + three strings)
+#define NOTE_FIELD_W 78
+static void draw_note(void)
+{
+    int fh = TFT_getfontheight();
+    char nm[12]; note_name(sy.freq, nm, sizeof(nm));
+    _bg = TFT_BLACK;
+    CLEAR_RECT(_width - NOTE_FIELD_W, 0, NOTE_FIELD_W, fh + 12);
+    Font f = cfont; TFT_setFont(DEJAVU18_FONT, NULL);
+    _fg = GATE_ON; TFT_print(nm, _width - 10 - TFT_getStringWidth(nm), 2);
+    cfont = f;
+    s_last_gate = sy.gate;
+    s_last_note = cur_midi();
+}
+
 static void draw_header(void)
 {
     int fh = TFT_getfontheight();
-    _bg = TFT_BLACK; TFT_fillRect(0, 0, _width, fh + 12, _bg);
+    _bg = TFT_BLACK; CLEAR_RECT(0, 0, _width - NOTE_FIELD_W, fh + 12);
     _fg = TFT_WHITE; TFT_print("Synth", 6, 4);
     const char *eng = sy.engine == ENG_FM ? "FM" : sy.engine == ENG_WT ? "WT" : "VA";
     int hf = slive_focus(0);   // Wave element focus tints the header tag
@@ -64,11 +87,7 @@ static void draw_header(void)
     TFT_print(htag, 62, 6);
     TFT_setFont(DEFAULT_FONT, NULL);
     // note name stays green — the gate flips too fast to read as a colour change
-    char nm[12]; note_name(sy.freq, nm, sizeof(nm));
-    Font f = cfont; TFT_setFont(DEJAVU18_FONT, NULL);
-    _fg = GATE_ON; TFT_print(nm, _width - 10 - TFT_getStringWidth(nm), 2);
-    cfont = f;
-    s_last_gate = sy.gate;
+    draw_note();
 }
 
 // ---- oscillator preview: one+ cycle of the current voice shape --------------
@@ -78,7 +97,7 @@ static void draw_osc(void)
 {
     int fh = TFT_getfontheight();
     int x = 8, y0 = fh + 15, w = _width - 16, h = 26, cy = y0 + h / 2;
-    _bg = TFT_BLACK; TFT_fillRect(x - 1, y0 - 2, w + 2, h + 4, _bg);
+    _bg = TFT_BLACK; CLEAR_RECT(x - 1, y0 - 2, w + 2, h + 4);
     // encoder-nav focus = a BOLDER trace (2 px, brighter), not a box
     int foc = (s_live_sel == 0);
     color_t wc = foc ? (s_live_edit ? (color_t){130, 255, 150} : (color_t){180, 225, 255})
@@ -98,8 +117,11 @@ static void draw_osc(void)
         }
         int py = cy - (int)(yv * (float)amp);
         if (i > 0) {
-            TFT_drawLine(x + i - 1, prevy, x + i, py, wc);
-            if (foc) TFT_drawLine(x + i - 1, prevy + 1, x + i, py + 1, wc);   // thicken
+            // one vertical span per column joining the previous sample to this
+            // one: ONE SPI transaction per column instead of a per-pixel
+            // diagonal line (each pixel was its own address-window + write)
+            int a = prevy < py ? prevy : py, b = prevy < py ? py : prevy;
+            TFT_drawFastVLine(x + i, a, b - a + 1 + (foc ? 1 : 0), wc);   // foc: thicken by a pixel
         }
         prevy = py;
     }
@@ -115,7 +137,7 @@ static void dial(int cx, int cy, int r, float v01, const char *lab, const char *
     // clear generously: the pointer now ESCAPES past the ring (to r+7) and the
     // focus ring sits at r+4 — cover both + the label row so nothing is stranded
     int m = r + 8;
-    TFT_fillRect(cx - m, cy - m, m * 2, m + r + fh + 8, _bg);
+    CLEAR_RECT(cx - m, cy - m, m * 2, m + r + fh + 8);
     if (hi) {                                          // encoder-nav focus ring
         color_t hc = hi == 2 ? (color_t){130, 255, 150} : (color_t){150, 150, 170};
         TFT_drawCircle(cx, cy, r + 3, hc);
@@ -147,28 +169,56 @@ static void k5_desc(const char **lab, char *val, size_t vn, float *v01)
     else                          { *lab = "shape";  *v01 = sy.shape;           snprintf(val, vn, "%.0f%%", sy.shape * 100.0f); }
 }
 
-// four macro dials: K5 timbre / K6 cutoff / K7 resonance / K8 env>cut
-static void draw_dials(void)
+// four macro dials: K5 timbre / K6 cutoff / K7 resonance / K8 env>cut.
+// Each is drawn on its own so a knob move repaints ONE dial (~5k px), not four.
+static unsigned dial_sig(int i)
+{
+    switch (i) {
+        case 0: { float k5 = sy.engine == ENG_FM ? sy.fm_index : sy.engine == ENG_WT ? sy.fold : sy.shape;
+                  return (unsigned)(k5 * 1000.0f) * 17u + (unsigned)sy.engine * 7u + (sy.mtx.live[SYM_TIMBRE] ? 1u : 0u) + (unsigned)slive_focus(1) * 3u; }
+        case 1:   return (unsigned)(sy.cutoff_base) * 131u + (sy.mtx.live[SYM_CUTOFF] ? 2u : 0u) + (unsigned)slive_focus(2) * 3u;
+        case 2:   return (unsigned)(sy.res01 * 1000.0f) * 29u + (sy.mtx.live[SYM_RES] ? 4u : 0u) + (unsigned)slive_focus(3) * 3u;
+        default:  return (unsigned)(sy.env_to_cut * 1000.0f) * 41u + (sy.mtx.live[SYM_ENVCUT] ? 8u : 0u) + (unsigned)slive_focus(4) * 3u;
+    }
+}
+static void draw_dial(int i)
 {
     int fh = TFT_getfontheight();
     int cy = fh + 16 + 26 + 40, r = 24;   // +40 (was +32): extra room for the escaping needle below the osc strip
-    int cx[4] = { 40, 120, 200, 280 };    // recentred + slightly tighter for the escaping-needle dials
-    // K5 timbre (engine-aware)
-    const char *l0; char v0[16]; float n0;
-    k5_desc(&l0, v0, sizeof(v0), &n0);
-    dial(cx[0], cy, r, n0, l0, v0, sy.mtx.live[SYM_TIMBRE], slive_focus(1));
-    // K6 cutoff (invert the log map -> 0..1)
-    float cv = logf(sy.cutoff_base / 10.0f) / logf(600.0f);
-    char cval[16];
-    if (sy.cutoff_base >= 1000.0f) snprintf(cval, sizeof(cval), "%.1fk", sy.cutoff_base / 1000.0f);
-    else                           snprintf(cval, sizeof(cval), "%.0f", sy.cutoff_base);
-    dial(cx[1], cy, r, cv, "cut", cval, sy.mtx.live[SYM_CUTOFF], slive_focus(2));
-    // K7 resonance
-    char rval[16]; snprintf(rval, sizeof(rval), "%.0f%%", sy.res01 * 100.0f);
-    dial(cx[2], cy, r, sy.res01, "res", rval, sy.mtx.live[SYM_RES], slive_focus(3));
-    // K8 env>cut
-    char eval[16]; snprintf(eval, sizeof(eval), "%.0f%%", sy.env_to_cut * 100.0f);
-    dial(cx[3], cy, r, sy.env_to_cut, "env>f", eval, sy.mtx.live[SYM_ENVCUT], slive_focus(4));
+    static const int cx[4] = { 40, 120, 200, 280 };    // recentred + slightly tighter for the escaping-needle dials
+    char val[16];
+    switch (i) {
+        case 0: {                                          // K5 timbre (engine-aware)
+            const char *l0; float n0;
+            k5_desc(&l0, val, sizeof(val), &n0);
+            dial(cx[0], cy, r, n0, l0, val, sy.mtx.live[SYM_TIMBRE], slive_focus(1));
+            break;
+        }
+        case 1: {                                          // K6 cutoff (invert the log map -> 0..1)
+            float cv = logf(sy.cutoff_base / 10.0f) / logf(600.0f);
+            if (sy.cutoff_base >= 1000.0f) snprintf(val, sizeof(val), "%.1fk", sy.cutoff_base / 1000.0f);
+            else                           snprintf(val, sizeof(val), "%.0f", sy.cutoff_base);
+            dial(cx[1], cy, r, cv, "cut", val, sy.mtx.live[SYM_CUTOFF], slive_focus(2));
+            break;
+        }
+        case 2:                                            // K7 resonance
+            snprintf(val, sizeof(val), "%.0f%%", sy.res01 * 100.0f);
+            dial(cx[2], cy, r, sy.res01, "res", val, sy.mtx.live[SYM_RES], slive_focus(3));
+            break;
+        default:                                           // K8 env>cut
+            snprintf(val, sizeof(val), "%.0f%%", sy.env_to_cut * 100.0f);
+            dial(cx[3], cy, r, sy.env_to_cut, "env>f", val, sy.mtx.live[SYM_ENVCUT], slive_focus(4));
+            break;
+    }
+    s_sig_dial[i] = dial_sig(i);
+}
+static void draw_dials(void) { for (int i = 0; i < 4; i++) draw_dial(i); }
+// redraw only the dials whose value/focus changed; returns how many
+static int draw_dials_changed(void)
+{
+    int n = 0;
+    for (int i = 0; i < 4; i++) if (dial_sig(i) != s_sig_dial[i]) { draw_dial(i); n++; }
+    return n;
 }
 
 // ---- ADSR envelope shape (a polyline you can read at a glance) --------------
@@ -176,7 +226,7 @@ static void draw_adsr(void)
 {
     int fh = TFT_getfontheight();
     int x = 8, y = fh + 16 + 104 + 32, w = _width - 16, h = 40;   // +32 for the osc strip
-    _bg = TFT_BLACK; TFT_fillRect(x, y - fh - 2, w, h + fh + 4, _bg);
+    _bg = TFT_BLACK; CLEAR_RECT(x, y - fh - 2, w, h + fh + 4);
     _fg = (color_t){110,110,120}; TFT_print("ENV", x, y - fh - 2);
     float ta = sy.atk, td = sy.dec, tr = sy.rel, tsum = ta + td + tr;
     if (tsum < 1e-4f) tsum = 1e-4f;
@@ -209,17 +259,6 @@ static void draw_adsr(void)
     }
 }
 
-static unsigned dials_sig(void)
-{
-    float k5 = sy.engine == ENG_FM ? sy.fm_index : sy.engine == ENG_WT ? sy.fold : sy.shape;
-    return (unsigned)(sy.cutoff_base) * 131u
-         + (unsigned)(k5 * 1000.0f) * 17u
-         + (unsigned)(sy.res01 * 1000.0f) * 29u
-         + (unsigned)(sy.env_to_cut * 1000.0f) * 41u
-         + (unsigned)sy.engine * 7u
-         + (sy.mtx.live[SYM_TIMBRE]?1u:0u) + (sy.mtx.live[SYM_CUTOFF]?2u:0u)
-         + (sy.mtx.live[SYM_RES]?4u:0u) + (sy.mtx.live[SYM_ENVCUT]?8u:0u);
-}
 static unsigned adsr_sig(void)
 {
     return (unsigned)(sy.atk*1000)*7u + (unsigned)(sy.dec*1000)*13u
@@ -241,10 +280,12 @@ static void live_full_redraw(void)
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK; _fg = TFT_WHITE;
-    draw_header();      s_last_note = cur_midi();
+    s_skip_clear = true;                 // the screen is already black
+    draw_header();
     draw_osc();         s_sig_osc   = osc_sig();
-    draw_dials();       s_sig_dials = dials_sig();
+    draw_dials();
     draw_adsr();        s_sig_adsr  = adsr_sig();
+    s_skip_clear = false;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     TFT_print("turn:pick  press:edit  hold:back    CV1:pitch TR1:gate", 6, _height - TFT_getfontheight() - 1);
@@ -278,12 +319,23 @@ static void slive_edit(int dir)
     if (s_live_sel >= 1 && s_live_sel <= 4) cvmtx_rearm(&sy.mtx);   // re-arm takeover
 }
 
-static void slive_repaint(void)
+// repaint the element that lost focus and the one that gained it (or just
+// the focused one on an edit). Elements: 0 = header tag + osc trace,
+// 1..4 = dials, 5..8 = ADSR points (one strip).
+static void slive_repaint_el(int e)
 {
-    draw_header();
-    draw_osc();   s_sig_osc   = osc_sig();
-    draw_dials(); s_sig_dials = dials_sig();
-    draw_adsr();  s_sig_adsr  = adsr_sig();
+    if (e == 0)       { draw_header(); draw_osc(); s_sig_osc = osc_sig(); }
+    else if (e <= 4)  { draw_dial(e - 1); }
+    else              { draw_adsr(); s_sig_adsr = adsr_sig(); }
+}
+static void slive_repaint(int prev_sel)
+{
+    slive_repaint_el(prev_sel);
+    if (s_live_sel != prev_sel) slive_repaint_el(s_live_sel);
+    // an edit can move values other elements show (engine change -> dials)
+    draw_dials_changed();
+    unsigned os = osc_sig();  if (os != s_sig_osc)  { draw_osc();  s_sig_osc  = os; }
+    unsigned as = adsr_sig(); if (as != s_sig_adsr) { draw_adsr(); s_sig_adsr = as; }
 }
 
 static int synth_live_handler(int it_id, int event, void *ev_data)
@@ -296,38 +348,39 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
             // adsr) are gated to the SLOW tick below — knob/CV ADC jitter was
             // redrawing them every 300ms, and those TFT + PSRAM shadow-framebuffer
             // writes contend with the PSRAM audio path (noise / audio loss).
-            int midi = cur_midi();
-            if (midi != s_last_note) { draw_header(); s_last_note = midi; }
+            if (cur_midi() != s_last_note) draw_note();   // the note field only
             break;
         }
         case EV_TIMER_REPEATING_SLOW: {
             // each block redraws only when its own values change (no free-running meter)
-            int midi = cur_midi();
-            if (midi != s_last_note) { draw_header(); s_last_note = midi; }   // gate no longer recolors
+            if (cur_midi() != s_last_note) draw_note();   // gate no longer recolors
             unsigned os = osc_sig();
             if (os != s_sig_osc) { draw_osc(); s_sig_osc = os; }
-            unsigned ds = dials_sig();
-            if (ds != s_sig_dials) { draw_dials(); s_sig_dials = ds; }
+            draw_dials_changed();                          // one dial per knob move, not four
             unsigned as = adsr_sig();
             if (as != s_sig_adsr) { draw_adsr(); s_sig_adsr = as; }
             break;
         }
-        case EV_FWD:
+        case EV_FWD: {
+            int prev = s_live_sel;
             if (s_live_edit) slive_edit(+1);
             else s_live_sel = (s_live_sel + 1) % SLIVE_N;
-            slive_repaint();
+            slive_repaint(prev);
             break;
-        case EV_BWD:
+        }
+        case EV_BWD: {
+            int prev = s_live_sel;
             if (s_live_edit) slive_edit(-1);
             else s_live_sel = (s_live_sel + SLIVE_N - 1) % SLIVE_N;
-            slive_repaint();
+            slive_repaint(prev);
             break;
+        }
         case EV_SHORT_PRESS:
             s_live_edit = !s_live_edit;   // click in/out (element 0 edits engine type)
-            slive_repaint();
+            slive_repaint(s_live_sel);
             break;
         case EV_LONG_PRESS:
-            if (s_live_edit) { s_live_edit = false; slive_repaint(); }   // escape edit
+            if (s_live_edit) { s_live_edit = false; slive_repaint(s_live_sel); }   // escape edit
             else return M_SYNTH_SETUP;                                   // leave Live
             break;
         default: break;
