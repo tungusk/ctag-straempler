@@ -12,6 +12,7 @@
 #include "sample_ram.h"
 #include "preset_store.h"
 #include "fxchain.h"
+#include "clock.h"        // core clock: LFO tempo sync
 #include "synth_priv.h"
 
 sy_state_t sy;
@@ -65,6 +66,9 @@ static esp_err_t synth_start(void)
     sy.lfo_rate = 5.0f;
     sy.lfo_depth = 0.0f;
     sy.lfo_dest = LFO_OFF;
+    sy.lfo_sync = false;
+    sy.lfo_div = 4;              // one beat per cycle
+    sy.lfo_shape = LFO_SINE;
     sy.level = 0.8f;
     sy.cutoff_base = 1200.0f;
     sy.res01 = 0.2f;
@@ -98,6 +102,32 @@ const char *const synth_mtx_labels[SYM_N] = {
 // K8 env>cut (CV5..8 = 4..7). Built units have all four; this dev unit's K5/K8
 // are weak, which is what the takeover (default holds until moved) is for.
 const int8_t synth_mtx_defaults[SYM_N] = { 5, 6, 4, 7, -1, -1, -1, -1 };
+
+// LFO clock divisions in beats per cycle, and their labels
+const float sy_lfo_beats[SY_LFO_DIV_N] = { 16.0f, 8.0f, 4.0f, 2.0f, 1.0f, 0.5f, 0.25f };
+const char *sy_lfo_div_name(int d)
+{
+    static const char *n[SY_LFO_DIV_N] = { "4 bar", "2 bar", "1 bar", "1/2", "1/4", "1/8", "1/16" };
+    return n[d < 0 ? 0 : d >= SY_LFO_DIV_N ? SY_LFO_DIV_N - 1 : d];
+}
+// one LFO sample from a shape + phase. RND is sample-and-hold: it takes a new
+// value when the phase wraps, so its step rate follows the rate/division too.
+static float sy_lfo_val(int shape, float ph, bool wrapped, float *rnd)
+{
+    switch (shape) {
+        case LFO_TRI: return 1.0f - 4.0f * fabsf(ph - 0.5f);
+        case LFO_SAW: return 2.0f * ph - 1.0f;
+        case LFO_SQR: return ph < 0.5f ? 1.0f : -1.0f;
+        case LFO_RND: {
+            // local LCG rather than esp_random(): no header dependency (IDF 4.3
+            // has none) and no syscall in the audio block
+            static uint32_t lcg = 0x2545F491u;
+            if (wrapped) { lcg = lcg * 1664525u + 1013904223u; *rnd = (float)(lcg >> 8) / 8388608.0f - 1.0f; }
+            return *rnd;
+        }
+        default:      return sinf(6.2831853f * ph);
+    }
+}
 
 static void synth_process(int32_t out[MACHINE_BLOCK],
                           const int32_t in[MACHINE_BLOCK],
@@ -194,9 +224,29 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
     }
     // LFO (per block — sub-audio, so block granularity is smooth) -> pitch or cutoff
     float blockdur2 = (float)(MACHINE_BLOCK / 2) / (float)SY_RATE;
-    sy.lfo_phase += lfr_eff * blockdur2;
+    // SYNC: the rate comes from the core clock's beat tempo, so the cycle is a
+    // musical division rather than a free Hz. The phase is also re-zeroed at
+    // each cycle boundary (counted in accepted pulses) — the rate is already
+    // correct, so that correction is tiny and it keeps the LFO on the beat
+    // instead of drifting to an arbitrary offset. No clock, no sync: it falls
+    // back to lfo_rate rather than freezing.
+    float lfr_use = lfr_eff;
+    float cbpm = clock_core_beat_bpm();
+    bool  synced = sy.lfo_sync && cbpm > 0.0f;
+    if (synced) {
+        int   di = sy.lfo_div < 0 ? 0 : (sy.lfo_div >= SY_LFO_DIV_N ? SY_LFO_DIV_N - 1 : sy.lfo_div);
+        float beats = sy_lfo_beats[di];
+        lfr_use = cbpm / 60.0f / beats;
+        float ppb = clock_core_ppb(); if (ppb < 1.0f) ppb = 1.0f;
+        uint32_t per = (uint32_t)(beats * ppb + 0.5f); if (!per) per = 1;
+        uint32_t cyc = clock_core_pulses() / per;
+        if (cyc != sy.lfo_cyc) { sy.lfo_cyc = cyc; sy.lfo_phase = 0.0f; }
+    }
+    float ph_prev = sy.lfo_phase;
+    sy.lfo_phase += lfr_use * blockdur2;
+    bool lfo_wrapped = (sy.lfo_phase >= 1.0f) || (sy.lfo_phase < ph_prev);
     sy.lfo_phase -= (float)(int)sy.lfo_phase;
-    float lfo = sinf(6.2831853f * sy.lfo_phase);
+    float lfo = sy_lfo_val(sy.lfo_shape, sy.lfo_phase, lfo_wrapped, &sy.lfo_rnd);
     float lfo_cut = (sy.lfo_dest == LFO_CUT)   ? (1.0f + lfo * lfd_eff * 0.8f) : 1.0f;
     float lfo_pit = (sy.lfo_dest == LFO_PITCH) ? exp2f(lfo * lfd_eff * 2.0f / 12.0f) : 1.0f;
 
@@ -298,6 +348,9 @@ static cJSON *synth_preset_save(void)
     cJSON_AddNumberToObject(o, "lfr", sy.lfo_rate);
     cJSON_AddNumberToObject(o, "lfd", sy.lfo_depth);
     cJSON_AddNumberToObject(o, "lfx", sy.lfo_dest);
+    cJSON_AddNumberToObject(o, "lfs", sy.lfo_sync ? 1 : 0);
+    cJSON_AddNumberToObject(o, "lfv", sy.lfo_div);
+    cJSON_AddNumberToObject(o, "lfw", sy.lfo_shape);
     cJSON_AddNumberToObject(o, "lvl", sy.level);
     // K6/K7/WT-fold state was knob-only (never persisted) until the autosave
     // sweep made knob edits savable — save what the save now fires for
@@ -331,6 +384,10 @@ static void synth_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfr"))   && cJSON_IsNumber(j)) sy.lfo_rate = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfd"))   && cJSON_IsNumber(j)) sy.lfo_depth = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfx"))   && cJSON_IsNumber(j)) sy.lfo_dest = j->valueint;
+    // absent in pre-LFO-sync presets: the init defaults stand (free-running sine)
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfs"))   && cJSON_IsNumber(j)) sy.lfo_sync = j->valueint != 0;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfv"))   && cJSON_IsNumber(j)) sy.lfo_div = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfw"))   && cJSON_IsNumber(j)) sy.lfo_shape = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) sy.level = (float)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cut")) && cJSON_IsNumber(j)) {
         float c = (float)j->valuedouble;

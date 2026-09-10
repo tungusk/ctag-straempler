@@ -12,6 +12,7 @@
 #include "tftspi.h"
 #include "machine.h"
 #include "sample_browser.h"
+#include "clock.h"        // LFO sync readout
 #include "synth_priv.h"
 
 static const color_t GATE_ON  = {40, 200, 90};   // note stays this green (gate flips too fast to read)
@@ -42,7 +43,16 @@ static bool s_skip_clear = false;
 // two-level encoder nav (mirrors Keys Live): browse elements, click in to edit,
 // long-press to escape. Elements: 0=Wave (header tag), 1..4 = dials
 // (timbre/cut/res/env>f), 5..8 = ADSR points (A/D/S/R).
-#define SLIVE_N 9
+// The bottom panel is TWO views sharing one strip: the ADSR graph and an LFO
+// section. Its title ("ENV" / "LFO") is the last nav element — press it to
+// switch. Element count therefore depends on the view: 0 = tag/osc, 1..4 =
+// dials, then the view's own params, then the title.
+#define SLIVE_BASE   5                    // tag + four dials
+#define SLIVE_ENV_N  4                    // A D S R
+#define SLIVE_LFO_N  5                    // sync, div/rate, shape, amount, dest
+static int s_env_view = 0;                // 0 = ADSR, 1 = LFO
+static int slive_n(void)     { return SLIVE_BASE + (s_env_view ? SLIVE_LFO_N : SLIVE_ENV_N) + 1; }
+static int slive_title_el(void) { return slive_n() - 1; }
 static int  s_live_sel  = 1;      // start on the first dial
 static bool s_live_edit = false;
 static int slive_focus(int e) { return s_live_sel != e ? 0 : (s_live_edit ? 2 : 1); }
@@ -231,7 +241,9 @@ static void draw_adsr(void)
     int fh = TFT_getfontheight();
     int x = 8, y = fh + 16 + 104 + 32, w = _width - 16, h = 40;   // +32 for the osc strip
     _bg = TFT_BLACK; CLEAR_RECT(x, y - fh - 2, w, h + fh + 4);
-    _fg = (color_t){110,110,120}; TFT_print("ENV", x, y - fh - 2);
+    int tf = (s_live_sel == slive_title_el());
+    _fg = tf ? (s_live_edit ? (color_t){130,255,150} : (color_t){160,240,255}) : (color_t){110,110,120};
+    TFT_print("ENV", x, y - fh - 2);
     float ta = sy.atk, td = sy.dec, tr = sy.rel, tsum = ta + td + tr;
     if (tsum < 1e-4f) tsum = 1e-4f;
     float body = (float)(w - 4) * 0.72f;                  // A+D+R share 72%, sustain plateau the rest
@@ -264,16 +276,82 @@ static void draw_adsr(void)
         // y+h+1) so the R point at the bottom-right corner leaves no artifact
         if (mx + r > x + w - 1) mx = x + w - 1 - r;
         if (my + r > y + h + 1) my = y + h + 1 - r;
+        // ...and the LEFT/TOP as well: a short attack puts the A point at
+        // xb = x+2, so a radius-5 dot straddled x=8 and left crumbs OUTSIDE
+        // the cleared rect — invisible until something stopped repainting over
+        // them (the LFO view switch is what exposed it)
+        if (mx - r < x) mx = x + r;
+        if (my - r < y - fh - 2) my = y - fh - 2 + r;
         color_t hc = s_live_edit ? (color_t){130, 255, 150} : (color_t){70, 255, 130};
         TFT_fillCircle(mx, my, r, hc);
     }
 }
 
+// ---- LFO section: the other view of the bottom strip ------------------------
+// Same rect as the ADSR graph. Five cells, label over value, the focused one
+// picked out. "div" is a clock division when sync is on and a free rate in Hz
+// when it is off — the cell relabels itself rather than showing a dead control.
+static void draw_lfo(void)
+{
+    int fh = TFT_getfontheight();
+    int x = 8, y = fh + 16 + 104 + 32, w = _width - 16, h = 40;
+    _bg = TFT_BLACK; CLEAR_RECT(x, y - fh - 2, w, h + fh + 4);
+
+    int tf = (s_live_sel == slive_title_el());
+    _fg = tf ? (s_live_edit ? (color_t){130,255,150} : (color_t){160,240,255}) : (color_t){110,110,120};
+    TFT_print("LFO", x, y - fh - 2);
+    // the live tempo sits next to the title so sync is legible at a glance
+    float bpm = clock_core_beat_bpm();
+    _fg = (color_t){70,70,80};
+    TFT_setFont(DEF_SMALL_FONT, NULL);
+    char t[28];
+    if (sy.lfo_sync) snprintf(t, sizeof(t), bpm > 0 ? "clk %.1f" : "no clock", bpm);
+    else             snprintf(t, sizeof(t), "free");
+    TFT_print(t, x + 34, y - fh);
+    TFT_setFont(DEFAULT_FONT, NULL);
+
+    static const char *lab[SLIVE_LFO_N] = { "sync", "div", "shape", "amt", "dest" };
+    char val[SLIVE_LFO_N][12];
+    snprintf(val[0], 12, "%s", sy.lfo_sync ? "on" : "off");
+    if (sy.lfo_sync) snprintf(val[1], 12, "%s", sy_lfo_div_name(sy.lfo_div));
+    else             snprintf(val[1], 12, "%.1fHz", sy.lfo_rate);
+    static const char *shn[LFO_SHAPE_N] = { "sine", "tri", "saw", "sqr", "rnd" };
+    int sh = sy.lfo_shape < 0 ? 0 : (sy.lfo_shape >= LFO_SHAPE_N ? 0 : sy.lfo_shape);
+    snprintf(val[2], 12, "%s", shn[sh]);
+    snprintf(val[3], 12, "%.0f%%", sy.lfo_depth * 100.0f);
+    snprintf(val[4], 12, "%s", sy.lfo_dest == LFO_CUT ? "cutoff" : sy.lfo_dest == LFO_PITCH ? "pitch" : "off");
+
+    int cw = w / SLIVE_LFO_N;
+    for (int i = 0; i < SLIVE_LFO_N; i++) {
+        int cx = x + i * cw + cw / 2, f = (s_live_sel == SLIVE_BASE + i);
+        _fg = f ? (color_t){130,130,140} : (color_t){80,80,90};
+        TFT_setFont(DEF_SMALL_FONT, NULL);
+        int lw = TFT_getStringWidth((char*)lab[i]);
+        TFT_print((char*)lab[i], cx - lw / 2, y + 2);
+        TFT_setFont(DEFAULT_FONT, NULL);
+        // a dest of "off" means the LFO is audible nowhere — say so by dimming
+        bool dim = (sy.lfo_dest == LFO_OFF) && i != 4;
+        _fg = f ? (s_live_edit ? (color_t){130,255,150} : (color_t){160,240,255})
+                : dim ? (color_t){70,70,80} : (color_t){190,190,200};
+        int vw = TFT_getStringWidth(val[i]);
+        TFT_print(val[i], cx - vw / 2, y + 16);
+    }
+}
+static unsigned lfo_sig(void)
+{
+    return (unsigned)sy.lfo_sync * 3u + (unsigned)sy.lfo_div * 7u + (unsigned)sy.lfo_shape * 13u
+         + (unsigned)(sy.lfo_depth * 1000.0f) * 17u + (unsigned)sy.lfo_dest * 19u
+         + (unsigned)(sy.lfo_rate * 100.0f) * 23u;
+}
 static unsigned adsr_sig(void)
 {
     return (unsigned)(sy.atk*1000)*7u + (unsigned)(sy.dec*1000)*13u
          + (unsigned)(sy.sus*1000)*17u + (unsigned)(sy.rel*1000)*19u;
 }
+// one entry point for the bottom strip, whichever view it is showing
+static void draw_bottom(void) { if (s_env_view) draw_lfo(); else draw_adsr(); }
+static unsigned bottom_sig(void) { return s_env_view ? lfo_sig() : adsr_sig(); }
+
 // the osc preview only depends on engine + timbre (+ FM ratio) — NOT on the
 // cut/res/env dials, so it doesn't repaint on their knob/CV jitter.
 static unsigned osc_sig(void)
@@ -294,7 +372,7 @@ static void live_full_redraw(void)
     draw_header();
     draw_osc();         s_sig_osc   = osc_sig();
     draw_dials();
-    draw_adsr();        s_sig_adsr  = adsr_sig();
+    draw_bottom();      s_sig_adsr  = bottom_sig();
     s_skip_clear = false;
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
@@ -321,10 +399,37 @@ static void slive_edit(int dir)
         case 2: sy.cutoff_base = sclampf(sy.cutoff_base * (dir > 0 ? 1.06f : 0.94f), 30.0f, 12000.0f); break;
         case 3: sy.res01       = sclampf(sy.res01 + d * 0.05f, 0.0f, 1.0f); break;
         case 4: sy.env_to_cut  = sclampf(sy.env_to_cut + d * 0.05f, 0.0f, 1.0f); break;
-        case 5: sy.atk = sclampf(sy.atk + d * 0.005f, 0.0005f, 2.0f); break;
-        case 6: sy.dec = sclampf(sy.dec + d * 0.01f, 0.001f, 2.0f); break;
-        case 7: sy.sus = sclampf(sy.sus + d * 0.05f, 0.0f, 1.0f); break;
-        case 8: sy.rel = sclampf(sy.rel + d * 0.02f, 0.001f, 3.0f); break;
+        default: break;
+    }
+    if (s_live_sel >= SLIVE_BASE && s_live_sel < slive_title_el()) {
+        int k = s_live_sel - SLIVE_BASE;
+        if (!s_env_view) {                       // ENV view: A D S R
+            switch (k) {
+                case 0: sy.atk = sclampf(sy.atk + d * 0.005f, 0.0005f, 2.0f); break;
+                case 1: sy.dec = sclampf(sy.dec + d * 0.01f, 0.001f, 2.0f); break;
+                case 2: sy.sus = sclampf(sy.sus + d * 0.05f, 0.0f, 1.0f); break;
+                case 3: sy.rel = sclampf(sy.rel + d * 0.02f, 0.001f, 3.0f); break;
+            }
+        } else {                                 // LFO view
+            switch (k) {
+                case 0: sy.lfo_sync = !sy.lfo_sync; break;
+                case 1:
+                    if (sy.lfo_sync) { sy.lfo_div += dir;
+                                       if (sy.lfo_div < 0) sy.lfo_div = SY_LFO_DIV_N - 1;
+                                       if (sy.lfo_div >= SY_LFO_DIV_N) sy.lfo_div = 0; }
+                    else             sy.lfo_rate = sclampf(sy.lfo_rate + d * 0.25f, 0.05f, 20.0f);
+                    break;
+                case 2: sy.lfo_shape += dir;
+                        if (sy.lfo_shape < 0) sy.lfo_shape = LFO_SHAPE_N - 1;
+                        if (sy.lfo_shape >= LFO_SHAPE_N) sy.lfo_shape = 0;
+                        break;
+                case 3: sy.lfo_depth = sclampf(sy.lfo_depth + d * 0.05f, 0.0f, 1.0f); break;
+                case 4: sy.lfo_dest += dir;
+                        if (sy.lfo_dest < 0) sy.lfo_dest = LFO_PITCH;
+                        if (sy.lfo_dest > LFO_PITCH) sy.lfo_dest = LFO_OFF;
+                        break;
+            }
+        }
     }
     if (s_live_sel >= 1 && s_live_sel <= 4) cvmtx_rearm(&sy.mtx);   // re-arm takeover
 }
@@ -335,8 +440,8 @@ static void slive_edit(int dir)
 static void slive_repaint_el(int e)
 {
     if (e == 0)       { draw_header(); draw_osc(); s_sig_osc = osc_sig(); }
-    else if (e <= 4)  { draw_dial(e - 1); }
-    else              { draw_adsr(); s_sig_adsr = adsr_sig(); }
+    else if (e < SLIVE_BASE) { draw_dial(e - 1); }
+    else              { draw_bottom(); s_sig_adsr = bottom_sig(); }
 }
 static void slive_repaint(int prev_sel)
 {
@@ -345,7 +450,7 @@ static void slive_repaint(int prev_sel)
     // an edit can move values other elements show (engine change -> dials)
     draw_dials_changed();
     unsigned os = osc_sig();  if (os != s_sig_osc)  { draw_osc();  s_sig_osc  = os; }
-    unsigned as = adsr_sig(); if (as != s_sig_adsr) { draw_adsr(); s_sig_adsr = as; }
+    unsigned as = bottom_sig(); if (as != s_sig_adsr) { draw_bottom(); s_sig_adsr = as; }
 }
 
 static int synth_live_handler(int it_id, int event, void *ev_data)
@@ -367,27 +472,37 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
             unsigned os = osc_sig();
             if (os != s_sig_osc) { draw_osc(); s_sig_osc = os; }
             draw_dials_changed();                          // one dial per knob move, not four
-            unsigned as = adsr_sig();
-            if (as != s_sig_adsr) { draw_adsr(); s_sig_adsr = as; }
+            unsigned as = bottom_sig();
+            if (as != s_sig_adsr) { draw_bottom(); s_sig_adsr = as; }
             break;
         }
         case EV_FWD: {
             int prev = s_live_sel;
             if (s_live_edit) slive_edit(+1);
-            else s_live_sel = (s_live_sel + 1) % SLIVE_N;
+            else s_live_sel = (s_live_sel + 1) % slive_n();
             slive_repaint(prev);
             break;
         }
         case EV_BWD: {
             int prev = s_live_sel;
             if (s_live_edit) slive_edit(-1);
-            else s_live_sel = (s_live_sel + SLIVE_N - 1) % SLIVE_N;
+            else s_live_sel = (s_live_sel + slive_n() - 1) % slive_n();
             slive_repaint(prev);
             break;
         }
         case EV_SHORT_PRESS:
-            s_live_edit = !s_live_edit;   // click in/out (element 0 edits engine type)
-            slive_repaint(s_live_sel);
+            if (s_live_sel == slive_title_el()) {
+                // the title is a SWITCH, not a value: flip ENV <-> LFO and keep
+                // the focus on it (the two views have different element counts,
+                // so landing anywhere else would need clamping anyway)
+                s_env_view = !s_env_view;
+                s_live_edit = false;
+                s_live_sel = slive_title_el();
+                draw_bottom(); s_sig_adsr = bottom_sig();
+            } else {
+                s_live_edit = !s_live_edit;   // click in/out (element 0 edits engine type)
+                slive_repaint(s_live_sel);
+            }
             break;
         case EV_LONG_PRESS:
             if (s_live_edit) { s_live_edit = false; slive_repaint(s_live_sel); }   // escape edit

@@ -484,6 +484,12 @@ static void draw_adsr(void)
         // y+h+1) so the R point at the bottom-right corner leaves no artifact
         if (mx + r > x + w - 1) mx = x + w - 1 - r;
         if (my + r > y + h + 1) my = y + h + 1 - r;
+        // ...and the LEFT/TOP as well: a short attack puts the A point at
+        // xb = x+2, so a radius-5 dot straddled x=8 and left crumbs OUTSIDE
+        // the cleared rect — invisible until something stopped repainting over
+        // them (the LFO view switch is what exposed it)
+        if (mx - r < x) mx = x + r;
+        if (my - r < y - fh - 2) my = y - fh - 2 + r;
         color_t hc = s_live_edit ? (color_t){130, 255, 150} : (color_t){70, 255, 130};
         TFT_fillCircle(mx, my, r, hc);
     }

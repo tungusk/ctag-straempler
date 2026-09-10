@@ -146,6 +146,45 @@ half mode, and **typing works whether or not a key is on screen**. .85 runs it.
   hard-coding a pad — so it stays aligned as cards fold. Measured 166/166 with
   everything open, 158/158 with BROADCAST collapsed.
 
+## 2026-09-10 — SYNTH: LFO section on the Live page (tempo sync, division, shape)
+
+Arlo asked for the ENV title to be selectable and switch the strip to an LFO
+section. **Finding first: the Synth ALREADY had an LFO** — `lfo_rate/depth/dest`
+(off/cutoff/pitch), free-running sine, persisted as `lfr`/`lfd`/`lfx`, on the
+Setup page, and matrix-modulatable via `SYM_LFORATE`/`SYM_LFODEPTH`. What was
+missing was sync, division, shape and a Live-page section. Check before
+scoping an "add an LFO" request in the other machines.
+
+- **New params**: `lfo_sync`, `lfo_div` (index into `sy_lfo_beats[]`, BEATS per
+  cycle: 16/8/4/2/1/0.5/0.25 = "4 bar".."1/16"), `lfo_shape` (sine/tri/saw/
+  sqr/rnd). Preset keys `lfs`/`lfv`/`lfw`; absent in old presets so the init
+  defaults stand (free-running sine) — no migration needed.
+- **Sync**: rate = `clock_core_beat_bpm()/60/beats`, and the phase is re-zeroed
+  at each cycle boundary counted in `clock_core_pulses()/per`. The rate is
+  already right, so that correction is tiny — it keeps the LFO ON the beat
+  instead of drifting to an arbitrary offset. **No clock = falls back to
+  `lfo_rate`, it does not freeze**, and the panel says "no clock" so that is
+  visible rather than mysterious.
+- **RND shape** is sample-and-hold on phase wrap, using a local LCG — NOT
+  `esp_random()`: IDF 4.3 has no `esp_random.h` (added later) and a syscall in
+  the audio block is not wanted anyway.
+- **UI**: the bottom strip is two views over one rect. `s_env_view` picks
+  ADSR or LFO; `draw_bottom()`/`bottom_sig()` are the single entry points.
+  The element count is now a FUNCTION (`slive_n()`), not `SLIVE_N`: base 5
+  (tag + dials) + 4 (ADSR) or 5 (LFO) + 1 title. The title is the last element
+  and a short press SWITCHES VIEW rather than entering edit.
+- **Pre-existing bug found and fixed in BOTH Synth and Keys**: `draw_adsr()`
+  clamped the focus dot against the right and bottom of its cleared rect but
+  not the LEFT — a short attack puts the A point at `xb = x+2`, so a radius-5
+  dot straddled x=8 and left green crumbs outside the rect. Invisible until
+  something stopped repainting over them, which the view switch does. Verified
+  gone by scanning the BMP for green pixels left of the strip.
+- **Not done**: the three new params are not on the Setup page. Inserting rows
+  after the existing LFO ones would renumber ~15 `case` labels including the
+  ACTION mapping (Load Wave / CV Matrix / FX / patches), which is a bad trade
+  for a param already reachable on Live and in the web ADVANCED table. **Keys
+  is next** — same section, lifted the way the ADSR was.
+
 ## 2026-09-10 — FX sliders take the CV matrix's grey
 
 `#rfx input[type=range]` now wears the matrix's grey track and thumb instead of
