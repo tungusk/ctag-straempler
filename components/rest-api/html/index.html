@@ -265,7 +265,7 @@ body.nosbar .sbar{display:none}
   #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}                   /* patching */
   #filescard{order:7}#machcard{order:8}                              /* library, then the selector */
   #rsetup{order:9}#rglob{order:11}#rparams{order:12}                 /* settings */
-  #rm{order:13}#bouncecard{order:14}#bcastcard{order:15}             /* capture / streaming */
+  #rm{order:13}#outcard{order:14}                                    /* capture / streaming */
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
 /* BOUNCE + PUSH -> ICECAST against BROADCAST: equal-height columns, the last card in the
@@ -676,19 +676,22 @@ body.nosbar .sbar{display:none}
   <div id="rglob"></div>
   <div id="rparams"></div>
   <div class="msg" id="rm"></div>
-  <div class="card pnl" id="bouncecard">
+  <!-- BOUNCE + BROADCAST in one card: both are "the output, leaving the box".
+       TWO green headers that both stay visible (Arlo 2026-09-11) — BOUNCE is a
+       single row with nothing to fold, BROADCAST folds its body under its own
+       header. No card-level fold, or one header would hide the other. -->
+  <div class="card pnl" id="outcard">
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span class="hlp" data-h="Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.">BOUNCE</span></b>
       <span id="bncstate" style="color:#888;margin-right:8px">idle</span>
       <button class="btn" id="bncbtn" style="flex:0 0 84px" onclick="bncToggle()">Record</button>
     </div>
-  </div>
-  <div class="card pnl" id="bcastcard">
-    <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span class="hlp" data-h="Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.">BROADCAST</span></b>
+    <div class="row tight" style="align-items:center;margin-top:10px;border-top:1px solid #262626;padding-top:8px">
+      <b class="ph" id="bc_hdr" style="flex:1;padding:0;margin:0;align-self:flex-start;cursor:pointer;user-select:none" onclick="foldToggle('bc')"><span id="bc_arw">&#9656; </span><span class="hlp" data-h="Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.">BROADCAST</span></b>
       <span id="bcstate" style="color:#888;margin-right:8px">off</span>
       <button class="btn" id="bcenbtn" style="flex:0 0 84px" onclick="bcastToggle()">Enable</button>
     </div>
+    <div id="bc_body" style="display:none">
     <div class="row tight" style="align-items:center;margin-top:4px">
       <span style="flex:1;color:#888">output stream</span>
       <a class="btn" id="bclinkmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
@@ -700,10 +703,9 @@ body.nosbar .sbar{display:none}
       <a class="btn" id="bclinkin" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
     </div>
     <audio id="bcaudio" controls preload="none" style="width:100%;margin-top:6px;color-scheme:dark;opacity:.8;border-radius:3px"></audio>
-    <b class="sub" id="push_hdr" data-t="PUSH &#8594; ICECAST" style="cursor:pointer;user-select:none;display:block;border-top:1px solid #262626;margin-top:8px;padding-top:6px" onclick="foldToggle('push')">&#9656; PUSH &#8594; ICECAST</b>
+    <b class="sub" id="push_hdr" style="cursor:pointer;user-select:none;display:block;border-top:1px solid #262626;margin-top:8px;padding-top:6px" onclick="foldToggle('push')"><span id="push_arw">&#9656; </span><span class="hlp" data-h="Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.">PUSH &#8594; ICECAST</span></b>
     <div id="push_body" style="display:none">
     <div class="row tight" style="align-items:center;margin-top:0">
-      <span class="hlp" style="flex:1;align-self:flex-start;color:#7a9;font-size:11px" data-h="Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.">what it does</span>
       <span id="icestate" style="color:#888;margin-right:8px">off</span>
       <button class="btn" id="icebtn" style="flex:0 0 84px" onclick="iceToggle()">Start</button>
     </div>
@@ -715,6 +717,7 @@ body.nosbar .sbar{display:none}
     <div class="row tight" style="margin-top:4px;gap:6px">
       <input id="icepass" placeholder="source password" type="password" style="flex:1">
       <input id="icename" placeholder="stream name" style="flex:1">
+    </div>
     </div>
     </div>
   </div>
@@ -1651,7 +1654,14 @@ var rpSetup=null,rpGlob=null;
 // `h` is optional: About's header lives in the GLOBAL screen, which glLoad()
 // has not rendered yet when this runs — assuming it exists threw here and took
 // the rest of rpSetCard's caller (including glLoad) down with it.
-function foldInit(key){if(foldOpen(key)){var b=document.getElementById(key+'_body'),h=document.getElementById(key+'_hdr');if(b){b.style.display='';if(h)h.textContent='\u25BE '+h.getAttribute('data-t');}}}
+function foldInit(key){
+  if(!foldOpen(key))return;
+  var b=document.getElementById(key+'_body'),a=document.getElementById(key+'_arw'),h=document.getElementById(key+'_hdr');
+  if(!b)return;
+  b.style.display='';
+  if(a)a.textContent='\u25BE ';                                            // header carries a tooltip: touch only the arrow
+  else if(h)h.textContent='\u25BE '+h.getAttribute('data-t');
+}
 function foldOpen(key,def){try{var v=localStorage.getItem('fold_'+key);return v===null?!!def:v==='1';}catch(e){return !!def;}}
 function foldSet(key,open){
   var b=document.getElementById(key+'_body'),a=document.getElementById(key+'_arw'),h=document.getElementById(key+'_hdr');
@@ -1689,7 +1699,7 @@ function makeFold(card,key,def){
 // set-and-forget, not perform controls, and open they cost ~330 px of the column
 // (Arlo 2026-09-10). Everything else defaults open.
 var FOLDABLE=[['machcard','mach'],['midicard','midi'],['rmatrix','mtx'],['rfx','fx'],
-              ['clkcard','clk'],['bouncecard','bnc',false],['bcastcard','bc',false],
+              ['clkcard','clk'],
               ['fscard','fs'],['rdcard','rd'],['edcard','ed'],
               ['filescard','files',false]];
 function foldAll(){
@@ -1698,7 +1708,7 @@ function foldAll(){
     if(host&&!host.classList.contains('card'))host=host.querySelector('.card');   // #rmatrix / #rfx are wrappers
     makeFold(host,f[1],f.length>2?f[2]:true);
   });
-  foldInit('push');foldInit('lsn');foldInit('up');   // sub-folds inside BROADCAST / CLOCK / FILES
+  foldInit('push');foldInit('lsn');foldInit('up');foldInit('bc');   // sub-folds: BROADCAST / CLOCK / FILES / the output card
   balanceSoon();   // cards have just been built / rebuilt: even the bottom edge
 }
 // A fold INSIDE a card: same grammar as foldCard (foldSet drives KEY_hdr /
@@ -2496,7 +2506,7 @@ var BAL_LEFT=['panel','midihome'];
 // FILES is PINNED at the TOP of the right column, above MACHINE (Arlo
 // 2026-09-10) — not dealt with the flow cards, open or folded.
 var BAL_RIGHT=['fileshome','machcard','fscard','rdcard','edcard'];
-var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rglob','rparams','rm','bouncecard','bcastcard'];
+var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rglob','rparams','rm','outcard'];
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');

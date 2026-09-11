@@ -9,6 +9,25 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-11 — BOUNCE + BROADCAST melded into one card
+
+Both are "the output, leaving the box", so they are one card (`#outcard`) with
+**TWO green headers that both stay visible** (Arlo). **No card-level fold** — one
+would hide the other. BOUNCE is a single row with nothing to fold (title, state,
+Record); BROADCAST's title is its own fold handle and its body (stream links,
+player, the PUSH sub-fold) collapses beneath it.
+
+**The `_arw` span is how a fold header keeps a tooltip.** `foldSet()`/`foldInit()`
+rewrite `KEY_hdr`'s whole textContent when there is no `KEY_arw`, which would
+eat an `.hlp` child on the first toggle. Give the header
+`<span id="KEY_arw">▸ </span><span class="hlp" …>TITLE</span>` and only the arrow
+is touched. `foldInit()` was taught the same arrow-first path (it only had the
+textContent one). BROADCAST and PUSH both use it now, and PUSH's separate
+"what it does" stub — a leftover from demoting that heading to `.sub` — is gone,
+its tooltip moved onto the title where it belongs.
+
+`FOLDABLE` loses both old cards; `BAL_FLOW` and the narrow order take `#outcard`.
+
 ## 2026-09-11 — drop zones: black ground, label not sentence
 
 `.dz` gets a **black** ground (it was inheriting the card) and the copy stops
