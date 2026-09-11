@@ -1250,7 +1250,7 @@ function loadSysinfo(){
     if(d.total){
       var freeMB=d.free/1048576, mins=freeMB/10.09;
       var rec=mins>=120?('~'+Math.round(mins/60)+' h'):('~'+Math.round(mins)+' min');
-      sd='SD '+Math.round(freeMB)+'/'+Math.round(d.total/1048576)+'MB \u00b7 '+rec+' rec';
+      sd='SD '+Math.round(freeMB)+'/'+Math.round(d.total/1048576)+'MB\u2002 '+rec+' rec';
     }
     var dk=document.getElementById('disk');   if(dk)dk.textContent=sd;
     var fdk=document.getElementById('fdisk'); if(fdk)fdk.textContent=sd;
@@ -1665,6 +1665,8 @@ function mxRerender(arr){
   d.mxs=arr.mxs;d.mxa=arr.mxa;d.mxm=arr.mxm;
   (d.imap||[]).forEach(function(e){if(e.k&&picks[e.k]!==undefined)e.s=picks[e.k];});
   document.getElementById('rmatrix').innerHTML=rpMatrix(d);
+  makeFold(document.querySelector('#rmatrix .card'),'mtx');   // innerHTML just ate the fold wrapper
+  balanceSoon();                                             // a row can appear or leave with it
 }
 
 // "+" opens an extra LINE for that CV: its own table row (label blank), whose
