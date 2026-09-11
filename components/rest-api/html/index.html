@@ -143,6 +143,15 @@ body.nosbar .sbar{display:none}
    sits on a common baseline (Arlo 2026-09-11). */
 #clkcard .row{gap:10px;row-gap:8px;flex-wrap:wrap;align-items:flex-end}
 #clkcard label{margin:0}
+/* accent-color only sets the FILL — the browser picks the tick colour for
+   contrast and always draws it bright. To mute the tick too the box has to be
+   drawn by hand: a panel-black square with a #777 tick, the same grey as the
+   Refresh button's label. */
+#scrauto{appearance:none;-webkit-appearance:none;flex:0 0 12px;width:12px;min-width:12px;height:12px;padding:0;border:1px solid #2a2a2a;
+  background:#050505;border-radius:2px;position:relative;cursor:pointer;vertical-align:middle}
+#scrauto:checked::after{content:'';position:absolute;left:3px;top:0;width:3px;height:7px;
+  border:solid #777;border-width:0 2px 2px 0;transform:rotate(45deg)}
+#scrauto:hover{border-color:#3a3a3a}
 /* a number field this narrow has no room for the native spinners — they sat on
    top of the value and clipped "120" to "12(". The field is typed or scrolled,
    not nudged with arrows. */
@@ -453,9 +462,11 @@ body.nosbar .sbar{display:none}
         <!-- flex-start, not center: #scrrow sits inside #scrbox, which is exactly
              the width of the screen image, so this lines Refresh up with the
              screen's left edge instead of floating it in the middle -->
-        <div class="row tight" id="scrrow" style="align-items:center;justify-content:flex-start;margin-top:0">
+        <div class="row tight" id="scrrow" style="align-items:center;justify-content:flex-start;margin-top:0;position:relative">
           <button class="btn big" id="scrbtn" onclick="scrShot()">Screen</button>
-          <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#aaa;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#5a5a5a;opacity:.9"> auto</label>
+          <!-- centred in the row independently of Refresh's width, and dressed
+               like the panel's buttons: same near-black fill and muted label -->
+          <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#777;margin:0;font-size:11px;position:absolute;left:50%;transform:translateX(-50%)"><input type="checkbox" id="scrauto" style="margin:0"> auto</label>
         </div>
         <button class="btn" id="scrclose" style="position:absolute;top:0;right:0;width:30px;display:none" onclick="scrClose()">&#10005;</button>
         <img id="scrimg" title="click: toggle size" onclick="scrZoom()" style="cursor:zoom-in;width:100%;display:none;margin:8px 0 6px;image-rendering:pixelated;border:1px solid #333">
