@@ -9,6 +9,27 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — zoomed screen: the card stops growing at all
+
+Arlo wanted the big/zoomed screenshot to stop pushing the page down, and said to
+spend the screw holes and the padding to get it.
+
+Dropping both takes the growth from +102 px to +9. Then Arlo: **"so in that case
+the padding can accommodate all of the expansion"** — and he is right, the
+real-panel padding (43+68 = 111 px) is LARGER than what the big screen adds
+(102 px), so it can absorb the expansion outright instead of just softening it.
+
+`#panel.big{padding:0 6px;aspect-ratio:91.3/128.5}` does it **without a magic
+number**: the card is pinned to the panel's own proportion in both views, so the
+arithmetic works itself out at any width rather than only at 502 px. Measured
+**706.5 px big and small, growth 0** — nothing below the card moves when you
+zoom. `#panel.big .mnt{display:none}` drops the holes; the card slot and antenna
+were already hidden when big. The 6 px sides stay — that is what the jack field
+needs to reach its real inset.
+
+If a big screen ever exceeds the ratio the card grows again. That is the right
+failure: when the two fight, the screen wins.
+
 ## 2026-09-10 — panel proportion, jack rows, screw holes, MIDI card fold
 
 Continuation of the panel-card work, all measured against

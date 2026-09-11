@@ -110,6 +110,18 @@ body.nosbar .sbar{display:none}
   box-shadow:inset 0 1px 2px rgba(0,0,0,.8);pointer-events:none}
 .mnt.t{top:6.5px}.mnt.b{bottom:6.5px}.mnt.l{left:3.39%}.mnt.r{right:3.39%}
 #panel.big .deco,#scrarea:has(#scrbox.empty) .deco{display:none}   /* only beside a loaded, small screen */
+/* ZOOMED: the point is the screen, so the frame stops pretending to be a panel.
+   The screw holes go and the real-panel padding (43/68) goes with them — and
+   since that padding is LARGER than what the big screen adds (111 px against
+   102 px), it can absorb the whole expansion rather than merely soften it
+   (Arlo 2026-09-10). aspect-ratio rather than a tuned padding does it without a
+   magic number: the card is held at the panel's own proportion in both views,
+   so zooming moves NOTHING below it — measured 706.5 px big and small, growth 0.
+   The 6 px sides stay: that is what the jack field needs to reach its real
+   inset. If a big screen ever exceeded the ratio the card would grow again,
+   which is the right failure — the screen wins. */
+#panel.big{padding:0 6px;aspect-ratio:91.3/128.5}
+#panel.big .mnt{display:none}
 #scrbox .row #scrbtn.big{flex:1 1 auto;aspect-ratio:4/3;margin:29px 0 6px;padding:0;font-size:14px;letter-spacing:1px;border-color:#333}   /* nothing loaded: the Screen button IS the screenshot frame — same size and place, so nothing reflows when the shot lands */
 #panel .row .btn:hover{background:#1a1a1a;color:#aaa}
 /* two equal flexible spacers around the controls: controls centre in the frame's spare height,
