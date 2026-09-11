@@ -370,9 +370,6 @@ body.nosbar .sbar{display:none}
     <div class="tab" id="t5" onclick="tab(5)">Listener</div>
     <div class="tab" id="t0" onclick="tab(0)">Files</div>
     <div class="tab" id="t1" onclick="tab(1)">Upload</div>
-    <div class="tab" id="t2" onclick="tab(2)">Freesound</div>
-    <div class="tab" id="t6" onclick="tab(6)">Radio</div>
-    <div class="tab" id="t7" onclick="tab(7)">Editor</div>
     <div class="tab" id="t4" onclick="tab(4)">Settings</div>
   </div>
 </header>
@@ -432,29 +429,6 @@ body.nosbar .sbar{display:none}
     <progress id="bpr" value="0" max="100" style="display:none"></progress>
     <div class="msg" id="bm"></div>
   </div>
-</div>
-<div class="pane" id="p2">
-  <div class="msg" id="fsnote">Requires the Freesound machine to be active (System &#8594; Machine) and an API key (Settings tab).</div>
-  <div class="row">
-    <input id="fq" placeholder="kick drum" onkeydown="if(event.key==='Enter')fsSearch(1)">
-    <button class="btn" style="flex:0 0 80px" onclick="fsSearch(1)">Search</button>
-  </div>
-  <div class="row" id="fspg" style="display:none">
-    <button class="btn" onclick="fsSearch(fsPage-1)" id="fsprev">&#8592; Prev</button>
-    <span style="text-align:center;color:#666" id="fsinfo"></span>
-    <button class="btn" onclick="fsSearch(fsPage+1)" id="fsnext">Next &#8594;</button>
-  </div>
-  <table style="margin-top:8px">
-    <thead><tr><th>Name</th><th>Dur</th><th>By</th><th></th></tr></thead>
-    <tbody id="fstb"></tbody>
-  </table>
-  <label style="margin-top:14px">Or fetch a direct MP3 URL (44.1kHz only)</label>
-  <div class="row">
-    <input id="furl" placeholder="https://example.com/loop.mp3" onkeydown="if(event.key==='Enter')fsFetch()">
-    <button class="btn" style="flex:0 0 80px" onclick="fsFetch()">Fetch</button>
-  </div>
-  <progress id="fspr" value="0" max="100"></progress>
-  <div class="msg" id="fsm"></div>
 </div>
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
@@ -533,6 +507,64 @@ body.nosbar .sbar{display:none}
     </div>
     <select id="mididev" style="margin-top:6px;display:none"></select>
   </div></div>
+  <!-- machine-specific cards: these were top-level tabs, each opening on a
+       "requires the X machine to be active" nag. Their endpoints are
+       machine_ui_t.web_uris, already served ONLY while that machine runs, so
+       a card that appears with the machine is the honest home for them. Shown
+       by NAME rather than a caps bit: the content is bespoke per machine, so
+       there is nothing a bit would add. -->
+  <div class="card pnl" id="fscard" style="display:none">
+    <b class="ph" style="padding:0;margin:0">FREESOUND</b>
+  <div class="row">
+  <input id="fq" placeholder="kick drum" onkeydown="if(event.key==='Enter')fsSearch(1)">
+  <button class="btn" style="flex:0 0 80px" onclick="fsSearch(1)">Search</button>
+  </div>
+  <div class="row" id="fspg" style="display:none">
+  <button class="btn" onclick="fsSearch(fsPage-1)" id="fsprev">&#8592; Prev</button>
+  <span style="text-align:center;color:#666" id="fsinfo"></span>
+  <button class="btn" onclick="fsSearch(fsPage+1)" id="fsnext">Next &#8594;</button>
+  </div>
+  <table style="margin-top:8px">
+  <thead><tr><th>Name</th><th>Dur</th><th>By</th><th></th></tr></thead>
+  <tbody id="fstb"></tbody>
+  </table>
+  <label style="margin-top:14px">Or fetch a direct MP3 URL (44.1kHz only)</label>
+  <div class="row">
+  <input id="furl" placeholder="https://example.com/loop.mp3" onkeydown="if(event.key==='Enter')fsFetch()">
+  <button class="btn" style="flex:0 0 80px" onclick="fsFetch()">Fetch</button>
+  </div>
+  <progress id="fspr" value="0" max="100"></progress>
+  <div class="msg" id="fsm"></div>
+  </div>
+  <div class="card pnl" id="rdcard" style="display:none">
+    <b class="ph" style="padding:0;margin:0">RADIO</b>
+  <div class="card">
+  <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af">NOW PLAYING</b><span id="rdstate" style="color:#888">&#8212;</span></div>
+  <div class="kv" id="rdinfo" style="margin-top:4px">&#8212;</div>
+  <div class="bar" style="margin-top:6px"><i id="rdbuf" style="width:0%"></i></div>
+  </div>
+  <label>Stations</label>
+  <div class="row" id="rdstations" style="flex-wrap:wrap"></div>
+  <label style="margin-top:10px">Custom stream URL (MP3, 44.1kHz)</label>
+  <div class="row"><input id="rdurl" placeholder="http://.../stream.mp3" onkeydown="if(event.key==='Enter')rdPlayUrl()"><button class="btn" style="flex:0 0 58px" onclick="rdPlayUrl()">Play</button><button class="btn" style="flex:0 0 58px" onclick="rdSaveStation()">Save</button></div>
+  <div class="row" style="margin-top:4px"><input type="file" id="rdm3u" accept=".m3u,.m3u8,audio/x-mpegurl,audio/mpegurl" style="display:none" onchange="rdImportM3u(this.files)"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('rdm3u').click()">Import .m3u playlist&#8230;</button><span class="msg" id="rdm3umsg" style="flex:1;align-self:center"></span></div>
+  <div class="row" style="margin-top:8px"><button class="btn del" style="flex:0 0 88px" onclick="rdStop()">Stop</button></div>
+  <div class="msg" id="rdm"></div>
+  </div>
+  <div class="card pnl" id="edcard" style="display:none">
+    <b class="ph" style="padding:0;margin:0">EDITOR</b>
+  <label>Sample</label>
+  <div class="row"><select id="edsel" style="flex:1"></select><button class="btn" style="flex:0 0 64px" onclick="edLoad()">&#8635;</button></div>
+  <label style="margin-top:10px">Operation (non-destructive &#8212; writes a new take)</label>
+  <div class="row" id="edops" style="flex-wrap:wrap"></div>
+  <label style="margin-top:10px">Fade length (ms, for fade in/out)</label>
+  <div class="row"><input id="edparam" type="number" value="50" style="flex:0 0 100px"></div>
+  <div class="card" style="margin-top:10px">
+  <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af" id="edstate">idle</b><span id="edout" style="color:#888"></span></div>
+  <div class="bar" style="margin-top:6px"><i id="edbar" style="width:0%"></i></div>
+  </div>
+  <div class="msg" id="edm"></div>
+  </div>
   </div>
   <div class="rcol">
   <div class="card pnl" id="machcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">MACHINE</b><span id="rmnote" style="color:#888;font-size:11px"></span></div>
@@ -667,35 +699,6 @@ body.nosbar .sbar{display:none}
   </div>
   <div class="msg">GROOVE = tempo model (steady grid, never octave-hops); PULSE/KICK/FLUX = raw onset pulses. Machines follow via Clock Src = AUDIO.</div>
 </div>
-<div class="pane" id="p6">
-  <div class="msg" id="rdnote">Switch the module to the <b>Radio</b> machine (Remote tab &#8594; Machine, or System &#8594; Machine on the device) to use this.</div>
-  <div class="card">
-    <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af">NOW PLAYING</b><span id="rdstate" style="color:#888">&#8212;</span></div>
-    <div class="kv" id="rdinfo" style="margin-top:4px">&#8212;</div>
-    <div class="bar" style="margin-top:6px"><i id="rdbuf" style="width:0%"></i></div>
-  </div>
-  <label>Stations</label>
-  <div class="row" id="rdstations" style="flex-wrap:wrap"></div>
-  <label style="margin-top:10px">Custom stream URL (MP3, 44.1kHz)</label>
-  <div class="row"><input id="rdurl" placeholder="http://.../stream.mp3" onkeydown="if(event.key==='Enter')rdPlayUrl()"><button class="btn" style="flex:0 0 58px" onclick="rdPlayUrl()">Play</button><button class="btn" style="flex:0 0 58px" onclick="rdSaveStation()">Save</button></div>
-  <div class="row" style="margin-top:4px"><input type="file" id="rdm3u" accept=".m3u,.m3u8,audio/x-mpegurl,audio/mpegurl" style="display:none" onchange="rdImportM3u(this.files)"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('rdm3u').click()">Import .m3u playlist&#8230;</button><span class="msg" id="rdm3umsg" style="flex:1;align-self:center"></span></div>
-  <div class="row" style="margin-top:8px"><button class="btn del" style="flex:0 0 88px" onclick="rdStop()">Stop</button></div>
-  <div class="msg" id="rdm"></div>
-</div>
-<div class="pane" id="p7">
-  <div class="msg" id="ednote">Switch the module to the <b>Editor</b> machine (Remote tab &#8594; Machine) to use this.</div>
-  <label>Sample</label>
-  <div class="row"><select id="edsel" style="flex:1"></select><button class="btn" style="flex:0 0 64px" onclick="edLoad()">&#8635;</button></div>
-  <label style="margin-top:10px">Operation (non-destructive &#8212; writes a new take)</label>
-  <div class="row" id="edops" style="flex-wrap:wrap"></div>
-  <label style="margin-top:10px">Fade length (ms, for fade in/out)</label>
-  <div class="row"><input id="edparam" type="number" value="50" style="flex:0 0 100px"></div>
-  <div class="card" style="margin-top:10px">
-    <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af" id="edstate">idle</b><span id="edout" style="color:#888"></span></div>
-    <div class="bar" style="margin-top:6px"><i id="edbar" style="width:0%"></i></div>
-  </div>
-  <div class="msg" id="edm"></div>
-</div>
 <div class="sbar">
   <div class="cv" id="cvb"></div>
   <span class="sep">|</span>
@@ -714,17 +717,15 @@ body.nosbar .sbar{display:none}
 
 function tab(n){
   for(var i=0;i<8;i++){
-    document.getElementById('t'+i).className='tab'+(i===n?' on':'');
-    document.getElementById('p'+i).className='pane'+(i===n?' on':'');
+    var t=document.getElementById('t'+i),pn=document.getElementById('p'+i);
+    if(!t||!pn)continue;          // Freesound/Radio/Editor left the bar: they are Remote cards now
+    t.className='tab'+(i===n?' on':'');
+    pn.className='pane'+(i===n?' on':'');
   }
   document.body.className=(n===3&&!WEB.sbar)?'nosbar':'';   // Remote: the perform page, status bar off unless asked
   if(n===0)loadFiles();
   if(n===3){loadRemote();if(WEB.scrload)setTimeout(function(){scrShot(3);},300);}
   if(n===4)loadSet();
-  if(n===6){rdState();rdTimer=rdTimer||setInterval(rdState,1000);}
-  else if(rdTimer){clearInterval(rdTimer);rdTimer=null;}
-  if(n===7){edLoad();edState();edTimer=edTimer||setInterval(edState,1000);}
-  else if(edTimer){clearInterval(edTimer);edTimer=null;}
 }
 
 // Files-page sub-tabs: 0 = Samples (usr/*.RAW), 1 = Modules (usr/TRACKER)
@@ -1621,7 +1622,8 @@ function makeFold(card,key,def){
 }
 // every Remote card except the panel folds; state per browser, open until told otherwise
 var FOLDABLE=[['machcard','mach'],['midicard','midi'],['rmatrix','mtx'],['rfx','fx'],
-              ['clkcard','clk'],['bouncecard','bnc'],['icecard','ice'],['bcastcard','bc']];
+              ['clkcard','clk'],['bouncecard','bnc'],['icecard','ice'],['bcastcard','bc'],
+              ['fscard','fs'],['rdcard','rd'],['edcard','ed']];
 function foldAll(){
   FOLDABLE.forEach(function(f){
     var host=document.getElementById(f[0]);
@@ -2342,8 +2344,32 @@ function remMach(n){
 var MC={MIDI:1,CLOCK:2,MATRIX:4,FX:8,SETUP:16};
 var CAPCARD=[['midicard',MC.MIDI],['rmatrix',MC.MATRIX],['rfx',MC.FX],
              ['clkcard',MC.CLOCK],['setup_card',MC.SETUP]];
+// the three ex-tabs, keyed by machine NAME: their content is bespoke per machine
+// so a caps bit would say nothing a name does not.
+var MACHCARD=[['fscard','Freesound'],['rdcard','Radio'],['edcard','Editor']];
+// the Radio and Editor pollers used to start when you opened their TAB. They now
+// follow the card, so they run exactly while the machine that needs them is up
+// — and, unlike before, they stop when you switch away rather than when you
+// happen to click another tab.
+function machCardPoll(name,on){
+  if(name==='Radio'){
+    if(on){rdState();rdTimer=rdTimer||setInterval(rdState,1000);}
+    else if(rdTimer){clearInterval(rdTimer);rdTimer=null;}
+  }else if(name==='Editor'){
+    if(on){edLoad();edState();edTimer=edTimer||setInterval(edState,1000);}
+    else if(edTimer){clearInterval(edTimer);edTimer=null;}
+  }
+}
 function capsApply(d){
-  if(!d||!('caps' in d))return;          // firmware too old to say: leave every card alone
+  if(!d)return;
+  MACHCARD.forEach(function(c){
+    var el=document.getElementById(c[0]);if(!el)return;
+    var want=(d.machine===c[1])?'':'none';
+    if(el.style.display===want)return;
+    el.style.display=want;
+    machCardPoll(c[1],want==='');
+  });
+  if(!('caps' in d))return;              // firmware too old to say: leave every card alone
   var caps=d.caps|0;
   CAPCARD.forEach(function(c){
     var el=document.getElementById(c[0]);if(!el)return;   // not built yet; the next poll gets it

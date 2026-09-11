@@ -9,6 +9,43 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — cards follow the machine; Freesound/Radio/Editor stop being tabs
+
+Arlo: cards should hide when the machine does not use them, and the thin
+machine-specific TABS should become cards that appear with their machine.
+
+**Pass 1 — `machine_ui_t.caps`** (`55d0393`). Card visibility was one hardcoded
+`machine=='Synth'||machine=='Keys'` for MIDI; everything else showed everywhere.
+**Neither interesting case is sniffable at runtime** — MIDI is a global
+`audio_midi_note()` only some machines read, and the core appends a Clock entry
+to EVERY machine's input map — so machines DECLARE: `MC_MIDI/CLOCK/MATRIX/FX`.
+`MC_SETUP` is DERIVED from the `setup` pointer, never declared (a Setup page IS
+that pointer). `/status` reports the active machine's caps; `capsApply()` in the
+page acts on it. Declarations came from a survey of what each machine actually
+references (cvmtx_t / fxrack_t / clock_core_ / audio_midi_note), not guesswork.
+A machine declaring nothing gets a shorter page; a page against older firmware
+with no `caps` field leaves every card alone.
+
+**Pass 2 — the three ex-tabs.** Freesound (22 lines), Radio (14), Editor (13),
+each of which opened on a "requires the X machine to be active" nag — the tell
+that they wanted to be cards. Their endpoints are `machine_ui_t.web_uris`,
+already served ONLY while that machine runs, so a card that appears with the
+machine is the honest home. Shown by machine NAME (`MACHCARD`), not a caps bit:
+the content is bespoke per machine, so a bit would add nothing. The tab bar is
+now only the genuinely global pages: Remote / Listener / Files / Upload /
+Settings.
+- `tab()` now skips ids that no longer exist, and the **Radio/Editor pollers
+  moved off the tab onto the CARD** — they run exactly while their machine is
+  up, and stop when you switch AWAY rather than when you happen to click
+  another tab.
+- All three fold like any other card (added to `FOLDABLE`).
+
+**TRAP I walked into:** inserting the cards before `<div class="rcol">` made them
+SIBLINGS of the two columns inside `.remcols` (a flex row), which threw the right
+column to y=776. They have to go INSIDE the left `.rcol`, after `#midihome`.
+Verified live on Freesound: card in the left column under the panel, and no
+MIDI/MATRIX/FX/CLOCK/SETUP cards at all, which is exactly right for it.
+
 ## 2026-09-10 — zoomed screen: the card stops growing at all
 
 Arlo wanted the big/zoomed screenshot to stop pushing the page down, and said to
