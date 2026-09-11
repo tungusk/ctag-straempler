@@ -156,7 +156,7 @@ body.nosbar .sbar{display:none}
    inset. If a big screen ever exceeded the ratio the card would grow again,
    which is the right failure — the screen wins. */
 #panel.big{padding:0 6px;aspect-ratio:91.3/128.5}
-#panel.big .mnt{display:none}
+#panel.big .mnt,#panel.big .pwm{display:none}   /* zoomed, the screen is the point */
 #scrbox .row #scrbtn.big{flex:1 1 auto;aspect-ratio:4/3;margin:29px 0 6px;padding:0;font-size:14px;letter-spacing:1px;border-color:#333}   /* nothing loaded: the Screen button IS the screenshot frame — same size and place, so nothing reflows when the shot lands */
 #panel .row .btn:hover{background:#1a1a1a;color:#aaa}
 /* two equal flexible spacers around the controls: controls centre in the frame's spare height,
@@ -656,7 +656,7 @@ body.nosbar .sbar{display:none}
       <div class="tab" id="ft1" onclick="filesTab(1)">Modules</div>
     </div>
     <!-- and which folder, below it with a little air -->
-    <div class="tabs" style="margin:10px 0 8px">
+    <div class="tabs" id="fdirrow" style="margin:10px 0 8px">
       <div class="tab on" id="fd-all" onclick="setDirFilt(null)">ALL</div>
       <div class="tab" id="fd-pool" onclick="setDirFilt('pool')">POOL</div>
       <div class="tab" id="fd-REC" onclick="setDirFilt('REC')">REC</div>
@@ -677,11 +677,14 @@ body.nosbar .sbar{display:none}
         <th></th></tr></thead>
       <tbody id="ftb"></tbody>
     </table>
-    </div>
+    <!-- the modules table shares the SAME capped scroller. Outside it, the
+         scroller sat empty at its min-height (120 px of nothing) while the
+         modules list hung below it unscrolled (Arlo 2026-09-11). -->
     <table id="mtab" style="display:none">
       <thead><tr><th>Name</th><th>Size</th><th></th></tr></thead>
       <tbody id="modtb"></tbody>
     </table>
+    </div>
   </div></div>
   <!-- the beat listener: it IS a clock source (machines follow it via
        Clock Src = AUDIO), so it belongs beside CLOCK on Remote rather than
@@ -818,10 +821,9 @@ function filesTab(n){
   document.getElementById('ft1').className='tab'+(n===1?' on':'');
   document.getElementById('ftab').style.display=n===0?'':'none';
   document.getElementById('mtab').style.display=n===1?'':'none';
-  // the folder chips only mean something for samples
-  ['fd-all','fd-pool','fd-REC','fd-LOOPS','fd-SLICES','fd-DRUMS','fd-KEYS','fd-TAPE'].forEach(function(id){
-    document.getElementById(id).style.display=n===0?'':'none';
-  });
+  // the folder chips only mean something for samples — hide the ROW, not just
+  // the chips: emptied, it still held its own 10px/8px margins as a gap
+  var fr=document.getElementById('fdirrow'); if(fr)fr.style.display=n===0?'':'none';
   n===0?loadFiles():loadMods();
 }
 

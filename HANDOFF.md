@@ -9,6 +9,21 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-11 — wordmark hides when zoomed; the Modules gap was the scroller
+
+- **`#panel.big .pwm{display:none}`** — zoomed, the screen is the point, so the
+  wordmark goes with the screw holes and the deco.
+- **The "extra padding on Modules" was TWO things**, and the first fix was the
+  wrong one. `filesTab()` hid the eight folder chips individually, leaving their
+  `.tabs` ROW in place with its own 10/8 px margins — so I hid the row
+  (`#fdirrow`). That helped but the gap got WORSE (124 px), which is the tell
+  that the real cause was elsewhere: **`#mtab` lived OUTSIDE `.fscroll`**, so on
+  Modules the scroller sat empty at its `min-height:120px` while the modules
+  table hung below it, uncapped and unscrolled. Moving `#mtab` inside the
+  scroller fixes both — one capped area, both tables scroll in it.
+  Measured: Modules gap 4 px (row collapsed), Samples 40 px (row + margins),
+  same scroller either way.
+
 ## 2026-09-11 — card headers up a size
 
 `.ph` 12 -> **14 px** (letter-spacing 1 -> 1.5, margin-bottom 4 -> 5) and `.sub`
