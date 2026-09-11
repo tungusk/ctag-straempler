@@ -111,13 +111,13 @@ body.nosbar .sbar{display:none}
    its centre is 5.19% in from the panel edge. These decos are positioned inside
    #scrarea, which is the panel's CONTENT box (6 px in on each side), hence the
    smaller number — measure the result against #panel, not against #scrarea. */
-.slot{left:2.77%;width:11px;height:96px;border:1px solid #333;border-radius:3px;background:#000}
+.slot{left:2.77%;width:11px;height:96px;border:1px solid #4e4e4e;border-radius:3px;background:#000}
 /* aligned on the CONNECTOR, not on the glyph+connector box. The SMA (dummyfp2,
    y -97.693) and the card slot centre (y -97.71) sit at the same height on the
    real panel, and .deco's translateY(-50%) centred the whole 64-unit viewBox --
    which put the connector circle (cy 47, i.e. 73.44% down) 15 px BELOW the slot.
    Overriding the transform lifts it onto the slot's centreline. */
-.ant{right:6%;width:34px;height:64px;fill:none;stroke:#555;stroke-width:1.6;stroke-linecap:round;transform:translateY(-73.44%)}
+.ant{right:6%;width:34px;height:64px;fill:none;stroke:#6e6e6e;stroke-width:1.6;stroke-linecap:round;transform:translateY(-73.44%)}
 /* the four Eurorack mounting slots, now at TRUE SCALE: on the real v2_3 panel
    they are 8.5 x 3.2 mm obrounds, 7.539 mm in from each side edge (= 8.26%, and
    with a 47 px hole that puts `left` at 3.39%) and 3 mm down from the top / up
@@ -244,8 +244,8 @@ body.nosbar .sbar{display:none}
    without it "OUT L" wrapped to two lines inside the pill and it came out 30 px
    tall. */
 .jcell.out .pl{border:1px solid #555;border-radius:6px;padding:0 7px;color:#8a8a8a;white-space:nowrap}
-.jcell.sep{border-left:1px dotted #444}
-.jcell.sepr{border-right:1px dotted #444}
+.jcell.sep{border-left:1px dotted #5c5c5c}
+.jcell.sepr{border-right:1px dotted #5c5c5c}
 /* jack socket: a ring meter (270-degree sweep, --v = 0..100) around a dark hole */
 .jack{--v:0;--c:#0af;width:42px;height:42px;border-radius:50%;position:relative;margin:4px 0 1px;
   background:conic-gradient(from 225deg,var(--c) calc(var(--v)*.75%),#2a2a2a calc(var(--v)*.75%))}   /* the 6 o'clock gap is ring grey too */
