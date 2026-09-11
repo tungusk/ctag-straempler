@@ -11,12 +11,15 @@ body{background:#2e2e2e;color:#ccc;font-family:monospace;font-size:13px;padding-
 header{background:#1e1e1e;border-bottom:1px solid #333;padding:6px 12px;display:flex;align-items:center;gap:10px}
 h1{font-size:13px;color:#888;flex:1;letter-spacing:.05em}
 .tabs{display:flex;gap:4px}
-.tab{cursor:pointer;padding:3px 10px;border:1px solid #444;border-radius:3px;color:#888;font-size:12px}
+/* the FILES chip rows (Samples/Modules + the folder filters) are wider than a
+   502 px column: wrap them instead of letting them escape the card */
+#filescard .tabs{flex-wrap:wrap;row-gap:4px}
+.tab{cursor:pointer;padding:3px 10px;border:1px solid #5a5a5a;border-radius:3px;color:#aaa;font-size:12px}
 .tab.on{background:var(--acc);color:#000;border-color:var(--acc)}
 .pane{display:none;padding:10px}
 .pane.on{display:block}
 table{width:100%;border-collapse:collapse}
-th{text-align:left;color:#666;padding:4px 6px;border-bottom:1px solid #2a2a2a;font-weight:normal;font-size:11px}
+th{text-align:left;color:#9a9a9a;padding:4px 6px;border-bottom:1px solid #2a2a2a;font-weight:normal;font-size:11px}
 td{padding:4px 6px;border-bottom:1px solid #1e1e1e;vertical-align:middle}
 tr:hover td{background:#161616}
 .btn{background:#2a2a2a;color:#aaa;border:1px solid #444;padding:3px 8px;cursor:pointer;border-radius:2px;font-size:11px;font-family:monospace}
@@ -25,7 +28,7 @@ tr:hover td{background:#161616}
 .del:hover{background:#2a1010}
 .del.armed{background:#f22;color:#000;border-color:#f22;font-weight:bold}
 .del.armed:hover{background:#f44}
-label{display:block;color:#777;font-size:11px;margin:8px 0 2px}
+label{display:block;color:#a4a4a4;font-size:11px;margin:8px 0 2px}
 input{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px 8px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
 select{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
 input[type=range]{padding:0;height:22px;accent-color:#0af}
@@ -36,16 +39,15 @@ input[type=checkbox]{color-scheme:dark;accent-color:#2f5566;opacity:.8}
 .mtr.sm{width:48px;height:8px}
 /* the library is hundreds of rows: it scrolls INSIDE the card so the page stays
    a page. The header row sticks so you can still read the columns while scrolling. */
-.fscroll{max-height:46vh;min-height:120px;overflow-y:auto;overflow-x:hidden;margin-top:4px;
+/* open, FILES owns the right column, so it can afford a taller list */
+.fscroll{max-height:60vh;min-height:120px;overflow-y:auto;overflow-x:hidden;margin-top:4px;
   border-top:1px solid #222;border-bottom:1px solid #222}
 .fscroll table{margin:0}
 .fscroll thead th{position:sticky;top:0;background:#1c1c1c;z-index:1}
-#filescard.wide{width:1016px;max-width:calc(100vw - 24px)}
-#filescard.wide .fscroll{max-height:62vh}
-.dz{border:2px dashed #333;padding:24px;text-align:center;color:#555;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
+.dz{border:2px dashed #5a5a5a;padding:24px;text-align:center;color:#aaa;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
 .dz.ov{border-color:#0af;color:#0af}
 progress{width:100%;height:6px;margin-top:6px;display:none}
-.msg{color:#777;font-size:11px;margin-top:4px;min-height:16px}
+.msg{color:#a4a4a4;font-size:11px;margin-top:4px;min-height:16px}
 .msg:empty{display:none}   /* an empty status line must not reserve 20 px (it sat above BOUNCE) */
 .ptag{background:#3a1010;border:1px solid #a33;color:#f88;border-radius:3px;padding:2px 8px;font-size:11px;letter-spacing:.05em}   /* polling paused: in the header so it is visible at any scroll */
 .ok{color:#4a4}
@@ -224,7 +226,7 @@ body.nosbar .sbar{display:none}
 .mxadd{background:none;border:1px solid #262626;color:#4a4a4a;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
 .mxadd:hover{color:#0af;border-color:#3a5a6a}
 .mxc [hidden]{display:none!important}
-.mxmode{background:none;border:1px solid #262626;color:#666;border-radius:2px;height:18px;padding:0 5px;font-family:monospace;font-size:10px;line-height:16px;cursor:pointer;white-space:nowrap}
+.mxmode{background:none;border:1px solid #3a3a3a;color:#9a9a9a;border-radius:2px;height:18px;padding:0 5px;font-family:monospace;font-size:10px;line-height:16px;cursor:pointer;white-space:nowrap}
 .mxmode.on{color:#0af;border-color:#3a5a6a}
 .mxdef{color:#4a4a4a;font-size:10px;padding:1px 3px;white-space:nowrap}
 .mxrev{background:none;border:1px solid #3a6a4a;color:#6c9;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
@@ -250,9 +252,9 @@ body.nosbar .sbar{display:none}
   #panel{order:1}#midicard{order:2}                                  /* the instrument */
   #fscard{order:3}#rdcard{order:3}#edcard{order:3}                   /* the active machine's own card */
   #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}#machcard{order:7}  /* patching, then the selector */
-  #rsetup{order:8}#rweb{order:9}#rglob{order:10}#rparams{order:11}   /* settings */
-  #rm{order:12}#bouncecard{order:13}#bcastcard{order:14}             /* capture / streaming */
-  #upcard{order:15}#filescard{order:16}                               /* the library, last */
+  #filescard{order:8}                                                /* pinned under MACHINE */
+  #rsetup{order:9}#rweb{order:10}#rglob{order:11}#rparams{order:12}  /* settings */
+  #rm{order:13}#bouncecard{order:14}#bcastcard{order:15}#upcard{order:16}   /* capture / streaming / upload */
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
 /* BOUNCE + PUSH -> ICECAST against BROADCAST: equal-height columns, the last card in the
@@ -295,7 +297,7 @@ body.nosbar .sbar{display:none}
 .fxslots select{width:auto;min-width:96px}
 .fxgs{display:flex;flex-wrap:wrap;gap:8px}
 .fxg{flex:1 1 250px;border:1px solid #2a2a2a;border-radius:3px;padding:4px 8px 6px}
-.fxg b{display:block;color:#666;font-size:10px;letter-spacing:1px;margin-bottom:2px}
+.fxg b{display:block;color:#9a9a9a;font-size:10px;letter-spacing:1px;margin-bottom:2px}
 .fxp{display:flex;align-items:center;gap:6px;margin:2px 0}
 .fxp label{flex:0 0 66px;color:#888;font-size:11px;white-space:nowrap}
 .fxp input[type=range]{flex:1;min-width:60px}
@@ -373,7 +375,15 @@ body.nosbar .sbar{display:none}
 .ren:hover{color:#0af;border-bottom-color:#0af}
 .bar{background:#181818;border:1px solid #333;height:14px;position:relative;margin:4px 0}
 .bar>i{display:block;height:100%;background:#0af}
-.card{border:none;background:#1c1c1c;padding:8px 10px;margin:8px 0}
+/* cards share the PAGE's background — they are separated by their spacing and
+   their titles, not by a lighter slab (Arlo 2026-09-10). #panel sets its own
+   near-black and is unaffected.
+   NOTE: this lifted the ground from #1c1c1c to #2e2e2e, so the muted greys on
+   cards lost their contrast — th / label / .msg / .dz / .tab / .mxmode / .fxg b
+   were all brightened to suit. The drop zones were the worst (#555 on #2e2e2e,
+   about 1.9:1 — effectively invisible). Anything on the PANEL or the status bar
+   still sits on near-black and must NOT be brightened with them. */
+.card{border:none;background:#2e2e2e;padding:8px 10px;margin:8px 0}
 .card h4{margin:0 0 6px;color:var(--accl);font-weight:normal;font-size:13px;letter-spacing:1px}
 .kv{color:#9ab}.kv b{color:#ddd;font-weight:normal}
 .scope{width:100%;border-collapse:collapse;font-size:11px}
@@ -597,7 +607,6 @@ body.nosbar .sbar{display:none}
   <div id="fileshome"><div class="card pnl" id="filescard">
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0">FILES</b>
-      <button class="btn" id="fwbtn" style="flex:0 0 52px" onclick="filesWideToggle()" title="card width">full</button>
     </div>
     <div class="tabs" style="margin-bottom:8px">
       <div class="tab on" id="ft0" onclick="filesTab(0)">Samples</div>
@@ -2275,25 +2284,10 @@ function midiWidthPref(){
   try{v=localStorage.getItem('web_midiw');}catch(e){}
   return (v==='half'||v==='0')?'half':'full';    // '1'/'0' is the legacy spelling
 }
-// FILES width: half sits in a column, full spans both by parking in the shared
-// band. Same shape as midiAuto(); the band holds either or both.
-function filesWidthPref(){try{return localStorage.getItem('web_filesw')||'half';}catch(e){return 'half';}}
-function filesWideToggle(){
-  try{localStorage.setItem('web_filesw',filesWidthPref()==='full'?'half':'full');}catch(e){}
-  filesAuto();
-}
-function filesAuto(){
-  var card=document.getElementById('filescard'); if(!card)return;
-  var fits=window.innerWidth>=1040;
-  var wide=fits&&filesWidthPref()==='full';
-  var b=document.getElementById('fwbtn');
-  if(b){b.style.display=fits?'':'none';b.textContent=wide?'1/2':'full';}
-  if(card.classList.contains('wide')!==wide){
-    card.classList.toggle('wide',wide);
-    (wide?document.getElementById('midiband'):document.getElementById('fileshome')).appendChild(card);
-  }
-  balanceSoon();
-}
+// FILES has no width toggle: spanning both columns read wrong against the panel.
+// Open, it simply OWNS the right column (see balanceCols) — which is the same
+// amount of room, in a shape that matches the rest of the page.
+function filesAuto(){balanceSoon();}
 function midiWideToggle(){   // wide splits the page around the band; re-lay it out
   setTimeout(balanceCols,80);
   try{localStorage.setItem('web_midiw',midiWidthPref()==='full'?'half':'full');}catch(e){}
@@ -2469,8 +2463,10 @@ function machCardPoll(name,on){
 // 400 px early. Both columns are 502 px, so a card's height does not change when
 // it moves and measuring before the move is safe.
 var BAL_LEFT=['panel','midihome'];
-var BAL_RIGHT=['machcard','fscard','rdcard','edcard'];
-var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard','upcard','fileshome'];
+// FILES is PINNED here, under MACHINE (Arlo 2026-09-10) — it is not dealt with
+// the flow cards, whether it is open or folded.
+var BAL_RIGHT=['machcard','fscard','rdcard','edcard','fileshome'];
+var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard','upcard'];
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');
@@ -2500,13 +2496,22 @@ function balanceCols(){
   // where the last run left things.
   if(narrow||!wide){
     if(bot)bot.style.display='none';
+    var fsc=document.getElementById('fscroll');   // the stylesheet owns it again
+    if(fsc&&fsc.style.maxHeight&&fsc.style.maxHeight!=='none')fsc.style.maxHeight='';
     BAL_LEFT.forEach(function(id){move(cols[0],id);});
     BAL_RIGHT.forEach(function(id){move(cols[1],id);});
     if(narrow){BAL_FLOW.forEach(function(id){move(cols[1],id);});return;}   // `order` sequences it
+    // An OPEN file list owns the right column: it is the one card with no
+    // natural height, so balancing it against the panel just shoved everything
+    // else around it. Folded, it is an ordinary flow card again.
+    var fb=document.getElementById('files_body');
+    var filesOpen=!!fb&&getComputedStyle(fb).display!=='none';
+    var flow=BAL_FLOW;
     var hl=0,hr=0;
     BAL_LEFT.forEach(function(id){hl+=h(id);});
     BAL_RIGHT.forEach(function(id){hr+=h(id);});
-    BAL_FLOW.forEach(function(id){
+    if(filesOpen){flow.forEach(function(id){move(cols[0],id);});fitFiles(cols);return;}   // rest goes left
+    flow.forEach(function(id){
       var c=h(id);
       if(hl<=hr){move(cols[0],id);hl+=c;}else{move(cols[1],id);hr+=c;}
     });
@@ -2530,6 +2535,22 @@ function balanceCols(){
     var c=h(id);
     if(b0<=b1){move(bcols[0],id);b0+=c;}else{move(bcols[1],id);b1+=c;}
   });
+}
+// Stretch the open file list so the RIGHT column ends level with the left.
+// Done synchronously: with the cap lifted the scroller reports its full content
+// height, so (left - right) is exactly the room the rest of the column leaves —
+// and reading it back in the same frame means the browser never paints the
+// uncapped, thousands-of-pixels version.
+function fitFiles(cols){
+  var sc=document.getElementById('fscroll');if(!sc)return;
+  sc.style.maxHeight='none';
+  var lh=cols[0].getBoundingClientRect().height;
+  var rh=cols[1].getBoundingClientRect().height;
+  var cur=sc.getBoundingClientRect().height;
+  var t=Math.round(cur+(lh-rh));
+  if(t<160)t=160;                     // never collapse to a sliver
+  if(t>cur)t=Math.round(cur);         // never taller than the list itself
+  sc.style.maxHeight=t+'px';
 }
 var balT;
 function balanceSoon(){clearTimeout(balT);balT=setTimeout(balanceCols,60);}

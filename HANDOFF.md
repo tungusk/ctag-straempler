@@ -9,6 +9,29 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — FILES owns the right column; cards sit on the page ground
+
+- **The FILES width toggle is GONE.** Spanning both columns read wrong against
+  the panel. Instead FILES is **pinned under MACHINE** (`BAL_RIGHT`, not the
+  flow, open or folded) and when it is OPEN it **owns the right column**: every
+  other flow card goes left. Same amount of room, in the page's own shape.
+- **`fitFiles()` stretches the list so both columns end level.** With the cap
+  lifted the scroller reports its full content height, so `(left - right)` is
+  exactly what the rest of the column leaves; reading it back in the SAME frame
+  means the browser never paints the uncapped 9000 px version. Measured gap
+  **0 px**, and it re-fits when anything on the left folds. Folded or narrow, the
+  inline cap is cleared and the stylesheet owns the height again.
+- **The FILES chip rows wrap** (`#filescard .tabs{flex-wrap:wrap}`) — Samples /
+  Modules plus eight folder filters are wider than a 502 px column and were
+  escaping the card.
+- **Cards now share the PAGE background** (`#1c1c1c` -> `#2e2e2e`); `#panel`
+  keeps its own near-black. **That lifted ground killed the muted greys**, so
+  `th` / `label` / `.msg` / `.dz` / `.tab` / `.mxmode` / `.fxg b` were brightened
+  to match. The drop zones were the worst — `#555` on `#2e2e2e` is about 1.9:1,
+  effectively invisible. **Anything on the PANEL or the status bar still sits on
+  near-black and must NOT be brightened with them** (`.pcell`/`.jcell`/`.mkey`/
+  `.sbar` deliberately untouched).
+
 ## 2026-09-10 — ONE page: no tabs, no banner, Files and Upload are cards
 
 Arlo: "make files and upload cards, drop the tabs and the entire banner."
