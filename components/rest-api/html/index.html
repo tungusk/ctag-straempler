@@ -199,6 +199,7 @@ body.nosbar .sbar{display:none}
 .pnl{padding:8px 14px 10px;background:#141414;border:1px solid #262626}   /* the panel card stays near-black */
 .pnl .msg{text-align:center;margin:4px auto 0}
 .ph{display:block;color:var(--acc);font-size:14px;letter-spacing:1.5px;margin-bottom:5px}
+[id$="_arw"],.arw{font-size:1.3em;letter-spacing:0;line-height:1;vertical-align:-1px}
 /* a second heading INSIDE a card (the icecast push, under BROADCAST): same
    voice a step quieter, and NOT .ph — makeFold() takes the card's first .ph as
    the fold handle, so a second one would hand it the wrong element. */
@@ -276,9 +277,9 @@ body.nosbar .sbar{display:none}
 .mtx{width:auto;max-width:920px;margin:4px 0 2px}
 .mtx td{padding:2px 6px;border-bottom:1px solid #1a1a1a;white-space:nowrap}
 .mtx select{width:118px}
-.mxrow{display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px}
-.mxc{display:flex;align-items:center;gap:6px;margin:1px 0}
-.mxp{display:flex;align-items:center;gap:6px;margin:1px 0;color:#7fb2cc;font-size:11px}
+.mxrow{display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px;width:100%}
+.mxc{display:flex;align-items:center;gap:6px;margin:1px 0;flex:1 1 100%;min-width:0}
+.mxc .mxmode,.mxc .amt,.mxc .mxtail{flex:0 0 auto}
 .mxbtn{vertical-align:top;padding-top:4px;width:22px;text-align:right}
 .mxadd{background:none;border:1px solid #262626;color:#4a4a4a;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
 .mxadd:hover{color:#0af;border-color:#3a5a6a}
@@ -289,10 +290,11 @@ body.nosbar .sbar{display:none}
 .mxrev{background:none;border:1px solid #3a6a4a;color:#6c9;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
 .mxrev:hover{color:#8f8;border-color:#8f8}
 .mxc select.on{border-color:#3a7;color:#6c9}
+.mxc select.pk{border-color:#2e4e5e;color:#7fb2cc}
 .mxf.ghost{opacity:.55;border-style:dashed;display:inline-flex;align-items:center;gap:6px}
-.mxp select{width:82px}
 .mxcard .mtx{width:100%}
-.mxcard .mtx input[type=range]{width:96px}
+.mxcard .mtx tr>td:nth-child(2){width:100%}
+.mxcard .mtx input[type=range]{flex:1 1 auto;width:auto;min-width:80px}
 /* SETTINGS card: two TFT-style screens (machine Setup / global Settings) */
 .tftw{display:flex;margin-top:4px}   /* one screen per card; the card is the panel-column width */
 /* Narrow window (one column): the two .rcol become display:contents, so EVERY
@@ -361,8 +363,8 @@ body.nosbar .sbar{display:none}
 .fxp select{width:auto;flex:1}
 .fxp input[type=checkbox]{width:auto;margin:0}
 .fxv{flex:0 0 58px;text-align:right;color:#aaa;font-size:11px;font-family:monospace}
-.mxcard .mtx select{width:104px}
-.mxcard .mtx .amt{width:38px}
+.mxcard .mtx select{width:152px}
+.mxcard .mtx .amt{width:44px}
 .mxf{display:inline-block;margin:1px 0;padding:2px 8px;border:1px solid #2e3e4a;border-radius:3px;background:#12181c;color:#7fb2cc;font-size:11px}
 .mtx input[type=range]{-webkit-appearance:none;appearance:none;width:140px;height:18px;vertical-align:middle;background:transparent;border:none}
 .mtx input[type=range]::-webkit-slider-runnable-track{height:6px;border:1px solid #333;border-radius:3px;background:linear-gradient(to right,#1a1a1a 0 49%,#444 49% 51%,#1a1a1a 51%)}
@@ -619,7 +621,7 @@ body.nosbar .sbar{display:none}
     <div class="msg" id="clkmsg" style="display:none"></div>
     <!-- the beat listener IS a clock source (machines follow it via Clock
          Src = AUDIO), so it belongs inside CLOCK rather than beside it. -->
-    <b class="sub" id="lsn_hdr" data-t="LISTENER" style="cursor:pointer;user-select:none;display:block;border-top:1px solid #262626;margin-top:8px;padding-top:6px" onclick="foldToggle('lsn')">&#9656; LISTENER</b>
+    <b class="sub" id="lsn_hdr" data-t="LISTENER" style="cursor:pointer;user-select:none;display:block;border-top:1px solid #262626;margin-top:8px;padding-top:6px" onclick="foldToggle('lsn')"><span id="lsn_arw">&#9656; </span>LISTENER</b>
     <div id="lsn_body" style="display:none">
     <div class="kv" id="blbox" style="margin-bottom:6px">--</div>
       <!-- same shape as the CLOCK row above it: label INLINE with its control,
@@ -654,7 +656,7 @@ body.nosbar .sbar{display:none}
     </div>
     <!-- UPLOAD lives inside FILES: it is the same library, seen from the
          writing end. Sub-fold, so it collapses away when you are only browsing. -->
-    <b class="sub" id="up_hdr" data-t="UPLOAD" style="cursor:pointer;user-select:none;display:block;margin:6px 0 2px" onclick="foldToggle('up')">&#9656; UPLOAD</b>
+    <b class="sub" id="up_hdr" data-t="UPLOAD" style="cursor:pointer;user-select:none;display:block;margin:6px 0 2px" onclick="foldToggle('up')"><span id="up_arw">&#9656; </span>UPLOAD</b>
     <div id="up_body" style="display:none">
     <!-- CONVERT-ON-IMPORT was invisible: an upload silently kicks a conversion pass
          (MP3 / 48k / 24-bit -> native WAV) and GET /import has always reported its
@@ -807,7 +809,7 @@ body.nosbar .sbar{display:none}
     <div class="kv" style="margin-top:4px">CTAG Str&#228;mpler &#8212; upstream by Robert Manzke (CC BY-NC-SA 4.0); v09-machines fork by Arlo + Claude</div>
   </div>
   <div id="setform" style="display:none">
-    <b class="sub" id="blogo_hdr" data-t="BOOT LOGO" style="cursor:pointer;user-select:none;display:block;margin-top:10px" onclick="foldToggle('blogo')">&#9656; BOOT LOGO</b>
+    <b class="sub" id="blogo_hdr" data-t="BOOT LOGO" style="cursor:pointer;user-select:none;display:block;margin-top:10px" onclick="foldToggle('blogo')"><span id="blogo_arw">&#9656; </span>BOOT LOGO</b>
     <div id="blogo_body" style="display:none">
       <div class="dz" id="bldz" onclick="document.getElementById('blf').click()">
         <b>DROP OR TAP</b>
@@ -1528,12 +1530,17 @@ function fxCard(d){
   h+='</div><div class="fxgs" id="fxgroups">'+fxGroups(d)+'</div></div>';
   return h;
 }
-// CV MATRIX, transposed: one row per input (CV 1-8, TR 1-2, plus a "no jack" row
-// for clocks on AUDIO/INT/OFF). A row lists the machine's INPUT MAP entries on
-// that channel ("imap" from the firmware): a FIXED job is a plain chip; an
-// EDITABLE pick (it carries a preset key) is a chip with a source dropdown, and
-// Apply writes the choice to that key. Then the assignable-matrix cells: one per
-// assignment plus a trailing "off" slot; picking a destination there adds one.
+// CV MATRIX, transposed: one row per input (CV 1-8, TR 1-2, and a row per
+// off-jack source — AUDIO / INT / OFF — while something sits there). EVERY row
+// reads the same way: the channel, then a dropdown naming what that channel
+// drives. Two kinds of job share that dropdown, so the column stays one column
+// (2026-09-11 — before this the input-map entries were rendered job-first, with
+// a source dropdown that echoed the row's own name back at you):
+//   - an assignable MATRIX destination, which brings the offset/knob controls
+//   - an editable INPUT MAP entry ("imap" from the firmware: an entry carrying
+//     a preset key, e.g. Tape's Play/stop, or the core clock, which is
+//     module-wide and applies through POST /settings instead)
+// A FIXED input-map entry (no key) is still a plain chip trailing the row.
 // The firmware stores one source per destination, so rpApply rebuilds mxs/mxa
 // from the cells (a destination claimed twice: the later row wins). Reset puts
 // every pick back to its default and clears the assignable matrix.
@@ -1542,20 +1549,61 @@ function fxCard(d){
 // knobs K5-K8) are marked in the list (green) and with the word "default" on
 // the row while it still matches; otherwise the row carries ONE arrow that
 // puts that CV back to its default. Nothing posts until Apply.
-var mxLabs=[],mxN=0,mxDef=[];
+var mxLabs=[],mxN=0,mxDef=[],mxIm=[];   // mxIm = the machine's input map, as rendered
 var SRC_NAMES=['CV1','CV2','CV3','CV4','CV5','CV6','CV7','CV8','TR1','TR2','AUDIO','INT','OFF'];
-function mxCell(cv,dest,amt,mode){
+// which channels an input-map entry accepts (MI_CV 1 / MI_TR 2 / MI_CLK 4).
+// Channel 12 stands in for "can this job be turned off at all".
+function mxImOK(e,ch){return !!(e.o&(ch<8?1:ch<10?2:4));}
+// a slot on a channel's row. "sel" is the job it holds: "-1" nothing, "<k>" the
+// matrix destination k, "p<i>" the input-map entry i.
+function mxCell(cv,sel,amt,mode){
+  sel=String(sel);
+  var pick=sel.charAt(0)==='p'?+sel.slice(1):-1,dest=pick<0?+sel:-1,i;
   mode=mode?1:0;
-  var o='<option value="-1"'+(dest<0?' selected':'')+'>off</option>';
-  for(var k=0;k<mxN;k++)o+='<option value="'+k+'"'+(k===dest?' selected':'')+(mxDef[k]===cv?' style="color:#6c9;background:#12301e"':'')+'>'+esc(mxLabs[k]||('dest '+(k+1)))+'</option>';
+  // an entry with no OFF among its sources must always sit on a jack, so its
+  // slot offers the other jobs only — never "off", never a matrix destination
+  var must=pick>=0&&!mxImOK(mxIm[pick],12),o='';
+  if(!must)o+='<option value="-1"'+(pick<0&&dest<0?' selected':'')+'>off</option>';
+  if(cv<8&&!must)for(i=0;i<mxN;i++)o+='<option value="'+i+'"'+(i===dest?' selected':'')+(mxDef[i]===cv?' style="color:#6c9;background:#12301e"':'')+'>'+esc(mxLabs[i]||('dest '+(i+1)))+'</option>';
+  for(i=0;i<mxIm.length;i++)if(mxIm[i].k&&(pick===i||mxImOK(mxIm[i],cv)))
+    o+='<option value="p'+i+'"'+(pick===i?' selected':'')+'>'+esc(mxIm[i].l)+'</option>';
   // green outline = assigned AND as the module has it; an unapplied edit drops it
   var L=mxLoaded(dest),same=!!(L&&L.cv===cv&&L.mode===mode&&(mode===1||L.amt===(+amt)));
-  return '<div class="mxc" data-cv="'+cv+'" data-mode="'+mode+'"><select class="'+(dest>=0&&same?'on':'')+'" onchange="mxRerender(mxCollect())">'+o+'</select>'
+  var h='<div class="mxc" data-cv="'+cv+'" data-mode="'+mode+'">'
+    +'<select data-was="'+sel+'" class="'+(pick>=0?'pk':(dest>=0&&same?'on':''))+'"'
+    +(pick>=0&&(mxIm[pick].o&8)?' title="module-wide setting (the core clock)"':'')
+    +' onchange="mxSel(this)">'+o+'</select>';
+  if(pick>=0)return h+'</div>';   // an input-map job carries no amount
+  return h
     +'<button class="mxmode'+(mode?' on':'')+'" title="offset (± amount) or knob (absolute: takes over once moved)" onclick="mxModeTog(this)">'+(mode?'knob':'&#177;')+'</button>'
     +'<input type="range" min="-100" max="100" step="1" value="'+amt+'"'+(mode?' hidden':'')+' oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\';mxTail(this.parentNode)">'
     +'<span class="amt"'+(mode?' hidden':'')+'>'+(amt>0?'+':'')+amt+'%</span>'
     +'<span class="mxtail">'+mxTailHtml(cv,dest,amt,mode)+'</span>'
 +'</div>';
+}
+// a slot changed: the chosen job moves here, and whatever just left needs a
+// home. It takes the incoming job's old channel when that channel is legal for
+// it (this is the TR1/TR2 swap); failing that it goes OFF if it can be off;
+// failing that it simply stays put and the row shows both jobs.
+// the slot just edited outranks any sibling still showing the same job (a
+// destination lives on exactly one channel, and so does an input-map entry)
+function mxOwn(a,c,sel,cv){
+  if(sel.charAt(0)==='p'){var g=mxIm[+sel.slice(1)];if(g&&g.k)a.picks[g.k]=cv;return;}
+  var d=+sel;if(d<0||d>=mxN)return;
+  var rng=c.querySelector('input[type=range]'),m=+c.dataset.mode;
+  a.mxs[d]=cv;a.mxa[d]=m?0:(rng?parseInt(rng.value)||0:0);a.mxm[d]=m;
+}
+function mxSel(s){
+  var cv=+s.parentNode.dataset.cv,was=s.dataset.was||'-1',now=s.value,a=mxCollect();
+  mxOwn(a,s.parentNode,now,cv);
+  if(was.charAt(0)==='p'&&was!==now){
+    var e=mxIm[+was.slice(1)],home=-1;
+    if(e&&e.k&&a.picks[e.k]===cv){
+      if(now.charAt(0)==='p'){var p=mxIm[+now.slice(1)];if(p&&p.s!==cv&&mxImOK(e,p.s))home=p.s;}
+      a.picks[e.k]=home>=0?home:(mxImOK(e,12)?12:cv);
+    }
+  }
+  mxRerender(a);
 }
 // the trailing badges: "default" while a defaulted dest matches its default,
 // the round arrow (back to the default) once it differs, and an UNDO arrow
@@ -1595,22 +1643,26 @@ function mxModeTog(b){
   mxRerender(mxCollect());
 }
 // the matrix as the firmware stores it, read back from the cells (a dest
-// claimed twice: the later row wins)
+// claimed twice: the later row wins), plus the channel each editable
+// input-map job now sits on. The hidden [data-ik] inputs seed the picks so a
+// job whose source is off-jack still has a value.
 function mxCollect(){
-  var mxs=[],mxa=[],mxm=[];
+  var mxs=[],mxa=[],mxm=[],picks={};
   for(var k=0;k<mxN;k++){mxs.push(-1);mxa.push(0);mxm.push(0);}
+  document.querySelectorAll('[data-ik]').forEach(function(h){picks[h.dataset.ik]=+h.value;});
   document.querySelectorAll('.mxc').forEach(function(c){
-    var cv=+c.dataset.cv,dest=+c.querySelector('select').value,amt=parseInt(c.querySelector('input').value)||0,mode=+c.dataset.mode;
+    var cv=+c.dataset.cv,sel=c.querySelector('select').value;
+    if(sel.charAt(0)==='p'){var e=mxIm[+sel.slice(1)];if(e&&e.k)picks[e.k]=cv;return;}
+    var rng=c.querySelector('input[type=range]'),dest=+sel,amt=rng?parseInt(rng.value)||0:0,mode=+c.dataset.mode;
     if(dest>=0&&dest<mxN){mxs[dest]=cv;mxa[dest]=mode?0:amt;mxm[dest]=mode;}
   });
-  return {mxs:mxs,mxa:mxa,mxm:mxm};
+  return {mxs:mxs,mxa:mxa,mxm:mxm,picks:picks};
 }
 // re-render from a working copy: current cells + current picks, with the
 // given matrix arrays swapped in (revert / reset). Nothing posts here.
 function mxRerender(arr){
-  var d=JSON.parse(JSON.stringify(rpData));
+  var d=JSON.parse(JSON.stringify(rpData)),picks=arr.picks||{};
   d.mxs=arr.mxs;d.mxa=arr.mxa;d.mxm=arr.mxm;
-  var picks={};document.querySelectorAll('[data-ik]').forEach(function(s){picks[s.dataset.ik]=+s.value;});
   (d.imap||[]).forEach(function(e){if(e.k&&picks[e.k]!==undefined)e.s=picks[e.k];});
   document.getElementById('rmatrix').innerHTML=rpMatrix(d);
 }
@@ -1622,47 +1674,39 @@ function mxAdd(cv){
   if(last)last.insertAdjacentHTML('afterend','<tr data-cvrow="'+cv+'"><td></td><td><div class="mxrow">'+mxCell(cv,-1,0)+'</div></td>'
     +'<td class="mxbtn"><button class="mxadd" title="remove this line" onclick="this.closest(\'tr\').remove()">&#8722;</button></td></tr>');
 }
-function mxPick(e,nolabel){   // an editable input-map entry: label + source dropdown
-  var allow=[];
-  if(e.o&1)for(var c=0;c<8;c++)allow.push(c);
-  if(e.o&2)allow.push(8,9);
-  if(e.o&4)allow.push(10,11,12);
-  if(allow.indexOf(e.s)<0)allow.push(e.s);
-  var o='';allow.forEach(function(v){o+='<option value="'+v+'"'+(v===e.s?' selected':'')+'>'+(SRC_NAMES[v]||v)+'</option>';});
-  return '<div class="mxp">'+(nolabel?'':'<span>'+esc(e.l)+'</span>')+'<select data-ik="'+esc(e.k)+'" data-idef="'+e.d+'"'+((e.o&8)?' data-ig="1" title="module-wide setting (the core clock)"':'')+'>'+o+'</select></div>';
-}
 function rpMatrix(d){
   var hasM=Array.isArray(d.mxs),im=Array.isArray(d.imap)?d.imap:[];
   if(!hasM&&!im.length)return '';
-  mxLabs=d.mxl||[];mxN=hasM?d.mxs.length:0;mxDef=Array.isArray(d.mxd)?d.mxd:[];
+  mxLabs=d.mxl||[];mxN=hasM?d.mxs.length:0;mxDef=Array.isArray(d.mxd)?d.mxd:[];mxIm=im;
   var mxm=Array.isArray(d.mxm)?d.mxm:[];
   var h='<div class="card pnl mxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">CV MATRIX</b>'
     +'<button class="btn foldhide" style="flex:0 0 auto;margin-right:6px" onclick="rpApply()">Apply</button>'
     +'<button class="btn foldhide" style="flex:0 0 auto" title="picks back to their defaults, assignable matrix cleared, applied" onclick="mxReset()">Reset</button></div><table class="mtx">';
-  for(var ch=0;ch<11;ch++){
-    var name=ch<8?'CV '+(ch+1):ch<10?'TR '+(ch-7):'clock',cells='',chips='';
-    im.forEach(function(e){
-      var on=(ch<10)?e.s===ch:(e.s<0||e.s>=10);
-      if(!on)return;
-      chips+=e.k?mxPick(e,ch===10):'<div class="mxf" title="fixed in this machine">'+esc(e.l)+'</div>';   // the clock row already says clock
+  // the editable picks also travel as hidden inputs so rpApply keeps its one
+  // [data-ik] harvest (and knows which are module-wide, [data-ig])
+  im.forEach(function(e){if(e.k)h+='<input type="hidden" data-ik="'+esc(e.k)+'" data-idef="'+e.d+'"'+((e.o&8)?' data-ig="1"':'')+' value="'+e.s+'">';});
+  // CV1-8, TR1-2, then the off-jack sources, each of those only while a job
+  // actually sits there (that is how AUDIO / INT / OFF stay visible at all)
+  for(var ch=0;ch<13;ch++){
+    var name=ch<8?'CV '+(ch+1):ch<10?'TR '+(ch-7):SRC_NAMES[ch],cells='',chips='',nc=0;
+    if(hasM&&ch<8)for(var k=0;k<mxN;k++)if(d.mxs[k]===ch){cells+=mxCell(ch,k,(d.mxa&&typeof d.mxa[k]==='number')?d.mxa[k]:0,mxm[k]===1);nc++;}
+    im.forEach(function(e,i){
+      if(e.s!==ch&&!(ch===12&&e.s<0))return;
+      if(e.k){cells+=mxCell(ch,'p'+i,0,0);nc++;}
+      else chips+='<div class="mxf" title="fixed in this machine">'+esc(e.l)+'</div>';
     });
-    var add=(hasM&&ch<8),nc=0;
-    if(add){   // the loaded assignments; a bare row gets one off slot unless a chip already fills the line
-      for(var k=0;k<mxN;k++)if(d.mxs[k]===ch){cells+=mxCell(ch,k,(d.mxa&&typeof d.mxa[k]==='number')?d.mxa[k]:0,mxm[k]===1);nc++;}
-      // a default whose entry is gone entirely still gets a slot with the arrow
-      if(!nc&&mxDefDest(ch)>=0)cells+=mxCell(ch,-1,0,0);
-      if(!nc&&!chips&&!cells)cells+=mxCell(ch,-1,0,0);
-    }
-    cells+=chips;   // fixed jobs / picks trail any dropdown so the dropdowns form one column
-    if(!cells){if(ch===10)continue;cells='<div class="mxf" style="color:#444;border-color:#222;background:none">&#8212;</div>';}
+    var add=(hasM&&ch<8);
+    if(add&&!nc)cells+=mxCell(ch,-1,0,0);   // a bare CV row still offers one slot
+    cells+=chips;   // fixed jobs trail the dropdowns so the dropdowns form one column
+    if(!cells){if(ch>=10)continue;cells='<div class="mxf" style="color:#444;border-color:#222;background:none">&#8212;</div>';}
     h+='<tr data-cvrow="'+ch+'"><td style="color:#aaa;vertical-align:top;padding-top:6px;white-space:nowrap">'+name+'</td><td><div class="mxrow" id="mxr'+ch+'">'+cells+'</div></td>'
       +'<td class="mxbtn">'+(add?'<button class="mxadd" title="add a matrix assignment from this CV" onclick="mxAdd('+ch+')">+</button>':'')+'</td></tr>';
   }
   return h+'</table></div>';
 }
 function mxReset(){   // picks to their defaults, matrix = the panel-knob defaults only, applied
-  document.querySelectorAll('[data-ik]').forEach(function(s){s.value=s.dataset.idef;});
-  var a={mxs:[],mxa:[],mxm:[]};
+  var a={mxs:[],mxa:[],mxm:[],picks:{}};
+  mxIm.forEach(function(e){if(e.k)a.picks[e.k]=+e.d;});
   for(var k=0;k<mxN;k++){var df=(mxDef[k]>=0)?mxDef[k]:-1;a.mxs.push(df);a.mxa.push(0);a.mxm.push(df>=0?1:0);}
   mxRerender(a);
   rpApply();
@@ -1801,13 +1845,13 @@ function foldAll(){
 function subFold(key,title,body){
   var open=foldOpen(key,false);
   return '<b class="sub" id="'+key+'_hdr" data-t="'+title+'" style="cursor:pointer;user-select:none;display:block;margin-top:10px" onclick="foldToggle(\''+key+'\')">'
-        +(open?'\u25BE ':'\u25B8 ')+title+'</b>'
+        +'<span id="'+key+'_arw">'+(open?'\u25BE ':'\u25B8 ')+'</span>'+title+'</b>'
         +'<div id="'+key+'_body"'+(open?'':' style="display:none"')+'>'+body+'</div>';
 }
 function foldCard(key,title,body,cls){
   var open=foldOpen(key);
   return '<div class="card '+(cls||'pnl')+'" id="'+key+'_card"><b class="ph" id="'+key+'_hdr" data-t="'+title+'" style="cursor:pointer;user-select:none;margin:0" onclick="foldToggle(\''+key+'\')">'
-        +(open?'\u25BE ':'\u25B8 ')+title+'</b><div id="'+key+'_body"'+(open?'':' style="display:none"')+'>'+body+'</div></div>';
+        +'<span id="'+key+'_arw">'+(open?'\u25BE ':'\u25B8 ')+'</span>'+title+'</b><div id="'+key+'_body"'+(open?'':' style="display:none"')+'>'+body+'</div></div>';
 }
 function tftRow(cls,l,v,i,dir,opt){   // dir: 0 = plain, 1 = toggle (click cycles), 2 = range (arrows), 3 = action, 4 = read-only, 5 = editable text
   var h='<div class="r '+cls+'"><span class="l">'+esc(l)+'</span><span class="vv">';
@@ -1873,7 +1917,7 @@ function scrGlobal(g){
        // id/data-t make this the fold's HEADER, so foldSet() keeps the arrow in
        // step generically instead of the marker going stale until the next repaint
        +'<span class="aff" id="about_hdr" data-t="About" style="cursor:pointer;user-select:none" onclick="foldToggle(\'about\')" title="show / hide">'
-       +(foldOpen('about')?'\u25BE About':'\u25B8 About')+'</span></div>';
+       +'<span class="arw">'+(foldOpen('about')?'\u25BE ':'\u25B8 ')+'</span>About</span></div>';
   h+=tftRow('rw','Hostname',s.hostname||'','gsHost',5,{ph:'ctag-modular',mx:32});
   h+=tftRow('rw','SSID',s.ssid||'','gsSsid',5,{});
   h+=tftRow('rw','Password','','gsPass',5,{pw:true,ph:'unchanged'});
@@ -2033,15 +2077,14 @@ function rpLoad(retry){
 
 function rpApply(){
   if(!rpData)return;
-  var d=JSON.parse(JSON.stringify(rpData)),glob={};
-  document.querySelectorAll('[data-ik]').forEach(function(s){   // input-map picks
-    if(s.dataset.ig)glob[s.dataset.ik]=+s.value;               // module-wide (the core clock) -> /settings
-    else d[s.dataset.ik]=+s.value;
+  var d=JSON.parse(JSON.stringify(rpData)),glob={},a=mxCollect();
+  document.querySelectorAll('[data-ik]').forEach(function(s){   // input-map picks, as the rows now read
+    var v=(a.picks[s.dataset.ik]!==undefined)?a.picks[s.dataset.ik]:+s.value;
+    if(s.dataset.ig)glob[s.dataset.ik]=v;                      // module-wide (the core clock) -> /settings
+    else d[s.dataset.ik]=v;
   });
   if(Object.keys(glob).length)fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(glob)}).then(function(){clkLoad();}).catch(function(){});
-  if(Array.isArray(d.mxs)){   // matrix: rebuild per-destination arrays (src / amount / mode) from the CV rows
-    var a=mxCollect();d.mxs=a.mxs;d.mxa=a.mxa;d.mxm=a.mxm;
-  }
+  if(Array.isArray(d.mxs)){d.mxs=a.mxs;d.mxa=a.mxa;d.mxm=a.mxm;}   // per-destination arrays, rebuilt from the CV rows
   document.querySelectorAll('[data-rp]').forEach(function(inp){
     var path=inp.getAttribute('data-rp').split('.'),o=d;
     for(var i=0;i<path.length-1;i++)o=o[path[i]];
