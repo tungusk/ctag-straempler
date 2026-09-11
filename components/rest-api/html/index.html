@@ -260,7 +260,7 @@ body.nosbar .sbar{display:none}
   #fscard{order:3}#rdcard{order:3}#edcard{order:3}                   /* the active machine's own card */
   #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}                   /* patching */
   #filescard{order:7}#machcard{order:8}                              /* library, then the selector */
-  #rsetup{order:9}#rweb{order:10}#rglob{order:11}#rparams{order:12}  /* settings */
+  #rsetup{order:9}#rglob{order:11}#rparams{order:12}                 /* settings */
   #rm{order:13}#bouncecard{order:14}#bcastcard{order:15}             /* capture / streaming */
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
@@ -668,7 +668,6 @@ body.nosbar .sbar{display:none}
        the free column"). The top pair stays as it was — panel left, machine
        right. -->
   <div id="rsetup"></div>
-  <div id="rweb"></div>
   <div id="rglob"></div>
   <div id="rparams"></div>
   <div class="msg" id="rm"></div>
@@ -1826,7 +1825,7 @@ function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrw
   +'<div class="row tight" style="margin-top:6px;align-items:center;justify-content:flex-end">'
   +'<span class="msg" id="sm" style="flex:1;margin:0;text-align:right"></span>'
   +'<button class="btn" style="flex:0 0 72px" onclick="saveSet()">Save</button></div>'
-  +'<div id="setslot"></div>');}
+  +'<div id="webslot"></div><div id="setslot"></div>');}
 // ---- WEB card: preferences that live in this BROWSER, not on the module ----
 // Everything here was hardcoded or hidden before: the auto-refresh interval was
 // a literal 3000 in scrPoll, the status poll a literal 500, the screen size only
@@ -1861,7 +1860,10 @@ function webCard(){
   return h+'<div style="color:#555;font-size:10px;margin:8px 4px 0">Kept in this browser only. '
         +'Poll PAUSED stops all REST traffic from this page \u2014 the panel stops updating until you set it back.</div></div>';
 }
-function webDraw(){var el=document.getElementById('rweb');if(el)el.innerHTML=foldCard('web','WEB',webCard());}
+// WEB is a sub-fold INSIDE Global: it is browser-side settings sitting next to
+// the device-side ones, not a card in its own right. Rendered into the slot
+// globCard() leaves, so it survives the card being re-templated on rpLoad.
+function webDraw(){var el=document.getElementById('webslot');if(el)el.innerHTML=subFold('web','WEB',webCard());}
 function webScrLoad(){WEB.scrload=WEB.scrload?0:1;webSave();webDraw();}
 function webScrInt(){
   var i=WEB_INT.indexOf(WEB.scrint); WEB.scrint=WEB_INT[(i<0?0:i+1)%WEB_INT.length];
@@ -2488,7 +2490,7 @@ var BAL_LEFT=['panel','midihome'];
 // FILES is PINNED at the TOP of the right column, above MACHINE (Arlo
 // 2026-09-10) — not dealt with the flow cards, open or folded.
 var BAL_RIGHT=['fileshome','machcard','fscard','rdcard','edcard'];
-var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard'];
+var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rglob','rparams','rm','bouncecard','bcastcard'];
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');

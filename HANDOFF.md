@@ -9,6 +9,18 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-11 — WEB folds into GLOBAL
+
+The WEB card (browser-side prefs: screen-at-load, auto-refresh, Poll LIVE/PAUSED,
+screen size, status bar) is a **sub-fold of GLOBAL** now, beside ABOUT and BOOT
+LOGO — browser-side settings sitting next to the device-side ones rather than
+being a card of its own. `webDraw()` renders into a `#webslot` that `globCard()`
+leaves, so it survives the card being re-templated on every `rpLoad()`.
+Dropped from `BAL_FLOW` and the narrow order list.
+
+GLOBAL now reads: the editable Settings screen, Save, then WEB / ABOUT / BOOT
+LOGO as sub-folds.
+
 ## 2026-09-10 — card style settled, three columns, panel wordmark
 
 **Card style: dark slab AND a hairline** (`#1c1c1c` + `1px #3d3d3d`). Mocked the
