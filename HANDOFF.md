@@ -9,6 +9,20 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-11 — drop zones: black ground, label not sentence
+
+`.dz` gets a **black** ground (it was inheriting the card) and the copy stops
+being prose: the action in caps and spaced (`DROP OR TAP`), the accepted types
+beneath in a dim `.dzt` line with no commas or explanation.
+
+    DROP OR TAP
+    audio · MP3 WAV AIFF FLAC OGG M4A RAW
+    modules · MOD XM IT S3M · slices · OT
+
+vs the old "Drop files here, or tap to browse — MP3 / WAV / AIFF, FLAC / OGG /
+M4A, 16-bit 44.1k stereo RAW, .OT, and tracker modules (MOD / XM / IT / S3M …)".
+The boot-logo zone reads `any image · converted to 320×240`.
+
 ## 2026-09-11 — WEB folds into GLOBAL
 
 The WEB card (browser-side prefs: screen-at-load, auto-refresh, Poll LIVE/PAUSED,

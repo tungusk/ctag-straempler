@@ -44,7 +44,11 @@ input[type=checkbox]{color-scheme:dark;accent-color:#2f5566;opacity:.8}
   border-top:1px solid #222;border-bottom:1px solid #222}
 .fscroll table{margin:0}
 .fscroll thead th{position:sticky;top:0;background:#1c1c1c;z-index:1}
-.dz{border:2px dashed #5a5a5a;padding:24px;text-align:center;color:#aaa;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
+/* black ground, and the copy is a LABEL not a sentence: the action in caps, the
+   accepted types beneath it, no prose (Arlo 2026-09-11) */
+.dz{border:2px dashed #5a5a5a;background:#000;padding:20px 16px;text-align:center;color:#ccc;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
+.dz b{letter-spacing:3px;font-size:12px}
+.dz .dzt{display:block;margin-top:6px;color:#7a7a7a;font-size:10px;letter-spacing:1px;line-height:1.6}
 .dz.ov{border-color:#0af;color:#0af}
 progress{width:100%;height:6px;margin-top:6px;display:none}
 .msg{color:#a4a4a4;font-size:11px;margin-top:4px;min-height:16px}
@@ -610,7 +614,8 @@ body.nosbar .sbar{display:none}
       <span class="kv" id="impmsg" style="margin-left:8px"></span>
     </div>
     <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
-      <b>Drop files here, or tap to browse</b> &#8212; MP3 / WAV / AIFF, FLAC / OGG / M4A, 16-bit 44.1k stereo RAW, .OT, and tracker modules (MOD / XM / IT / S3M / &#8230;).
+      <b>DROP OR TAP</b>
+      <span class="dzt">audio &#183; MP3 WAV AIFF FLAC OGG M4A RAW<br>modules &#183; MOD XM IT S3M &#183; slices &#183; OT</span>
     </div>
     <input type="file" id="fi" multiple accept="audio/*,.raw,.RAW,.ot,.OT,.mod,.xm,.it,.s3m,.669,.mtm,.okt,.ult,.far,.med,.dbm,.amf,.ptm,.stm,.dmf,.gdm,.imf,.liq,.mdl,.pt3,.oxm,.digi,.emod,.MOD,.XM,.IT,.S3M" style="display:none" onchange="onFiles(this.files)">
     <div class="row" style="margin-top:6px"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('fi').click()">Choose files&#8230;</button></div>
@@ -739,7 +744,8 @@ body.nosbar .sbar{display:none}
     <b class="sub" id="blogo_hdr" data-t="BOOT LOGO" style="cursor:pointer;user-select:none;display:block;margin-top:10px" onclick="foldToggle('blogo')">&#9656; BOOT LOGO</b>
     <div id="blogo_body" style="display:none">
       <div class="dz" id="bldz" onclick="document.getElementById('blf').click()">
-        <b>Drop an image here, or tap to browse</b> &#8212; any size, converted in-browser to the 320x240 BMP the module needs
+        <b>DROP OR TAP</b>
+        <span class="dzt">any image &#183; converted to 320&#215;240</span>
       </div>
       <input type="file" id="blf" accept="image/*" style="display:none" onchange="blPick(this.files[0])">
       <canvas id="blc" width="320" height="240" style="display:none;border:1px solid #333;margin-top:6px;max-width:100%"></canvas>
