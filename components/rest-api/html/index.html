@@ -6,6 +6,12 @@
 <title>Strämpler</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
+/* WebKit auto-inflates text per BLOCK on phones, and the card headers sit in
+   structurally different blocks — some `.ph` are direct children of the card,
+   others are inside a `.row.tight` flex row — so they were being scaled by
+   different amounts and came out visibly different sizes (Arlo 2026-09-11).
+   Pinning this makes 12 px mean 12 px everywhere. */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 :root{--acc:#3fcf8f;--accl:#8fe6c0}   /* card titles + the active tab; the panel's data blue is separate */
 body{background:#2e2e2e;color:#ccc;font-family:monospace;font-size:13px;padding-bottom:36px}
 header{background:#1e1e1e;border-bottom:1px solid #333;padding:6px 12px;display:flex;align-items:center;gap:10px}

@@ -9,6 +9,19 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-11 — card headers came out different sizes on a phone
+
+`html{-webkit-text-size-adjust:100%;text-size-adjust:100%}`. **WebKit auto-inflates
+text per BLOCK on phones**, and the `.ph` headers sit in structurally different
+blocks — some are direct children of their card, others are inside a `.row.tight`
+flex row — so they were being scaled by different amounts and came out visibly
+different sizes (Arlo). The page had no `text-size-adjust` at all. Pinning it
+makes 12 px mean 12 px everywhere.
+
+**NOT verified on a phone** — desktop was always consistent (all ten headers
+measure 12 px there, `inRow` or not), so the fix addresses the mechanism rather
+than a reproduction. Worth an eye on the actual device.
+
 ## 2026-09-11 — CLOCK/LISTENER spacing, brighter card text, bigger wordmark
 
 - **Wide MIDI stays TWO columns** even at three (`#p3.c3 .card.pnl.wide` rule
