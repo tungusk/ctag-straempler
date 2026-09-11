@@ -9,6 +9,26 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — ONE page: no tabs, no banner, Files and Upload are cards
+
+Arlo: "make files and upload cards, drop the tabs and the entire banner."
+
+The `<header>` (title + tab bar) is gone and `#p0` was split at its `<hr>` into
+**UPLOAD** (import progress, rescan, drop zone, batch) and **FILES** (the
+Samples/Modules + folder chips and the table). Both are ordinary fold cards
+(`FOLDABLE`, default CLOSED) in the flow, so the whole app is now one surface.
+`tab(3)` still runs at startup and no-ops on the ids that are gone; **the library
+now fetches itself** (`loadFiles();loadMods();filesAuto();`) since no tab click
+does it any more.
+
+- **The file table scrolls INSIDE the card**: `.fscroll` at `max-height:46vh`
+  (62vh when wide) with a sticky header row. Measured 279 rows = a 9229 px table
+  held to 450 px — without this the page ran to thousands of pixels.
+- **FILES has the MIDI card's width button**, half (502) / full (1016). Full
+  parks it in the band, so **the band is now SHARED** — `balanceCols()` no longer
+  asks "is the MIDI card wide" but "does the band hold any visible card", and
+  either or both can be in it.
+
 ## 2026-09-10 — About on the screen's affordance, Listener inside Clock
 
 - **The GLOBAL screen's "About" affordance IS the ABOUT fold's header.** Giving

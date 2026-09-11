@@ -34,6 +34,14 @@ input[type=checkbox]{color-scheme:dark;accent-color:#2f5566;opacity:.8}
 .row>*{flex:1}
 .row.tight>*{flex:0 0 auto;padding:3px 14px}   /* natural-width buttons */
 .mtr.sm{width:48px;height:8px}
+/* the library is hundreds of rows: it scrolls INSIDE the card so the page stays
+   a page. The header row sticks so you can still read the columns while scrolling. */
+.fscroll{max-height:46vh;min-height:120px;overflow-y:auto;overflow-x:hidden;margin-top:4px;
+  border-top:1px solid #222;border-bottom:1px solid #222}
+.fscroll table{margin:0}
+.fscroll thead th{position:sticky;top:0;background:#1c1c1c;z-index:1}
+#filescard.wide{width:1016px;max-width:calc(100vw - 24px)}
+#filescard.wide .fscroll{max-height:62vh}
 .dz{border:2px dashed #333;padding:24px;text-align:center;color:#555;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
 .dz.ov{border-color:#0af;color:#0af}
 progress{width:100%;height:6px;margin-top:6px;display:none}
@@ -243,7 +251,8 @@ body.nosbar .sbar{display:none}
   #fscard{order:3}#rdcard{order:3}#edcard{order:3}                   /* the active machine's own card */
   #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}#machcard{order:7}  /* patching, then the selector */
   #rsetup{order:8}#rweb{order:9}#rglob{order:10}#rparams{order:11}   /* settings */
-  #rm{order:12}#bouncecard{order:13}#bcastcard{order:14}             /* capture / streaming, last */
+  #rm{order:12}#bouncecard{order:13}#bcastcard{order:14}             /* capture / streaming */
+  #upcard{order:15}#filescard{order:16}                               /* the library, last */
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
 /* BOUNCE + PUSH -> ICECAST against BROADCAST: equal-height columns, the last card in the
@@ -375,70 +384,6 @@ body.nosbar .sbar{display:none}
 </style>
 </head>
 <body class="nosbar">
-<header>
-  <h1>Strämpler</h1>
-  <span class="ptag" id="ptag" hidden>POLLING PAUSED</span>
-  <div class="tabs">
-    <div class="tab on" id="t3" onclick="tab(3)">Remote</div>
-    <div class="tab" id="t0" onclick="tab(0)">Files</div>
-  </div>
-</header>
-<div class="pane" id="p0">
-  <!-- CONVERT-ON-IMPORT was invisible: an upload silently kicks a conversion pass
-       (MP3 / 48k / 24-bit -> native WAV) and GET /import has always reported its
-       progress. Nothing ever read it. -->
-  <div class="card" id="impcard" style="display:none">
-    <h4>IMPORT / CONVERT</h4>
-    <div class="kv" id="impcur">idle</div>
-    <div class="bar"><i id="impbar" style="width:0%"></i></div>
-  </div>
-  <div style="margin:6px 0">
-    <button class="btn" onclick="rescan()">rescan library</button>
-    <span class="kv" id="impmsg" style="margin-left:8px"></span>
-  </div>
-  <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
-    <b>Drop files here, or tap to browse</b> &#8212; MP3 / WAV / AIFF, FLAC / OGG / M4A, 16-bit 44.1k stereo RAW, .OT, and tracker modules (MOD / XM / IT / S3M / &#8230;).
-  </div>
-  <input type="file" id="fi" multiple accept="audio/*,.raw,.RAW,.ot,.OT,.mod,.xm,.it,.s3m,.669,.mtm,.okt,.ult,.far,.med,.dbm,.amf,.ptm,.stm,.dmf,.gdm,.imf,.liq,.mdl,.pt3,.oxm,.digi,.emod,.MOD,.XM,.IT,.S3M" style="display:none" onchange="onFiles(this.files)">
-  <div class="row" style="margin-top:6px"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('fi').click()">Choose files&#8230;</button></div>
-  <div id="batch" style="display:none;margin-top:12px">
-    <div class="row"><b style="flex:1;color:#0af">To upload (<span id="bcount">0</span>)</b>
-      <button class="btn" id="bup" style="flex:0 0 84px" onclick="doBatchUpload()">Upload</button>
-      <button class="btn del" id="bclr" style="flex:0 0 58px" onclick="clearBatch()">Clear</button>
-      <button class="btn del" id="bcancel" style="flex:0 0 72px;display:none" onclick="cancelBatch()">Cancel</button></div>
-    <table style="margin-top:6px"><tbody id="btb"></tbody></table>
-    <progress id="bpr" value="0" max="100" style="display:none"></progress>
-    <div class="msg" id="bm"></div>
-  </div>
-  <hr style="border:none;border-top:1px solid #262626;margin:14px 0">
-  <div class="tabs" style="margin-bottom:8px">
-    <div class="tab on" id="ft0" onclick="filesTab(0)">Samples</div>
-    <div class="tab" id="ft1" onclick="filesTab(1)">Modules</div>
-    <span style="width:10px"></span>
-    <div class="tab on" id="fd-all" onclick="setDirFilt(null)">ALL</div>
-    <div class="tab" id="fd-pool" onclick="setDirFilt('pool')">POOL</div>
-    <div class="tab" id="fd-REC" onclick="setDirFilt('REC')">REC</div>
-    <div class="tab" id="fd-LOOPS" onclick="setDirFilt('LOOPS')">LOOPS</div>
-    <div class="tab" id="fd-SLICES" onclick="setDirFilt('SLICES')">SLICES</div>
-    <div class="tab" id="fd-DRUMS" onclick="setDirFilt('DRUMS')">DRUMS</div>
-    <div class="tab" id="fd-KEYS" onclick="setDirFilt('KEYS')">KEYS</div>
-    <div class="tab" id="fd-TAPE" onclick="setDirFilt('TAPE')">TAPE</div>
-  </div>
-  <table id="ftab">
-    <thead><tr>
-      <th id="th-name" style="cursor:pointer" onclick="setSort('name',1)">Name</th>
-      <th id="th-bpm" style="cursor:pointer" onclick="setSort('bpm',1)">BPM</th>
-      <th id="th-dur" style="cursor:pointer" onclick="setSort('dur',1)">Length</th>
-      <th id="th-size" style="cursor:pointer" onclick="setSort('size',1)">Size</th>
-      <th>Wave</th>
-      <th></th></tr></thead>
-    <tbody id="ftb"></tbody>
-  </table>
-  <table id="mtab" style="display:none">
-    <thead><tr><th>Name</th><th>Size</th><th></th></tr></thead>
-    <tbody id="modtb"></tbody>
-  </table>
-</div>
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
   <div class="remcols remtop">
@@ -617,6 +562,73 @@ body.nosbar .sbar{display:none}
       <div class="msg" id="blsm"></div>
     </div>
   </div>
+  <div class="card pnl" id="upcard">
+    <b class="ph" style="padding:0;margin:0">UPLOAD</b>
+    <!-- CONVERT-ON-IMPORT was invisible: an upload silently kicks a conversion pass
+         (MP3 / 48k / 24-bit -> native WAV) and GET /import has always reported its
+         progress. Nothing ever read it. -->
+    <div class="card" id="impcard" style="display:none">
+      <h4>IMPORT / CONVERT</h4>
+      <div class="kv" id="impcur">idle</div>
+      <div class="bar"><i id="impbar" style="width:0%"></i></div>
+    </div>
+    <div style="margin:6px 0">
+      <button class="btn" onclick="rescan()">rescan library</button>
+      <span class="kv" id="impmsg" style="margin-left:8px"></span>
+    </div>
+    <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
+      <b>Drop files here, or tap to browse</b> &#8212; MP3 / WAV / AIFF, FLAC / OGG / M4A, 16-bit 44.1k stereo RAW, .OT, and tracker modules (MOD / XM / IT / S3M / &#8230;).
+    </div>
+    <input type="file" id="fi" multiple accept="audio/*,.raw,.RAW,.ot,.OT,.mod,.xm,.it,.s3m,.669,.mtm,.okt,.ult,.far,.med,.dbm,.amf,.ptm,.stm,.dmf,.gdm,.imf,.liq,.mdl,.pt3,.oxm,.digi,.emod,.MOD,.XM,.IT,.S3M" style="display:none" onchange="onFiles(this.files)">
+    <div class="row" style="margin-top:6px"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('fi').click()">Choose files&#8230;</button></div>
+    <div id="batch" style="display:none;margin-top:12px">
+      <div class="row"><b style="flex:1;color:#0af">To upload (<span id="bcount">0</span>)</b>
+        <button class="btn" id="bup" style="flex:0 0 84px" onclick="doBatchUpload()">Upload</button>
+        <button class="btn del" id="bclr" style="flex:0 0 58px" onclick="clearBatch()">Clear</button>
+        <button class="btn del" id="bcancel" style="flex:0 0 72px;display:none" onclick="cancelBatch()">Cancel</button></div>
+      <table style="margin-top:6px"><tbody id="btb"></tbody></table>
+      <progress id="bpr" value="0" max="100" style="display:none"></progress>
+      <div class="msg" id="bm"></div>
+    </div>
+  </div>
+  <!-- FILES: the library is long, so the table scrolls INSIDE the card at a
+       capped height instead of running the page to thousands of pixels. The
+       width button is the MIDI card's: half sits in a column, full spans both. -->
+  <div id="fileshome"><div class="card pnl" id="filescard">
+    <div class="row tight" style="align-items:center;margin-top:0">
+      <b class="ph" style="flex:1;padding:0;margin:0">FILES</b>
+      <button class="btn" id="fwbtn" style="flex:0 0 52px" onclick="filesWideToggle()" title="card width">full</button>
+    </div>
+    <div class="tabs" style="margin-bottom:8px">
+      <div class="tab on" id="ft0" onclick="filesTab(0)">Samples</div>
+      <div class="tab" id="ft1" onclick="filesTab(1)">Modules</div>
+      <span style="width:10px"></span>
+      <div class="tab on" id="fd-all" onclick="setDirFilt(null)">ALL</div>
+      <div class="tab" id="fd-pool" onclick="setDirFilt('pool')">POOL</div>
+      <div class="tab" id="fd-REC" onclick="setDirFilt('REC')">REC</div>
+      <div class="tab" id="fd-LOOPS" onclick="setDirFilt('LOOPS')">LOOPS</div>
+      <div class="tab" id="fd-SLICES" onclick="setDirFilt('SLICES')">SLICES</div>
+      <div class="tab" id="fd-DRUMS" onclick="setDirFilt('DRUMS')">DRUMS</div>
+      <div class="tab" id="fd-KEYS" onclick="setDirFilt('KEYS')">KEYS</div>
+      <div class="tab" id="fd-TAPE" onclick="setDirFilt('TAPE')">TAPE</div>
+    </div>
+    <div class="fscroll" id="fscroll">
+    <table id="ftab">
+      <thead><tr>
+        <th id="th-name" style="cursor:pointer" onclick="setSort('name',1)">Name</th>
+        <th id="th-bpm" style="cursor:pointer" onclick="setSort('bpm',1)">BPM</th>
+        <th id="th-dur" style="cursor:pointer" onclick="setSort('dur',1)">Length</th>
+        <th id="th-size" style="cursor:pointer" onclick="setSort('size',1)">Size</th>
+        <th>Wave</th>
+        <th></th></tr></thead>
+      <tbody id="ftb"></tbody>
+    </table>
+    </div>
+    <table id="mtab" style="display:none">
+      <thead><tr><th>Name</th><th>Size</th><th></th></tr></thead>
+      <tbody id="modtb"></tbody>
+    </table>
+  </div></div>
   <!-- the beat listener: it IS a clock source (machines follow it via
        Clock Src = AUDIO), so it belongs beside CLOCK on Remote rather than
        in a tab of its own. -->
@@ -1644,7 +1656,8 @@ function makeFold(card,key,def){
 // (Arlo 2026-09-10). Everything else defaults open.
 var FOLDABLE=[['machcard','mach'],['midicard','midi'],['rmatrix','mtx'],['rfx','fx'],
               ['clkcard','clk'],['bouncecard','bnc',false],['bcastcard','bc',false],
-              ['fscard','fs'],['rdcard','rd'],['edcard','ed']];
+              ['fscard','fs'],['rdcard','rd'],['edcard','ed'],
+              ['filescard','files',false],['upcard','up',false]];
 function foldAll(){
   FOLDABLE.forEach(function(f){
     var host=document.getElementById(f[0]);
@@ -2262,6 +2275,25 @@ function midiWidthPref(){
   try{v=localStorage.getItem('web_midiw');}catch(e){}
   return (v==='half'||v==='0')?'half':'full';    // '1'/'0' is the legacy spelling
 }
+// FILES width: half sits in a column, full spans both by parking in the shared
+// band. Same shape as midiAuto(); the band holds either or both.
+function filesWidthPref(){try{return localStorage.getItem('web_filesw')||'half';}catch(e){return 'half';}}
+function filesWideToggle(){
+  try{localStorage.setItem('web_filesw',filesWidthPref()==='full'?'half':'full');}catch(e){}
+  filesAuto();
+}
+function filesAuto(){
+  var card=document.getElementById('filescard'); if(!card)return;
+  var fits=window.innerWidth>=1040;
+  var wide=fits&&filesWidthPref()==='full';
+  var b=document.getElementById('fwbtn');
+  if(b){b.style.display=fits?'':'none';b.textContent=wide?'1/2':'full';}
+  if(card.classList.contains('wide')!==wide){
+    card.classList.toggle('wide',wide);
+    (wide?document.getElementById('midiband'):document.getElementById('fileshome')).appendChild(card);
+  }
+  balanceSoon();
+}
 function midiWideToggle(){   // wide splits the page around the band; re-lay it out
   setTimeout(balanceCols,80);
   try{localStorage.setItem('web_midiw',midiWidthPref()==='full'?'half':'full');}catch(e){}
@@ -2334,7 +2366,7 @@ function midiDraw(){
   });
 }
 var midiRsz=null;
-window.addEventListener('resize',function(){clearTimeout(midiRsz);midiRsz=setTimeout(function(){midiAuto();balanceCols();},120);});
+window.addEventListener('resize',function(){clearTimeout(midiRsz);midiRsz=setTimeout(function(){midiAuto();filesAuto();balanceCols();},120);});
 // WebMIDI (Chrome): forward a hardware keyboard
 function midiDevices(){
   if(!navigator.requestMIDIAccess)return;
@@ -2438,7 +2470,7 @@ function machCardPoll(name,on){
 // it moves and measuring before the move is safe.
 var BAL_LEFT=['panel','midihome'];
 var BAL_RIGHT=['machcard','fscard','rdcard','edcard'];
-var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard'];
+var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard','upcard','fileshome'];
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');
@@ -2458,8 +2490,11 @@ function balanceCols(){
   }
   function move(col,id){var e=document.getElementById(id);if(e&&col)col.appendChild(e);}
   var narrow=window.innerWidth<=1040;
-  var mc=document.getElementById('midicard');
-  var wide=!!mc&&mc.classList.contains('wide')&&getComputedStyle(mc).display!=='none';
+  // the band is shared (MIDI and/or FILES); any visible card in it splits the page
+  var band=document.getElementById('midiband');
+  var wide=false,bi;
+  if(band)for(bi=0;bi<band.children.length;bi++)
+    if(getComputedStyle(band.children[bi]).display!=='none'){wide=true;break;}
 
   // Every card is re-appended on every run, so the result does not depend on
   // where the last run left things.
@@ -2706,7 +2741,8 @@ pollImport();
 bcastInit();     // broadcast Listen link + player URL (:8000)
 webLoad();       // browser-side prefs before the first render
 midiAuto();      // MIDI card width follows the window
-tab(3);          // Remote is the default tab
+tab(3);          // the only page; tab() no-ops on the ids that are gone
+loadFiles();loadMods();filesAuto();   // the library is on this page now, nothing clicks a tab to fetch it
 foldAll();       // MACHINE / MIDI / CLOCK / BOUNCE / ICECAST / BROADCAST fold too
 midiAuto();      // again: #midi_body only exists once foldAll has wrapped the card
 pollStatus();
