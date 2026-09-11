@@ -9,6 +9,12 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-11 — card headers up a size
+
+`.ph` 12 -> **14 px** (letter-spacing 1 -> 1.5, margin-bottom 4 -> 5) and `.sub`
+11 -> **12** so the sub-folds stay exactly one step under their card title.
+Measured: all ten `.ph` at 14, all four `.sub` at 12.
+
 ## 2026-09-11 — card headers came out different sizes on a phone
 
 `html{-webkit-text-size-adjust:100%;text-size-adjust:100%}`. **WebKit auto-inflates
