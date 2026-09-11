@@ -35,6 +35,22 @@ sets the background by id. That is why the new padding went on `#panel` and not
 on `.pnl` — "fixing" the `.pnl` rule resurrects a `#141414` background and a
 `#262626` border nobody has ever seen. Check before you touch it.
 
+**Follow-up the same session — Arlo: the side margins were still too wide.**
+Measured rather than eyeballed, against the same KiCad panel:
+- the **knob row was already right** (rendered 15.34% / 84.66% against a real
+  15.23% / 84.77% — POT_LARGE_HOLE at x 13.903 / 77.544);
+- the **jack field was the culprit**: rendered 12.95% / 87.05% against a real
+  8.26% / 91.74%. `.jcell` min-width 62 -> **70 px** puts the seven columns on
+  the real x positions (7 x 70 = 490), and `#panel`'s side padding went 10 -> 6
+  to give them the room. Measured after: **8.17% / 91.83%**, inside half a pixel.
+
+The **screen is deliberately NOT to scale**: the v2_3 display cutout is
+43.176 mm wide = 47.3% of the panel, and `#scrbox` renders it at 60% of the
+content box (~57.6%). That is a readability choice and it makes the margins
+NARROWER, not wider, so it was left alone. The Edge.Cuts outline is
+**91.3 x 128.5 mm**, not the 91.44 HP nominal — ratio 1.407, card renders 1.414
+(~4 px tall, content-driven, not worth chasing).
+
 Page edited -> **`html/convert.sh` is NOT run by CMake**, run it or the change
 silently does not ship. Built, OTA'd to .85, verified in the browser.
 

@@ -65,7 +65,8 @@ body.nosbar .sbar{display:none}
    field however tall the matrix / FX / clock column gets */
 .remtop{align-items:flex-start}                /* columns keep their own height: the panel hugs its elements (Arlo 2026-09-10) */
 .remtop .rcol{display:flex;flex-direction:column}
-/* the frame carries the REAL panel's proportion: 91.44 x 128.5 mm, so at the
+/* the frame carries the REAL panel's proportion: 91.3 x 128.5 mm (the v2_3 Edge.Cuts
+   outline, not the 91.44 HP nominal), so at the
    502 px column width the card is 705 px tall. The extra top/bottom padding is
    what that costs, and it is the whole point — a Eurorack panel has material
    above the screen and below the jack field, and without it the card read like
@@ -73,7 +74,7 @@ body.nosbar .sbar{display:none}
    lives HERE, not on .pnl: .card is declared later at equal specificity, so
    .pnl's padding/background/border have never applied — do not "fix" that rule
    without checking what resurrecting the other two does.) */
-#panel{flex:0 0 auto;background:#050505;display:flex;flex-direction:column;position:relative;padding:38px 10px 40px}
+#panel{flex:0 0 auto;background:#050505;display:flex;flex-direction:column;position:relative;padding:38px 6px 40px}
 #panel .row .btn{background:#050505;border-color:#2a2a2a;color:#777}
 #scrbox .row>*{padding:3px 10px}
 #scrbox .row>:last-child{margin-right:0}
@@ -87,7 +88,7 @@ body.nosbar .sbar{display:none}
 .ant{right:6%;width:34px;height:64px;fill:none;stroke:#555;stroke-width:1.6;stroke-linecap:round}
 /* the four Eurorack mounting slots, drawn in the card slot's language. On the
    real v2_3 panel they are 8.5 x 3.2 mm obrounds, 7.5 mm in from each side edge
-   (7.539/91.44 = 8.2%) and 3 mm down from the top and up from the bottom. To
+   (7.539/91.3 = 8.26%) and 3 mm down from the top and up from the bottom. To
    SCALE that is 47 x 18 px here, which reads far too heavy beside the slot and
    antenna linework — everything else on this panel is under-scaled too (the
    58 px knobs are 10.6 mm) — so they are drawn at the deco weight instead.
@@ -115,7 +116,13 @@ body.nosbar .sbar{display:none}
 .pgrid4 .pcell{display:grid;grid-template-rows:14px 64px;row-gap:6px;align-items:center;justify-items:center}
 .pgrid4 .pknob{margin:0}
 .pcell,.jcell{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;color:#666;padding:6px 0 4px}
-.jcell{padding:6px 8px 4px;min-width:62px}
+/* 70px, not 62: the seven jack columns then land on the REAL panel's x
+   positions. The v2_3 jacks sit at x 7.539 .. 83.901 on a 91.3 mm panel, i.e.
+   8.26% in from each edge; at 62 px the outermost pair sat at 12.95% and the
+   side margins read too wide (Arlo 2026-09-10). 7 x 70 = 490 px, which is why
+   #panel's side padding is 6 and not 10 — the jack field is the widest thing
+   on the panel and it has to reach. Measured after: 8.17% / 91.83%. */
+.jcell{padding:6px 8px 4px;min-width:70px}
 .pl{color:#999;letter-spacing:1px;font-size:10px}
 .pcell.dim .pl{color:#555}
 .pknob{width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 50% 38%,#2c2c2c,#151515 70%);border:1px solid #3a3a3a;box-shadow:0 2px 4px #000;position:relative;margin:6px 0 4px}   /* GAIN: the CV5-8 knob body, panel-only */
