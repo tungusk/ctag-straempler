@@ -22,7 +22,7 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
      Both live here, together, for the same reason --pline does: nudged apart
      one at a time they stop reading as a pair. Hover must stay clearly above
      the lighter band, not between the two. */
-  --fzeb:#1a1a1a; --fhov:#262626}
+  --fzeb:#1f1f1f; --fhov:#2d2d2d}   /* 21 -> 31 -> 45 (Arlo asked for more contrast than 26/38) */
 body{background:#2e2e2e;color:#ccc;font-family:monospace;font-size:13px;padding-bottom:36px}
 header{background:#1e1e1e;border-bottom:1px solid #333;padding:6px 12px;display:flex;align-items:center;gap:10px}
 h1{font-size:13px;color:#aaa;flex:1;letter-spacing:.05em}
@@ -954,9 +954,14 @@ function renderFiles(){
     var bpm=f.bpm?f.bpm.toFixed(1):'';        // no tempo = nothing, not a dash
     var nameCell;
     if(f.name===libEdit){   // inline edit box, same idiom as the batch list
-      nameCell='<input id="lrn" value="'+esc(f.name)+'" maxlength="8" style="width:84px;padding:2px 4px;background:#000;color:#fff;border:1px solid #0af" '
+      // OK sits BEFORE the field (Arlo 2026-09-11). The Name column is only as
+      // wide as an 8-char name, so button + field must be held on ONE line or
+      // they stack and the row grows — hence the flex wrapper, not a bare pair.
+      nameCell='<div style="display:flex;align-items:center;gap:5px">'
+        +'<button class="btn" onclick="libCommit(\''+esc(f.name)+'\')">OK</button>'
+        +'<input id="lrn" value="'+esc(f.name)+'" maxlength="8" style="width:84px;padding:2px 4px;background:#000;color:#fff;border:1px solid #0af" '
         +'onkeydown="if(event.key===\'Enter\')libCommit(\''+esc(f.name)+'\');else if(event.key===\'Escape\')libCancel()">'
-        +' <button class="btn" onclick="libCommit(\''+esc(f.name)+'\')">OK</button>';
+        +'</div>';
     }else{
       nameCell='<span class="ren" title="rename in place" onclick="libRename(\''+esc(f.name)+'\')">'+esc(f.name)+'</span>';
     }
