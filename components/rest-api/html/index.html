@@ -9,7 +9,7 @@
 :root{--acc:#3fcf8f;--accl:#8fe6c0}   /* card titles + the active tab; the panel's data blue is separate */
 body{background:#2e2e2e;color:#ccc;font-family:monospace;font-size:13px;padding-bottom:36px}
 header{background:#1e1e1e;border-bottom:1px solid #333;padding:6px 12px;display:flex;align-items:center;gap:10px}
-h1{font-size:13px;color:#888;flex:1;letter-spacing:.05em}
+h1{font-size:13px;color:#aaa;flex:1;letter-spacing:.05em}
 .tabs{display:flex;gap:4px}
 /* the FILES chip rows (Samples/Modules + the folder filters) are wider than a
    502 px column: wrap them instead of letting them escape the card */
@@ -19,7 +19,7 @@ h1{font-size:13px;color:#888;flex:1;letter-spacing:.05em}
 .pane{display:none;padding:10px}
 .pane.on{display:block}
 table{width:100%;border-collapse:collapse}
-th{text-align:left;color:#9a9a9a;padding:4px 6px;border-bottom:1px solid #2a2a2a;font-weight:normal;font-size:11px}
+th{text-align:left;color:#b4b4b4;padding:4px 6px;border-bottom:1px solid #2a2a2a;font-weight:normal;font-size:11px}
 td{padding:4px 6px;border-bottom:1px solid #1e1e1e;vertical-align:middle}
 tr:hover td{background:#161616}
 .btn{background:#2a2a2a;color:#aaa;border:1px solid #444;padding:3px 8px;cursor:pointer;border-radius:2px;font-size:11px;font-family:monospace}
@@ -28,7 +28,7 @@ tr:hover td{background:#161616}
 .del:hover{background:#2a1010}
 .del.armed{background:#f22;color:#000;border-color:#f22;font-weight:bold}
 .del.armed:hover{background:#f44}
-label{display:block;color:#a4a4a4;font-size:11px;margin:8px 0 2px}
+label{display:block;color:#c2c2c2;font-size:11px;margin:8px 0 2px}
 input{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px 8px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
 select{background:#1e1e1e;color:#ccc;border:1px solid #3a3a3a;padding:4px;font-family:monospace;font-size:12px;width:100%;border-radius:2px}
 input[type=range]{padding:0;height:22px;accent-color:#0af}
@@ -48,10 +48,10 @@ input[type=checkbox]{color-scheme:dark;accent-color:#2f5566;opacity:.8}
    accepted types beneath it, no prose (Arlo 2026-09-11) */
 .dz{border:2px dashed #5a5a5a;background:#000;padding:20px 16px;text-align:center;color:#ccc;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
 .dz b{letter-spacing:3px;font-size:12px}
-.dz .dzt{display:block;margin-top:6px;color:#7a7a7a;font-size:10px;letter-spacing:1px;line-height:1.6}
+.dz .dzt{display:block;margin-top:6px;color:#9a9a9a;font-size:10px;letter-spacing:1px;line-height:1.6}
 .dz.ov{border-color:#0af;color:#0af}
 progress{width:100%;height:6px;margin-top:6px;display:none}
-.msg{color:#a4a4a4;font-size:11px;margin-top:4px;min-height:16px}
+.msg{color:#bcbcbc;font-size:11px;margin-top:4px;min-height:16px}
 .msg:empty{display:none}   /* an empty status line must not reserve 20 px (it sat above BOUNCE) */
 .ptag{background:#3a1010;border:1px solid #a33;color:#f88;border-radius:3px;padding:2px 8px;font-size:11px;letter-spacing:.05em}   /* polling paused: in the header so it is visible at any scroll */
 .ok{color:#4a4}
@@ -127,8 +127,17 @@ body.nosbar .sbar{display:none}
    panel proportion the padding was tuned for */
 /* ABOUT reads as part of the screen above it: same black ground, same inset */
 #about_body{background:#000;border:1px solid #262626;border-radius:2px;padding:8px 10px;margin-top:4px}
-.pwm{position:absolute;left:0;right:0;bottom:24px;text-align:center;color:#f0f0f0;font-weight:bold;
-  font-size:12px;letter-spacing:4px;pointer-events:none;user-select:none}
+/* CLOCK + LISTENER are two sections of one card and were spaced nothing alike:
+   the clock's labels each carried the global 8 px top margin and wrapped to two
+   lines (84 px), while the listener's row sat at 49. One rule for both — the
+   labels lose their margin, the rows share a gap and a row-gap, and everything
+   sits on a common baseline (Arlo 2026-09-11). */
+#clkcard .row{gap:10px;row-gap:8px;flex-wrap:wrap;align-items:flex-end}
+#clkcard label{margin:0}
+#clkcard #blbox{margin-bottom:6px}
+#clkcard #lsn_body .row{margin-top:6px}
+.pwm{position:absolute;left:0;right:0;bottom:22px;text-align:center;color:#f0f0f0;font-weight:bold;
+  font-size:14px;letter-spacing:5px;pointer-events:none;user-select:none}
 #panel.big .deco,#scrarea:has(#scrbox.empty) .deco{display:none}   /* only beside a loaded, small screen */
 /* ZOOMED: the point is the screen, so the frame stops pretending to be a panel.
    The screw holes go and the real-panel padding (43/68) goes with them — and
@@ -150,9 +159,11 @@ body.nosbar .sbar{display:none}
 .pbody{margin:0}
 /* everything under the two columns spans them: 502 + 12 + 502 */
 #p3>.card,#p3>.row{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
-/* 3 x 502 + 2 x 12 gap = 1530: full-width things span whatever the page holds */
-#p3.c3>.card,#p3.c3>.row{width:1530px}
-#p3.c3 .card.pnl.wide{width:1530px}   /* (#rparams>.card was here: the ADVANCED card now lives in the left column at panel width) */
+/* 3 x 502 + 2 x 12 gap = 1530: full-width rows span whatever the page holds.
+   The WIDE MIDI card deliberately does NOT — it stays two columns (1016) and
+   centres, because a keyboard stretched over three is wider than it is useful
+   (Arlo 2026-09-11). */
+#p3.c3>.card,#p3.c3>.row{width:1530px}   /* (#rparams>.card was here: the ADVANCED card now lives in the left column at panel width) */
 #rparams .rpcols{columns:2 300px;column-gap:12px}
 .psec{margin-top:6px}
 .pnl{padding:8px 14px 10px;background:#141414;border:1px solid #262626}   /* the panel card stays near-black */
@@ -239,7 +250,7 @@ body.nosbar .sbar{display:none}
 .mxadd{background:none;border:1px solid #262626;color:#4a4a4a;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
 .mxadd:hover{color:#0af;border-color:#3a5a6a}
 .mxc [hidden]{display:none!important}
-.mxmode{background:none;border:1px solid #3a3a3a;color:#9a9a9a;border-radius:2px;height:18px;padding:0 5px;font-family:monospace;font-size:10px;line-height:16px;cursor:pointer;white-space:nowrap}
+.mxmode{background:none;border:1px solid #3a3a3a;color:#b4b4b4;border-radius:2px;height:18px;padding:0 5px;font-family:monospace;font-size:10px;line-height:16px;cursor:pointer;white-space:nowrap}
 .mxmode.on{color:#0af;border-color:#3a5a6a}
 .mxdef{color:#4a4a4a;font-size:10px;padding:1px 3px;white-space:nowrap}
 .mxrev{background:none;border:1px solid #3a6a4a;color:#6c9;border-radius:2px;width:18px;height:18px;padding:0;font-family:monospace;font-size:12px;line-height:16px;cursor:pointer}
@@ -302,17 +313,17 @@ body.nosbar .sbar{display:none}
 .advh{color:#777;font-size:11px;letter-spacing:1px;margin:10px 0 4px;cursor:pointer;user-select:none}
 .adv{width:100%;border-collapse:collapse;font-size:12px}
 .adv td{padding:2px 6px;border-bottom:1px solid #222;vertical-align:middle}
-.adv td:first-child{color:#888;font-family:monospace;width:34%}
+.adv td:first-child{color:#aaa;font-family:monospace;width:34%}
 .adv input,.adv select{margin:0;padding:2px 6px;font-size:12px}
 .adv input[type=checkbox]{width:auto}
 .fxslots{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin:2px 0 4px}
-.fxslots label{color:#888;font-size:11px;white-space:nowrap}
+.fxslots label{color:#aaa;font-size:11px;white-space:nowrap}
 .fxslots select{width:auto;min-width:96px}
 .fxgs{display:flex;flex-wrap:wrap;gap:8px}
 .fxg{flex:1 1 250px;border:1px solid #2a2a2a;border-radius:3px;padding:4px 8px 6px}
-.fxg b{display:block;color:#9a9a9a;font-size:10px;letter-spacing:1px;margin-bottom:2px}
+.fxg b{display:block;color:#b4b4b4;font-size:10px;letter-spacing:1px;margin-bottom:2px}
 .fxp{display:flex;align-items:center;gap:6px;margin:2px 0}
-.fxp label{flex:0 0 66px;color:#888;font-size:11px;white-space:nowrap}
+.fxp label{flex:0 0 66px;color:#aaa;font-size:11px;white-space:nowrap}
 .fxp input[type=range]{flex:1;min-width:60px}
 .fxp select{width:auto;flex:1}
 .fxp input[type=checkbox]{width:auto;margin:0}
@@ -399,7 +410,7 @@ body.nosbar .sbar{display:none}
    status bar sits on near-black and must NOT be brightened with them. */
 .card{border:1px solid #3d3d3d;border-radius:3px;background:#1c1c1c;padding:8px 10px;margin:8px 0}
 .card h4{margin:0 0 6px;color:var(--accl);font-weight:normal;font-size:13px;letter-spacing:1px}
-.kv{color:#9ab}.kv b{color:#ddd;font-weight:normal}
+.kv{color:#aabecb}.kv b{color:#ddd;font-weight:normal}
 .scope{width:100%;border-collapse:collapse;font-size:11px}
 .scope td{padding:2px 4px;border-bottom:1px solid #1c1c1c}
 .mtr{display:inline-block;width:120px;height:8px;background:#181818;border:1px solid #333;vertical-align:middle}
@@ -421,7 +432,7 @@ body.nosbar .sbar{display:none}
       <div id="scrbox" class="empty" style="width:60%;margin:0 auto;position:relative">
         <div class="row tight" id="scrrow" style="align-items:center;justify-content:center;margin-top:0">
           <button class="btn big" id="scrbtn" onclick="scrShot()">Screen</button>
-          <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#888;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
+          <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#aaa;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
         </div>
         <button class="btn" id="scrclose" style="position:absolute;top:0;right:0;width:30px;display:none" onclick="scrClose()">&#10005;</button>
         <img id="scrimg" title="click: toggle size" onclick="scrZoom()" style="cursor:zoom-in;width:100%;display:none;margin:8px 0 6px;image-rendering:pixelated;border:1px solid #333">
@@ -472,7 +483,7 @@ body.nosbar .sbar{display:none}
   <div id="midihome"><div class="card pnl" id="midicard" style="display:none">
     <b class="ph" style="padding:0;margin:0"><span class="hlp" data-h="Impulse Tracker layout, two manuals an octave apart: Z S X D C V G B H N J M , L . ; / is the lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P the upper. Octave on - and = &#183; Space releases held notes &#183; Esc panics. Typing plays whether or not a key is on screen &#8212; &#8249; &#8250; only move the view. Plays Synth / Keys; MIDI wins over CV while a note is held.">MIDI</span></b>
     <div class="row tight" id="midictl" style="align-items:center">
-      <label style="flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;margin:0;color:#888;font-size:11px"><input type="checkbox" id="midityping" checked style="width:auto;margin:0"> typing</label>
+      <label style="flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;margin:0;color:#aaa;font-size:11px"><input type="checkbox" id="midityping" checked style="width:auto;margin:0"> typing</label>
       <span id="midioctg"><button class="btn octb" onclick="midiOct(-1)" title="octave down (-)">&#9666;</button>
       <span id="midioct">C4</span>
       <button class="btn octb" onclick="midiOct(1)" title="octave up (=)">&#9656;</button></span>
@@ -490,7 +501,7 @@ body.nosbar .sbar{display:none}
   </div></div>
   </div>
   <div class="rcol">
-  <div class="card pnl" id="machcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">MACHINE</b><span id="rmnote" style="color:#888;font-size:11px"></span></div>
+  <div class="card pnl" id="machcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">MACHINE</b><span id="rmnote" style="color:#aaa;font-size:11px"></span></div>
     <div id="rmach"></div>
   </div>
   <!-- machine-specific cards: these were top-level tabs, each opening on a
@@ -525,7 +536,7 @@ body.nosbar .sbar{display:none}
   <div class="card pnl" id="rdcard" style="display:none">
     <b class="ph" style="padding:0;margin:0">RADIO</b>
   <div class="card">
-  <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af">NOW PLAYING</b><span id="rdstate" style="color:#888">&#8212;</span></div>
+  <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af">NOW PLAYING</b><span id="rdstate" style="color:#aaa">&#8212;</span></div>
   <div class="kv" id="rdinfo" style="margin-top:4px">&#8212;</div>
   <div class="bar" style="margin-top:6px"><i id="rdbuf" style="width:0%"></i></div>
   </div>
@@ -546,7 +557,7 @@ body.nosbar .sbar{display:none}
   <label style="margin-top:10px">Fade length (ms, for fade in/out)</label>
   <div class="row"><input id="edparam" type="number" value="50" style="flex:0 0 100px"></div>
   <div class="card" style="margin-top:10px">
-  <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af" id="edstate">idle</b><span id="edout" style="color:#888"></span></div>
+  <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af" id="edstate">idle</b><span id="edout" style="color:#aaa"></span></div>
   <div class="bar" style="margin-top:6px"><i id="edbar" style="width:0%"></i></div>
   </div>
   <div class="msg" id="edm"></div>
@@ -556,14 +567,14 @@ body.nosbar .sbar{display:none}
   <div class="card pnl" id="clkcard">
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0">CLOCK</b>
-      <span id="clkro" style="color:#888;margin-right:8px;font-size:11px">&#8212;</span>
+      <span id="clkro" style="color:#aaa;margin-right:8px;font-size:11px">&#8212;</span>
       <button class="btn foldhide" style="flex:0 0 auto" onclick="clkApply()">Apply</button>
     </div>
     <div class="row tight" style="align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
-      <label style="color:#888;font-size:11px">source <select id="clksrc" style="width:82px;display:inline-block"></select></label>
-      <label style="color:#888;font-size:11px">ppq <select id="clkppq" style="width:54px;display:inline-block"><option>1</option><option>2</option><option>4</option><option>8</option></select></label>
-      <label style="color:#888;font-size:11px">int bpm <input type="number" id="clkbpm" min="20" max="300" step="1" style="width:58px;display:inline-block"></label>
-      <label style="color:#888;font-size:11px" title="INT stands in while the external source is unlocked; the jack wins back on its first edge"><input type="checkbox" id="clkauto" style="width:auto"> fallback</label>
+      <label style="color:#aaa;font-size:11px">source <select id="clksrc" style="width:82px;display:inline-block"></select></label>
+      <label style="color:#aaa;font-size:11px">ppq <select id="clkppq" style="width:54px;display:inline-block"><option>1</option><option>2</option><option>4</option><option>8</option></select></label>
+      <label style="color:#aaa;font-size:11px">int bpm <input type="number" id="clkbpm" min="20" max="300" step="1" style="width:58px;display:inline-block"></label>
+      <label style="color:#aaa;font-size:11px" title="INT stands in while the external source is unlocked; the jack wins back on its first edge"><input type="checkbox" id="clkauto" style="width:auto"> fallback</label>
     </div>
     <div class="msg" id="clkmsg" style="display:none"></div>
     <!-- the beat listener IS a clock source (machines follow it via Clock
@@ -571,20 +582,22 @@ body.nosbar .sbar{display:none}
     <b class="sub" id="lsn_hdr" data-t="LISTENER" style="cursor:pointer;user-select:none;display:block;border-top:1px solid #262626;margin-top:8px;padding-top:6px" onclick="foldToggle('lsn')">&#9656; LISTENER</b>
     <div id="lsn_body" style="display:none">
     <div class="kv" id="blbox" style="margin-bottom:6px">--</div>
-      <div class="row">
-        <div><label>Mode</label>
-          <select id="blmode" onchange="blSet()">
+      <!-- same shape as the CLOCK row above it: label INLINE with its control,
+           not stacked over it. Stacked, this row read as a different kind of
+           thing and the two sections never lined up (Arlo 2026-09-11). -->
+      <div class="row tight">
+        <label style="color:#aaa;font-size:11px">mode
+          <select id="blmode" onchange="blSet()" style="width:92px;display:inline-block">
             <option value="0">OFF</option><option value="1">PULSE</option>
             <option value="2">KICK</option><option value="3">FLUX</option>
             <option value="4">GROOVE</option>
-          </select></div>
-        <div><label>Clock out (audio jack)</label>
-          <select id="blout" onchange="blSet()">
+          </select></label>
+        <label style="color:#aaa;font-size:11px">clock out
+          <select id="blout" onchange="blSet()" style="width:74px;display:inline-block">
             <option value="0">OFF</option><option value="1">LEFT</option>
             <option value="2">RIGHT</option>
-          </select></div>
-        <div style="flex:0 0 90px"><label>&nbsp;</label>
-          <button class="btn" style="width:100%" onclick="blRelock()">Relock</button></div>
+          </select></label>
+        <button class="btn" style="flex:0 0 auto" onclick="blRelock()">Relock</button>
       </div>
       <div class="msg" id="blsm"></div>
     </div>
@@ -688,22 +701,22 @@ body.nosbar .sbar{display:none}
            triangle's WIDTH, hidden, so its title lines up with BROADCAST's
            below it. Same glyph, so the two can never drift apart. -->
       <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span style="visibility:hidden">&#9656; </span><span class="hlp" data-h="Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.">BOUNCE</span></b>
-      <span id="bncstate" style="color:#888;margin-right:8px">idle</span>
+      <span id="bncstate" style="color:#aaa;margin-right:8px">idle</span>
       <button class="btn" id="bncbtn" style="flex:0 0 84px" onclick="bncToggle()">Record</button>
     </div>
     <div class="row tight" style="align-items:center;margin-top:10px;border-top:1px solid #262626;padding-top:8px">
       <b class="ph" id="bc_hdr" style="flex:1;padding:0;margin:0;align-self:flex-start;cursor:pointer;user-select:none" onclick="foldToggle('bc')"><span id="bc_arw">&#9656; </span><span class="hlp" data-h="Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.">BROADCAST</span></b>
-      <span id="bcstate" style="color:#888;margin-right:8px">off</span>
+      <span id="bcstate" style="color:#aaa;margin-right:8px">off</span>
       <button class="btn" id="bcenbtn" style="flex:0 0 84px" onclick="bcastToggle()">Enable</button>
     </div>
     <div id="bc_body" style="display:none">
     <div class="row tight" style="align-items:center;margin-top:4px">
-      <span style="flex:1;color:#888">output stream</span>
+      <span style="flex:1;color:#aaa">output stream</span>
       <a class="btn" id="bclinkmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
       <a class="btn" id="bclink" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
     </div>
     <div class="row tight" style="align-items:center;margin-top:4px">
-      <span style="flex:1;color:#888">line input</span>
+      <span style="flex:1;color:#aaa">line input</span>
       <a class="btn" id="bclinkinmp3" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none">MP3</a>
       <a class="btn" id="bclinkin" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
     </div>
@@ -711,7 +724,7 @@ body.nosbar .sbar{display:none}
     <b class="sub" id="push_hdr" style="cursor:pointer;user-select:none;display:block;border-top:1px solid #262626;margin-top:8px;padding-top:6px" onclick="foldToggle('push')"><span id="push_arw">&#9656; </span><span class="hlp" data-h="Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.">PUSH &#8594; ICECAST</span></b>
     <div id="push_body" style="display:none">
     <div class="row tight" style="align-items:center;margin-top:0">
-      <span id="icestate" style="color:#888;margin-right:8px">off</span>
+      <span id="icestate" style="color:#aaa;margin-right:8px">off</span>
       <button class="btn" id="icebtn" style="flex:0 0 84px" onclick="iceToggle()">Start</button>
     </div>
     <div class="row tight" style="margin-top:4px;gap:6px">
@@ -896,7 +909,7 @@ function renderFiles(){
     }
     // the folder pull-down rides in the actions cell: it shows where the file
     // lives; picking another folder moves it (audio+sidecar+slices together)
-    var dirSel='<select style="width:auto;font-size:10px;padding:1px 2px;color:#888" '
+    var dirSel='<select style="width:auto;font-size:10px;padding:1px 2px;color:#aaa" '
       +'onchange="moveFile(\''+esc(f.name)+'\',this.value)">';
     ['pool','REC','LOOPS','SLICES','DRUMS','KEYS','TAPE'].forEach(function(dd){
       dirSel+='<option value="'+dd+'"'+((f.dir||'pool')===dd?' selected':'')+'>'+dd.toUpperCase()+'</option>';
@@ -2094,7 +2107,7 @@ function rdState(){
     var tech=d.err ? d.err
            : (d.bitrate ? (d.station+'  '+d.bitrate+' kbps  '+d.samprate+' Hz'+(d.reconnects?('  reconn '+d.reconnects):'')+(d.underruns?('  drops '+d.underruns):''))
                         : (d.station||'—'));
-    document.getElementById('rdinfo').innerHTML=(np?'<b>'+esc(np)+'</b><br>':'')+'<span style="color:#888">'+esc(tech)+'</span>';
+    document.getElementById('rdinfo').innerHTML=(np?'<b>'+esc(np)+'</b><br>':'')+'<span style="color:#aaa">'+esc(tech)+'</span>';
     document.getElementById('rdbuf').style.width=(d.buf||0)+'%';
     var box=document.getElementById('rdstations'),st=d.stations||[];
     var sig=st.map(function(s){return (s.name||s)+(s.saved?'*':'');}).join('|');
@@ -2815,7 +2828,7 @@ function updateScope(cv){
     hist.push(v);
     if(hist.length>15)hist.shift();
     var pct=Math.round(v/4095*100);
-    h+='<tr><td style="color:#888">CV'+(i+1)+'</td>'
+    h+='<tr><td style="color:#aaa">CV'+(i+1)+'</td>'
       +'<td style="width:44px;text-align:right">'+v+'</td>'
       +'<td><span class="mtr"><i style="width:'+pct+'%"></i></span></td>'
       +'<td>'+(cvSpikes[i]?('<span class="spk">spikes '+cvSpikes[i]+'</span>'):'<span style="color:#3a3">clean</span>')+'</td>'

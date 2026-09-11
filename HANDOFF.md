@@ -9,6 +9,24 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-11 — CLOCK/LISTENER spacing, brighter card text, bigger wordmark
+
+- **Wide MIDI stays TWO columns** even at three (`#p3.c3 .card.pnl.wide` rule
+  dropped): a keyboard stretched over 1530 px is wider than it is useful. It
+  centres in the band instead.
+- **CLOCK and LISTENER were built differently and so could never line up.**
+  CLOCK put its label INLINE with its control; LISTENER stacked the label OVER
+  it in `<div>` wrappers, and the global `label{margin:8px 0 2px}` spread the
+  clock's four controls to 84 px while the listener's sat at 49. The listener
+  row is now the same inline shape, and `#clkcard` sets one gap / row-gap /
+  baseline for both with `label{margin:0}`. What is left (64 vs 32) is content —
+  CLOCK has four controls and wraps, LISTENER has three and does not.
+- **Card text up another step**: `label`, `.msg`, `th`, `.mxmode`, `.fxg b`,
+  `.dz .dzt`, `.kv`, and the inline `#888` readouts -> `#aaa`. **`.mkey .u` was
+  explicitly excluded** from the blanket swap — it is a white key on a light
+  ground, not card text.
+- **Wordmark 12 -> 14 px**, letter-spacing 4 -> 5.
+
 ## 2026-09-11 — folded cards hide their actions; ABOUT opens where it belongs
 
 - **BOUNCE is indented by a HIDDEN triangle** so its title lines up with
