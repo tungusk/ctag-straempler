@@ -9,6 +9,35 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — panel card: real proportion + the mounting slots
+
+Two touch-ups Arlo asked for on the Remote tab's panel card.
+
+- **Proportion.** The frame now carries the real panel's 91.44 x 128.5 mm
+  ratio: at the 502 px column that is 705 px tall, paid for with
+  `padding:38px 10px 40px` on `#panel`. A Eurorack panel has material above the
+  screen and below the jack field; without it the card read like a web form.
+- **Mounting slots.** Four `.mnt` obrounds at the corners, drawn in the card
+  slot's language. Real geometry from `hardware-kicad/strampler_panel_v2_3`:
+  `RAIL_SCREW_HOLE` at x 7.539 / 83.901 and y 3 / 125.5 on a 91.44 x 128.5
+  panel, each an 8.5 x 3.2 mm obround — so 8.2% in from the sides, 3 mm from
+  top and bottom. **To scale they are 47 x 18 px and read far too heavy** beside
+  the slot/antenna linework (everything on this panel is under-scaled: the 58 px
+  knobs are 10.6 mm), so they are drawn at 26 x 10, the deco weight. Both were
+  rendered side by side in the browser before choosing.
+  Deliberately NOT class `.deco` — the slot and antenna hide beside a big or
+  empty screen, but the holes belong to the frame and stay.
+
+**TRAP found on the way: `.pnl`'s `padding`/`background`/`border` have NEVER
+applied.** `.card` (line ~282) is declared after `.pnl` (line ~91) at equal
+specificity, so it wins on order. The panel looks right only because `#panel`
+sets the background by id. That is why the new padding went on `#panel` and not
+on `.pnl` — "fixing" the `.pnl` rule resurrects a `#141414` background and a
+`#262626` border nobody has ever seen. Check before you touch it.
+
+Page edited -> **`html/convert.sh` is NOT run by CMake**, run it or the change
+silently does not ship. Built, OTA'd to .85, verified in the browser.
+
 ## 2026-09-10 (later) — the LFO lifted to Keys, via a shared util/lfo
 
 Owed from the Synth LFO session. **Keys had NO LFO at all** — the "lift" was a

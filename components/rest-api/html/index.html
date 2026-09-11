@@ -65,7 +65,15 @@ body.nosbar .sbar{display:none}
    field however tall the matrix / FX / clock column gets */
 .remtop{align-items:flex-start}                /* columns keep their own height: the panel hugs its elements (Arlo 2026-09-10) */
 .remtop .rcol{display:flex;flex-direction:column}
-#panel{flex:0 0 auto;background:#050505;display:flex;flex-direction:column}
+/* the frame carries the REAL panel's proportion: 91.44 x 128.5 mm, so at the
+   502 px column width the card is 705 px tall. The extra top/bottom padding is
+   what that costs, and it is the whole point — a Eurorack panel has material
+   above the screen and below the jack field, and without it the card read like
+   a web form. position:relative is for the mounting slots below. (The padding
+   lives HERE, not on .pnl: .card is declared later at equal specificity, so
+   .pnl's padding/background/border have never applied — do not "fix" that rule
+   without checking what resurrecting the other two does.) */
+#panel{flex:0 0 auto;background:#050505;display:flex;flex-direction:column;position:relative;padding:38px 10px 40px}
 #panel .row .btn{background:#050505;border-color:#2a2a2a;color:#777}
 #scrbox .row>*{padding:3px 10px}
 #scrbox .row>:last-child{margin-right:0}
@@ -77,6 +85,16 @@ body.nosbar .sbar{display:none}
 .deco{position:absolute;top:50%;transform:translateY(-50%);pointer-events:none}
 .slot{left:8%;width:11px;height:96px;border:1px solid #333;border-radius:3px;background:#000}
 .ant{right:6%;width:34px;height:64px;fill:none;stroke:#555;stroke-width:1.6;stroke-linecap:round}
+/* the four Eurorack mounting slots, drawn in the card slot's language. On the
+   real v2_3 panel they are 8.5 x 3.2 mm obrounds, 7.5 mm in from each side edge
+   (7.539/91.44 = 8.2%) and 3 mm down from the top and up from the bottom. To
+   SCALE that is 47 x 18 px here, which reads far too heavy beside the slot and
+   antenna linework — everything else on this panel is under-scaled too (the
+   58 px knobs are 10.6 mm) — so they are drawn at the deco weight instead.
+   Deliberately NOT .deco: the slot and antenna hide beside a big or empty
+   screen, but the holes belong to the frame and stay. */
+.mnt{position:absolute;width:26px;height:10px;border:1px solid #333;border-radius:5px;background:#000;pointer-events:none}
+.mnt.t{top:11px}.mnt.b{bottom:11px}.mnt.l{left:8.2%}.mnt.r{right:8.2%}
 #panel.big .deco,#scrarea:has(#scrbox.empty) .deco{display:none}   /* only beside a loaded, small screen */
 #scrbox .row #scrbtn.big{flex:1 1 auto;aspect-ratio:4/3;margin:29px 0 6px;padding:0;font-size:14px;letter-spacing:1px;border-color:#333}   /* nothing loaded: the Screen button IS the screenshot frame — same size and place, so nothing reflows when the shot lands */
 #panel .row .btn:hover{background:#1a1a1a;color:#aaa}
@@ -389,6 +407,7 @@ body.nosbar .sbar{display:none}
   <div class="remcols remtop">
   <div class="rcol">
   <div class="card pnl" id="panel">
+    <div class="mnt t l" title="mounting hole"></div><div class="mnt t r" title="mounting hole"></div>
     <div class="pspace">
     <div id="scrarea" style="position:relative">
       <div class="deco slot" title="card slot"></div>
@@ -433,6 +452,7 @@ body.nosbar .sbar{display:none}
     </div>
     </div>
     <div class="pspace"></div>
+    <div class="mnt b l" title="mounting hole"></div><div class="mnt b r" title="mounting hole"></div>
   </div>
   <div id="midihome"><div class="card pnl" id="midicard" style="display:none">
     <div class="row tight" style="align-items:center">
