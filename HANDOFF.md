@@ -27,9 +27,14 @@ were too dark even on `#1c1c1c`, so that was a fix, not a compensation.
 - **Samples/Modules on their own line**, folder chips below with air above.
 - **THREE COLUMNS when the window allows.** `colCount()`: 502 each + 12 gap +
   24 gutter, so 2 needs 1040 and 3 needs **1554**. `balanceCols()` now deals into
-  N columns (`deal()` picks the shortest) instead of comparing two; pins are
-  `use[0]` and `use[last]`; `fitFiles()` measures against the TALLEST other
-  column. Full-width things (`#p3.c3`) span 1530.
+  N columns (`deal()` picks the shortest) instead of comparing two; `fitFiles()`
+  measures against the TALLEST other column. Full-width things (`#p3.c3`) span
+  1530.
+- **The FILES/MACHINE pin is column 1, not the last** (Arlo 2026-09-11): the
+  RIGHT of two and the MIDDLE of three, which is the same `pin=1` either way.
+  Everything else spreads over the columns around it. Verified at 1700 px: FILES
+  in the middle, and open it holds that column alone at 1771 px against the
+  tallest neighbour's 1771.
 
 **Panel**
 - **The hostname is the wordmark**, centred below the jack field where the real

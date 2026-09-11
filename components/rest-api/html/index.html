@@ -2513,6 +2513,9 @@ function balanceCols(){
   for(i=0;i<bcols.length;i++)bcols[i].style.display=(i<ncol)?'':'none';
   var p3=document.getElementById('p3'); if(p3)p3.classList.toggle('c3',ncol>=3);
   var last=use.length-1;
+  // FILES + MACHINE always land in column 1: the RIGHT of two, the MIDDLE of
+  // three (Arlo 2026-09-11). Everything else spreads over the columns around it.
+  var pin=1;
   function deal(set,heights,id){          // into whichever column is shortest
     var k=0,m=heights[0],q;
     for(q=1;q<set.length;q++)if(heights[q]<m){m=heights[q];k=q;}
@@ -2531,7 +2534,7 @@ function balanceCols(){
     var fsc=document.getElementById('fscroll');   // the stylesheet owns it again
     if(fsc&&fsc.style.maxHeight&&fsc.style.maxHeight!=='none')fsc.style.maxHeight='';
     BAL_LEFT.forEach(function(id){move(use[0],id);});
-    BAL_RIGHT.forEach(function(id){move(use[last],id);});
+    BAL_RIGHT.forEach(function(id){move(use[pin],id);});
     if(narrow){BAL_FLOW.forEach(function(id){move(use[0],id);});return;}   // `order` sequences it
     // An OPEN file list owns the right column: it is the one card with no
     // natural height, so balancing it against the panel just shoved everything
@@ -2545,17 +2548,17 @@ function balanceCols(){
       // 2026-09-10). The list is the tallest thing on the page when it is open;
       // sharing its column just squeezes it. Everything else spreads over the
       // columns that are left.
-      var rest=use.slice(0,last),rh=[];
-      for(k=0;k<rest.length;k++)rh[k]=0;
+      var rest=[],rh=[];
+      for(k=0;k<use.length;k++)if(k!==pin){rest.push(use[k]);rh.push(0);}
       BAL_LEFT.forEach(function(id){rh[0]+=h(id);});
       BAL_RIGHT.forEach(function(id){if(id!=='fileshome')deal(rest,rh,id);});
       flow.forEach(function(id){deal(rest,rh,id);});
-      fitFiles(use);return;
+      fitFiles(use,pin);return;
     }
     var hs=[];
     for(k=0;k<use.length;k++)hs[k]=0;
     BAL_LEFT.forEach(function(id){hs[0]+=h(id);});
-    BAL_RIGHT.forEach(function(id){hs[last]+=h(id);});
+    BAL_RIGHT.forEach(function(id){hs[pin]+=h(id);});
     flow.forEach(function(id){deal(use,hs,id);});
     return;
   }
@@ -2564,13 +2567,13 @@ function balanceCols(){
   // the band into row B and balances there.
   if(bot)bot.style.display='';
   BAL_LEFT.forEach(function(id){move(use[0],id);});      // midihome is empty while wide
-  BAL_RIGHT.forEach(function(id){move(use[last],id);});
+  BAL_RIGHT.forEach(function(id){move(use[pin],id);});
   var hp=h('panel'),hr2=0,rest=[];
   BAL_RIGHT.forEach(function(id){hr2+=h(id);});
   BAL_FLOW.forEach(function(id){
     var e=document.getElementById(id);if(!e)return;
     var c=h(id);
-    if(hr2+c<=hp){move(use[last],id);hr2+=c;}else rest.push(id);
+    if(hr2+c<=hp){move(use[pin],id);hr2+=c;}else rest.push(id);
   });
   var b0=0,b1=0;
   rest.forEach(function(id){
@@ -2585,12 +2588,13 @@ function colCount(){var w=window.innerWidth;return w>=1554?3:(w>1040?2:1);}
 // height, so (left - right) is exactly the room the rest of the column leaves —
 // and reading it back in the same frame means the browser never paints the
 // uncapped, thousands-of-pixels version.
-function fitFiles(cols){
+function fitFiles(cols,pin){
   var sc=document.getElementById('fscroll');if(!sc)return;
+  if(pin==null)pin=cols.length-1;
   sc.style.maxHeight='none';
-  var last=cols.length-1,lh=0,q;
-  for(q=0;q<last;q++)lh=Math.max(lh,cols[q].getBoundingClientRect().height);
-  var rh=cols[last].getBoundingClientRect().height;
+  var lh=0,q;
+  for(q=0;q<cols.length;q++)if(q!==pin)lh=Math.max(lh,cols[q].getBoundingClientRect().height);
+  var rh=cols[pin].getBoundingClientRect().height;
   var cur=sc.getBoundingClientRect().height;
   var t=Math.round(cur+(lh-rh));
   if(t<160)t=160;                     // never collapse to a sliver
