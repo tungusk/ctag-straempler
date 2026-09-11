@@ -143,7 +143,9 @@ body.nosbar .sbar{display:none}
    sits on a common baseline (Arlo 2026-09-11). */
 #clkcard .row{gap:10px;row-gap:8px;flex-wrap:wrap;align-items:flex-end}
 #clkcard label{margin:0}
-#clkcard #blbox{margin-bottom:6px}
+/* the listener's readout is a STATUS DISPLAY, so it gets the same black frame
+   as the settings screens and ABOUT rather than floating on the card */
+#clkcard #blbox{background:#000;border:1px solid #262626;border-radius:2px;padding:6px 8px;margin-bottom:6px}
 #clkcard #lsn_body .row{margin-top:6px}
 .pwm{position:absolute;left:0;right:0;bottom:22px;text-align:center;color:#f0f0f0;font-weight:bold;
   font-size:14px;letter-spacing:5px;pointer-events:none;user-select:none}
