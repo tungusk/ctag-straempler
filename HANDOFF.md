@@ -51,6 +51,26 @@ NARROWER, not wider, so it was left alone. The Edge.Cuts outline is
 **91.3 x 128.5 mm**, not the 91.44 HP nominal — ratio 1.407, card renders 1.414
 (~4 px tall, content-driven, not worth chasing).
 
+**Third pass — deco alignment + the OUT pills, all three read off the panel:**
+- **Card slot** moved out to the edge: the SD cutout is x 3.488..5.995, centre
+  **5.19%** in from the panel edge; `left` went 8% -> 2.77%. Careful, the decos
+  live in `#scrarea` = the panel's CONTENT box (6 px in each side), so the CSS
+  number and the panel percentage are NOT the same — measure against `#panel`.
+  Lands at 4.99%, a pixel out.
+- **Antenna aligned on its CONNECTOR**, not on the glyph+connector box. The SMA
+  (`dummyfp2`, y -97.693) and the card slot centre (-97.71) are at the same
+  height on the real panel; `.deco`'s `translateY(-50%)` centred the whole
+  64-unit viewBox, leaving the connector circle (cy 47 = 73.44% down) **15 px
+  low**. `.ant` overrides with `translateY(-73.44%)`. Delta measured 0.
+- **OUT jacks wear a pill** because the real panel does and the other labels do
+  not: an **0.18 mm silk OUTLINE, 9.46 x 4.0 mm** around the OUT label
+  (F.SilkS x 79.10..88.56 — proved it is an outline, not a fill, by slicing at
+  the pill's mid-height: runs at 79.10-79.28 and 88.38-88.56 are the two edges,
+  everything between is the lettering). 52 x 22 px at this scale; renders
+  51.1 x 22. `auCell()` now tags the out cells `.out`.
+  **`white-space:nowrap` is load-bearing** — without it "OUT L" wrapped to two
+  lines inside the pill and it came out 30 px tall.
+
 Page edited -> **`html/convert.sh` is NOT run by CMake**, run it or the change
 silently does not ship. Built, OTA'd to .85, verified in the browser.
 
