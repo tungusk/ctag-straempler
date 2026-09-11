@@ -30,11 +30,11 @@ were too dark even on `#1c1c1c`, so that was a fix, not a compensation.
   N columns (`deal()` picks the shortest) instead of comparing two; `fitFiles()`
   measures against the TALLEST other column. Full-width things (`#p3.c3`) span
   1530.
-- **The FILES/MACHINE pin is column 1, not the last** (Arlo 2026-09-11): the
-  RIGHT of two and the MIDDLE of three, which is the same `pin=1` either way.
-  Everything else spreads over the columns around it. Verified at 1700 px: FILES
-  in the middle, and open it holds that column alone at 1771 px against the
-  tallest neighbour's 1771.
+- **At three columns the PANEL column takes the MIDDLE** (`pcol`), FILES +
+  MACHINE stay pinned to the LAST (`pin`), and the flow spreads over what is
+  left. At two columns `pcol=0`, so nothing changes there. Verified at 1700 px:
+  panel centre, FILES right; open, FILES holds its column alone at 1771 px
+  against the tallest neighbour's 1771.
 
 **Panel**
 - **The hostname is the wordmark**, centred below the jack field where the real

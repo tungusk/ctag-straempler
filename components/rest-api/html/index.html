@@ -2513,9 +2513,10 @@ function balanceCols(){
   for(i=0;i<bcols.length;i++)bcols[i].style.display=(i<ncol)?'':'none';
   var p3=document.getElementById('p3'); if(p3)p3.classList.toggle('c3',ncol>=3);
   var last=use.length-1;
-  // FILES + MACHINE always land in column 1: the RIGHT of two, the MIDDLE of
-  // three (Arlo 2026-09-11). Everything else spreads over the columns around it.
-  var pin=1;
+  // The PANEL takes the middle when there are three columns (Arlo 2026-09-11) —
+  // at two it is simply the left. FILES + MACHINE stay pinned to the last column
+  // either way, and the flow spreads over whatever is left.
+  var pcol=(use.length>=3)?1:0, pin=last;
   function deal(set,heights,id){          // into whichever column is shortest
     var k=0,m=heights[0],q;
     for(q=1;q<set.length;q++)if(heights[q]<m){m=heights[q];k=q;}
@@ -2533,7 +2534,7 @@ function balanceCols(){
     if(bot)bot.style.display='none';
     var fsc=document.getElementById('fscroll');   // the stylesheet owns it again
     if(fsc&&fsc.style.maxHeight&&fsc.style.maxHeight!=='none')fsc.style.maxHeight='';
-    BAL_LEFT.forEach(function(id){move(use[0],id);});
+    BAL_LEFT.forEach(function(id){move(use[pcol],id);});
     BAL_RIGHT.forEach(function(id){move(use[pin],id);});
     if(narrow){BAL_FLOW.forEach(function(id){move(use[0],id);});return;}   // `order` sequences it
     // An OPEN file list owns the right column: it is the one card with no
@@ -2548,16 +2549,16 @@ function balanceCols(){
       // 2026-09-10). The list is the tallest thing on the page when it is open;
       // sharing its column just squeezes it. Everything else spreads over the
       // columns that are left.
-      var rest=[],rh=[];
-      for(k=0;k<use.length;k++)if(k!==pin){rest.push(use[k]);rh.push(0);}
-      BAL_LEFT.forEach(function(id){rh[0]+=h(id);});
+      var rest=[],rh=[],ri=-1;
+      for(k=0;k<use.length;k++)if(k!==pin){rest.push(use[k]);rh.push(0);if(k===pcol)ri=rest.length-1;}
+      if(ri>=0)BAL_LEFT.forEach(function(id){rh[ri]+=h(id);});
       BAL_RIGHT.forEach(function(id){if(id!=='fileshome')deal(rest,rh,id);});
       flow.forEach(function(id){deal(rest,rh,id);});
       fitFiles(use,pin);return;
     }
     var hs=[];
     for(k=0;k<use.length;k++)hs[k]=0;
-    BAL_LEFT.forEach(function(id){hs[0]+=h(id);});
+    BAL_LEFT.forEach(function(id){hs[pcol]+=h(id);});
     BAL_RIGHT.forEach(function(id){hs[pin]+=h(id);});
     flow.forEach(function(id){deal(use,hs,id);});
     return;
@@ -2566,7 +2567,7 @@ function balanceCols(){
   // panel. Fill the right of row A up to that, then everything else drops below
   // the band into row B and balances there.
   if(bot)bot.style.display='';
-  BAL_LEFT.forEach(function(id){move(use[0],id);});      // midihome is empty while wide
+  BAL_LEFT.forEach(function(id){move(use[pcol],id);});   // midihome is empty while wide
   BAL_RIGHT.forEach(function(id){move(use[pin],id);});
   var hp=h('panel'),hr2=0,rest=[];
   BAL_RIGHT.forEach(function(id){hr2+=h(id);});
