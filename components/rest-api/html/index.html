@@ -125,6 +125,8 @@ body.nosbar .sbar{display:none}
 .mnt.t{top:6.5px}.mnt.b{bottom:6.5px}.mnt.l{left:3.39%}.mnt.r{right:3.39%}
 /* absolutely positioned, so it costs the frame no height and cannot disturb the
    panel proportion the padding was tuned for */
+/* ABOUT reads as part of the screen above it: same black ground, same inset */
+#about_body{background:#000;border:1px solid #262626;border-radius:2px;padding:8px 10px;margin-top:4px}
 .pwm{position:absolute;left:0;right:0;bottom:24px;text-align:center;color:#f0f0f0;font-weight:bold;
   font-size:12px;letter-spacing:4px;pointer-events:none;user-select:none}
 #panel.big .deco,#scrarea:has(#scrbox.empty) .deco{display:none}   /* only beside a loaded, small screen */
@@ -555,7 +557,7 @@ body.nosbar .sbar{display:none}
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0">CLOCK</b>
       <span id="clkro" style="color:#888;margin-right:8px;font-size:11px">&#8212;</span>
-      <button class="btn" style="flex:0 0 auto" onclick="clkApply()">Apply</button>
+      <button class="btn foldhide" style="flex:0 0 auto" onclick="clkApply()">Apply</button>
     </div>
     <div class="row tight" style="align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
       <label style="color:#888;font-size:11px">source <select id="clksrc" style="width:82px;display:inline-block"></select></label>
@@ -682,7 +684,10 @@ body.nosbar .sbar{display:none}
        header. No card-level fold, or one header would hide the other. -->
   <div class="card pnl" id="outcard">
     <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span class="hlp" data-h="Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.">BOUNCE</span></b>
+      <!-- BOUNCE has nothing to fold, so no triangle — but it still gets the
+           triangle's WIDTH, hidden, so its title lines up with BROADCAST's
+           below it. Same glyph, so the two can never drift apart. -->
+      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span style="visibility:hidden">&#9656; </span><span class="hlp" data-h="Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.">BOUNCE</span></b>
       <span id="bncstate" style="color:#888;margin-right:8px">idle</span>
       <button class="btn" id="bncbtn" style="flex:0 0 84px" onclick="bncToggle()">Record</button>
     </div>
@@ -737,13 +742,16 @@ body.nosbar .sbar{display:none}
   <!-- what is left of the old Settings tab. Everything with a row on the
        GLOBAL screen lives THERE now and is edited in place; these two have
        no row, so they are sub-folds under it. -->
+  <!-- ABOUT is its own node: its HEADER is the GLOBAL screen's "About"
+       affordance at the TOP of the card, so its body has to open right under the
+       screen. Parked inside #setform it surfaced below WEB, nowhere near the
+       thing that toggled it (Arlo 2026-09-11). -->
+  <div id="about_body" style="display:none">
+    <div class="kv">device time <b id="devtime">--</b> <span style="color:#9ab">(SNTP, at UTC+shift)</span></div>
+    <div class="kv" style="margin-top:4px">firmware <b id="abver">--</b></div>
+    <div class="kv" style="margin-top:4px">CTAG Str&#228;mpler &#8212; upstream by Robert Manzke (CC BY-NC-SA 4.0); v09-machines fork by Arlo + Claude</div>
+  </div>
   <div id="setform" style="display:none">
-    <!-- no header of its own: the GLOBAL screen's "About" affordance toggles it -->
-    <div id="about_body" style="display:none">
-      <div class="kv">device time <b id="devtime">--</b> <span style="color:#555">(SNTP, at UTC+shift)</span></div>
-      <div class="kv" style="margin-top:4px">firmware <b id="abver">--</b></div>
-      <div class="kv" style="margin-top:4px">CTAG Str&#228;mpler &#8212; upstream by Robert Manzke (CC BY-NC-SA 4.0); v09-machines fork by Arlo + Claude</div>
-    </div>
     <b class="sub" id="blogo_hdr" data-t="BOOT LOGO" style="cursor:pointer;user-select:none;display:block;margin-top:10px" onclick="foldToggle('blogo')">&#9656; BOOT LOGO</b>
     <div id="blogo_body" style="display:none">
       <div class="dz" id="bldz" onclick="document.getElementById('blf').click()">
@@ -1452,7 +1460,7 @@ function fxSlotPick(){fxHarvest();var g=document.getElementById('fxgroups');if(g
 function fxCard(d){
   if(!Array.isArray(d.fxsl))return '';
   var h='<div class="card pnl" id="fxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">FX</b>'
-       +'<button class="btn" style="flex:0 0 auto" onclick="rpApply()">Apply</button></div><div class="fxslots">';
+       +'<button class="btn foldhide" style="flex:0 0 auto" onclick="rpApply()">Apply</button></div><div class="fxslots">';
   d.fxsl.forEach(function(k,i){h+='<label>FX'+(i+1)+' '+fxSel('fxsl.'+i,+k,FXK,'data-rp="fxsl.'+i+'" onchange="fxSlotPick()"')+'</label>';});
   if(d.rv!==undefined)h+='<label>FX3 '+fxSel('rv',+d.rv,FXRV,'data-rp="rv"')+'</label>';
   if(d.rvmx!==undefined)h+='<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:150px">mix <input type="range" data-rp="rvmx" min="0" max="100" value="'+d.rvmx+'" oninput="fxv(this)" style="flex:1"><span class="fxv">'+fxFmt('rvmx',d.rvmx)+'</span></label>';
@@ -1568,8 +1576,8 @@ function rpMatrix(d){
   mxLabs=d.mxl||[];mxN=hasM?d.mxs.length:0;mxDef=Array.isArray(d.mxd)?d.mxd:[];
   var mxm=Array.isArray(d.mxm)?d.mxm:[];
   var h='<div class="card pnl mxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">CV MATRIX</b>'
-    +'<button class="btn" style="flex:0 0 auto;margin-right:6px" onclick="rpApply()">Apply</button>'
-    +'<button class="btn" style="flex:0 0 auto" title="picks back to their defaults, assignable matrix cleared, applied" onclick="mxReset()">Reset</button></div><table class="mtx">';
+    +'<button class="btn foldhide" style="flex:0 0 auto;margin-right:6px" onclick="rpApply()">Apply</button>'
+    +'<button class="btn foldhide" style="flex:0 0 auto" title="picks back to their defaults, assignable matrix cleared, applied" onclick="mxReset()">Reset</button></div><table class="mtx">';
   for(var ch=0;ch<11;ch++){
     var name=ch<8?'CV '+(ch+1):ch<10?'TR '+(ch-7):'clock',cells='',chips='';
     im.forEach(function(e){
@@ -1661,14 +1669,28 @@ function foldInit(key){
   b.style.display='';
   if(a)a.textContent='\u25BE ';                                            // header carries a tooltip: touch only the arrow
   else if(h)h.textContent='\u25BE '+h.getAttribute('data-t');
+  foldActions(key,true);
 }
 function foldOpen(key,def){try{var v=localStorage.getItem('fold_'+key);return v===null?!!def:v==='1';}catch(e){return !!def;}}
+// An Apply/Reset in a card's HEADER row survives the fold (makeFold only bodies
+// what comes after it) and is meaningless while the card is shut. Anything
+// marked .foldhide and sitting outside the body goes with it. Readouts are NOT
+// marked — the clock tag, the FILES disk line and BOUNCE/BROADCAST's own state
+// and buttons are wanted collapsed (Arlo 2026-09-11).
+function foldActions(key,open){
+  var b=document.getElementById(key+'_body');if(!b)return;
+  var card=b.parentElement;while(card&&card.className.indexOf('card')<0)card=card.parentElement;
+  if(!card)return;
+  var els=card.querySelectorAll('.foldhide'),i;
+  for(i=0;i<els.length;i++)if(!b.contains(els[i]))els[i].style.display=open?'':'none';
+}
 function foldSet(key,open){
   var b=document.getElementById(key+'_body'),a=document.getElementById(key+'_arw'),h=document.getElementById(key+'_hdr');
   if(!b)return;
   b.style.display=open?'':'none';
   if(a)a.textContent=open?'\u25BE ':'\u25B8 ';                       // converted card: only the arrow changes
   else if(h)h.textContent=(open?'\u25BE ':'\u25B8 ')+h.getAttribute('data-t');   // foldCard(): the whole label
+  foldActions(key,open);
   try{localStorage.setItem('fold_'+key,open?'1':'0');}catch(e){}
   balanceSoon();               // folding changes a column's height
 }
@@ -1688,6 +1710,7 @@ function makeFold(card,key,def){
   card.appendChild(body);
   var open=foldOpen(key,def===undefined?true:def);
   body.style.display=open?'':'none';
+  foldActions(key,open);        // a card built folded must hide its actions too
   var arw=document.createElement('span');
   arw.id=key+'_arw'; arw.textContent=open?'\u25BE ':'\u25B8 ';
   ph.insertBefore(arw,ph.firstChild);
@@ -1835,7 +1858,7 @@ function plainCard(title,body){return '<div class="card pnl"><b class="ph" style
 function setupCard(adv){return foldCard('setup','MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>'+(adv||''));}
 // #setslot takes the STATIC #setform (the old Settings tab). It is moved in
 // rather than templated, so a rebuild cannot wipe a half-typed SSID or password.
-function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>'
+function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div><div id="aboutslot"></div>'
   // Save sits outside the screen zone, right-aligned. It covers only the four
   // text rows; every toggle on the screen already writes on click.
   +'<div class="row tight" style="margin-top:6px;align-items:center;justify-content:flex-end">'
@@ -1904,12 +1927,17 @@ function rpSetCard(inner,asTable){
   // PARK the static form outside the card first. #rglob's innerHTML is replaced
   // below, and once the form has been moved INTO that card a reload destroys the
   // node outright — it never comes back and the About/Boot Logo folds vanish.
-  var form=document.getElementById('setform');
-  if(form)document.getElementById('p3').appendChild(form);
+  var form=document.getElementById('setform'),abt=document.getElementById('about_body');
+  var p3n=document.getElementById('p3');
+  if(form)p3n.appendChild(form);
+  if(abt)p3n.appendChild(abt);
   document.getElementById('rsetup').innerHTML=setupCard(advBody(inner,asTable));
   document.getElementById('rglob').innerHTML=globCard();
   var slot=document.getElementById('setslot');
-  if(slot&&form){slot.appendChild(form);form.style.display='';foldInit('about');foldInit('blogo');}   // MOVE, never re-template
+  var aslot=document.getElementById('aboutslot');
+  if(aslot&&abt)aslot.appendChild(abt);                          // under the screen that toggles it
+  if(slot&&form){slot.appendChild(form);form.style.display='';}  // MOVE, never re-template
+  foldInit('about');foldInit('blogo');
   webDraw();
   foldAll();                     // the matrix / FX cards were just rebuilt
   return '';                     // #rparams is only an error slot now

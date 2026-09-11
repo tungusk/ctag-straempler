@@ -9,6 +9,28 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-11 — folded cards hide their actions; ABOUT opens where it belongs
+
+- **BOUNCE is indented by a HIDDEN triangle** so its title lines up with
+  BROADCAST's below it — same glyph at `visibility:hidden`, so the two cannot
+  drift apart with the font. Measured both at x=179.
+- **A folded card hides its header ACTIONS.** `makeFold()` bodies only what comes
+  after the header row, so an Apply/Reset there survived the fold and did
+  nothing. Anything marked **`.foldhide`** and living outside the body is hidden
+  with it (`foldActions()`, called from `foldSet`/`foldInit`/`makeFold` — the
+  last matters for a card that is built folded). Marked: CV MATRIX Apply+Reset,
+  FX Apply, CLOCK Apply. **Deliberately NOT marked** (Arlo): the clock readout,
+  the FILES disk line, and BOUNCE/BROADCAST's state *and* buttons — those are
+  wanted collapsed. Verified folded: actions gone, readouts and the two
+  output buttons still there.
+- **ABOUT opens directly under the screen.** Its HEADER is the screen's "About"
+  affordance at the TOP of the card, but its body was parked inside `#setform`
+  at the BOTTOM — so clicking it surfaced content below WEB, nowhere near the
+  thing that toggled it. It is now its own static node moved into an
+  `#aboutslot` right after the screen (4 px below it, above WEB), on the same
+  **black** ground so it reads as part of the screen. `#setform` keeps the boot
+  logo. Both are parked on `#p3` before `#rglob` is re-templated.
+
 ## 2026-09-11 — BOUNCE + BROADCAST melded into one card
 
 Both are "the output, leaving the box", so they are one card (`#outcard`) with
