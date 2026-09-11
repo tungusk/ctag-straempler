@@ -441,7 +441,7 @@ body.nosbar .sbar{display:none}
       <div id="scrbox" class="empty" style="width:60%;margin:0 auto;position:relative">
         <div class="row tight" id="scrrow" style="align-items:center;justify-content:center;margin-top:0">
           <button class="btn big" id="scrbtn" onclick="scrShot()">Screen</button>
-          <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#aaa;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#2f5566;opacity:.8"> auto</label>
+          <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#aaa;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#5a5a5a;opacity:.9"> auto</label>
         </div>
         <button class="btn" id="scrclose" style="position:absolute;top:0;right:0;width:30px;display:none" onclick="scrClose()">&#10005;</button>
         <img id="scrimg" title="click: toggle size" onclick="scrZoom()" style="cursor:zoom-in;width:100%;display:none;margin:8px 0 6px;image-rendering:pixelated;border:1px solid #333">
@@ -579,10 +579,12 @@ body.nosbar .sbar{display:none}
       <span id="clkro" style="color:#aaa;margin-right:8px;font-size:11px">&#8212;</span>
       <button class="btn foldhide" style="flex:0 0 auto" onclick="clkApply()">Apply</button>
     </div>
-    <div class="row tight" style="align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
-      <label style="color:#aaa;font-size:11px">source <select id="clksrc" style="width:82px;display:inline-block"></select></label>
-      <label style="color:#aaa;font-size:11px">ppq <select id="clkppq" style="width:54px;display:inline-block"><option>1</option><option>2</option><option>4</option><option>8</option></select></label>
-      <label style="color:#aaa;font-size:11px">int bpm <input type="number" id="clkbpm" min="20" max="300" step="1" style="width:58px;display:inline-block"></label>
+    <!-- one line: the controls are narrowed so `fallback` sits with the rest
+         instead of wrapping onto a row of its own -->
+    <div class="row tight" style="align-items:center;gap:10px;margin-top:6px">
+      <label style="color:#aaa;font-size:11px">src <select id="clksrc" style="width:72px;display:inline-block"></select></label>
+      <label style="color:#aaa;font-size:11px">ppq <select id="clkppq" style="width:46px;display:inline-block"><option>1</option><option>2</option><option>4</option><option>8</option></select></label>
+      <label style="color:#aaa;font-size:11px">bpm <input type="number" id="clkbpm" min="20" max="300" step="1" style="width:52px;display:inline-block"></label>
       <label style="color:#aaa;font-size:11px" title="INT stands in while the external source is unlocked; the jack wins back on its first edge"><input type="checkbox" id="clkauto" style="width:auto"> fallback</label>
     </div>
     <div class="msg" id="clkmsg" style="display:none"></div>
@@ -908,7 +910,7 @@ function renderFiles(){
   });
   var tb=document.getElementById('ftb'),h='';
   files.forEach(function(f){
-    var bpm=f.bpm?f.bpm.toFixed(1):'<span style="color:#666">--</span>';
+    var bpm=f.bpm?f.bpm.toFixed(1):'';        // no tempo = nothing, not a dash
     var nameCell;
     if(f.name===libEdit){   // inline edit box, same idiom as the batch list
       nameCell='<input id="lrn" value="'+esc(f.name)+'" maxlength="8" style="width:84px;padding:2px 4px;background:#000;color:#fff;border:1px solid #0af" '
@@ -1211,7 +1213,14 @@ function loadSysinfo(){
       var t=new Date((d.time+(d.tz||0)*3600)*1000);
       dt.textContent=t.toISOString().replace('T',' ').slice(0,19);
     }
-    var sd=d.total?('SD '+Math.round(d.free/1048576)+'/'+Math.round(d.total/1048576)+'MB'):'';
+    // free space is only meaningful as TIME here: recordings are 16-bit stereo
+    // 44.1k WAV = 176400 B/s = 10.09 MB per minute.
+    var sd='';
+    if(d.total){
+      var freeMB=d.free/1048576, mins=freeMB/10.09;
+      var rec=mins>=120?('~'+Math.round(mins/60)+' h'):('~'+Math.round(mins)+' min');
+      sd='SD '+Math.round(freeMB)+'/'+Math.round(d.total/1048576)+'MB \u00b7 '+rec+' rec';
+    }
     var dk=document.getElementById('disk');   if(dk)dk.textContent=sd;
     var fdk=document.getElementById('fdisk'); if(fdk)fdk.textContent=sd;
   }).catch(function(){});
@@ -2800,14 +2809,17 @@ function rescan(){
 }
 
 // ---- BEATLISTEN ----------------------------------------------------------------
-var BL_MODE=['off','KICK','FLUX'],BL_ST=['idle','hunting','LOCKED'];
+// straight off bl_mode_t / bl_state_t in beatlisten.h — these had drifted and
+// were mislabelling states, not just falling back to a number
+var BL_MODE=['off','PULSE','KICK','FLUX','GROOVE'];
+var BL_ST=['off','onset','silent','listening','LOCKED','freewheel'];
 function updateBl(d){
   var b=d.bl,e=document.getElementById('blbox');
   if(!e)return;
   if(!b){e.textContent='not reporting';return;}
-  var mode=BL_MODE[b.m]||('mode '+b.m), st=BL_ST[b.st]||('state '+b.st);
-  e.innerHTML='<b>'+esc(mode)+'</b> &middot; '+esc(st)
-    +'<br>bpm <b>'+(b.bpm?b.bpm.toFixed(1):'--')+'</b>'
+  var st=BL_ST[b.st]||('state '+b.st);      // the mode is the picker below
+  e.innerHTML='<b>'+esc(st)+'</b>'
+    +' &nbsp; bpm <b>'+(b.bpm?b.bpm.toFixed(1):'--')+'</b>'
     +' &nbsp; conf <b>'+(b.cf?b.cf.toFixed(2):'--')+'</b>'
     +' &nbsp; cost <b>'+(b.us||0)+' us</b>';
 }
