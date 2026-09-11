@@ -9,6 +9,39 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — narrow-mode order fix + the columns even their bottom edge
+
+**REGRESSION from merging the rows, caught by Arlo:** "when compressed machine
+etc cards go above panel. panel stays top". In narrow mode `.remtop .rcol`
+becomes `display:contents`, so EVERY card is a direct flex child of `.remtop`
+and `order` alone sequences them. The cards that moved into the right column had
+no `order`, and the default **0 sorts AHEAD of the panel's 1**. Every card now
+has an explicit order (panel 1 ... broadcast 14). **Add a card to the columns =
+add it to that media query.** `#midihome` needs none: it is `display:contents`,
+so `#midicard` is the flex item and it carries order 2.
+Also removed the last `.remset` / `.remstream` rules, dead since the rows went.
+
+**`balanceCols()` — even bottom edges** (Arlo: "when they flow, they should try
+to establish an even bottom edge horizontally"). The TOP PAIR is pinned because
+it is what the page is about — panel (+keyboard) left, MACHINE and the active
+machine's card right — and every other card is dealt to whichever column is
+currently SHORTER, in order. Both columns are 502 px, so a card's height does not
+change when it moves and measuring before the move is safe.
+- Runs from `foldAll()`, `capsApply()` (a card appearing/leaving), `foldSet()`
+  and resize, debounced 60 ms through `balanceSoon()`.
+- **Bails while an INPUT/SELECT/TEXTAREA inside the columns has focus** —
+  moving a node reparents it and takes focus and selection with it, which would
+  eat what someone is typing into the icecast or Freesound fields.
+- Stands down below 1040 px and lets `order` rule.
+- Measured on Tape: gap **376 px -> 6 px**; fold the CV matrix -> 40, unfold ->
+  6 again. On Freesound earlier: 160 -> 38.
+
+**OTA REJECTED once here** ("stop radio and retry?") with a machine loaded and
+PSRAM down to ~1.0 MB from 1.75. Nothing was flashed — `ota.sh` checks the reply
+and only auto-retries `ota_begin failed`. It went through on the retry. Also
+worth remembering: the unit stopped answering /sysinfo entirely for a moment and
+it was Arlo handling the module, not a crash — `ping` said it was alive.
+
 ## 2026-09-10 — cards follow the machine; Freesound/Radio/Editor stop being tabs
 
 Arlo: cards should hide when the machine does not use them, and the thin

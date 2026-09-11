@@ -228,22 +228,26 @@ body.nosbar .sbar{display:none}
 .mxcard .mtx input[type=range]{width:96px}
 /* SETTINGS card: two TFT-style screens (machine Setup / global Settings) */
 .tftw{display:flex;margin-top:4px}   /* one screen per card; the card is the panel-column width */
-/* narrow window (one column): panel, keyboard, then CV MATRIX / FX / CLOCK / MACHINE,
-   then MACHINE SETUP / GLOBAL / ADVANCED — regardless of the two-column DOM order */
+/* Narrow window (one column): the two .rcol become display:contents, so EVERY
+   card is a direct flex child of .remtop and `order` alone decides the sequence,
+   regardless of the two-column DOM order.
+   EVERY card needs an order. The default is 0, which sorts AHEAD of the panel's
+   1 — when the settings and streaming cards moved into the right column they
+   had none, and jumped above the panel (Arlo 2026-09-10: "when compressed
+   machine etc cards go above panel. panel stays top"). Add a card here when you
+   add one to the columns. */
 @media (max-width:1040px){
   .remtop{display:flex;flex-direction:column;align-items:center}
   .remtop .rcol{display:contents}
-  #panel{order:1}#midicard{order:2}#rmatrix{order:3}#rfx{order:4}#clkcard{order:5}#machcard{order:6}
+  #panel{order:1}#midicard{order:2}                                  /* the instrument */
+  #fscard{order:3}#rdcard{order:3}#edcard{order:3}                   /* the active machine's own card */
+  #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}#machcard{order:7}  /* patching, then the selector */
+  #rsetup{order:8}#rweb{order:9}#rglob{order:10}#rparams{order:11}   /* settings */
+  #rm{order:12}#bouncecard{order:13}#bcastcard{order:14}             /* capture / streaming, last */
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
-.remset{align-items:flex-start;justify-content:flex-start;width:1016px;max-width:calc(100vw - 24px);margin:0 auto}   /* the settings zone: two across on the column grid, the odd one stays LEFT */
-.remset>.rcol{flex:0 0 502px;max-width:100%}   /* left: MACHINE SETUP; right: GLOBAL then ADVANCED */
-@media (max-width:1040px){.remset{justify-content:center}}
 /* BOUNCE + PUSH -> ICECAST against BROADCAST: equal-height columns, the last card in the
    short column absorbs the difference, so the row stays aligned as cards fold */
-.remstream{align-items:stretch}
-.remstream>.rcol{display:flex;flex-direction:column}
-.remstream>.rcol>.card:last-child{flex:1 1 auto}
 /* ADVANCED: the raw-key table inside the same dark frame as the two screens */
 .tft.adv{min-height:0}
 .tft table.adv{font-family:inherit;font-size:12px}
@@ -1601,6 +1605,7 @@ function foldSet(key,open){
   if(a)a.textContent=open?'\u25BE ':'\u25B8 ';                       // converted card: only the arrow changes
   else if(h)h.textContent=(open?'\u25BE ':'\u25B8 ')+h.getAttribute('data-t');   // foldCard(): the whole label
   try{localStorage.setItem('fold_'+key,open?'1':'0');}catch(e){}
+  balanceSoon();               // folding changes a column's height
 }
 function foldToggle(key){var b=document.getElementById(key+'_body');if(b)foldSet(key,b.style.display==='none');}
 // Turn a card that was NOT built by foldCard() into a fold card: everything after
@@ -1637,6 +1642,7 @@ function foldAll(){
     if(host&&!host.classList.contains('card'))host=host.querySelector('.card');   // #rmatrix / #rfx are wrappers
     makeFold(host,f[1],f.length>2?f[2]:true);
   });
+  balanceSoon();   // cards have just been built / rebuilt: even the bottom edge
 }
 function foldCard(key,title,body,cls){
   var open=foldOpen(key);
@@ -2272,7 +2278,7 @@ function midiDraw(){
   });
 }
 var midiRsz=null;
-window.addEventListener('resize',function(){clearTimeout(midiRsz);midiRsz=setTimeout(midiAuto,120);});
+window.addEventListener('resize',function(){clearTimeout(midiRsz);midiRsz=setTimeout(function(){midiAuto();balanceCols();},120);});
 // WebMIDI (Chrome): forward a hardware keyboard
 function midiDevices(){
   if(!navigator.requestMIDIAccess)return;
@@ -2367,6 +2373,45 @@ function machCardPoll(name,on){
     else if(edTimer){clearInterval(edTimer);edTimer=null;}
   }
 }
+// ---- even the two columns' bottom edges -------------------------------------
+// The TOP PAIR is fixed, because it is what the page is about: panel (+keyboard)
+// left, MACHINE and the active machine's own card right (Arlo 2026-09-10). Every
+// other card is then dealt to whichever column is currently SHORTER, in order,
+// so the two finish on roughly the same line instead of the right one stopping
+// 400 px early. Both columns are 502 px, so a card's height does not change when
+// it moves and measuring before the move is safe.
+var BAL_LEFT=['panel','midihome'];
+var BAL_RIGHT=['machcard','fscard','rdcard','edcard'];
+var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard'];
+function balanceCols(){
+  var top=document.querySelector('.remcols.remtop');if(!top)return;
+  if(window.innerWidth<=1040)return;          // one column: the `order` rules have it
+  var cols=[],i;
+  for(i=0;i<top.children.length;i++)if(top.children[i].className==='rcol')cols.push(top.children[i]);
+  if(cols.length!==2)return;
+  // never yank a field out from under someone mid-type: moving a node reparents
+  // it and takes focus and selection with it
+  var ae=document.activeElement;
+  if(ae&&top.contains(ae)&&/^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName))return;
+  function h(id){
+    var e=document.getElementById(id);
+    if(!e||getComputedStyle(e).display==='none')return 0;
+    var c=getComputedStyle(e);
+    return e.getBoundingClientRect().height+(parseFloat(c.marginTop)||0)+(parseFloat(c.marginBottom)||0);
+  }
+  function put(col,ids){ids.forEach(function(id){var e=document.getElementById(id);if(e)col.appendChild(e);});}
+  put(cols[0],BAL_LEFT);put(cols[1],BAL_RIGHT);
+  var hl=0,hr=0,k;
+  for(k=0;k<BAL_LEFT.length;k++)hl+=h(BAL_LEFT[k]);
+  for(k=0;k<BAL_RIGHT.length;k++)hr+=h(BAL_RIGHT[k]);
+  BAL_FLOW.forEach(function(id){
+    var e=document.getElementById(id);if(!e)return;
+    var ch=h(id);
+    if(hl<=hr){cols[0].appendChild(e);hl+=ch;}else{cols[1].appendChild(e);hr+=ch;}
+  });
+}
+var balT;
+function balanceSoon(){clearTimeout(balT);balT=setTimeout(balanceCols,60);}
 function capsApply(d){
   if(!d)return;
   MACHCARD.forEach(function(c){
@@ -2375,6 +2420,7 @@ function capsApply(d){
     if(el.style.display===want)return;
     el.style.display=want;
     machCardPoll(c[1],want==='');
+    balanceSoon();
   });
   if(!('caps' in d))return;              // firmware too old to say: leave every card alone
   var caps=d.caps|0;
@@ -2384,6 +2430,7 @@ function capsApply(d){
     if(el.style.display===want)return;
     el.style.display=want;
     if(want===''&&c[0]==='midicard')midiAuto();   // it could not be measured while hidden
+    balanceSoon();             // a card appearing or leaving moves the bottom edge
   });
 }
 function updateRemote(d){
