@@ -241,7 +241,7 @@ body.nosbar .sbar{display:none}
   .remtop .rcol{display:contents}
   #panel{order:1}#midicard{order:2}                                  /* the instrument */
   #fscard{order:3}#rdcard{order:3}#edcard{order:3}                   /* the active machine's own card */
-  #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}#lsncard{order:6}#machcard{order:7}  /* patching, then the selector */
+  #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}#machcard{order:7}  /* patching, then the selector */
   #rsetup{order:8}#rweb{order:9}#rglob{order:10}#rparams{order:11}   /* settings */
   #rm{order:12}#bouncecard{order:13}#bcastcard{order:14}             /* capture / streaming, last */
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
@@ -594,18 +594,11 @@ body.nosbar .sbar{display:none}
       <label style="color:#888;font-size:11px" title="INT stands in while the external source is unlocked; the jack wins back on its first edge"><input type="checkbox" id="clkauto" style="width:auto"> fallback</label>
     </div>
     <div class="msg" id="clkmsg" style="display:none"></div>
-  </div>
-  <!-- the beat listener: it IS a clock source (machines follow it via
-       Clock Src = AUDIO), so it belongs beside CLOCK on Remote rather than
-       in a tab of its own. -->
-  <div class="card pnl" id="lsncard">
-    <b class="ph" style="padding:0;margin:0">LISTENER</b>
-    <div class="card">
-      <h4>LISTENER</h4>
-      <div class="kv" id="blbox">--</div>
-    </div>
-    <div class="card">
-      <h4>CONTROLS</h4>
+    <!-- the beat listener IS a clock source (machines follow it via Clock
+         Src = AUDIO), so it belongs inside CLOCK rather than beside it. -->
+    <b class="sub" id="lsn_hdr" data-t="LISTENER" style="cursor:pointer;user-select:none;display:block;border-top:1px solid #262626;margin-top:8px;padding-top:6px" onclick="foldToggle('lsn')">&#9656; LISTENER</b>
+    <div id="lsn_body" style="display:none">
+    <div class="kv" id="blbox" style="margin-bottom:6px">--</div>
       <div class="row">
         <div><label>Mode</label>
           <select id="blmode" onchange="blSet()">
@@ -623,8 +616,10 @@ body.nosbar .sbar{display:none}
       </div>
       <div class="msg" id="blsm"></div>
     </div>
-    <div class="msg">GROOVE = tempo model (steady grid, never octave-hops); PULSE/KICK/FLUX = raw onset pulses. Machines follow via Clock Src = AUDIO.</div>
   </div>
+  <!-- the beat listener: it IS a clock source (machines follow it via
+       Clock Src = AUDIO), so it belongs beside CLOCK on Remote rather than
+       in a tab of its own. -->
   <!-- the settings and streaming cards stack in the RIGHT column rather than
        in rows of their own. As rows they could not flow up beside the panel:
        the top row was 723 px on the left against 296 on the right, so a thin
@@ -694,7 +689,7 @@ body.nosbar .sbar{display:none}
        GLOBAL screen lives THERE now and is edited in place; these two have
        no row, so they are sub-folds under it. -->
   <div id="setform" style="display:none">
-    <b class="sub" id="about_hdr" data-t="ABOUT" style="cursor:pointer;user-select:none;display:block;margin-top:10px" onclick="foldToggle('about')">&#9656; ABOUT</b>
+    <!-- no header of its own: the GLOBAL screen's "About" affordance toggles it -->
     <div id="about_body" style="display:none">
       <div class="kv">device time <b id="devtime">--</b> <span style="color:#555">(SNTP, at UTC+shift)</span></div>
       <div class="kv" style="margin-top:4px">firmware <b id="abver">--</b></div>
@@ -702,8 +697,10 @@ body.nosbar .sbar{display:none}
     </div>
     <b class="sub" id="blogo_hdr" data-t="BOOT LOGO" style="cursor:pointer;user-select:none;display:block;margin-top:10px" onclick="foldToggle('blogo')">&#9656; BOOT LOGO</b>
     <div id="blogo_body" style="display:none">
-      <div class="kv" style="color:#777">any image &#8212; converted in-browser to the 320x240 BMP the module needs</div>
-      <input type="file" id="blf" accept="image/*" onchange="blPick(this.files[0])">
+      <div class="dz" id="bldz" onclick="document.getElementById('blf').click()">
+        <b>Drop an image here, or tap to browse</b> &#8212; any size, converted in-browser to the 320x240 BMP the module needs
+      </div>
+      <input type="file" id="blf" accept="image/*" style="display:none" onchange="blPick(this.files[0])">
       <canvas id="blc" width="320" height="240" style="display:none;border:1px solid #333;margin-top:6px;max-width:100%"></canvas>
       <div class="row" id="blrow" style="display:none"><button class="btn" onclick="blUpload()">Upload boot logo</button></div>
       <div class="msg" id="blm"></div>
@@ -1108,6 +1105,14 @@ var dz=document.getElementById('dz');
 dz.ondragover=function(e){e.preventDefault();dz.className='dz ov';};
 dz.ondragleave=function(){dz.className='dz';};
 dz.ondrop=function(e){e.preventDefault();dz.className='dz';onFiles(e.dataTransfer.files);};
+// the boot-logo drop zone: one image, same affordance as the file one
+(function(){
+  var b=document.getElementById('bldz'); if(!b)return;
+  b.ondragover=function(e){e.preventDefault();b.className='dz ov';};
+  b.ondragleave=function(){b.className='dz';};
+  b.ondrop=function(e){e.preventDefault();b.className='dz';
+    var f=e.dataTransfer.files&&e.dataTransfer.files[0]; if(f)blPick(f);};
+})();
 
 function loadSet(){   // the GLOBAL screen fetches /settings itself in glLoad();
   loadSysinfo();     // this is only the About readouts now
@@ -1597,7 +1602,10 @@ function rpStep(i,d){
 // in a table. Folded state remembered per browser; starts folded.
 var rpSetup=null,rpGlob=null;
 // fold cards: heading toggles the body; per-card state in localStorage, folded by default
-function foldInit(key){if(foldOpen(key)){var b=document.getElementById(key+'_body'),h=document.getElementById(key+'_hdr');if(b){b.style.display='';h.textContent='\u25BE '+h.getAttribute('data-t');}}}
+// `h` is optional: About's header lives in the GLOBAL screen, which glLoad()
+// has not rendered yet when this runs — assuming it exists threw here and took
+// the rest of rpSetCard's caller (including glLoad) down with it.
+function foldInit(key){if(foldOpen(key)){var b=document.getElementById(key+'_body'),h=document.getElementById(key+'_hdr');if(b){b.style.display='';if(h)h.textContent='\u25BE '+h.getAttribute('data-t');}}}
 function foldOpen(key,def){try{var v=localStorage.getItem('fold_'+key);return v===null?!!def:v==='1';}catch(e){return !!def;}}
 function foldSet(key,open){
   var b=document.getElementById(key+'_body'),a=document.getElementById(key+'_arw'),h=document.getElementById(key+'_hdr');
@@ -1636,14 +1644,14 @@ function makeFold(card,key,def){
 // (Arlo 2026-09-10). Everything else defaults open.
 var FOLDABLE=[['machcard','mach'],['midicard','midi'],['rmatrix','mtx'],['rfx','fx'],
               ['clkcard','clk'],['bouncecard','bnc',false],['bcastcard','bc',false],
-              ['fscard','fs'],['rdcard','rd'],['edcard','ed'],['lsncard','lsn',false]];
+              ['fscard','fs'],['rdcard','rd'],['edcard','ed']];
 function foldAll(){
   FOLDABLE.forEach(function(f){
     var host=document.getElementById(f[0]);
     if(host&&!host.classList.contains('card'))host=host.querySelector('.card');   // #rmatrix / #rfx are wrappers
     makeFold(host,f[1],f.length>2?f[2]:true);
   });
-  foldInit('push');   // a sub-fold inside BROADCAST, static markup
+  foldInit('push');foldInit('lsn');   // sub-folds inside BROADCAST / CLOCK, static markup
   balanceSoon();   // cards have just been built / rebuilt: even the bottom edge
 }
 // A fold INSIDE a card: same grammar as foldCard (foldSet drives KEY_hdr /
@@ -1716,7 +1724,13 @@ function glBounce(){glPost(rpGlob.b.active?'/bounce/stop':'/bounce/start');}
 function glBcast(){fetch('/bcast/enable?on='+(rpGlob.c.enabled?0:1)).then(function(){setTimeout(glLoad,300);bcastPoll();}).catch(function(){});}
 function scrGlobal(g){
   var s=g.s,i=g.i,tz=+(s.tz_shift||0),key=s.apikey||'';
-  var h='<div class="tft"><div class="tt"><span>Settings</span><span class="aff">About</span></div>';
+  // the screen's own About affordance drives the ABOUT fold below it — the
+  // device's Settings screen has the same affordance, so it reads as the panel does
+  var h='<div class="tft"><div class="tt"><span>Settings</span>'
+       // id/data-t make this the fold's HEADER, so foldSet() keeps the arrow in
+       // step generically instead of the marker going stale until the next repaint
+       +'<span class="aff" id="about_hdr" data-t="About" style="cursor:pointer;user-select:none" onclick="foldToggle(\'about\')" title="show / hide">'
+       +(foldOpen('about')?'\u25BE About':'\u25B8 About')+'</span></div>';
   h+=tftRow('rw','Hostname',s.hostname||'','gsHost',5,{ph:'ctag-modular',mx:32});
   h+=tftRow('rw','SSID',s.ssid||'','gsSsid',5,{});
   h+=tftRow('rw','Password','','gsPass',5,{pw:true,ph:'unchanged'});
@@ -1731,10 +1745,7 @@ function scrGlobal(g){
   h+=tftRow('tog','Broadcast',g.c.enabled?'ON':'OFF','glBcast',1);
   h+=tftRow('act','Tuner','open',null,3);
   h+=tftRow('ro','IP',i.ip||'',null,4);
-  // Save covers only the four text rows; every toggle above writes on click
-  h+='<div class="row tight" style="margin:8px 4px 0;align-items:center"><span class="msg" id="sm" style="flex:1;margin:0"></span>'
-    +'<button class="btn" style="flex:0 0 72px" onclick="saveSet()">Save</button></div>';
-  return h+'</div>';
+  return h+'</div>';   // Save lives OUTSIDE the screen — see globCard()
 }
 // the raw preset keys as a table (advanced fold); same data-rp inputs rpApply harvests
 function rpTable(o,path){
@@ -1765,7 +1776,13 @@ function plainCard(title,body){return '<div class="card pnl"><b class="ph" style
 function setupCard(adv){return foldCard('setup','MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>'+(adv||''));}
 // #setslot takes the STATIC #setform (the old Settings tab). It is moved in
 // rather than templated, so a rebuild cannot wipe a half-typed SSID or password.
-function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div><div id="setslot"></div>');}
+function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>'
+  // Save sits outside the screen zone, right-aligned. It covers only the four
+  // text rows; every toggle on the screen already writes on click.
+  +'<div class="row tight" style="margin-top:6px;align-items:center;justify-content:flex-end">'
+  +'<span class="msg" id="sm" style="flex:1;margin:0;text-align:right"></span>'
+  +'<button class="btn" style="flex:0 0 72px" onclick="saveSet()">Save</button></div>'
+  +'<div id="setslot"></div>');}
 // ---- WEB card: preferences that live in this BROWSER, not on the module ----
 // Everything here was hardcoded or hidden before: the auto-refresh interval was
 // a literal 3000 in scrPoll, the status poll a literal 500, the screen size only
@@ -1822,9 +1839,14 @@ function advBody(inner,asTable){
   return subFold('adv','ADVANCED','<div class="tftw"><div class="tft adv">'+adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div></div></div>');
 }
 function rpSetCard(inner,asTable){
+  // PARK the static form outside the card first. #rglob's innerHTML is replaced
+  // below, and once the form has been moved INTO that card a reload destroys the
+  // node outright — it never comes back and the About/Boot Logo folds vanish.
+  var form=document.getElementById('setform');
+  if(form)document.getElementById('p3').appendChild(form);
   document.getElementById('rsetup').innerHTML=setupCard(advBody(inner,asTable));
   document.getElementById('rglob').innerHTML=globCard();
-  var slot=document.getElementById('setslot'),form=document.getElementById('setform');
+  var slot=document.getElementById('setslot');
   if(slot&&form){slot.appendChild(form);form.style.display='';foldInit('about');foldInit('blogo');}   // MOVE, never re-template
   webDraw();
   foldAll();                     // the matrix / FX cards were just rebuilt
@@ -2416,7 +2438,7 @@ function machCardPoll(name,on){
 // it moves and measuring before the move is safe.
 var BAL_LEFT=['panel','midihome'];
 var BAL_RIGHT=['machcard','fscard','rdcard','edcard'];
-var BAL_FLOW=['rmatrix','rfx','clkcard','lsncard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard'];
+var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard'];
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');

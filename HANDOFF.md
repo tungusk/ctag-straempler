@@ -9,6 +9,34 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — About on the screen's affordance, Listener inside Clock
+
+- **The GLOBAL screen's "About" affordance IS the ABOUT fold's header.** Giving
+  it `id="about_hdr" data-t="About"` hands it to `foldSet()`, so the arrow stays
+  in step generically instead of going stale until the next repaint. The old
+  `.sub` ABOUT header is gone.
+- **Save moved OUT of the screen** into `globCard()`, right-aligned under it.
+- **Boot logo is a drop zone** (`#bldz`, the `.dz` look, drag + click), not a
+  bare file input.
+- **LISTENER became a sub-fold of CLOCK** rather than its own card — it IS a
+  clock source (Clock Src = AUDIO). Dropped from `FOLDABLE`/`BAL_FLOW`/the order
+  list. Its nested `.card`s and duplicate `LISTENER`/`CONTROLS` headings went
+  too: the card title is the heading.
+
+**TWO BUGS I INTRODUCED, both worth knowing:**
+1. **`#rglob.innerHTML` is replaced on every `rpLoad()`** — so once `#setform`
+   had been moved INTO that card, the next reload DESTROYED the node and the
+   Settings fields never came back. `rpSetCard()` now PARKS the form on `#p3`
+   before re-templating and re-slots it after. Any static node moved into a
+   re-templated card needs this.
+2. **`foldInit()` assumed a fold's header exists whenever its body does.** Once
+   About's header moved into the GLOBAL screen — which `glLoad()` renders LATER
+   — it was null, `foldInit` threw, and the throw propagated out of
+   `rpSetCard()` and killed the `glLoad()` call after it. The whole GLOBAL screen
+   silently stayed empty. `h` is now optional.
+   **Read the console.** Twelve rows missing looked like a render bug; the
+   console named the throw and the line in one shot.
+
 ## 2026-09-10 — GLOBAL edits in place, and folds inside folds
 
 Arlo: "notice the way that the global menu is not editable, but theres a field
