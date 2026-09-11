@@ -1,1 +1,1 @@
-v0.10-beta2-20260909 (second public beta: Remote tab laid out as the panel, the core clock, CV matrix knob mode)
+v0.10-beta3-20260911 (third public beta: the web remote is one page, an LFO on Synth and Keys, a faster screen)
