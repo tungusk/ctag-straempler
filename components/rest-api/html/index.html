@@ -16,7 +16,13 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   /* the panel's LINEWORK: card slot, antenna, jack-group dividers. One value so
      they cannot drift apart again — they were #333/#444/#555, then three
      different steps of a fix. */
-  --pline:#6e6e6e}   /* card titles + the active tab; the panel's data blue is separate */
+  --pline:#6e6e6e;   /* card titles + the active tab; the panel's data blue is separate */
+  /* the file list's banding. The card ground is #151515 and the GLOBAL row
+     hover is only #161616 — one step — so a stripe at all would swallow it.
+     Both live here, together, for the same reason --pline does: nudged apart
+     one at a time they stop reading as a pair. Hover must stay clearly above
+     the lighter band, not between the two. */
+  --fzeb:#1a1a1a; --fhov:#262626}
 body{background:#2e2e2e;color:#ccc;font-family:monospace;font-size:13px;padding-bottom:36px}
 header{background:#1e1e1e;border-bottom:1px solid #333;padding:6px 12px;display:flex;align-items:center;gap:10px}
 h1{font-size:13px;color:#aaa;flex:1;letter-spacing:.05em}
@@ -57,6 +63,10 @@ input[type=checkbox]{color-scheme:dark;accent-color:#2f5566;opacity:.8}
   border-top:1px solid #222;border-bottom:1px solid #222}
 .fscroll table{margin:0}
 .fscroll thead th{position:sticky;top:0;background:#1c1c1c;z-index:1}
+/* banding on the file + module lists (they share this scroller). Equal
+   specificity with the hover rule below it, so ORDER is what makes hover win. */
+.fscroll tbody tr:nth-child(even) td{background:var(--fzeb)}
+.fscroll tbody tr:hover td{background:var(--fhov)}
 /* black ground, and the copy is a LABEL not a sentence: the action in caps, the
    accepted types beneath it, no prose (Arlo 2026-09-11) */
 .dz{border:2px dashed #5a5a5a;background:#000;padding:20px 16px;text-align:center;color:#ccc;cursor:pointer;border-radius:4px;margin-bottom:8px;transition:border-color .15s,color .15s}
