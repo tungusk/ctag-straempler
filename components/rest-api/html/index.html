@@ -84,7 +84,7 @@ body.nosbar .sbar{display:none}
    lives HERE, not on .pnl: .card is declared later at equal specificity, so
    .pnl's padding/background/border have never applied — do not "fix" that rule
    without checking what resurrecting the other two does.) */
-#panel{flex:0 0 auto;background:#050505;display:flex;flex-direction:column;position:relative;padding:43px 6px 68px}
+#panel{flex:0 0 auto;background:#050505;border:none;display:flex;flex-direction:column;position:relative;padding:43px 6px 68px}   /* no hairline on the module itself: its near-black IS the edge */
 #panel .row .btn{background:#050505;border-color:#2a2a2a;color:#777}
 #scrbox .row>*{padding:3px 10px}
 #scrbox .row>:last-child{margin-right:0}
@@ -119,6 +119,10 @@ body.nosbar .sbar{display:none}
 .mnt{position:absolute;width:47px;height:18px;border-radius:9px;background:#2e2e2e;
   box-shadow:inset 0 1px 2px rgba(0,0,0,.8);pointer-events:none}
 .mnt.t{top:6.5px}.mnt.b{bottom:6.5px}.mnt.l{left:3.39%}.mnt.r{right:3.39%}
+/* absolutely positioned, so it costs the frame no height and cannot disturb the
+   panel proportion the padding was tuned for */
+.pwm{position:absolute;left:0;right:0;bottom:24px;text-align:center;color:#f0f0f0;font-weight:bold;
+  font-size:12px;letter-spacing:4px;pointer-events:none;user-select:none}
 #panel.big .deco,#scrarea:has(#scrbox.empty) .deco{display:none}   /* only beside a loaded, small screen */
 /* ZOOMED: the point is the screen, so the frame stops pretending to be a panel.
    The screw holes go and the real-panel padding (43/68) goes with them — and
@@ -139,7 +143,10 @@ body.nosbar .sbar{display:none}
 .pspace{flex:1 1 0;display:flex;flex-direction:column;justify-content:center}
 .pbody{margin:0}
 /* everything under the two columns spans them: 502 + 12 + 502 */
-#p3>.card,#p3>.row{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}   /* (#rparams>.card was here: the ADVANCED card now lives in the left column at panel width) */
+#p3>.card,#p3>.row{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
+/* 3 x 502 + 2 x 12 gap = 1530: full-width things span whatever the page holds */
+#p3.c3>.card,#p3.c3>.row{width:1530px}
+#p3.c3 .card.pnl.wide{width:1530px}   /* (#rparams>.card was here: the ADVANCED card now lives in the left column at panel width) */
 #rparams .rpcols{columns:2 300px;column-gap:12px}
 .psec{margin-top:6px}
 .pnl{padding:8px 14px 10px;background:#141414;border:1px solid #262626}   /* the panel card stays near-black */
@@ -251,10 +258,10 @@ body.nosbar .sbar{display:none}
   .remtop .rcol{display:contents}
   #panel{order:1}#midicard{order:2}                                  /* the instrument */
   #fscard{order:3}#rdcard{order:3}#edcard{order:3}                   /* the active machine's own card */
-  #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}#machcard{order:7}  /* patching, then the selector */
-  #filescard{order:8}                                                /* pinned under MACHINE */
+  #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}                   /* patching */
+  #filescard{order:7}#machcard{order:8}                              /* library, then the selector */
   #rsetup{order:9}#rweb{order:10}#rglob{order:11}#rparams{order:12}  /* settings */
-  #rm{order:13}#bouncecard{order:14}#bcastcard{order:15}#upcard{order:16}   /* capture / streaming / upload */
+  #rm{order:13}#bouncecard{order:14}#bcastcard{order:15}             /* capture / streaming */
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
 /* BOUNCE + PUSH -> ICECAST against BROADCAST: equal-height columns, the last card in the
@@ -375,15 +382,16 @@ body.nosbar .sbar{display:none}
 .ren:hover{color:#0af;border-bottom-color:#0af}
 .bar{background:#181818;border:1px solid #333;height:14px;position:relative;margin:4px 0}
 .bar>i{display:block;height:100%;background:#0af}
-/* cards share the PAGE's background — they are separated by their spacing and
-   their titles, not by a lighter slab (Arlo 2026-09-10). #panel sets its own
-   near-black and is unaffected.
-   NOTE: this lifted the ground from #1c1c1c to #2e2e2e, so the muted greys on
-   cards lost their contrast — th / label / .msg / .dz / .tab / .mxmode / .fxg b
-   were all brightened to suit. The drop zones were the worst (#555 on #2e2e2e,
-   about 1.9:1 — effectively invisible). Anything on the PANEL or the status bar
-   still sits on near-black and must NOT be brightened with them. */
-.card{border:none;background:#2e2e2e;padding:8px 10px;margin:8px 0}
+/* A card is a DARK slab on the page ground AND carries a hairline edge — mocked
+   the three ways side by side against the real cards (Arlo 2026-09-10): flat on
+   the page ground needed the border to do all the work and stacked up lines
+   against every button and sub-fold rule; the slab alone grouped well but left
+   soft edges. Together the value change groups and the line defines.
+   The greys stay BRIGHTENED from the flat experiment — th / label / .msg / .dz /
+   .tab / .mxmode / .fxg b were too dark even on #1c1c1c (the drop zones worst of
+   all), so that part was a fix, not a compensation. Anything on the PANEL or the
+   status bar sits on near-black and must NOT be brightened with them. */
+.card{border:1px solid #3d3d3d;border-radius:3px;background:#1c1c1c;padding:8px 10px;margin:8px 0}
 .card h4{margin:0 0 6px;color:var(--accl);font-weight:normal;font-size:13px;letter-spacing:1px}
 .kv{color:#9ab}.kv b{color:#ddd;font-weight:normal}
 .scope{width:100%;border-collapse:collapse;font-size:11px}
@@ -444,6 +452,9 @@ body.nosbar .sbar{display:none}
     </div>
     </div>
     <div class="pspace"></div>
+    <!-- the hostname sits where the wordmark is on the real panel: centred under
+         the jack field. READ-ONLY here — it is edited on the GLOBAL screen. -->
+    <div class="pwm" id="pwm"></div>
     <div class="mnt b l" title="mounting hole"></div><div class="mnt b r" title="mounting hole"></div>
   </div>
   <!-- the title is a DIRECT child of the card, as on every other card: it puts
@@ -572,8 +583,20 @@ body.nosbar .sbar{display:none}
       <div class="msg" id="blsm"></div>
     </div>
   </div>
-  <div class="card pnl" id="upcard">
-    <b class="ph" style="padding:0;margin:0">UPLOAD</b>
+  <!-- FILES: the library is long, so the table scrolls INSIDE the card at a
+       capped height instead of running the page to thousands of pixels. The
+       width button is the MIDI card's: half sits in a column, full spans both. -->
+  <div id="fileshome"><div class="card pnl" id="filescard">
+    <div class="row tight" style="align-items:center;margin-top:0">
+      <b class="ph" style="flex:1;padding:0;margin:0">FILES</b>
+      <!-- card free/total. It lives in the TITLE row, which makeFold() leaves
+           outside the body, so it stays readable with the card collapsed. -->
+      <span id="fdisk" style="flex:0 0 auto;color:#9ab;font-size:11px"></span>
+    </div>
+    <!-- UPLOAD lives inside FILES: it is the same library, seen from the
+         writing end. Sub-fold, so it collapses away when you are only browsing. -->
+    <b class="sub" id="up_hdr" data-t="UPLOAD" style="cursor:pointer;user-select:none;display:block;margin:6px 0 2px" onclick="foldToggle('up')">&#9656; UPLOAD</b>
+    <div id="up_body" style="display:none">
     <!-- CONVERT-ON-IMPORT was invisible: an upload silently kicks a conversion pass
          (MP3 / 48k / 24-bit -> native WAV) and GET /import has always reported its
          progress. Nothing ever read it. -->
@@ -600,18 +623,14 @@ body.nosbar .sbar{display:none}
       <progress id="bpr" value="0" max="100" style="display:none"></progress>
       <div class="msg" id="bm"></div>
     </div>
-  </div>
-  <!-- FILES: the library is long, so the table scrolls INSIDE the card at a
-       capped height instead of running the page to thousands of pixels. The
-       width button is the MIDI card's: half sits in a column, full spans both. -->
-  <div id="fileshome"><div class="card pnl" id="filescard">
-    <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="ph" style="flex:1;padding:0;margin:0">FILES</b>
     </div>
-    <div class="tabs" style="margin-bottom:8px">
+    <!-- what you are looking at, on its own line -->
+    <div class="tabs">
       <div class="tab on" id="ft0" onclick="filesTab(0)">Samples</div>
       <div class="tab" id="ft1" onclick="filesTab(1)">Modules</div>
-      <span style="width:10px"></span>
+    </div>
+    <!-- and which folder, below it with a little air -->
+    <div class="tabs" style="margin:10px 0 8px">
       <div class="tab on" id="fd-all" onclick="setDirFilt(null)">ALL</div>
       <div class="tab" id="fd-pool" onclick="setDirFilt('pool')">POOL</div>
       <div class="tab" id="fd-REC" onclick="setDirFilt('REC')">REC</div>
@@ -696,13 +715,15 @@ body.nosbar .sbar{display:none}
     </div>
   </div>
   </div>
+  <!-- third column: only dealt into when the window can hold 3 x 502 -->
+  <div class="rcol"></div>
   </div>
   <div id="midiband"></div>   <!-- full-width mode parks the MIDI card here, spanning both columns -->
   <!-- row B: only used when the wide MIDI band splits the page. A 1016 px band
        cannot live inside a 502 px column, so when it is on, row A runs panel |
        cards-to-the-panel's-height, then the band, then the rest continues here
        (Arlo 2026-09-10: pin MIDI under the panel). Empty and hidden otherwise. -->
-  <div class="remcols" id="rembot" style="display:none"><div class="rcol"></div><div class="rcol"></div></div>
+  <div class="remcols" id="rembot" style="display:none"><div class="rcol"></div><div class="rcol"></div><div class="rcol"></div></div>
   <!-- the old Settings tab. Kept as a STATIC node and MOVED into the GLOBAL
        card by rpSetCard(); templating it would wipe a half-typed SSID or
        password every time the params reload. -->
@@ -1151,10 +1172,9 @@ function loadSysinfo(){
       var t=new Date((d.time+(d.tz||0)*3600)*1000);
       dt.textContent=t.toISOString().replace('T',' ').slice(0,19);
     }
-    var dk=document.getElementById('disk');
-    if(dk){
-      dk.textContent=d.total?('SD '+Math.round(d.free/1048576)+'/'+Math.round(d.total/1048576)+'MB'):'';
-    }
+    var sd=d.total?('SD '+Math.round(d.free/1048576)+'/'+Math.round(d.total/1048576)+'MB'):'';
+    var dk=document.getElementById('disk');   if(dk)dk.textContent=sd;
+    var fdk=document.getElementById('fdisk'); if(fdk)fdk.textContent=sd;
   }).catch(function(){});
 }
 function blSet(){
@@ -1666,14 +1686,14 @@ function makeFold(card,key,def){
 var FOLDABLE=[['machcard','mach'],['midicard','midi'],['rmatrix','mtx'],['rfx','fx'],
               ['clkcard','clk'],['bouncecard','bnc',false],['bcastcard','bc',false],
               ['fscard','fs'],['rdcard','rd'],['edcard','ed'],
-              ['filescard','files',false],['upcard','up',false]];
+              ['filescard','files',false]];
 function foldAll(){
   FOLDABLE.forEach(function(f){
     var host=document.getElementById(f[0]);
     if(host&&!host.classList.contains('card'))host=host.querySelector('.card');   // #rmatrix / #rfx are wrappers
     makeFold(host,f[1],f.length>2?f[2]:true);
   });
-  foldInit('push');foldInit('lsn');   // sub-folds inside BROADCAST / CLOCK, static markup
+  foldInit('push');foldInit('lsn');foldInit('up');   // sub-folds inside BROADCAST / CLOCK / FILES
   balanceSoon();   // cards have just been built / rebuilt: even the bottom edge
 }
 // A fold INSIDE a card: same grammar as foldCard (foldSet drives KEY_hdr /
@@ -1728,6 +1748,8 @@ function glLoad(){
   var J=function(u){return fetch(u).then(function(r){return r.json();}).catch(function(){return {};});};
   Promise.all([J('/settings'),J('/sysinfo'),J('/bounce/state'),J('/bcast/state')]).then(function(a){
     rpGlob={s:a[0]||{},i:a[1]||{},b:a[2]||{},c:a[3]||{}};
+    var wm=document.getElementById('pwm');
+    if(wm)wm.textContent=(rpGlob.s.hostname||'ctag-modular');
     var el=document.getElementById('gscrwrap');
     // the rows are editable now, so a repaint mid-type would eat the keystrokes
     var ae=document.activeElement;
@@ -2463,17 +2485,17 @@ function machCardPoll(name,on){
 // 400 px early. Both columns are 502 px, so a card's height does not change when
 // it moves and measuring before the move is safe.
 var BAL_LEFT=['panel','midihome'];
-// FILES is PINNED here, under MACHINE (Arlo 2026-09-10) — it is not dealt with
-// the flow cards, whether it is open or folded.
-var BAL_RIGHT=['machcard','fscard','rdcard','edcard','fileshome'];
-var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard','upcard'];
+// FILES is PINNED at the TOP of the right column, above MACHINE (Arlo
+// 2026-09-10) — not dealt with the flow cards, open or folded.
+var BAL_RIGHT=['fileshome','machcard','fscard','rdcard','edcard'];
+var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard'];
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');
   var cols=[],bcols=[],i;
   for(i=0;i<top.children.length;i++)if(top.children[i].className==='rcol')cols.push(top.children[i]);
   if(bot)for(i=0;i<bot.children.length;i++)if(bot.children[i].className==='rcol')bcols.push(bot.children[i]);
-  if(cols.length!==2)return;
+  if(cols.length<2)return;
   // never yank a field out from under someone mid-type: moving a node reparents
   // it and takes focus and selection with it
   var ae=document.activeElement;
@@ -2485,7 +2507,17 @@ function balanceCols(){
     return e.getBoundingClientRect().height+(parseFloat(c.marginTop)||0)+(parseFloat(c.marginBottom)||0);
   }
   function move(col,id){var e=document.getElementById(id);if(e&&col)col.appendChild(e);}
-  var narrow=window.innerWidth<=1040;
+  var ncol=colCount(),narrow=ncol===1;
+  var use=cols.slice(0,Math.max(ncol,2));            // the columns in play
+  for(i=0;i<cols.length;i++)cols[i].style.display=(narrow||i<ncol)?'':'none';
+  for(i=0;i<bcols.length;i++)bcols[i].style.display=(i<ncol)?'':'none';
+  var p3=document.getElementById('p3'); if(p3)p3.classList.toggle('c3',ncol>=3);
+  var last=use.length-1;
+  function deal(set,heights,id){          // into whichever column is shortest
+    var k=0,m=heights[0],q;
+    for(q=1;q<set.length;q++)if(heights[q]<m){m=heights[q];k=q;}
+    move(set[k],id);heights[k]+=h(id);
+  }
   // the band is shared (MIDI and/or FILES); any visible card in it splits the page
   var band=document.getElementById('midiband');
   var wide=false,bi;
@@ -2498,37 +2530,47 @@ function balanceCols(){
     if(bot)bot.style.display='none';
     var fsc=document.getElementById('fscroll');   // the stylesheet owns it again
     if(fsc&&fsc.style.maxHeight&&fsc.style.maxHeight!=='none')fsc.style.maxHeight='';
-    BAL_LEFT.forEach(function(id){move(cols[0],id);});
-    BAL_RIGHT.forEach(function(id){move(cols[1],id);});
-    if(narrow){BAL_FLOW.forEach(function(id){move(cols[1],id);});return;}   // `order` sequences it
+    BAL_LEFT.forEach(function(id){move(use[0],id);});
+    BAL_RIGHT.forEach(function(id){move(use[last],id);});
+    if(narrow){BAL_FLOW.forEach(function(id){move(use[0],id);});return;}   // `order` sequences it
     // An OPEN file list owns the right column: it is the one card with no
     // natural height, so balancing it against the panel just shoved everything
     // else around it. Folded, it is an ordinary flow card again.
     var fb=document.getElementById('files_body');
     var filesOpen=!!fb&&getComputedStyle(fb).display!=='none';
-    var flow=BAL_FLOW;
-    var hl=0,hr=0;
-    BAL_LEFT.forEach(function(id){hl+=h(id);});
-    BAL_RIGHT.forEach(function(id){hr+=h(id);});
-    if(filesOpen){flow.forEach(function(id){move(cols[0],id);});fitFiles(cols);return;}   // rest goes left
-    flow.forEach(function(id){
-      var c=h(id);
-      if(hl<=hr){move(cols[0],id);hl+=c;}else{move(cols[1],id);hr+=c;}
-    });
+    var flow=BAL_FLOW,k;
+    if(filesOpen){
+      // FILES gets the LAST column to ITSELF — MACHINE and the machine's own
+      // card are displaced under the panel, keyboard or no keyboard (Arlo
+      // 2026-09-10). The list is the tallest thing on the page when it is open;
+      // sharing its column just squeezes it. Everything else spreads over the
+      // columns that are left.
+      var rest=use.slice(0,last),rh=[];
+      for(k=0;k<rest.length;k++)rh[k]=0;
+      BAL_LEFT.forEach(function(id){rh[0]+=h(id);});
+      BAL_RIGHT.forEach(function(id){if(id!=='fileshome')deal(rest,rh,id);});
+      flow.forEach(function(id){deal(rest,rh,id);});
+      fitFiles(use);return;
+    }
+    var hs=[];
+    for(k=0;k<use.length;k++)hs[k]=0;
+    BAL_LEFT.forEach(function(id){hs[0]+=h(id);});
+    BAL_RIGHT.forEach(function(id){hs[last]+=h(id);});
+    flow.forEach(function(id){deal(use,hs,id);});
     return;
   }
   // WIDE: the band goes under the panel, so row A can only be as deep as the
   // panel. Fill the right of row A up to that, then everything else drops below
   // the band into row B and balances there.
   if(bot)bot.style.display='';
-  BAL_LEFT.forEach(function(id){move(cols[0],id);});      // midihome is empty while wide
-  BAL_RIGHT.forEach(function(id){move(cols[1],id);});
+  BAL_LEFT.forEach(function(id){move(use[0],id);});      // midihome is empty while wide
+  BAL_RIGHT.forEach(function(id){move(use[last],id);});
   var hp=h('panel'),hr2=0,rest=[];
   BAL_RIGHT.forEach(function(id){hr2+=h(id);});
   BAL_FLOW.forEach(function(id){
     var e=document.getElementById(id);if(!e)return;
     var c=h(id);
-    if(hr2+c<=hp){move(cols[1],id);hr2+=c;}else rest.push(id);
+    if(hr2+c<=hp){move(use[last],id);hr2+=c;}else rest.push(id);
   });
   var b0=0,b1=0;
   rest.forEach(function(id){
@@ -2536,7 +2578,9 @@ function balanceCols(){
     if(b0<=b1){move(bcols[0],id);b0+=c;}else{move(bcols[1],id);b1+=c;}
   });
 }
-// Stretch the open file list so the RIGHT column ends level with the left.
+// How many columns the window holds: 502 each + 12 gap, page gutter 24.
+function colCount(){var w=window.innerWidth;return w>=1554?3:(w>1040?2:1);}
+// Stretch the open file list so its column ends level with the tallest other.
 // Done synchronously: with the cap lifted the scroller reports its full content
 // height, so (left - right) is exactly the room the rest of the column leaves —
 // and reading it back in the same frame means the browser never paints the
@@ -2544,8 +2588,9 @@ function balanceCols(){
 function fitFiles(cols){
   var sc=document.getElementById('fscroll');if(!sc)return;
   sc.style.maxHeight='none';
-  var lh=cols[0].getBoundingClientRect().height;
-  var rh=cols[1].getBoundingClientRect().height;
+  var last=cols.length-1,lh=0,q;
+  for(q=0;q<last;q++)lh=Math.max(lh,cols[q].getBoundingClientRect().height);
+  var rh=cols[last].getBoundingClientRect().height;
   var cur=sc.getBoundingClientRect().height;
   var t=Math.round(cur+(lh-rh));
   if(t<160)t=160;                     // never collapse to a sliver

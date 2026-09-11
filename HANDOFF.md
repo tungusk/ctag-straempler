@@ -9,6 +9,37 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — card style settled, three columns, panel wordmark
+
+**Card style: dark slab AND a hairline** (`#1c1c1c` + `1px #3d3d3d`). Mocked the
+three ways side by side from the REAL cards rather than argued: flat-on-the-page
+needed the border to do all the work and stacked lines against every button and
+sub-fold rule; the slab alone grouped well but left soft edges. **No border on
+`#panel`** — its near-black IS its edge (Arlo). The brightened greys STAY: they
+were too dark even on `#1c1c1c`, so that was a fix, not a compensation.
+
+**Layout**
+- **UPLOAD folded into FILES** as a sub-fold at the TOP of its body — same
+  library, seen from the writing end.
+- **FILES pinned ABOVE MACHINE** at the top of the last column.
+- When FILES is OPEN it takes the last column **alone**: MACHINE and the
+  machine's own card are displaced under the panel, keyboard or not.
+- **Samples/Modules on their own line**, folder chips below with air above.
+- **THREE COLUMNS when the window allows.** `colCount()`: 502 each + 12 gap +
+  24 gutter, so 2 needs 1040 and 3 needs **1554**. `balanceCols()` now deals into
+  N columns (`deal()` picks the shortest) instead of comparing two; pins are
+  `use[0]` and `use[last]`; `fitFiles()` measures against the TALLEST other
+  column. Full-width things (`#p3.c3`) span 1530.
+
+**Panel**
+- **The hostname is the wordmark**, centred below the jack field where the real
+  panel's is, bold white. Read-only — it is edited on the GLOBAL screen.
+  Absolutely positioned, so it costs the frame no height and the 1.407 ratio the
+  padding was tuned for is untouched (measured 707 px after).
+- **Card free/total sits in the FILES title row**, which `makeFold()` leaves
+  outside the body — so it reads with the card collapsed. Same string as the
+  status bar, both fed from one place in `loadSysinfo()`.
+
 ## 2026-09-10 — FILES owns the right column; cards sit on the page ground
 
 - **The FILES width toggle is GONE.** Spanning both columns read wrong against
