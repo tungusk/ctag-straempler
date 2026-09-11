@@ -135,6 +135,10 @@ body.nosbar .sbar{display:none}
 .pnl{padding:8px 14px 10px;background:#141414;border:1px solid #262626}   /* the panel card stays near-black */
 .pnl .msg{text-align:center;margin:4px auto 0}
 .ph{display:block;color:var(--acc);font-size:12px;letter-spacing:1px;margin-bottom:4px}
+/* a second heading INSIDE a card (the icecast push, under BROADCAST): same
+   voice a step quieter, and NOT .ph — makeFold() takes the card's first .ph as
+   the fold handle, so a second one would hand it the wrong element. */
+.sub{display:block;color:#7a9;font-size:11px;letter-spacing:1px}
 .pgrid4{display:grid;grid-template-columns:repeat(4,116px);justify-content:center}
 /* the perform row: label on a fixed line, the item centred in one fixed 64 px band
    whatever its size (GAIN 58, TR 48, DATA 54), with a little air between them */
@@ -507,6 +511,11 @@ body.nosbar .sbar{display:none}
     </div>
     <select id="mididev" style="margin-top:6px;display:none"></select>
   </div></div>
+  </div>
+  <div class="rcol">
+  <div class="card pnl" id="machcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">MACHINE</b><span id="rmnote" style="color:#888;font-size:11px"></span></div>
+    <div id="rmach"></div>
+  </div>
   <!-- machine-specific cards: these were top-level tabs, each opening on a
        "requires the X machine to be active" nag. Their endpoints are
        machine_ui_t.web_uris, already served ONLY while that machine runs, so
@@ -565,11 +574,6 @@ body.nosbar .sbar{display:none}
   </div>
   <div class="msg" id="edm"></div>
   </div>
-  </div>
-  <div class="rcol">
-  <div class="card pnl" id="machcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">MACHINE</b><span id="rmnote" style="color:#888;font-size:11px"></span></div>
-    <div id="rmach"></div>
-  </div>
   <div id="rmatrix"></div>
   <div id="rfx"></div>
   <div class="card pnl" id="clkcard">
@@ -586,17 +590,18 @@ body.nosbar .sbar{display:none}
     </div>
     <div class="msg" id="clkmsg" style="display:none"></div>
   </div>
-  </div>
-  </div>
-  <div id="midiband"></div>   <!-- full-width mode parks the MIDI card here, spanning both columns -->
-  <!-- the three settings cards: a row of their own, flowing side by side when the window allows -->
-  <div class="remcols remset">
-    <div class="rcol"><div id="rsetup"></div><div id="rweb"></div></div>
-    <div class="rcol"><div id="rglob"></div><div id="rparams"></div></div>
-  </div>
+  <!-- the settings and streaming cards stack in the RIGHT column rather than
+       in rows of their own. As rows they could not flow up beside the panel:
+       the top row was 723 px on the left against 296 on the right, so a thin
+       machine left a 427 px void next to the panel while these sat below it
+       (Arlo 2026-09-10: "so much white space" / "the other two sections in
+       the free column"). The top pair stays as it was — panel left, machine
+       right. -->
+  <div id="rsetup"></div>
+  <div id="rweb"></div>
+  <div id="rglob"></div>
+  <div id="rparams"></div>
   <div class="msg" id="rm"></div>
-  <div class="remcols remstream">
-  <div class="rcol">
   <div class="card pnl" id="bouncecard">
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span class="hlp" data-h="Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.">BOUNCE</span></b>
@@ -604,24 +609,6 @@ body.nosbar .sbar{display:none}
       <button class="btn" id="bncbtn" style="flex:0 0 84px" onclick="bncToggle()">Record</button>
     </div>
   </div>
-  <div class="card pnl" id="icecard">
-    <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span class="hlp" data-h="Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.">PUSH &#8594; ICECAST</span></b>
-      <span id="icestate" style="color:#888;margin-right:8px">off</span>
-      <button class="btn" id="icebtn" style="flex:0 0 84px" onclick="iceToggle()">Start</button>
-    </div>
-    <div class="row tight" style="margin-top:4px;gap:6px">
-      <input id="icehost" placeholder="server host" style="flex:2">
-      <input id="iceport" placeholder="8000" style="flex:0 0 64px">
-      <input id="icemount" placeholder="/mount" style="flex:1">
-    </div>
-    <div class="row tight" style="margin-top:4px;gap:6px">
-      <input id="icepass" placeholder="source password" type="password" style="flex:1">
-      <input id="icename" placeholder="stream name" style="flex:1">
-    </div>
-  </div>
-  </div>
-  <div class="rcol">
   <div class="card pnl" id="bcastcard">
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span class="hlp" data-h="Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.">BROADCAST</span></b>
@@ -639,9 +626,26 @@ body.nosbar .sbar{display:none}
       <a class="btn" id="bclinkin" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
     </div>
     <audio id="bcaudio" controls preload="none" style="width:100%;margin-top:6px;color-scheme:dark;opacity:.8;border-radius:3px"></audio>
+    <div class="psec" style="border-top:1px solid #262626;margin-top:8px;padding-top:6px">
+    <div class="row tight" style="align-items:center;margin-top:0">
+      <b class="sub" style="flex:1;align-self:flex-start"><span class="hlp" data-h="Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.">PUSH &#8594; ICECAST</span></b>
+      <span id="icestate" style="color:#888;margin-right:8px">off</span>
+      <button class="btn" id="icebtn" style="flex:0 0 84px" onclick="iceToggle()">Start</button>
+    </div>
+    <div class="row tight" style="margin-top:4px;gap:6px">
+      <input id="icehost" placeholder="server host" style="flex:2">
+      <input id="iceport" placeholder="8000" style="flex:0 0 64px">
+      <input id="icemount" placeholder="/mount" style="flex:1">
+    </div>
+    <div class="row tight" style="margin-top:4px;gap:6px">
+      <input id="icepass" placeholder="source password" type="password" style="flex:1">
+      <input id="icename" placeholder="stream name" style="flex:1">
+    </div>
+    </div>
   </div>
   </div>
   </div>
+  <div id="midiband"></div>   <!-- full-width mode parks the MIDI card here, spanning both columns -->
 </div>
 <div class="pane" id="p4">
   <label>Device IP</label><input id="ip" readonly style="opacity:.7">
@@ -1621,14 +1625,17 @@ function makeFold(card,key,def){
   ph.onclick=function(){foldToggle(key);};
 }
 // every Remote card except the panel folds; state per browser, open until told otherwise
+// third element = default fold state. The streaming cards start CLOSED: they are
+// set-and-forget, not perform controls, and open they cost ~330 px of the column
+// (Arlo 2026-09-10). Everything else defaults open.
 var FOLDABLE=[['machcard','mach'],['midicard','midi'],['rmatrix','mtx'],['rfx','fx'],
-              ['clkcard','clk'],['bouncecard','bnc'],['icecard','ice'],['bcastcard','bc'],
+              ['clkcard','clk'],['bouncecard','bnc',false],['bcastcard','bc',false],
               ['fscard','fs'],['rdcard','rd'],['edcard','ed']];
 function foldAll(){
   FOLDABLE.forEach(function(f){
     var host=document.getElementById(f[0]);
     if(host&&!host.classList.contains('card'))host=host.querySelector('.card');   // #rmatrix / #rfx are wrappers
-    makeFold(host,f[1],true);
+    makeFold(host,f[1],f.length>2?f[2]:true);
   });
 }
 function foldCard(key,title,body,cls){

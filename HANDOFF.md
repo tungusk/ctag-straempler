@@ -40,11 +40,32 @@ Settings.
   another tab.
 - All three fold like any other card (added to `FOLDABLE`).
 
-**TRAP I walked into:** inserting the cards before `<div class="rcol">` made them
-SIBLINGS of the two columns inside `.remcols` (a flex row), which threw the right
-column to y=776. They have to go INSIDE the left `.rcol`, after `#midihome`.
-Verified live on Freesound: card in the left column under the panel, and no
-MIDI/MATRIX/FX/CLOCK/SETUP cards at all, which is exactly right for it.
+**TRAP:** inserting the cards before `<div class="rcol">` made them SIBLINGS of
+the two columns inside `.remcols` (a flex row), which threw the right column to
+y=776. A card has to go INSIDE a `.rcol`.
+
+**Pass 3 — the column layout, because hiding cards created a void.** With a thin
+machine the right column empties and the tall panel leaves a hole beside it: the
+top row measured **723 px left against 296 right — a 427 px void** — while the
+settings and streaming cards sat BELOW in rows of their own, unable to flow up.
+- machine cards went to the RIGHT column under MACHINE (Arlo: "should be on
+  right") — you pick the machine there, so its card belongs under it.
+- **`.remset` and `.remstream` are gone as rows**; their cards now stack in the
+  right column. `#p3` is ONE `.remcols` with two `.rcol`s. Void 427 -> 183 px.
+  Arlo on the column split: "left right choices dont need to be exact. as long
+  as the top pair is consistent, we're going for the best flow."
+- **PUSH -> ICECAST folded INTO the BROADCAST card** — both are "stream the
+  output out", and it was two cards saying `off` next to each other. Its heading
+  became `.sub`, NOT `.ph`: `makeFold()` takes the card's first `.ph` as the fold
+  handle, so a second one hands it the wrong element.
+- **BOUNCE and BROADCAST now default CLOSED** (`FOLDABLE` grew a third element,
+  the default). They are set-and-forget, not perform controls. Note the default
+  only shows on a browser with no stored `fold_<key>`, so clear localStorage to
+  see it.
+
+Verified live on Freesound: one row, right column stacking MACHINE / FREESOUND /
+WEB / GLOBAL / ADVANCED / BOUNCE / BROADCAST, and no MIDI/MATRIX/FX/CLOCK/SETUP
+card anywhere — exactly right for a machine that declares none of them.
 
 ## 2026-09-10 — zoomed screen: the card stops growing at all
 
