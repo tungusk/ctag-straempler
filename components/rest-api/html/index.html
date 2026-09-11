@@ -102,7 +102,7 @@ body.nosbar .sbar{display:none}
    .pnl's padding/background/border have never applied — do not "fix" that rule
    without checking what resurrecting the other two does.) */
 #panel{flex:0 0 auto;background:#050505;border:none;display:flex;flex-direction:column;position:relative;padding:43px 6px 68px}   /* no hairline on the module itself: its near-black IS the edge */
-#panel .row .btn{background:#050505;border-color:#2a2a2a;color:#777}
+#panel .row .btn,#scrclose{background:#050505;border-color:#2a2a2a;color:#777}
 #scrbox .row>*{padding:3px 10px}
 #scrbox .row>:last-child{margin-right:0}
 #scrbox .row #scrclose{padding:3px 0;text-align:center}
@@ -182,7 +182,7 @@ body.nosbar .sbar{display:none}
 #panel.big{padding:0 6px;aspect-ratio:91.3/128.5}
 #panel.big .mnt,#panel.big .pwm{display:none}   /* zoomed, the screen is the point */
 #scrbox .row #scrbtn.big{flex:1 1 auto;aspect-ratio:4/3;margin:29px 0 6px;padding:0;font-size:14px;letter-spacing:1px;border-color:#333}   /* nothing loaded: the Screen button IS the screenshot frame — same size and place, so nothing reflows when the shot lands */
-#panel .row .btn:hover{background:#1a1a1a;color:#aaa}
+#panel .row .btn:hover,#scrclose:hover{background:#1a1a1a;color:#aaa}
 /* two equal flexible spacers around the controls: controls centre in the frame's spare height,
    and the screen area (or the lone Screen button) centres inside the upper spacer */
 .pspace{flex:1 1 0;display:flex;flex-direction:column;justify-content:center}
