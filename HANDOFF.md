@@ -9,6 +9,34 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — down to TWO tabs: Remote and Files
+
+Arlo: "should boil down to two tabs: remote and files." Four merges.
+
+- **ADVANCED is a fold INSIDE Machine Setup.** New `subFold()` — same grammar as
+  `foldCard()` (`foldSet` drives `KEY_hdr`/`KEY_body`) but no card chrome, so it
+  reads as a section rather than a second card. Defaults CLOSED. It was always
+  the same machine's state, just raw keys instead of the screen. `#rparams`
+  survives only as the error slot.
+- **The Settings tab is now the bottom of the GLOBAL card.** It is a STATIC node
+  (`#setform`) that `rpSetCard()` MOVES into `#setslot` — deliberately not
+  templated, because `globCard()` is re-rendered on every `rpLoad()` and that
+  would wipe a half-typed SSID or password each time. Same trick `midiAuto()`
+  uses for `#midiaux`. `loadSet()` moved off `tab(4)` onto the Remote open.
+- **Upload is the top of Files**, with the drop-zone blurb cut to the file types
+  it accepts. The old text explained the whole conversion pipeline.
+- **Listener is a Remote card** (`lsncard`, folded by default) sitting right
+  after CLOCK — it IS a clock source (machines follow it via Clock Src = AUDIO),
+  so that is where it makes sense, not a tab of its own.
+
+Verified live on Synth: tabs = Remote / Files; ADVANCED nested and closed;
+`#setform` inside `#glob_body` with all 8 fields populated from `/settings` +
+`/sysinfo`; LISTENER card with its four controls; drop zone in Files.
+
+**Note:** `ota.sh` aborted once with "device not answering /ota/state" while the
+unit was perfectly alive (ping fine, `/ota/state` answered a second later). Just
+retry — it is a transient, not the OOM rejection, which reports differently.
+
 ## 2026-09-10 — the wide MIDI band pins under the panel (row B)
 
 Arlo: "when midi is visible pin it under panel". **Half-width already was** — it

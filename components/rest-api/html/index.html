@@ -241,7 +241,7 @@ body.nosbar .sbar{display:none}
   .remtop .rcol{display:contents}
   #panel{order:1}#midicard{order:2}                                  /* the instrument */
   #fscard{order:3}#rdcard{order:3}#edcard{order:3}                   /* the active machine's own card */
-  #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}#machcard{order:7}  /* patching, then the selector */
+  #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}#lsncard{order:6}#machcard{order:7}  /* patching, then the selector */
   #rsetup{order:8}#rweb{order:9}#rglob{order:10}#rparams{order:11}   /* settings */
   #rm{order:12}#bouncecard{order:13}#bcastcard{order:14}             /* capture / streaming, last */
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
@@ -375,13 +375,37 @@ body.nosbar .sbar{display:none}
   <span class="ptag" id="ptag" hidden>POLLING PAUSED</span>
   <div class="tabs">
     <div class="tab on" id="t3" onclick="tab(3)">Remote</div>
-    <div class="tab" id="t5" onclick="tab(5)">Listener</div>
     <div class="tab" id="t0" onclick="tab(0)">Files</div>
-    <div class="tab" id="t1" onclick="tab(1)">Upload</div>
-    <div class="tab" id="t4" onclick="tab(4)">Settings</div>
   </div>
 </header>
 <div class="pane" id="p0">
+  <!-- CONVERT-ON-IMPORT was invisible: an upload silently kicks a conversion pass
+       (MP3 / 48k / 24-bit -> native WAV) and GET /import has always reported its
+       progress. Nothing ever read it. -->
+  <div class="card" id="impcard" style="display:none">
+    <h4>IMPORT / CONVERT</h4>
+    <div class="kv" id="impcur">idle</div>
+    <div class="bar"><i id="impbar" style="width:0%"></i></div>
+  </div>
+  <div style="margin:6px 0">
+    <button class="btn" onclick="rescan()">rescan library</button>
+    <span class="kv" id="impmsg" style="margin-left:8px"></span>
+  </div>
+  <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
+    <b>Drop files here, or tap to browse</b> &#8212; MP3 / WAV / AIFF, FLAC / OGG / M4A, 16-bit 44.1k stereo RAW, .OT, and tracker modules (MOD / XM / IT / S3M / &#8230;).
+  </div>
+  <input type="file" id="fi" multiple accept="audio/*,.raw,.RAW,.ot,.OT,.mod,.xm,.it,.s3m,.669,.mtm,.okt,.ult,.far,.med,.dbm,.amf,.ptm,.stm,.dmf,.gdm,.imf,.liq,.mdl,.pt3,.oxm,.digi,.emod,.MOD,.XM,.IT,.S3M" style="display:none" onchange="onFiles(this.files)">
+  <div class="row" style="margin-top:6px"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('fi').click()">Choose files&#8230;</button></div>
+  <div id="batch" style="display:none;margin-top:12px">
+    <div class="row"><b style="flex:1;color:#0af">To upload (<span id="bcount">0</span>)</b>
+      <button class="btn" id="bup" style="flex:0 0 84px" onclick="doBatchUpload()">Upload</button>
+      <button class="btn del" id="bclr" style="flex:0 0 58px" onclick="clearBatch()">Clear</button>
+      <button class="btn del" id="bcancel" style="flex:0 0 72px;display:none" onclick="cancelBatch()">Cancel</button></div>
+    <table style="margin-top:6px"><tbody id="btb"></tbody></table>
+    <progress id="bpr" value="0" max="100" style="display:none"></progress>
+    <div class="msg" id="bm"></div>
+  </div>
+  <hr style="border:none;border-top:1px solid #262626;margin:14px 0">
   <div class="tabs" style="margin-bottom:8px">
     <div class="tab on" id="ft0" onclick="filesTab(0)">Samples</div>
     <div class="tab" id="ft1" onclick="filesTab(1)">Modules</div>
@@ -409,34 +433,6 @@ body.nosbar .sbar{display:none}
     <thead><tr><th>Name</th><th>Size</th><th></th></tr></thead>
     <tbody id="modtb"></tbody>
   </table>
-</div>
-<div class="pane" id="p1">
-  <!-- CONVERT-ON-IMPORT was invisible: an upload silently kicks a conversion pass
-       (MP3 / 48k / 24-bit -> native WAV) and GET /import has always reported its
-       progress. Nothing ever read it. -->
-  <div class="card" id="impcard" style="display:none">
-    <h4>IMPORT / CONVERT</h4>
-    <div class="kv" id="impcur">idle</div>
-    <div class="bar"><i id="impbar" style="width:0%"></i></div>
-  </div>
-  <div style="margin:6px 0">
-    <button class="btn" onclick="rescan()">rescan library</button>
-    <span class="kv" id="impmsg" style="margin-left:8px"></span>
-  </div>
-  <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
-    <b>Drop files here, or tap to browse</b> (one or many): <b>MP3/WAV/AIFF</b> upload as-is and convert on the module (fast &#8212; no giant RAW over WiFi); other audio (flac/ogg/m4a &#8594; decoded in-browser to RAW); 16-bit 44.1kHz stereo RAW; or <b>tracker modules</b> (MOD/XM/IT/&#8230; &#8594; usr/TRACKER). Review &amp; rename below, then Upload.
-  </div>
-  <input type="file" id="fi" multiple accept="audio/*,.raw,.RAW,.ot,.OT,.mod,.xm,.it,.s3m,.669,.mtm,.okt,.ult,.far,.med,.dbm,.amf,.ptm,.stm,.dmf,.gdm,.imf,.liq,.mdl,.pt3,.oxm,.digi,.emod,.MOD,.XM,.IT,.S3M" style="display:none" onchange="onFiles(this.files)">
-  <div class="row" style="margin-top:6px"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('fi').click()">Choose files&#8230;</button></div>
-  <div id="batch" style="display:none;margin-top:12px">
-    <div class="row"><b style="flex:1;color:#0af">To upload (<span id="bcount">0</span>)</b>
-      <button class="btn" id="bup" style="flex:0 0 84px" onclick="doBatchUpload()">Upload</button>
-      <button class="btn del" id="bclr" style="flex:0 0 58px" onclick="clearBatch()">Clear</button>
-      <button class="btn del" id="bcancel" style="flex:0 0 72px;display:none" onclick="cancelBatch()">Cancel</button></div>
-    <table style="margin-top:6px"><tbody id="btb"></tbody></table>
-    <progress id="bpr" value="0" max="100" style="display:none"></progress>
-    <div class="msg" id="bm"></div>
-  </div>
 </div>
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
@@ -594,6 +590,36 @@ body.nosbar .sbar{display:none}
     </div>
     <div class="msg" id="clkmsg" style="display:none"></div>
   </div>
+  <!-- the beat listener: it IS a clock source (machines follow it via
+       Clock Src = AUDIO), so it belongs beside CLOCK on Remote rather than
+       in a tab of its own. -->
+  <div class="card pnl" id="lsncard">
+    <b class="ph" style="padding:0;margin:0">LISTENER</b>
+    <div class="card">
+      <h4>LISTENER</h4>
+      <div class="kv" id="blbox">--</div>
+    </div>
+    <div class="card">
+      <h4>CONTROLS</h4>
+      <div class="row">
+        <div><label>Mode</label>
+          <select id="blmode" onchange="blSet()">
+            <option value="0">OFF</option><option value="1">PULSE</option>
+            <option value="2">KICK</option><option value="3">FLUX</option>
+            <option value="4">GROOVE</option>
+          </select></div>
+        <div><label>Clock out (audio jack)</label>
+          <select id="blout" onchange="blSet()">
+            <option value="0">OFF</option><option value="1">LEFT</option>
+            <option value="2">RIGHT</option>
+          </select></div>
+        <div style="flex:0 0 90px"><label>&nbsp;</label>
+          <button class="btn" style="width:100%" onclick="blRelock()">Relock</button></div>
+      </div>
+      <div class="msg" id="blsm"></div>
+    </div>
+    <div class="msg">GROOVE = tempo model (steady grid, never octave-hops); PULSE/KICK/FLUX = raw onset pulses. Machines follow via Clock Src = AUDIO.</div>
+  </div>
   <!-- the settings and streaming cards stack in the RIGHT column rather than
        in rows of their own. As rows they could not flow up beside the panel:
        the top row was 723 px on the left against 296 on the right, so a thin
@@ -655,8 +681,10 @@ body.nosbar .sbar{display:none}
        cards-to-the-panel's-height, then the band, then the rest continues here
        (Arlo 2026-09-10: pin MIDI under the panel). Empty and hidden otherwise. -->
   <div class="remcols" id="rembot" style="display:none"><div class="rcol"></div><div class="rcol"></div></div>
-</div>
-<div class="pane" id="p4">
+  <!-- the old Settings tab. Kept as a STATIC node and MOVED into the GLOBAL
+       card by rpSetCard(); templating it would wipe a half-typed SSID or
+       password every time the params reload. -->
+  <div id="setform" style="display:none">
   <label>Device IP</label><input id="ip" readonly style="opacity:.7">
   <label>Hostname (this unit = http://&lt;name&gt;.local &#8212; give each Str&#228;mpler its own)</label><input id="sh" maxlength="32" placeholder="ctag-modular">
   <label>WiFi SSID</label><input id="ss">
@@ -685,32 +713,7 @@ body.nosbar .sbar{display:none}
     <button class="btn" onclick="blUpload()">Upload boot logo</button>
   </div>
   <div class="msg" id="blm"></div>
-</div>
-<div class="pane" id="p5">
-  <div class="card">
-    <h4>LISTENER</h4>
-    <div class="kv" id="blbox">--</div>
   </div>
-  <div class="card">
-    <h4>CONTROLS</h4>
-    <div class="row">
-      <div><label>Mode</label>
-        <select id="blmode" onchange="blSet()">
-          <option value="0">OFF</option><option value="1">PULSE</option>
-          <option value="2">KICK</option><option value="3">FLUX</option>
-          <option value="4">GROOVE</option>
-        </select></div>
-      <div><label>Clock out (audio jack)</label>
-        <select id="blout" onchange="blSet()">
-          <option value="0">OFF</option><option value="1">LEFT</option>
-          <option value="2">RIGHT</option>
-        </select></div>
-      <div style="flex:0 0 90px"><label>&nbsp;</label>
-        <button class="btn" style="width:100%" onclick="blRelock()">Relock</button></div>
-    </div>
-    <div class="msg" id="blsm"></div>
-  </div>
-  <div class="msg">GROOVE = tempo model (steady grid, never octave-hops); PULSE/KICK/FLUX = raw onset pulses. Machines follow via Clock Src = AUDIO.</div>
 </div>
 <div class="sbar">
   <div class="cv" id="cvb"></div>
@@ -737,8 +740,7 @@ function tab(n){
   }
   document.body.className=(n===3&&!WEB.sbar)?'nosbar':'';   // Remote: the perform page, status bar off unless asked
   if(n===0)loadFiles();
-  if(n===3){loadRemote();if(WEB.scrload)setTimeout(function(){scrShot(3);},300);}
-  if(n===4)loadSet();
+  if(n===3){loadRemote();loadSet();if(WEB.scrload)setTimeout(function(){scrShot(3);},300);}
 }
 
 // Files-page sub-tabs: 0 = Samples (usr/*.RAW), 1 = Modules (usr/TRACKER)
@@ -1640,7 +1642,7 @@ function makeFold(card,key,def){
 // (Arlo 2026-09-10). Everything else defaults open.
 var FOLDABLE=[['machcard','mach'],['midicard','midi'],['rmatrix','mtx'],['rfx','fx'],
               ['clkcard','clk'],['bouncecard','bnc',false],['bcastcard','bc',false],
-              ['fscard','fs'],['rdcard','rd'],['edcard','ed']];
+              ['fscard','fs'],['rdcard','rd'],['edcard','ed'],['lsncard','lsn',false]];
 function foldAll(){
   FOLDABLE.forEach(function(f){
     var host=document.getElementById(f[0]);
@@ -1648,6 +1650,15 @@ function foldAll(){
     makeFold(host,f[1],f.length>2?f[2]:true);
   });
   balanceSoon();   // cards have just been built / rebuilt: even the bottom edge
+}
+// A fold INSIDE a card: same grammar as foldCard (foldSet drives KEY_hdr /
+// KEY_body) but no card chrome, so it reads as a section of its parent rather
+// than a second card. Defaults CLOSED — a sub-fold is detail, not the point.
+function subFold(key,title,body){
+  var open=foldOpen(key,false);
+  return '<b class="sub" id="'+key+'_hdr" data-t="'+title+'" style="cursor:pointer;user-select:none;display:block;margin-top:10px" onclick="foldToggle(\''+key+'\')">'
+        +(open?'\u25BE ':'\u25B8 ')+title+'</b>'
+        +'<div id="'+key+'_body"'+(open?'':' style="display:none"')+'>'+body+'</div>';
 }
 function foldCard(key,title,body,cls){
   var open=foldOpen(key);
@@ -1738,8 +1749,12 @@ function rpTable(o,path){
 // screen and the global Settings screen side by side, then the ADVANCED fold
 // all three fold (closed on first launch, remembered per browser)
 function plainCard(title,body){return '<div class="card pnl"><b class="ph" style="margin:0">'+title+'</b>'+body+'</div>';}
-function setupCard(){return foldCard('setup','MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>');}
-function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div>');}
+// ADVANCED is a fold INSIDE Machine Setup now: it is the same machine's state,
+// just the raw keys rather than the screen, so it was never a card of its own.
+function setupCard(adv){return foldCard('setup','MACHINE SETUP','<div class="tftw" id="mscrwrap">'+(rpSetup?scrMachine(rpSetup):'<div class="tft"></div>')+'</div>'+(adv||''));}
+// #setslot takes the STATIC #setform (the old Settings tab). It is moved in
+// rather than templated, so a rebuild cannot wipe a half-typed SSID or password.
+function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrwrap">'+(rpGlob?scrGlobal(rpGlob):'<div class="tft"></div>')+'</div><div id="setslot"></div>');}
 // ---- WEB card: preferences that live in this BROWSER, not on the module ----
 // Everything here was hardcoded or hidden before: the auto-refresh interval was
 // a literal 3000 in scrPoll, the status poll a literal 500, the screen size only
@@ -1791,16 +1806,18 @@ function webPoll(){
 function webSize(){scrZoom();}      // scrZoom updates WEB.size and redraws
 function webSbar(){WEB.sbar=WEB.sbar?0:1;webSave();webApplySbar();webDraw();}
 function webApplySbar(){if(document.getElementById('p3').className.indexOf('on')>=0)document.body.className=WEB.sbar?'':'nosbar';}
-function advCard(inner,asTable){
+function advBody(inner,asTable){
   var adv=asTable?'<table class="adv">'+inner+'</table>':inner;
-  return foldCard('adv','ADVANCED','<div class="tftw"><div class="tft adv">'+adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div></div></div>');
+  return subFold('adv','ADVANCED','<div class="tftw"><div class="tft adv">'+adv+'<div class="row" style="margin-top:8px"><button class="btn" onclick="rpLoad()">Reload</button><button class="btn" onclick="rpApply()">Apply</button></div></div></div>');
 }
 function rpSetCard(inner,asTable){
-  document.getElementById('rsetup').innerHTML=setupCard();
+  document.getElementById('rsetup').innerHTML=setupCard(advBody(inner,asTable));
   document.getElementById('rglob').innerHTML=globCard();
+  var slot=document.getElementById('setslot'),form=document.getElementById('setform');
+  if(slot&&form){slot.appendChild(form);form.style.display='';}   // MOVE, never re-template
   webDraw();
   foldAll();                     // the matrix / FX cards were just rebuilt
-  return advCard(inner,asTable);
+  return '';                     // #rparams is only an error slot now
 }
 function rpLoad(retry){
   fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
@@ -2388,7 +2405,7 @@ function machCardPoll(name,on){
 // it moves and measuring before the move is safe.
 var BAL_LEFT=['panel','midihome'];
 var BAL_RIGHT=['machcard','fscard','rdcard','edcard'];
-var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard'];
+var BAL_FLOW=['rmatrix','rfx','clkcard','lsncard','rsetup','rweb','rglob','rparams','rm','bouncecard','bcastcard'];
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');
