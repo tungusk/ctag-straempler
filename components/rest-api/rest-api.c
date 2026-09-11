@@ -1274,12 +1274,17 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     // build compact JSON by hand to avoid cJSON overhead in hot path
     char buf[860];
     int n = snprintf(buf, sizeof(buf),
-        "{\"machine\":\"%s\",\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
+        "{\"machine\":\"%s\",\"caps\":%u,\"recording\":%s,\"v0\":\"%s\",\"v1\":\"%s\","
         "\"cv\":[%u,%u,%u,%u,%u,%u,%u,%u],\"trig\":%u,"
         "\"vu\":[%u,%u,%u,%u],"
         "\"bl\":{\"m\":%d,\"st\":%d,\"bpm\":%.2f,\"cf\":%.2f,\"us\":%d},\"aus\":%u,\"auspk\":%u,"
         "\"ausgap\":%u,\"sav\":{\"us\":%u,\"n\":%u},\"fxpk\":%d%s%s%s}",
         m ? m->name : "",
+        // what the active machine USES, so the page can drop the cards that
+        // would sit there dead (machine.h MC_*). MC_SETUP is derived here
+        // rather than declared: a Setup page IS the setup pointer.
+        (unsigned)((m && m->ui ? m->ui->caps : 0u) |
+                   (m && m->ui && m->ui->setup ? MC_SETUP : 0u)),
         rec ? "true" : "false",
         st.v0, st.v1,
         st.cv[0], st.cv[1], st.cv[2], st.cv[3],

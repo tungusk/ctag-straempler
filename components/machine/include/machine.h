@@ -62,7 +62,22 @@ typedef struct {
     // it row for row (GET/POST /remote/setup) — same labels, same value
     // strings, same press/turn grammar as the TFT.
     const void *setup;
+    // optional (2026-09-10): what this machine USES, so the web Remote tab can
+    // drop the cards that would only sit there dead. Declared, not sniffed:
+    // MIDI is a global audio_midi_note() that only some machines read, and the
+    // core appends a Clock entry to EVERY machine's input map, so neither can
+    // be inferred at runtime. A machine that declares nothing simply gets a
+    // shorter page — which is the right answer for the thinner machines.
+    // MC_SETUP is not a bit: the core derives it from `setup` above.
+    uint32_t caps;
 } machine_ui_t;
+
+// machine_ui_t.caps bits
+#define MC_MIDI   (1u << 0)   // reads audio_midi_note() — the MIDI keyboard applies
+#define MC_CLOCK  (1u << 1)   // follows the core clock (clock_core_*)
+#define MC_MATRIX (1u << 2)   // has a CV matrix (cvmtx_t)
+#define MC_FX     (1u << 3)   // has an FX rack (fxrack_t)
+#define MC_SETUP  (1u << 4)   // has a Setup page — DERIVED from `setup`, never declared
 
 struct machine_input_s;
 typedef struct machine_s {

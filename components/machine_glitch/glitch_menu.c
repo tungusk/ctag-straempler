@@ -163,4 +163,5 @@ const machine_ui_t glitch_menu_ui = {
     .main_event = glitch_main_event,
     .boot_target = M_GLITCH_LIVE,
     .setup = &gl_setup,
+    .caps = MC_CLOCK,
 };

@@ -817,4 +817,5 @@ const machine_ui_t synth_menu_ui = {
     .main_event = synth_main_event,
     .boot_target = M_SYNTH_LIVE,
     .setup = &sy_setup,
+    .caps = MC_MIDI | MC_CLOCK | MC_MATRIX | MC_FX,
 };

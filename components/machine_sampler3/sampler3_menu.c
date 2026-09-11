@@ -679,4 +679,5 @@ const machine_ui_t s3_menu_ui = {
     .main_event = s3_main_event,
     .boot_target = M_S3_LIVE,
     .setup = &s3_setup,
+    .caps = MC_CLOCK,
 };

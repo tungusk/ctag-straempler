@@ -2333,16 +2333,29 @@ function remMach(n){
   }).catch(function(){});
 }
 
+// ---- card visibility: a machine declares what it uses (machine.h MC_*) and
+// the cards that would only sit there dead are dropped. This used to be a
+// hardcoded machine=='Synth'||machine=='Keys' for the MIDI card alone; the
+// firmware now says so itself in /status, so a machine that gains or loses a
+// feature does not need this file edited. A machine that declares nothing just
+// gets a shorter page, which is the right answer for the thinner ones.
+var MC={MIDI:1,CLOCK:2,MATRIX:4,FX:8,SETUP:16};
+var CAPCARD=[['midicard',MC.MIDI],['rmatrix',MC.MATRIX],['rfx',MC.FX],
+             ['clkcard',MC.CLOCK],['setup_card',MC.SETUP]];
+function capsApply(d){
+  if(!d||!('caps' in d))return;          // firmware too old to say: leave every card alone
+  var caps=d.caps|0;
+  CAPCARD.forEach(function(c){
+    var el=document.getElementById(c[0]);if(!el)return;   // not built yet; the next poll gets it
+    var want=(caps&c[1])?'':'none';
+    if(el.style.display===want)return;
+    el.style.display=want;
+    if(want===''&&c[0]==='midicard')midiAuto();   // it could not be measured while hidden
+  });
+}
 function updateRemote(d){
   if(!document.getElementById('p3').className.match(/on/))return;
-  var mc=document.getElementById('midicard');
-  if(mc){
-    var want=(d.machine=='Synth'||d.machine=='Keys')?'':'none';
-    if(mc.style.display!==want){
-      mc.style.display=want;
-      if(want==='')midiAuto();   // it could not be measured while hidden — size it now it is real
-    }
-  }
+  capsApply(d);
   var cv=d.cv||[];
   knFollow(cv);
   clkReadout(d.clk);

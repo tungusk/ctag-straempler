@@ -1027,4 +1027,5 @@ const machine_ui_t tape_menu_ui = {
     .main_event = tape_main_event,
     .boot_target = M_TAPE_MAIN,
     .setup = &tape_setup,
+    .caps = MC_CLOCK | MC_MATRIX | MC_FX,
 };

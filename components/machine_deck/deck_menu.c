@@ -510,4 +510,5 @@ const machine_ui_t deck_menu_ui = {
     .main_event = deck_main_event,
     .boot_target = M_DECK_LIVE,
     .setup = &dk_setup,
+    .caps = MC_CLOCK,
 };

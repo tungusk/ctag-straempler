@@ -442,4 +442,5 @@ const machine_ui_t looper_menu_ui = {
     .web_uris = looper_web_uris,
     .n_web_uris = 1,
     .setup = &lp_setup,
+    .caps = MC_CLOCK,
 };

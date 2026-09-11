@@ -1228,4 +1228,5 @@ const machine_ui_t keys_menu_ui = {
     .main_event = keys_main_event,
     .boot_target = M_ISMP_LIVE,
     .setup = &ks_setup,
+    .caps = MC_MIDI | MC_CLOCK | MC_MATRIX | MC_FX,
 };
