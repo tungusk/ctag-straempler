@@ -25,8 +25,11 @@ h1{font-size:13px;color:#aaa;flex:1;letter-spacing:.05em}
 .pane{display:none;padding:10px}
 .pane.on{display:block}
 table{width:100%;border-collapse:collapse}
-th{text-align:left;color:#b4b4b4;padding:4px 6px;border-bottom:1px solid #2a2a2a;font-weight:normal;font-size:11px}
-td{padding:4px 6px;border-bottom:1px solid #1e1e1e;vertical-align:middle}
+th{text-align:left;color:#b4b4b4;padding:4px 4px;border-bottom:1px solid #2a2a2a;font-weight:normal;font-size:11px}
+/* 4 px sides, not 6: the file table ran 529 px of columns into a 480 px
+   scroller with overflow-x hidden, so the download arrow was simply cut off.
+   The width comes out of the wave thumbnail and the cell padding. */
+td{padding:4px 4px;border-bottom:1px solid #1e1e1e;vertical-align:middle}
 tr:hover td{background:#161616}
 .btn{background:#2a2a2a;color:#aaa;border:1px solid #444;padding:3px 8px;cursor:pointer;border-radius:2px;font-size:11px;font-family:monospace}
 .btn:hover{background:#333}
@@ -414,7 +417,7 @@ body.nosbar .sbar{display:none}
    .tab / .mxmode / .fxg b were too dark even on #1c1c1c (the drop zones worst of
    all), so that part was a fix, not a compensation. Anything on the PANEL or the
    status bar sits on near-black and must NOT be brightened with them. */
-.card{border:1px solid #3d3d3d;border-radius:3px;background:#1c1c1c;padding:8px 10px;margin:8px 0}
+.card{border:1px solid #3d3d3d;border-radius:3px;background:#151515;padding:8px 10px;margin:8px 0}
 .card h4{margin:0 0 6px;color:var(--accl);font-weight:normal;font-size:13px;letter-spacing:1px}
 .kv{color:#aabecb}.kv b{color:#ddd;font-weight:normal}
 .scope{width:100%;border-collapse:collapse;font-size:11px}
@@ -930,7 +933,7 @@ function renderFiles(){
       +'<td>'+bpm+'</td>'
       +'<td style="color:#9ab">'+mmss(f.dur)+'</td>'
       +'<td>'+(f.size?(Math.round(f.size/1024))+'KB':'')+'</td>'
-      +'<td><canvas class="wf" width="120" height="24" data-name="'+esc(f.name)+'" style="vertical-align:middle;background:#000;border-radius:2px"></canvas></td>'
+      +'<td><canvas class="wf" width="78" height="24" data-name="'+esc(f.name)+'" style="vertical-align:middle;background:#000;border-radius:2px"></canvas></td>'
       +'<td style="white-space:nowrap">'
       +dirSel+' '
       +'<a class="btn" style="text-decoration:none" href="/files/raw?name='+encodeURIComponent(f.name)+'" download="'+esc(f.name)+'.RAW">&#11015;</a> '
