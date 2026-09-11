@@ -74,7 +74,7 @@ body.nosbar .sbar{display:none}
    lives HERE, not on .pnl: .card is declared later at equal specificity, so
    .pnl's padding/background/border have never applied — do not "fix" that rule
    without checking what resurrecting the other two does.) */
-#panel{flex:0 0 auto;background:#050505;display:flex;flex-direction:column;position:relative;padding:38px 6px 40px}
+#panel{flex:0 0 auto;background:#050505;display:flex;flex-direction:column;position:relative;padding:43px 6px 68px}
 #panel .row .btn{background:#050505;border-color:#2a2a2a;color:#777}
 #scrbox .row>*{padding:3px 10px}
 #scrbox .row>:last-child{margin-right:0}
@@ -95,16 +95,20 @@ body.nosbar .sbar{display:none}
    which put the connector circle (cy 47, i.e. 73.44% down) 15 px BELOW the slot.
    Overriding the transform lifts it onto the slot's centreline. */
 .ant{right:6%;width:34px;height:64px;fill:none;stroke:#555;stroke-width:1.6;stroke-linecap:round;transform:translateY(-73.44%)}
-/* the four Eurorack mounting slots, drawn in the card slot's language. On the
-   real v2_3 panel they are 8.5 x 3.2 mm obrounds, 7.5 mm in from each side edge
-   (7.539/91.3 = 8.26%) and 3 mm down from the top and up from the bottom. To
-   SCALE that is 47 x 18 px here, which reads far too heavy beside the slot and
-   antenna linework — everything else on this panel is under-scaled too (the
-   58 px knobs are 10.6 mm) — so they are drawn at the deco weight instead.
+/* the four Eurorack mounting slots, now at TRUE SCALE: on the real v2_3 panel
+   they are 8.5 x 3.2 mm obrounds, 7.539 mm in from each side edge (= 8.26%, and
+   with a 47 px hole that puts `left` at 3.39%) and 3 mm down from the top / up
+   from the bottom (= 6.5 px once the 18 px height is taken off). They were first
+   drawn at the slot/antenna's lighter weight; Arlo wanted them bigger and nearer
+   the corners, which is exactly true scale, so scale won.
+   The fill is the PAGE background (#2e2e2e, body above — keep the two in step)
+   over the near-black panel, so the slot reads as a hole you can see through
+   rather than a painted-on shape; the inset shadow is the material's thickness.
    Deliberately NOT .deco: the slot and antenna hide beside a big or empty
    screen, but the holes belong to the frame and stay. */
-.mnt{position:absolute;width:26px;height:10px;border:1px solid #333;border-radius:5px;background:#000;pointer-events:none}
-.mnt.t{top:11px}.mnt.b{bottom:11px}.mnt.l{left:8.2%}.mnt.r{right:8.2%}
+.mnt{position:absolute;width:47px;height:18px;border-radius:9px;background:#2e2e2e;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.8);pointer-events:none}
+.mnt.t{top:6.5px}.mnt.b{bottom:6.5px}.mnt.l{left:3.39%}.mnt.r{right:3.39%}
 #panel.big .deco,#scrarea:has(#scrbox.empty) .deco{display:none}   /* only beside a loaded, small screen */
 #scrbox .row #scrbtn.big{flex:1 1 auto;aspect-ratio:4/3;margin:29px 0 6px;padding:0;font-size:14px;letter-spacing:1px;border-color:#333}   /* nothing loaded: the Screen button IS the screenshot frame — same size and place, so nothing reflows when the shot lands */
 #panel .row .btn:hover{background:#1a1a1a;color:#aaa}
@@ -131,7 +135,7 @@ body.nosbar .sbar{display:none}
    side margins read too wide (Arlo 2026-09-10). 7 x 70 = 490 px, which is why
    #panel's side padding is 6 and not 10 — the jack field is the widest thing
    on the panel and it has to reach. Measured after: 8.17% / 91.83%. */
-.jcell{padding:6px 8px 4px;min-width:70px}
+.jcell{padding:2px 8px;gap:1px;min-width:70px}
 .pl{color:#999;letter-spacing:1px;font-size:10px}
 .pcell.dim .pl{color:#555}
 .pknob{width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 50% 38%,#2c2c2c,#151515 70%);border:1px solid #3a3a3a;box-shadow:0 2px 4px #000;position:relative;margin:6px 0 4px}   /* GAIN: the CV5-8 knob body, panel-only */
@@ -160,7 +164,7 @@ body.nosbar .sbar{display:none}
    below measures 51.1 x 22 around the 10 px label. nowrap is load-bearing:
    without it "OUT L" wrapped to two lines inside the pill and it came out 30 px
    tall. */
-.jcell.out .pl{border:1px solid #555;border-radius:999px;padding:4px 7px;color:#8a8a8a;white-space:nowrap}
+.jcell.out .pl{border:1px solid #555;border-radius:6px;padding:0 7px;color:#8a8a8a;white-space:nowrap}
 .jcell.sep{border-left:1px dotted #444}
 .jcell.sepr{border-right:1px dotted #444}
 /* jack socket: a ring meter (270-degree sweep, --v = 0..100) around a dark hole */
@@ -170,9 +174,18 @@ body.nosbar .sbar{display:none}
 .jack.au{--c:#3a7}
 .jack.tr{background:#2a2a2a}
 .jack.tr.on{background:#e33;box-shadow:0 0 8px #e33}
+/* the CV readout sits IN the socket, not under it. Under it, it cost a whole
+   text line per row and pushed the jack rows to an 88 px pitch against the real
+   panel's 12.7 mm = 69.8 px (Arlo: "out of proportion too tall"). pointer-events
+   none so it never eats a drag-to-inject. */
+.jack>.jv{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:#9a9a9a;pointer-events:none;z-index:1}
 .jack.inj{cursor:ns-resize;touch-action:none;user-select:none}
 .jack.inj:hover{box-shadow:0 0 0 1px #555}
-.jcell .pl{margin-bottom:1px}
+/* 22 px = the OUT pill's height, given to EVERY jack label so the sockets in a
+   row line up. Without it the pill made its own label 22 px against the others'
+   12 and dropped the OUT jack 10 px below its own row. */
+.jcell .pl{height:22px;display:flex;align-items:center;justify-content:center;margin-bottom:0}
+.jcell .jack{margin:1px 0 0}
 /* machine settings: two columns when the window is wide enough, fields never split */
 .rpcols{columns:2 300px;column-gap:20px}
 .rpcols>*,.fld{break-inside:avoid}
@@ -295,10 +308,16 @@ body.nosbar .sbar{display:none}
 #midiaux{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .row.tight>#midiaux{padding:0}
 #midiaux .btn{flex:0 0 auto;width:52px;padding:1px 8px;line-height:1.4;text-align:center}   /* width, not flex-basis: #midiaux is a COLUMN when wide */
-#midicard.wide{display:flex;align-items:center;gap:12px}
-#midicard.wide>.row.tight:first-child{flex:0 0 118px;flex-direction:column;align-items:flex-start;gap:8px;margin:0}
-#midicard.wide>.row.tight:first-child>span[style*="flex:1"]{display:none}
-#midicard.wide>#midi_body{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:12px}
+/* WIDE. The title is a direct child of the card now (so that folding can take
+   the controls with it), which would cost a whole row here — the row this mode
+   exists to save. So when wide it is PINNED in the corner instead and the left
+   gutter is padded to clear it: measured 120 px open, exactly what it was
+   before. min-height keeps the title visible once the body is folded away. */
+#midicard.wide{display:block;position:relative;min-height:22px}
+#midicard.wide>.ph{position:absolute;top:8px;left:10px;margin:0;z-index:1}
+#midicard.wide>#midi_body{display:flex;align-items:center;gap:12px}
+#midicard.wide #midictl{flex:0 0 118px;flex-direction:column;align-items:flex-start;gap:8px;margin:0;padding-top:24px}
+#midicard.wide #midictl>span[style*="flex:1"]{display:none}
 #midicard.wide #midirow{flex:1 1 auto;min-width:0;margin-top:0}
 #midicard.wide #midiaux{flex-direction:column;align-items:flex-end;gap:8px}
 #midicard.wide #mididev{flex:0 0 130px;margin-top:0}
@@ -477,10 +496,16 @@ body.nosbar .sbar{display:none}
     <div class="pspace"></div>
     <div class="mnt b l" title="mounting hole"></div><div class="mnt b r" title="mounting hole"></div>
   </div>
+  <!-- the title is a DIRECT child of the card, as on every other card: it puts
+       the label in the same corner (measured inset 10,8 — identical to MACHINE)
+       AND it is what makes the fold work, since makeFold() bodies everything
+       after the title. While it lived inside the control row, folding took only
+       the keyboard and left typing / octave / width / Panic on screen, and the
+       wide card bottomed out at 85 px instead of collapsing. -->
   <div id="midihome"><div class="card pnl" id="midicard" style="display:none">
-    <div class="row tight" style="align-items:center">
-      <b class="ph" style="flex:0 0 auto;padding:0;margin:0"><span class="hlp" data-h="Impulse Tracker layout, two manuals an octave apart: Z S X D C V G B H N J M , L . ; / is the lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P the upper. Octave on - and = &#183; Space releases held notes &#183; Esc panics. Typing plays whether or not a key is on screen &#8212; &#8249; &#8250; only move the view. Plays Synth / Keys; MIDI wins over CV while a note is held.">MIDI</span></b>
-      <label style="flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;margin:0 0 0 14px;color:#888;font-size:11px"><input type="checkbox" id="midityping" checked style="width:auto;margin:0"> typing</label>
+    <b class="ph" style="padding:0;margin:0"><span class="hlp" data-h="Impulse Tracker layout, two manuals an octave apart: Z S X D C V G B H N J M , L . ; / is the lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P the upper. Octave on - and = &#183; Space releases held notes &#183; Esc panics. Typing plays whether or not a key is on screen &#8212; &#8249; &#8250; only move the view. Plays Synth / Keys; MIDI wins over CV while a note is held.">MIDI</span></b>
+    <div class="row tight" id="midictl" style="align-items:center">
+      <label style="flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;margin:0;color:#888;font-size:11px"><input type="checkbox" id="midityping" checked style="width:auto;margin:0"> typing</label>
       <span id="midioctg"><button class="btn octb" onclick="midiOct(-1)" title="octave down (-)">&#9666;</button>
       <span id="midioct">C4</span>
       <button class="btn octb" onclick="midiOct(1)" title="octave up (=)">&#9656;</button></span>
@@ -1201,8 +1226,8 @@ function loadRemote(){
     function cvCell(i){
       var ch=i+1,inj=i<4;   // CV1-4: drag the socket to inject (a virtual patch cable)
       return '<div class="jcell"><span class="pl" id="rl'+i+'">CV '+ch+'</span>'
-        +'<div class="jack'+(inj?' inj':'')+'" id="rf'+i+'"'+(inj?' data-ch="'+ch+'" title="drag to inject"':'')+'></div>'
-        +'<span id="rv'+i+'">-</span></div>';
+        +'<div class="jack'+(inj?' inj':'')+'" id="rf'+i+'"'+(inj?' data-ch="'+ch+'" title="drag to inject"':'')+'>'
+        +'<span class="jv" id="rv'+i+'">-</span></div></div>';
     }
     function auCell(g,side,id){   // green = audio
       return '<div class="jcell'+(g=='out'?' sep out':'')+'"><span class="pl"'+(id?' id="'+id+'"':'')+'>'+g.toUpperCase()+' '+side.toUpperCase()+'</span>'

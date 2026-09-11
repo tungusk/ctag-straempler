@@ -9,6 +9,53 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — panel proportion, jack rows, screw holes, MIDI card fold
+
+Continuation of the panel-card work, all measured against
+`hardware-kicad/strampler_panel_v2_3` rather than judged by eye.
+
+**Jack rows were the "too tall".** Rendered pitch was **88 px against the real
+12.7 mm = 69.8 px**. Two causes, both fixed:
+- the CV readout sat UNDER the socket, costing a text line per row. It now lives
+  INSIDE the socket (`.jack>.jv`, absolutely centred, `pointer-events:none` so it
+  never eats a drag-to-inject). `cvCell()` emits it inside the `.jack` div.
+- the OUT pill made its own label 22 px against the other labels' 12 and so
+  **dropped the OUT jack 10 px below its own row**. Every jack label is now a
+  fixed 22 px (`.jcell .pl`), which aligns the row AND gives the pill its
+  natural home. Cell padding 6/4 -> 2/2, gap 3 -> 1, jack margin 4/1 -> 1/0.
+  Measured pitch **70 px**, row aligned.
+- content got ~36 px shorter, so `#panel` padding went 38/40 -> **43/68** to hold
+  the real 1.407 ratio. Result: card 706.5 px = exactly 502 x 128.5/91.3, jack
+  rows land at 545.5 / 615.5 against a real 545.2 / 615.
+- pill corners are **6 px, not fully round**: at 0.4 mm from the pill's top edge
+  the silk is at x 79.42, wider than an obround would be — that solves to a
+  ~1.2 mm corner radius.
+
+**Screw holes are now TRUE SCALE** (47 x 18 px = 8.5 x 3.2 mm) and filled with
+the PAGE background `#2e2e2e` + an inset shadow, so they read as holes you see
+through rather than painted shapes. **Keep that colour in step with `body`.**
+`left/right:3.39%` puts their CENTRES at the real 8.26%.
+
+**MIDI card — one cause behind all three complaints** (wouldn't collapse when
+full, controls stayed visible when folded on half, title not in the corner):
+`makeFold()` bodies everything AFTER the element containing `.ph`, and `.ph`
+lived inside the control row — so folding took only the keyboard and left
+typing / octave / width / Panic on screen, and the wide card bottomed out at
+85 px. `.ph` is now a DIRECT child of the card and the control row is
+`#midictl`. Fold now takes everything; title inset measured **10,8 — identical
+to the MACHINE card**.
+Wide mode would have gained a row from that, the row this mode exists to save,
+so when wide the title is **pinned** (`position:absolute`, corner) and
+`#midictl` is padded to clear it: **120 px open, exactly as before**; folded
+22 px (was 85). `min-height:22px` keeps the title visible once folded.
+Half: 162 open (was 148 — the requested title line), 30 folded.
+
+**PROCESS TRAP, cost a wasted build+OTA:** `cd components/rest-api/html && python3 <<EOF`
+fails silently as a no-op edit when the shell is ALREADY in that directory — the
+`cd` errors, `&&` skips the python, and the following `./convert.sh` cheerfully
+regenerates an UNCHANGED header. The byte count in convert.sh's output is the
+tell: if it did not move, nothing was edited. Use absolute paths in the heredoc.
+
 ## 2026-09-10 — panel card: real proportion + the mounting slots
 
 Two touch-ups Arlo asked for on the Remote tab's panel card.
