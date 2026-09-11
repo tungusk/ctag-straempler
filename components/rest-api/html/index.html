@@ -143,6 +143,12 @@ body.nosbar .sbar{display:none}
    sits on a common baseline (Arlo 2026-09-11). */
 #clkcard .row{gap:10px;row-gap:8px;flex-wrap:wrap;align-items:flex-end}
 #clkcard label{margin:0}
+/* a number field this narrow has no room for the native spinners — they sat on
+   top of the value and clipped "120" to "12(". The field is typed or scrolled,
+   not nudged with arrows. */
+#clkcard input[type=number]::-webkit-inner-spin-button,
+#clkcard input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+#clkcard input[type=number]{-moz-appearance:textfield;appearance:textfield;text-align:center}
 /* the listener's readout is a STATUS DISPLAY, so it gets the same black frame
    as the settings screens and ABOUT rather than floating on the card */
 #clkcard #blbox{background:#000;border:1px solid #262626;border-radius:2px;padding:6px 8px;margin-bottom:6px}
@@ -183,7 +189,10 @@ body.nosbar .sbar{display:none}
 /* a second heading INSIDE a card (the icecast push, under BROADCAST): same
    voice a step quieter, and NOT .ph — makeFold() takes the card's first .ph as
    the fold handle, so a second one would hand it the wrong element. */
-.sub{display:block;color:#7a9;font-size:12px;letter-spacing:1.5px}   /* a step under .ph, in step with it */
+.sub{display:block;color:#7a9;font-size:12px;letter-spacing:1.5px;margin-bottom:5px}
+/* the gap belongs to the BODY, so it only appears when the fold is open — a
+   collapsed sub-header sits tight against whatever follows it */
+.sub+div{padding-top:3px}   /* a step under .ph, in step with it */
 .pgrid4{display:grid;grid-template-columns:repeat(4,116px);justify-content:center}
 /* the perform row: label on a fixed line, the item centred in one fixed 64 px band
    whatever its size (GAIN 58, TR 48, DATA 54), with a little air between them */
@@ -441,7 +450,10 @@ body.nosbar .sbar{display:none}
       <div class="deco slot" title="card slot"></div>
       <svg class="deco ant" viewBox="0 0 34 64" title="antenna"><path d="M6 15 a15.5 15.5 0 0 1 22 0"/><path d="M10.5 20 a9 9 0 0 1 13 0"/><circle cx="17" cy="25" r="1.7" fill="#555" stroke="none"/><circle cx="17" cy="47" r="13"/><circle cx="17" cy="47" r="5"/></svg>
       <div id="scrbox" class="empty" style="width:60%;margin:0 auto;position:relative">
-        <div class="row tight" id="scrrow" style="align-items:center;justify-content:center;margin-top:0">
+        <!-- flex-start, not center: #scrrow sits inside #scrbox, which is exactly
+             the width of the screen image, so this lines Refresh up with the
+             screen's left edge instead of floating it in the middle -->
+        <div class="row tight" id="scrrow" style="align-items:center;justify-content:flex-start;margin-top:0">
           <button class="btn big" id="scrbtn" onclick="scrShot()">Screen</button>
           <label id="scrautol" style="display:none;align-items:center;gap:5px;color:#aaa;margin:0 0 0 8px;font-size:11px"><input type="checkbox" id="scrauto" style="width:auto;margin:0;color-scheme:dark;accent-color:#5a5a5a;opacity:.9"> auto</label>
         </div>
