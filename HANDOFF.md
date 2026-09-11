@@ -9,6 +9,52 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-11 PM — the CV matrix reads one way down the column (`7994943`, `0ce0ee8`)
+
+Arlo: on Tape, CV 4 read `Clock [CV4]` and TR 1 read `Play/stop [TR1]` — a
+label plus a dropdown echoing the row's own name, in a different column than
+every neighbouring dropdown, and CV 4's was a duplicate of the CLOCK card's Src
+control. The matrix is one row per channel, so **every row must read *channel ->
+what it drives***; the INPUT MAP entries were the only ones rendered job-first.
+
+They now sit in the row's own dropdown beside the assignable destinations
+(`mxCell` takes `"-1"` / `"<dest>"` / `"p<i>"`). Two calls Arlo made:
+- **the clock JOINS the pulldown** on every CV and TR row (still writes
+  `clk_src` via POST /settings) — editable in two places on purpose. Off-jack
+  sources get a row named for the source (AUDIO / INT / OFF) in place of the old
+  collapsed "clock" row; sending it TO AUDIO/INT stays the CLOCK card's job.
+- **TR jobs SWAP** — Record punch onto TR 1 puts Play/stop on TR 2.
+
+The constraint that shapes `mxSel`: an entry with no OFF in its `opts` must
+always sit on a jack, so its slot never offers "off", and a displaced job takes
+the incoming job's old channel when legal, else OFF, **else stays and the row
+shows both** — never a state the firmware cannot hold.
+
+**Traps, all hit for real:**
+- a slot rendered for an input-map job has **no range input**, so `mxCollect`
+  threw on it — and a throw inside an `onchange` means **the re-render silently
+  never runs**: the DOM keeps the raw select change and the card merely looks
+  wrong. Read the console; it named the line at once.
+- `mxCollect`'s last-row-wins applied to the edit itself, so a stale sibling
+  slot outranked the one just edited. Predates the rework for destinations too
+  (Window picked on CV 4 stayed on CV 5). Hence `mxOwn()`.
+- **`mxRerender` ate the card's fold arrow** (`0ce0ee8`): writing
+  `#rmatrix.innerHTML` throws away the `mtx_arw` span and `mtx_body` div
+  `makeFold` injected, and only `rpLoad` called `foldAll()`. Harmless until the
+  transpose routed every dropdown through `mxRerender`. **Any innerHTML
+  re-render of a folded card must re-fold it.** Arlo caught this, not me — I had
+  screenshotted right after a reload, when `foldAll` had just run.
+- scaling the fold arrows "a step" meant first unifying them: `makeFold` used a
+  `KEY_arw` span but `foldCard`/`subFold` and three static headers wrote the
+  glyph inline. All spans now; `[id$="_arw"],.arw{font-size:1.3em}` sizes them.
+
+Also: matrix rows fill the card (`.mxc{flex:1 1 100%}`, select 152px so "Record
+punch" and Deck's "Deck A loop window" fit, range `flex:1 1 auto`), and the
+FILES readout lost its dividing dot — `SD 25985/29838MB  ~43 h rec`.
+
+Built and flashed to .85 (runs `0ce0ee8`, slot ota_0). TR swap verified through
+Apply and read back from the firmware; `ptr`/`rtr` restored after.
+
 ## 2026-09-11 — wordmark hides when zoomed; the Modules gap was the scroller
 
 - **`#panel.big .pwm{display:none}`** — zoomed, the screen is the point, so the
@@ -990,6 +1036,14 @@ is not worth it. Commits `ce2aa07..` on `v09-machines` + fork lib `7b30a32`,
 
 ## 2026-09-09 — SECOND PUBLIC BETA: `v0.10-beta2` (tag at `73d8828`)
 
+> **DRAFTED 2026-09-11 — the release URL below is dead to the public.** Arlo
+> drafted beta1 and beta2 so a visitor sees exactly one current build; the
+> public releases list is beta3 only. Nothing was deleted: both keep all seven
+> assets, and `gh release edit v0.10-beta2 --draft=false -R tungusk/ctag-straempler`
+> puts it back. A draft has no public tag, so GitHub reassigned it an
+> `untagged-…` URL and the links here will not resolve until it is republished.
+> The **tag** `v0.10-beta2` is still public — commits and source zips resolve fine.
+
 Ear pass PASSED on .85 (clock into CV4 → Deck LOCK, lock rides Deck→Tape→
 Looper, Tracker sync, Glitch divisions, K5-K7 knob feel on Synth/Keys).
 Tag `v0.10-beta2` = `73d8828` (version.txt bump on top of the 09-09 web
@@ -1162,6 +1216,9 @@ clean, `reset=sw`). Bail point before the series: tag `pre-core-clock-20260908`
   caps C36/C38/C39/C42).
 
 ## 2026-09-05 — FIRST PUBLIC BETA: GitHub pre-release `v0.10-beta1`
+
+> **DRAFTED 2026-09-11 — the release URL below is dead to the public.** See the
+> beta2 section for the why and the one-line undo; the tag itself is untouched.
 
 https://github.com/tungusk/ctag-straempler/releases/tag/v0.10-beta1 — tag at
 `341bfee` (= encoder-config-v2 code + `ac5b756` home-path stripping +
