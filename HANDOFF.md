@@ -9,6 +9,32 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — the wide MIDI band pins under the panel (row B)
+
+Arlo: "when midi is visible pin it under panel". **Half-width already was** — it
+is in `BAL_LEFT`, measured 16 px below the panel. The broken case was FULL width:
+`midiAuto()` parks the wide card in `#midiband`, and once the rows merged that
+sits after BOTH columns, so it had drifted to **207 px below the panel**, at the
+bottom of the page.
+
+A 1016 px band cannot live inside a 502 px column, so this needs a split, and
+Arlo chose band-under-panel over dropping full mode. When the band is on:
+- **row A is only as deep as the PANEL** — its right column takes cards until the
+  next one would pass the panel's height;
+- then `#midiband`;
+- then **`#rembot`**, a second `.remcols` that takes the remainder and balances
+  it across two columns. Hidden and empty whenever the band is off.
+
+`balanceCols()` re-appends every card on every run, so the result never depends
+on where the last run left things, and it re-lays out from `midiWideToggle()`.
+Measured: full **gap 16 px** (was 207), band 1016 px wide; unfolding BROADCAST
+pushes it past the panel and it lands in row B, band still at 16.
+
+**Testing note:** forcing a card visible with `capsApply({caps:...|1})` does NOT
+stick — the ~2 s `/status` poll re-applies the real caps and hides it again,
+which reads as "the code does nothing". Wrap `capsApply` for the duration
+instead, and put it back afterwards.
+
 ## 2026-09-10 — narrow-mode order fix + the columns even their bottom edge
 
 **REGRESSION from merging the rows, caught by Arlo:** "when compressed machine
