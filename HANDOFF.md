@@ -52,8 +52,25 @@ Also: matrix rows fill the card (`.mxc{flex:1 1 100%}`, select 152px so "Record
 punch" and Deck's "Deck A loop window" fit, range `flex:1 1 auto`), and the
 FILES readout lost its dividing dot — `SD 25985/29838MB  ~43 h rec`.
 
-Built and flashed to .85 (runs `0ce0ee8`, slot ota_0). TR swap verified through
-Apply and read back from the firmware; `ptr`/`rtr` restored after.
+Built and flashed to .85. TR swap verified through Apply and read back from the
+firmware; `ptr`/`rtr` restored after.
+
+Then two smaller passes (`cb08565`, `0b6a3cf`) — **.85 runs `0b6a3cf`**:
+- **banding on the FILES + modules lists.** The card ground is `#151515` and the
+  GLOBAL row hover was only `#161616` — one step — so a stripe would have
+  swallowed it. Both now sit in `:root` as `--fzeb`/`--fhov` for the same reason
+  `--pline` does; settled at `#1f1f1f`/`#2d2d2d` (21 -> 31 -> 45) after Arlo
+  asked for more contrast than the first try. Scoped to `.fscroll` so the global
+  `tr:hover` is untouched. **The band and hover rules are EQUAL specificity —
+  hover wins on source order alone, so reordering them breaks hover silently.**
+- **the library's in-place rename puts OK before the field.** Swapping the two
+  was not enough: the Name column is only as wide as an 8-char name, so the pair
+  wrapped and the editing row grew. A flex wrapper holds them on one line (row
+  height stays 33 px); the autofocus/select-all finds `#lrn` by id and was
+  unaffected. The batch-upload list keeps its OK in the actions column — a
+  different layout, deliberately left alone.
+
+Everything this session was verified in CHROME only; Arlo views in Safari.
 
 ## 2026-09-11 — wordmark hides when zoomed; the Modules gap was the scroller
 
