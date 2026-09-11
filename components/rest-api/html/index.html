@@ -264,6 +264,11 @@ body.nosbar .sbar{display:none}
 .tft .r .l{color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tft .r .vv{display:flex;align-items:center;white-space:nowrap}
 .tft .r .v{color:#ddd;min-width:44px;text-align:right}
+/* an editable row: the input has to read as the row's value, not as a web form
+   dropped into the screen — same colour and alignment, no chrome until focus */
+.tft .r input.tin{width:150px;margin:0;padding:0 2px;background:none;border:none;border-bottom:1px solid #2a3a6a;
+  color:#ddd;font-family:monospace;font-size:inherit;text-align:right;border-radius:0}
+.tft .r input.tin:focus{outline:none;border-bottom-color:var(--acc);background:#0a1238}
 .tft .r.tog .v{cursor:pointer}
 .tft .r.tog .v:hover,.tft .r.rng .v:hover{color:#7fd8ff}
 .tft .r.act .v{color:#777}
@@ -656,9 +661,10 @@ body.nosbar .sbar{display:none}
       <a class="btn" id="bclinkin" href="#" target="_blank" style="flex:0 0 60px;text-align:center;text-decoration:none;margin-left:6px">WAV</a>
     </div>
     <audio id="bcaudio" controls preload="none" style="width:100%;margin-top:6px;color-scheme:dark;opacity:.8;border-radius:3px"></audio>
-    <div class="psec" style="border-top:1px solid #262626;margin-top:8px;padding-top:6px">
+    <b class="sub" id="push_hdr" data-t="PUSH &#8594; ICECAST" style="cursor:pointer;user-select:none;display:block;border-top:1px solid #262626;margin-top:8px;padding-top:6px" onclick="foldToggle('push')">&#9656; PUSH &#8594; ICECAST</b>
+    <div id="push_body" style="display:none">
     <div class="row tight" style="align-items:center;margin-top:0">
-      <b class="sub" style="flex:1;align-self:flex-start"><span class="hlp" data-h="Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.">PUSH &#8594; ICECAST</span></b>
+      <span class="hlp" style="flex:1;align-self:flex-start;color:#7a9;font-size:11px" data-h="Pushes the OUTPUT as 96k mono MP3 to an icecast mountpoint (SOURCE protocol) &#8212; listeners tune in via the server. Reconnects until stopped. Uses the same encoder: one push OR one :8000 listener at a time.">what it does</span>
       <span id="icestate" style="color:#888;margin-right:8px">off</span>
       <button class="btn" id="icebtn" style="flex:0 0 84px" onclick="iceToggle()">Start</button>
     </div>
@@ -684,35 +690,24 @@ body.nosbar .sbar{display:none}
   <!-- the old Settings tab. Kept as a STATIC node and MOVED into the GLOBAL
        card by rpSetCard(); templating it would wipe a half-typed SSID or
        password every time the params reload. -->
+  <!-- what is left of the old Settings tab. Everything with a row on the
+       GLOBAL screen lives THERE now and is edited in place; these two have
+       no row, so they are sub-folds under it. -->
   <div id="setform" style="display:none">
-  <label>Device IP</label><input id="ip" readonly style="opacity:.7">
-  <label>Hostname (this unit = http://&lt;name&gt;.local &#8212; give each Str&#228;mpler its own)</label><input id="sh" maxlength="32" placeholder="ctag-modular">
-  <label>WiFi SSID</label><input id="ss">
-  <label>WiFi Password (leave blank to keep current)</label><input id="sp" type="password">
-  <label>Freesound API Key</label><input id="sa">
-  <label style="margin-top:10px"><input type="checkbox" id="srem" style="width:auto;margin-right:6px">Teleremote (soft trigs, encoder + knob injection from this page)</label>
-  <div class="row" style="margin-top:10px">
-    <button class="btn" onclick="saveSet()">Save</button>
-  </div>
-  <div class="msg" id="sm"></div>
-  <div class="card">
-    <h4>CLOCK</h4>
-    <div class="kv">device time <b id="devtime">--</b> <span style="color:#555">(SNTP, shown at UTC+shift)</span></div>
-    <label>Timezone shift (hours vs UTC, -12..+14) &#8212; saved with Save above</label>
-    <input id="stz" type="number" min="-12" max="14" step="1" style="width:90px">
-  </div>
-  <div class="card">
-    <h4>ABOUT</h4>
-    <div class="kv">firmware <b id="abver">--</b></div>
-    <div class="kv" style="margin-top:4px">CTAG Str&#228;mpler &#8212; upstream by Robert Manzke (CC BY-NC-SA 4.0); v09-machines fork by Arlo + Claude</div>
-  </div>
-  <label style="margin-top:18px">Boot logo (any image &#8212; converted in-browser to the exact 320x240 BMP the module needs)</label>
-  <input type="file" id="blf" accept="image/*" onchange="blPick(this.files[0])">
-  <canvas id="blc" width="320" height="240" style="display:none;border:1px solid #333;margin-top:6px;max-width:100%"></canvas>
-  <div class="row" id="blrow" style="display:none">
-    <button class="btn" onclick="blUpload()">Upload boot logo</button>
-  </div>
-  <div class="msg" id="blm"></div>
+    <b class="sub" id="about_hdr" data-t="ABOUT" style="cursor:pointer;user-select:none;display:block;margin-top:10px" onclick="foldToggle('about')">&#9656; ABOUT</b>
+    <div id="about_body" style="display:none">
+      <div class="kv">device time <b id="devtime">--</b> <span style="color:#555">(SNTP, at UTC+shift)</span></div>
+      <div class="kv" style="margin-top:4px">firmware <b id="abver">--</b></div>
+      <div class="kv" style="margin-top:4px">CTAG Str&#228;mpler &#8212; upstream by Robert Manzke (CC BY-NC-SA 4.0); v09-machines fork by Arlo + Claude</div>
+    </div>
+    <b class="sub" id="blogo_hdr" data-t="BOOT LOGO" style="cursor:pointer;user-select:none;display:block;margin-top:10px" onclick="foldToggle('blogo')">&#9656; BOOT LOGO</b>
+    <div id="blogo_body" style="display:none">
+      <div class="kv" style="color:#777">any image &#8212; converted in-browser to the 320x240 BMP the module needs</div>
+      <input type="file" id="blf" accept="image/*" onchange="blPick(this.files[0])">
+      <canvas id="blc" width="320" height="240" style="display:none;border:1px solid #333;margin-top:6px;max-width:100%"></canvas>
+      <div class="row" id="blrow" style="display:none"><button class="btn" onclick="blUpload()">Upload boot logo</button></div>
+      <div class="msg" id="blm"></div>
+    </div>
   </div>
 </div>
 <div class="sbar">
@@ -1114,13 +1109,8 @@ dz.ondragover=function(e){e.preventDefault();dz.className='dz ov';};
 dz.ondragleave=function(){dz.className='dz';};
 dz.ondrop=function(e){e.preventDefault();dz.className='dz';onFiles(e.dataTransfer.files);};
 
-function loadSet(){
-  fetch('/settings').then(function(r){return r.json();}).then(function(d){
-    document.getElementById('ss').value=d.ssid||'';
-    document.getElementById('sa').value=d.apikey||'';
-    document.getElementById('sh').value=d.hostname||'';
-  });
-  loadSysinfo();
+function loadSet(){   // the GLOBAL screen fetches /settings itself in glLoad();
+  loadSysinfo();     // this is only the About readouts now
 }
 function loadSysinfo(){
   fetch('/sysinfo').then(function(r){return r.json();}).then(function(d){
@@ -1155,11 +1145,15 @@ function blRelock(){
   });
 }
 function saveSet(){
-  var body=JSON.stringify({ssid:document.getElementById('ss').value,passwd:document.getElementById('sp').value,apikey:document.getElementById('sa').value,hostname:document.getElementById('sh').value,remote:document.getElementById('srem').checked?1:0,tz:parseInt(document.getElementById('stz').value||'0',10)});
+  var g=function(id){var e=document.getElementById(id);return e?e.value:'';};
+  // only the four text rows. Remote / Timezone / Listen / ClkOut are toggles
+  // that already wrote themselves, and resending them here would fight that.
+  var body=JSON.stringify({ssid:g('gsSsid'),passwd:g('gsPass'),apikey:g('gsKey'),hostname:g('gsHost')});
   fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(function(r){
     var m=document.getElementById('sm');
-    m.className='msg '+(r.ok?'ok':'er');
-    m.textContent=r.ok?'Saved! (Reboot to apply WiFi changes)':'Error '+r.status;
+    if(m){m.className='msg '+(r.ok?'ok':'er');
+          m.textContent=r.ok?'Saved \u2014 reboot to apply WiFi changes':'Error '+r.status;}
+    if(r.ok)setTimeout(glLoad,400);
   });
 }
 
@@ -1649,6 +1643,7 @@ function foldAll(){
     if(host&&!host.classList.contains('card'))host=host.querySelector('.card');   // #rmatrix / #rfx are wrappers
     makeFold(host,f[1],f.length>2?f[2]:true);
   });
+  foldInit('push');   // a sub-fold inside BROADCAST, static markup
   balanceSoon();   // cards have just been built / rebuilt: even the bottom edge
 }
 // A fold INSIDE a card: same grammar as foldCard (foldSet drives KEY_hdr /
@@ -1665,8 +1660,15 @@ function foldCard(key,title,body,cls){
   return '<div class="card '+(cls||'pnl')+'" id="'+key+'_card"><b class="ph" id="'+key+'_hdr" data-t="'+title+'" style="cursor:pointer;user-select:none;margin:0" onclick="foldToggle(\''+key+'\')">'
         +(open?'\u25BE ':'\u25B8 ')+title+'</b><div id="'+key+'_body"'+(open?'':' style="display:none"')+'>'+body+'</div></div>';
 }
-function tftRow(cls,l,v,i,dir){   // dir: 0 = plain, 1 = toggle (click cycles), 2 = range (arrows), 3 = action, 4 = read-only
+function tftRow(cls,l,v,i,dir,opt){   // dir: 0 = plain, 1 = toggle (click cycles), 2 = range (arrows), 3 = action, 4 = read-only, 5 = editable text
   var h='<div class="r '+cls+'"><span class="l">'+esc(l)+'</span><span class="vv">';
+  // 5: the row IS the field. These used to be read-only here AND editable in a
+  // form underneath saying the same thing twice (Arlo 2026-09-10).
+  if(dir===5){
+    opt=opt||{};
+    return h+'<input class="tin" id="'+i+'" value="'+esc(v)+'"'+(opt.pw?' type="password"':'')
+      +(opt.ph?' placeholder="'+esc(opt.ph)+'"':'')+(opt.mx?' maxlength="'+opt.mx+'"':'')+'></span></div>';
+  }
   if(dir===2)h+='<span class="ar" onclick="'+i+'(-1,event)">&#9666;</span>';
   h+='<span class="v"'+(dir===1?' onclick="'+i+'(1,event)" title="click cycles"':dir===3?' title="opens a page on the device"':'')+'>'+esc(v)+(dir===3&&!/>\s*$/.test(v)?' &#8250;':'')+'</span>';
   if(dir===2)h+='<span class="ar" onclick="'+i+'(1,event)">&#9656;</span>';
@@ -1696,7 +1698,10 @@ function glLoad(){
   var J=function(u){return fetch(u).then(function(r){return r.json();}).catch(function(){return {};});};
   Promise.all([J('/settings'),J('/sysinfo'),J('/bounce/state'),J('/bcast/state')]).then(function(a){
     rpGlob={s:a[0]||{},i:a[1]||{},b:a[2]||{},c:a[3]||{}};
-    var el=document.getElementById('gscrwrap'); if(el)el.innerHTML=scrGlobal(rpGlob);
+    var el=document.getElementById('gscrwrap');
+    // the rows are editable now, so a repaint mid-type would eat the keystrokes
+    var ae=document.activeElement;
+    if(el&&!(ae&&el.contains(ae)&&ae.tagName==='INPUT'))el.innerHTML=scrGlobal(rpGlob);
   });
 }
 function glPost(u,body){
@@ -1712,9 +1717,12 @@ function glBcast(){fetch('/bcast/enable?on='+(rpGlob.c.enabled?0:1)).then(functi
 function scrGlobal(g){
   var s=g.s,i=g.i,tz=+(s.tz_shift||0),key=s.apikey||'';
   var h='<div class="tft"><div class="tt"><span>Settings</span><span class="aff">About</span></div>';
-  h+=tftRow('ro','SSID',s.ssid||'',null,4);
-  h+=tftRow('ro','Password','\u2022\u2022\u2022\u2022\u2022\u2022',null,4);
-  h+=tftRow('ro','Api Key',key?'\u2022\u2022\u2022\u2022'+key.slice(-4):'',null,4);
+  h+=tftRow('rw','Hostname',s.hostname||'','gsHost',5,{ph:'ctag-modular',mx:32});
+  h+=tftRow('rw','SSID',s.ssid||'','gsSsid',5,{});
+  h+=tftRow('rw','Password','','gsPass',5,{pw:true,ph:'unchanged'});
+  // masked like the password: it was '••••'+last4 before it became editable, and
+  // making a row editable should not quietly put a credential on screen in clear
+  h+=tftRow('rw','Api Key',key,'gsKey',5,{pw:true,ph:'freesound key'});
   h+=tftRow('rng','Timezone',(tz>=0?'+':'')+tz,'glTz',2);
   h+=tftRow('tog','Remote',i.remote?'ON':'OFF','glRemote',1);
   h+=tftRow('tog','Listen',GL_LISTEN[+i.blisten||0]||'?','glListen',1);
@@ -1723,7 +1731,10 @@ function scrGlobal(g){
   h+=tftRow('tog','Broadcast',g.c.enabled?'ON':'OFF','glBcast',1);
   h+=tftRow('act','Tuner','open',null,3);
   h+=tftRow('ro','IP',i.ip||'',null,4);
-  return h+'<div style="color:#555;font-size:10px;margin:8px 4px 0">SSID / password / API key: Settings tab</div></div>';
+  // Save covers only the four text rows; every toggle above writes on click
+  h+='<div class="row tight" style="margin:8px 4px 0;align-items:center"><span class="msg" id="sm" style="flex:1;margin:0"></span>'
+    +'<button class="btn" style="flex:0 0 72px" onclick="saveSet()">Save</button></div>';
+  return h+'</div>';
 }
 // the raw preset keys as a table (advanced fold); same data-rp inputs rpApply harvests
 function rpTable(o,path){
@@ -1814,7 +1825,7 @@ function rpSetCard(inner,asTable){
   document.getElementById('rsetup').innerHTML=setupCard(advBody(inner,asTable));
   document.getElementById('rglob').innerHTML=globCard();
   var slot=document.getElementById('setslot'),form=document.getElementById('setform');
-  if(slot&&form){slot.appendChild(form);form.style.display='';}   // MOVE, never re-template
+  if(slot&&form){slot.appendChild(form);form.style.display='';foldInit('about');foldInit('blogo');}   // MOVE, never re-template
   webDraw();
   foldAll();                     // the matrix / FX cards were just rebuilt
   return '';                     // #rparams is only an error slot now

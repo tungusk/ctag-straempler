@@ -9,6 +9,35 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-10 — GLOBAL edits in place, and folds inside folds
+
+Arlo: "notice the way that the global menu is not editable, but theres a field
+for it below? combine these things into a single element" / "make the black
+screeny area editable and drop the ugly form".
+
+**The screen IS the form now.** `tftRow()` gained **dir 5 = editable text**: the
+value slot is an `<input class="tin">` styled as the row's value (no chrome until
+focus), so Hostname / SSID / Password / Api Key are edited where they are read.
+The duplicate `#setform` fields are gone, and so is the footer that pointed at a
+"Settings tab" that no longer exists. Save posts ONLY those four — Remote,
+Timezone, Listen and ClkOut are toggles that already write on click, and
+resending them would fight that.
+- **`glLoad()` must not repaint while an input in `#gscrwrap` has focus**, or it
+  eats the keystrokes. Same class of bug as the balancer's typing guard.
+- **The Api Key row is `type=password`.** It was `••••`+last4 when read-only;
+  making a row editable should not quietly put a credential on screen in clear.
+- What has no row on the screen became sub-folds under it: **ABOUT** (device
+  time, firmware, credits) and **BOOT LOGO**.
+
+**Folds inside folds** — Arlo wanted a card with two independently collapsible
+sections where "the second header isnt seen when its collapsed down to the
+first one". `subFold()` already does exactly that (it was built for ADVANCED
+inside Machine Setup): it is `foldSet`'s grammar with no card chrome, and it
+lives in the parent's body, so collapsing the parent takes the sub-header with
+it. Applied to **PUSH -> ICECAST inside BROADCAST**, which had been a plain
+`.psec`. Static sub-folds need a `foldInit(key)` call to restore their remembered
+state — `foldAll()` does `push`, `rpSetCard()` does `about`/`blogo`.
+
 ## 2026-09-10 — down to TWO tabs: Remote and Files
 
 Arlo: "should boil down to two tabs: remote and files." Four merges.
