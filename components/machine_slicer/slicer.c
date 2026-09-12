@@ -16,6 +16,8 @@
 #include "sd_lock.h"
 #include "machine.h"
 #include "cvsmooth.h"
+#include "cvmtx.h"
+#include "clock.h"
 #include "audio.h"
 #include "slicer_priv.h"
 
@@ -359,6 +361,23 @@ static inline bool voice_frame(uint32_t p, int *l, int *r)
 }
 
 // ---- lifecycle ------------------------------------------------------------
+const char *const slicer_mtx_labels[SLM_N] = {
+    "Slice", "Speed", "Level", "Pitch", "Filter", "Reso"
+};
+// where each destination is born, as an ABSOLUTE (takeover) entry. Slice sits
+// on the CV3 JACK (Arlo 09-11) so a sequencer drives it rather than a knob;
+// the panel knobs take the three continuous jobs. Level and Pitch start
+// unassigned — Pitch here is modulation ON TOP of the V/oct jack below.
+// The MIDDLE TWO knobs are neutral at noon (Arlo's convention): K6 bypasses the
+// filter at 12 o'clock and sweeps low-pass left / high-pass right, K7 is unity
+// playback speed at 12 and varispeeds either way. K8 takes resonance, where 0
+// at full-left IS the neutral. K5 is deliberately free.
+//   CV3 = 2, K6 = 5, K7 = 6, K8 = 7
+static const int8_t slicer_mtx_defaults[SLM_N] = {
+    /* Slice */ 2, /* Speed */ 6, /* Level */ -1, /* Pitch */ -1,
+    /* Filter */ 5, /* Reso */ 7
+};
+
 static esp_err_t slicer_start(void)
 {
     memset(&sl, 0, sizeof(sl));
@@ -382,11 +401,14 @@ static esp_err_t slicer_start(void)
     sl.inc = 1.0f;
     // FX: filter + reverb (reverb slab is ~170 KB PSRAM; fails soft to bypass)
     sl.fx_cut = 8000.0f; sl.fx_res = 0.2f; sl.fx_rvmix = 0.25f;
+    sl.fx_filt = 2048; sl.fx_fmode = 0; sl.fx_fsm = 0.0f;   // noon = bypass
     svf_reset(&sl.fx_flt_l); svf_reset(&sl.fx_flt_r);
     if (reverb_init(&sl.fx_rv) == ESP_OK) {
         reverb_set_mode(&sl.fx_rv, RV_ROOM);
         reverb_set_mix(&sl.fx_rv, sl.fx_rvmix);
     }
+    sl.pitch_src = 0;                       // CV1 = the module's 1V/oct jack
+    cvmtx_init(&sl.mtx, slicer_mtx_labels, SLM_N, slicer_mtx_defaults);
     s_run = true;
     // unpinned: file readers pinned to core 0 cause WiFi audio clicks
     xTaskCreate(reader_task, "sl_reader", 4096, NULL, 6, NULL);
@@ -424,6 +446,10 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     static cvmed_t s_med[8];
     int cvm[8];
     for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&s_med[k], io->cv[k]);
+    // the clock's channel must never take over a destination
+    { int cs = clock_core_src(); sl.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
+    cvmtx_track(&sl.mtx, cvm);      // ch1/2 idle-floor follow + ABS takeover
+    float kk;
 
     (void)in;
     if (sl.loading || sl.len == 0 || !sl.heads) {
@@ -438,28 +464,74 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     if (pressed & 1) sl.cmd_fire = 1;
     if (pressed & 2) sl.cmd_advance = 1;
 
-    // CONTEXTUAL knobs 6/7: FX box selected -> filter cutoff/res; else the usual
-    // slice-select (CV6) + pitch (CV7). ui_ctx is set by the Live UI.
-    static uint16_t last_cv6 = 0xFFFF;
-    uint16_t cv6 = cvm[5];
-    if (last_cv6 == 0xFFFF) last_cv6 = cv6;
-    if (sl.ui_ctx == 1) {                            // FX context
-        sl.fx_cut = 40.0f * powf(300.0f, (float)cvm[5] / 4095.0f);   // 40 Hz .. ~12 kHz (log)
-        sl.fx_res = (float)cvm[6] / 4095.0f;
-    } else if (cv6 > last_cv6 + 40 || cv6 + 40 < last_cv6) {
-        int s = (int)((uint32_t)cv6 * sl.n_slices / 4096);           // CV6 = slice select (on movement)
-        sl.sel = (s >= sl.n_slices) ? sl.n_slices - 1 : s;
-        last_cv6 = cv6;
+    // The house rule (Tape/Synth do the same): sl.* stay the BASE values that the
+    // UI and the ABS knobs write. OFFSET modulation is folded into per-block
+    // LOCALS and never written back — a read-modify-write here would compound
+    // every 725 us block and run away in under a second.
+
+    // SLICE SELECT — the UI owns sl.sel until a matrix source MOVES, then that
+    // source owns it (the old CV6 "on movement" rule, now on whatever the matrix
+    // says; CV3 by default). Set from an absolute position, never accumulated.
+    {
+        float sv01 = -1.0f;
+        if (cvmtx_abs(&sl.mtx, SLM_SLICE, &kk)) sv01 = kk;
+        else { float mv = cvmtx_val(&sl.mtx, cvm, SLM_SLICE);
+               if (mv != 0.0f) sv01 = 0.5f + mv * 0.5f; }
+        static float last01 = -2.0f;
+        if (sv01 >= 0.0f) {
+            if (last01 < -1.0f || fabsf(sv01 - last01) > 0.01f) {
+                int sv = (int)(sv01 * (float)sl.n_slices);
+                sl.sel = sv < 0 ? 0 : (sv >= sl.n_slices ? sl.n_slices - 1 : sv);
+                last01 = sv01;
+            }
+        } else last01 = -2.0f;
     }
 
-    // CV2 jack = level (when driven, else unity) — CV1 is now the 1V/oct pitch in
-    uint16_t c2 = cvm[1] > 900 ? cvm[1] - 900 : 0;
-    sl.level = c2 ? (uint16_t)((uint32_t)c2 * 255 / 3195) : 255;
+    // DJ FILTER — the law is lifted verbatim from DoubleDecker so the two
+    // machines feel the same under the hand: a dead zone at 2048 +/- 150 is
+    // BYPASS, below it a low-pass sweeps 12 kHz down to 80 Hz, above it a
+    // high-pass sweeps 30 Hz up to 6 kHz.
+    if (cvmtx_abs(&sl.mtx, SLM_FILTER, &kk)) sl.fx_filt = (uint16_t)(kk * 4095.0f);
+    int fpos = (int)sl.fx_filt;
+    { float mv = cvmtx_val(&sl.mtx, cvm, SLM_FILTER);
+      if (mv != 0.0f) fpos += (int)(mv * 2048.0f); }
+    if (fpos < 0) fpos = 0; else if (fpos > 4095) fpos = 4095;
 
-    // knob 7 (CV7) varispeed base: unity plateau, 0.5x..2.0x. CV7 is only READ
-    // when not in FX context (there it's the filter resonance) — the base then
-    // freezes at its last value, but v/oct below still tracks.
-    if (sl.ui_ctx != 1) sl.pitch_cv = cvm[6];
+    if (cvmtx_abs(&sl.mtx, SLM_RESO, &kk)) sl.fx_res = kk;
+    float fx_res_eff = sl.fx_res;
+    { float mv = cvmtx_val(&sl.mtx, cvm, SLM_RESO);
+      if (mv != 0.0f) fx_res_eff = sl.fx_res + mv; }
+    if (fx_res_eff < 0.0f) fx_res_eff = 0.0f; else if (fx_res_eff > 1.0f) fx_res_eff = 1.0f;
+
+    { int mode = 0; float fc = 0.0f;
+      if (fpos < 2048 - 150) {
+          mode = 1;
+          float t = (float)fpos / (2048.0f - 150.0f);
+          fc = 80.0f * powf(150.0f, t);                       // 80 Hz .. 12 kHz
+      } else if (fpos > 2048 + 150) {
+          mode = 2;
+          float t = (float)(fpos - 2048 - 150) / (4095.0f - 2048.0f - 150.0f);
+          fc = 30.0f * powf(200.0f, t);                       // 30 Hz .. 6 kHz
+      }
+      sl.fx_fmode = mode;
+      sl.fx_cut = mode ? fc : 0.0f;                            // for the display
+      float f_target = mode ? svf_coef(fc, (float)SL_RATE, 1.2f) : 0.0f;
+      sl.fx_fsm += 0.2f * (f_target - sl.fx_fsm);              // smooth the sweep
+    }
+
+    // LEVEL: unassigned means unity, as the old un-patched CV2 did
+    if (cvmtx_abs(&sl.mtx, SLM_LEVEL, &kk)) {
+        int lv = (int)(kk * 255.0f);
+        sl.level = (uint16_t)(lv < 0 ? 0 : (lv > 255 ? 255 : lv));
+    } else if (sl.mtx.src[SLM_LEVEL] < 0) sl.level = 255;
+    int level_eff = sl.level;
+    { float mv = cvmtx_val(&sl.mtx, cvm, SLM_LEVEL);
+      if (mv != 0.0f) level_eff = (int)sl.level + (int)(mv * 255.0f); }
+    if (level_eff < 0) level_eff = 0; else if (level_eff > 255) level_eff = 255;
+
+    // SPEED (varispeed base): unity plateau, 0.5x..2.0x, on whatever the matrix
+    // says (K7 by default). Unassigned leaves the last value standing.
+    if (cvmtx_abs(&sl.mtx, SLM_SPEED, &kk)) sl.pitch_cv = (uint16_t)(kk * 4095.0f);
     float base;
     if (sl.pitch_cv >= 1843 && sl.pitch_cv <= 2253) base = 1.0f;
     else if (sl.pitch_cv > 2253) base = 1.0f + (float)(sl.pitch_cv - 2253) / 1842.0f;
@@ -468,11 +540,15 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     // CV1 = quantized 1V/oct pitch in — the module's primary 1V/oct JACK (not a
     // repurposed knob), so it ALWAYS pitches the slice, even on the FX box.
     // Idle ~877 -> 0 semitones; ~49 ADC counts/semitone (sampler2/synth scale).
-    int voct = (int)lroundf(((float)cvm[0] - 877.0f) / 49.0f);
+    int pc = (sl.pitch_src >= 0 && sl.pitch_src < 8) ? sl.pitch_src : 0;
+    int voct = (int)lroundf(((float)cvm[pc] - 877.0f) / 49.0f);
     if (voct < -24) voct = -24;
     if (voct >  24) voct =  24;
     sl.inc = base;
     if (voct != 0) sl.inc *= exp2f((float)voct / 12.0f);
+    { float mv = cvmtx_val(&sl.mtx, cvm, SLM_PITCH);        // +/- 2 octaves of modulation
+      if (cvmtx_abs(&sl.mtx, SLM_PITCH, &kk)) mv = (kk - 0.5f) * 2.0f;
+      if (mv != 0.0f) sl.inc *= exp2f(mv * 2.0f); }
     // the tail STREAM feeds ~2x real-time; past that it stutters. Cap up-pitch at
     // 2x; down-pitch unbounded (slower = no starve).
     if (sl.inc > 2.0f) sl.inc = 2.0f;
@@ -488,9 +564,8 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
     bool fx = sl.fx_on;
     float fcoef = 0.0f, fq = 0.0f;
     if (fx) {
-        float fc = sl.fx_cut < 30.0f ? 30.0f : sl.fx_cut;
-        fcoef = svf_coef(fc, SL_RATE, 1.0f);
-        fq = svf_damp(sl.fx_res, 0.4f, 2.0f);
+        fcoef = sl.fx_fsm;                           // smoothed, set above
+        fq = svf_damp(fx_res_eff, 0.4f, 2.0f);
         if (!(fabsf(sl.fx_flt_l.lp) < 1e9f) || !(fabsf(sl.fx_flt_r.lp) < 1e9f)) {
             svf_reset(&sl.fx_flt_l); svf_reset(&sl.fx_flt_r);   // NaN self-heal
         }
@@ -506,8 +581,8 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
                 if (p1 >= sl.s_len) p1 = p0;
                 if (voice_frame(p0, &l0, &r0) && voice_frame(p1, &l1, &r1)) {
                     float frac = (float)(sl.pos - (double)p0);
-                    l = (l0 + (int)((l1 - l0) * frac)) * sl.level >> 8;
-                    r = (r0 + (int)((r1 - r0) * frac)) * sl.level >> 8;
+                    l = (l0 + (int)((l1 - l0) * frac)) * level_eff >> 8;
+                    r = (r0 + (int)((r1 - r0) * frac)) * level_eff >> 8;
                     // fire crossfade: ramp from the pre-fire tail into the slice
                     if (sl.xfade > 0) {
                         float t = 1.0f - (float)sl.xfade / (float)SL_XFADE;   // 0 -> 1
@@ -529,10 +604,17 @@ static void slicer_process(int32_t out[MACHINE_BLOCK],
         }
         if (fx) {   // resonant low-pass
             float lo, ro;
-            svf_step(&sl.fx_flt_l, (float)l, fcoef, fq, &lo, NULL, NULL);
-            svf_step(&sl.fx_flt_r, (float)r, fcoef, fq, &ro, NULL, NULL);
-            l = lo > 32767.0f ? 32767 : lo < -32768.0f ? -32768 : (int32_t)lo;
-            r = ro > 32767.0f ? 32767 : ro < -32768.0f ? -32768 : (int32_t)ro;
+            if (sl.fx_fmode == 0) {                  // BYPASS: park the state on the
+                svf_park(&sl.fx_flt_l, (float)l);    // signal so re-engaging cannot click
+                svf_park(&sl.fx_flt_r, (float)r);
+            } else {
+                float hl, hr;
+                svf_step(&sl.fx_flt_l, (float)l, fcoef, fq, &lo, NULL, &hl);
+                svf_step(&sl.fx_flt_r, (float)r, fcoef, fq, &ro, NULL, &hr);
+                if (sl.fx_fmode == 2) { lo = hl; ro = hr; }
+                l = lo > 32767.0f ? 32767 : lo < -32768.0f ? -32768 : (int32_t)lo;
+                r = ro > 32767.0f ? 32767 : ro < -32768.0f ? -32768 : (int32_t)ro;
+            }
         }
         out[f * 2]     = l << 16;
         out[f * 2 + 1] = r << 16;
@@ -576,6 +658,8 @@ static cJSON *slicer_preset_save(void)
     cJSON_AddStringToObject(o, "sample", sl.sample);
     cJSON_AddBoolToObject(o, "auto", sl.auto_on);
     cJSON_AddBoolToObject(o, "reverse", sl.reverse);
+    cJSON_AddNumberToObject(o, "pcv", sl.pitch_src);
+    cvmtx_save(&sl.mtx, o);                 // "mxs"/"mxa"/"mxm"
     return o;
 }
 
@@ -588,6 +672,9 @@ static void slicer_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sens")) && cJSON_IsNumber(j)) sl.sensitivity = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "auto")))    sl.auto_on = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "reverse"))) sl.reverse = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "pcv")) && cJSON_IsNumber(j)) sl.pitch_src = (int8_t)j->valueint;
+    cvmtx_load(&sl.mtx, node);
+    cvmtx_rearm(&sl.mtx);          // knobs recapture against the loaded values
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])
         slicer_load(j->valuestring);   // async: reader rebuilds everything
 }
@@ -597,10 +684,9 @@ extern const machine_ui_t slicer_menu_ui;
 static int sl_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    MI_ADD(mi("pitch (V/oct)", 0));
-    MI_ADD(mi("level (when patched)", 1));
-    MI_ADD(mi("slice select / FX cutoff", 5));
-    MI_ADD(mi("varispeed / FX resonance", 6));
+    // the continuous jobs live in the CV MATRIX now (see slicer_mtx_labels);
+    // only the V/oct jack and the two triggers are input-map entries
+    MI_ADD(mi_pick("Pitch (V/oct)", "pcv", sl.pitch_src, 0, MI_CV));
     MI_ADD(mi("fire slice", 8));
     MI_ADD(mi("fire + step", 9));
     return n;

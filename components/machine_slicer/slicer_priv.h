@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include "svf.h"
 #include "reverb.h"
+#include "cvmtx.h"
 
 // M3 slicer — STREAMING edition (2026-07-13, "the real fix, deck-sized").
 // The whole-sample PSRAM buffer is gone and with it the length ceiling: any
@@ -29,6 +30,12 @@
 #define SL_ENV_MAX     (10 * 60 * SL_RATE / SL_WIN + 2)   // <=10 min detection
 #define SL_PEAKS       300                   // waveform display columns
 #define SL_OT_SLICES   64                    // Elektron .ot format limit
+
+// CV matrix destinations (2026-09-11). Before this the CV jobs were hard-wired
+// and K6/K7 each meant TWO things depending on sl.ui_ctx (bar vs FX box); every
+// job now has one home and any of them can move to any CV.
+enum { SLM_SLICE = 0, SLM_SPEED, SLM_LEVEL, SLM_PITCH, SLM_FILTER, SLM_RESO, SLM_N };
+extern const char *const slicer_mtx_labels[SLM_N];
 
 typedef struct {
     // PSRAM (allocated once at start; each slab under the ~2.1 MB grant ceiling)
@@ -70,6 +77,8 @@ typedef struct {
     volatile bool reverse;        // direction (reader rebuilds heads on change)
     volatile uint16_t level;
     volatile uint16_t pitch_cv;
+    cvmtx_t  mtx;                 // assignable CV matrix (destinations above)
+    int8_t   pitch_src;           // 1V/oct JACK channel, editable ("pcv"); -1 = none
 
     // playback voice (audio task)
     volatile bool playing;
@@ -86,8 +95,11 @@ typedef struct {
     bool     fx_on;               // master FX enable (the fx box toggles this)
     int      ui_ctx;              // 0 = bar (CV6/7 = select/pitch), 1 = fx (knob6/7 = cutoff/res)
     svf_t    fx_flt_l, fx_flt_r;  // stereo low-pass
-    float    fx_cut;              // filter cutoff Hz
+    float    fx_cut;              // filter cutoff Hz (derived from fx_filt)
     float    fx_res;              // filter resonance 0..1
+    volatile uint16_t fx_filt;    // DJ filter position 0..4095, 2048 +/-150 = BYPASS
+    int      fx_fmode;            // 0 bypass / 1 low-pass / 2 high-pass
+    float    fx_fsm;              // smoothed svf coefficient (no zipper on a sweep)
     reverb_t fx_rv;               // Dattorro reverb (lazy PSRAM slab)
     float    fx_rvmix;            // reverb wet 0..1
 

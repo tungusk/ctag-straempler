@@ -13,6 +13,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "cvmtx.h"
 #include "sample_ram.h"
 #include "sample_browser.h"
 #include "setup_menu.h"
@@ -299,6 +300,7 @@ static const setup_item_t sl_setup_items[] = {
     {"Reverse",     ST_TOGGLE},
     {"Reverb",      ST_TOGGLE},   // reverb mode cycle
     {"Rev Mix",     ST_RANGE},    // 0..100%
+    {"CV Matrix",   ST_ACTION},   // -> M_SLICER_MATRIX
 };
 
 static void cycle_target(int dir){
@@ -366,12 +368,20 @@ static void sl_setup_adj(int i, int dir){
 static int sl_setup_action(int i){
     if(i == 2) return M_SLICER_SENS;   // open the dial-in screen
     if(i == 3) return M_SLICER_LOAD;   // open the sample browser
+    if(i == 8) return M_SLICER_MATRIX; // the assignable CV matrix
     return 0;
+}
+
+static int slicer_matrix_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return cvmtx_menu_event(&sl.mtx, event, "Slicer CV Matrix",
+                            M_SLICER_SETUP, M_SLICER_LIVE);
 }
 
 static setup_menu_t sl_setup = {
     .items       = sl_setup_items,
-    .n           = 8,
+    .n           = 9,   // MUST match sl_setup_items — a stale count drops the tail
     .title       = "Slicer Setup",
     .aff_label   = "Machine",
     .aff_target  = M_MORE,
@@ -472,6 +482,8 @@ static void slicer_register_pages(void *menusys){
     menusys_item_set_default_cb(_ms, M_SLICER_LOAD, slicer_load_handler);
     menusys_new_item(_ms, M_SLICER_SENS);
     menusys_item_set_default_cb(_ms, M_SLICER_SENS, slicer_sens_handler);
+    menusys_new_item(_ms, M_SLICER_MATRIX);
+    menusys_item_set_default_cb(_ms, M_SLICER_MATRIX, slicer_matrix_handler);
 }
 
 static int slicer_main_event(int event, void *ev_data){
@@ -503,4 +515,5 @@ const machine_ui_t slicer_menu_ui = {
     .web_uris = slicer_web_uris,
     .n_web_uris = 1,
     .setup = &sl_setup,
+    .caps  = MC_MATRIX,        // the web page's CV MATRIX card (and the grid view)
 };

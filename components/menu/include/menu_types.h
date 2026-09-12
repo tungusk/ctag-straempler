@@ -25,6 +25,7 @@ typedef enum{
     M_SLICER_SETUP,
     M_SLICER_LOAD,
     M_SLICER_SENS,
+    M_SLICER_MATRIX,
     M_GRAN_LIVE,
     M_GRAN_SETUP,
     M_GRAN_LOAD,

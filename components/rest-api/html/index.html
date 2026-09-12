@@ -1646,6 +1646,11 @@ function mxCell(cv,sel,amt,mode){
     +(pick>=0&&(mxIm[pick].o&8)?' title="module-wide setting (the core clock)"':'')
     +' onchange="mxSel(this)">'+o+'</select>';
   if(pick>=0)return h+'</div>';   // an input-map job carries no amount
+  // an UNASSIGNED slot has nothing to modulate, so it carries no controls
+  // either — the grid view always gated on this, the row view never did
+  // (Arlo 2026-09-12). The tail still renders: that is where the default
+  // marker and the revert arrow live.
+  if(dest<0)return h+'<span class="mxtail">'+mxTailHtml(cv,dest,amt,mode)+'</span></div>';
   return h
     +'<button class="mxmode'+(mode?' on':'')+'" title="offset (± amount) or knob (absolute: takes over once moved)" onclick="mxModeTog(this)">'+(mode?'knob':'&#177;')+'</button>'
     +'<input type="range" min="-100" max="100" step="1" value="'+amt+'"'+(mode?' hidden':'')+' oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\';mxTail(this.parentNode)">'
