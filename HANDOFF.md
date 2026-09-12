@@ -9,6 +9,64 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-12 — MACHINE-SIDE CV REWORK begins: Slicer gets a matrix (`74710cf`)
+
+Arlo: "essential". The Tier-2 machines carry hand-rolled CV instead of a
+`cvmtx`; this is the first of them. **Slicer** had every CV job hard-wired, and
+K6/K7 each meant TWO things depending on `sl.ui_ctx` (bar vs FX box) while K5
+and K8 did nothing.
+
+Six destinations through the shared widget — Slice, Speed, Level, Pitch,
+Filter, Reso — so the web CV MATRIX card and the grid view appear for free once
+`MC_MATRIX` is declared.
+
+**Arlo's knob convention, now built to:** the MIDDLE TWO knobs are neutral at
+12 o'clock and the effect happens turning either way. K6 bypasses the filter at
+noon, K7 is unity playback speed at noon. Knobs where 0 is the natural neutral
+(resonance) stay at full-left. Defaults: Slice → CV3 **jack** (a sequencer
+drives it, his call), Filter → K6, Speed → K7, Reso → K8, K5 free, Level and
+Pitch unassigned.
+
+**The DJ filter law is lifted VERBATIM from DoubleDecker**, not invented, so the
+machines feel the same: dead zone `2048 ± 150` = bypass, below it a low-pass
+sweeps 12 kHz → 80 Hz, above it a high-pass sweeps 30 Hz → 6 kHz, coefficient
+smoothed 0.2/block, and `svf_park()` on bypass so re-engaging cannot click.
+
+**The adoption recipe, for the next machine:**
+1. destinations enum + `labels[]` + `defaults[]` (which CV each job is born on)
+2. `cvmtx_t mtx` in state, `cvmtx_init()` in start
+3. `mtx.skip_src = clock_core_src()` then `cvmtx_track(&m.mtx, cvm)` per block
+4. `cvmtx_abs()` for knob jobs, `cvmtx_val()` for offsets
+5. `cvmtx_save/load` + `cvmtx_rearm` in the preset path
+6. a setup row + `cvmtx_menu_event()` page + a `M_<M>_MATRIX` id
+7. `.caps = MC_MATRIX`
+8. hand-rolled `mi_pick` entries become destinations; keep picks only for jobs
+   that are NOT 0..1 (V/oct needs semitone scaling — Slicer keeps `pcv`)
+
+**TWO TRAPS, both real here:**
+1. **`setup_menu_t.n` is a hardcoded literal.** The CV Matrix row is Slicer's
+   9th, so `.n` went 8 → 9. A stale count silently drops the tail — it already
+   cost Tape an unreachable `FX Route`.
+2. **Offset reads must NOT be read-modify-write.** The first cut had
+   `sl.fx_cut = sl.fx_cut * exp2f(mv*4)`, which compounds every 725 us block and
+   hits the rails in under a second. House rule: `m.*` are BASE values the UI
+   and ABS knobs write; offset modulation goes into per-block LOCALS, never
+   written back. Check every target for a UI writer too — `sl.sel` has one (the
+   encoder), so slice select keeps its "UI owns it until a CV moves" rule.
+
+**Left open on purpose:** a turntable Speed law (noon 1x, 9 o'clock stop,
+reverse below, 3 o'clock ~2x). The forward half is easy; REVERSE is not —
+`sl.reverse` is a reader-side rebuild of every slice head, and a negative `inc`
+wraps `sl.pos` so `p0 >= s_len` ends the slice instantly. Needs streamer work.
+`sl.ui_ctx` is now unused for routing but left in place.
+
+Also web: an unassigned row in the matrix ROW view no longer draws a mode
+button, slider and 0% for a destination it is not driving.
+
+**Next in the rework:** Tracker and Deck — both hand-guard clock collisions
+today (`clock_src_is_cv(clock_core_src(), 6) ? …`), which `mtx.skip_src`
+deletes. Then Sampler3, then DoubleDecker and Drums.
+
 ## 2026-09-11 night — a GRID view of the CV matrix (`9db80fe`, `fdf64cf`, `d496f70`)
 
 A second view of the same card, switchable, **row view still the default**. The
