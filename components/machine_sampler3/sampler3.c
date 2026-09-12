@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "sample_ram.h"  // shared dated browser walk (sample_list_recent)
+#include "cvsmooth.h"
 #include "machine.h"
 #include "audio.h"
 #include "recording.h"
@@ -454,6 +455,19 @@ int s3_list_samples(char (**names)[S3_NAME_LEN])
 
 // ---- engine --------------------------------------------------------------------
 
+// Speed 1 and 2 keep K6/K7 — "speed-on-knob is how this machine works", and
+// they were the only two knobs the first prototype had. The crop STARTS take the
+// two that now work. Crop is on by default (S3_CROP_FREE), so these are live
+// assignments, but the widget's takeover means a loaded preset keeps its stored
+// crop until the knob is actually moved — where before the knob's resting
+// position overrode it on the first block.
+//   CV5 crop start 1   CV6 speed 1   CV7 speed 2   CV8 crop start 2
+const char *const s3_mtx_labels[S3M_N] = {
+    "Speed 1", "Crop Start 1", "Crop Len 1",
+    "Speed 2", "Crop Start 2", "Crop Len 2",
+};
+static const int8_t s3_mtx_defaults[S3M_N] = { 5, 4, -1, 6, 7, -1 };
+
 static esp_err_t s3_start(void)
 {
     memset(&s3, 0, sizeof(s3));
@@ -477,9 +491,6 @@ static esp_err_t s3_start(void)
         v->crop_len = 1.0f;
         v->ui_cs = 0;
         v->ui_ce = 1.0f;
-        v->src_speed = 5 + i;            // CV6/CV7: speed-on-knob is how this
-        v->src_start = -1;               // machine works (the good knobs)
-        v->src_len = -1;
         v->crop_mode = S3_CROP_FREE;
         v->cs_sm = 0;
         v->ln_sm = 1.0f;
@@ -488,8 +499,8 @@ static esp_err_t s3_start(void)
         v->q_cs = 0;
         v->q_ln = 1 << 20;               // clamps down to the take length
         v->playmode = S3_MODE_LOOP;      // preset feel (Arlo): loops by default
-        s3.cv12_floor[i] = 4095;         // converge down on first reads
     }
+    cvmtx_init(&s3.mtx, s3_mtx_labels, S3M_N, s3_mtx_defaults);
     s3.rec_wait_vid = -1;
     s_run = true;
     // unpinned: file-reading tasks pinned to core 0 cause WiFi audio clicks
@@ -554,23 +565,15 @@ static inline int s3_cell_adopt(float pos, int cur)
     return cur;
 }
 
-// matrix CV read — from the MEDIAN-conditioned snapshot (WiFi-burst ADC
-// spikes of ±80 counts punched through slew + hysteresis: jumpy crop
-// points). ch1/2 (1V/oct jacks) idle ~21% up the scale by analog design —
-// rescale from the tracked floor so a patched mod source spans the full
-// 0..4095 range instead of starting a fifth of the way up.
-static inline int s3_mod_read(const machine_io_t *io, int src)
+
+// the median snapshot + ch1/2 floor rescale that s3_mod_read() did by hand is
+// cvmtx_cv01(); this hands the widget the same 0..4095 it used to return
+static inline bool s3_mod_read(int dest, int *out)
 {
-    (void)io;
-    int c = s3.cv_med[src & 7];
-    if ((src & 7) < 2) {
-        int fl = s3.cv12_floor[src & 7];
-        if (fl > 3800) return 0;              // tracker not converged / dead ch
-        c = (int)((int32_t)(c - fl) * 4095 / (4095 - fl));
-        if (c < 0) c = 0;
-        if (c > 4095) c = 4095;
-    }
-    return c;
+    float k;
+    if (!cvmtx_abs(&s3.mtx, dest, &k)) return false;
+    *out = (int)(k * 4095.0f);
+    return true;
 }
 
 static void s3_process(int32_t out[MACHINE_BLOCK],
@@ -583,27 +586,18 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
     uint8_t fell = prev_trig & (~io->trig_level) & 0x03;
     prev_trig = io->trig_level;
 
-    // ch1/2 floor trackers: dips follow instantly, drift back up slowly
-    // (the deck clk_base pattern)
-    for (int c = 0; c < 2; c++) {
-        int cv = io->cv[c];
-        if (cv < s3.cv12_floor[c]) s3.cv12_floor[c] = cv;
-        else if (s3.cv12_floor[c] < 4095) s3.cv12_floor[c]++;
-    }
-
-    // median-of-5 CV conditioning: one snapshot per block for all matrix
-    // reads. Impulse spikes (WiFi bursts) vanish; sustained knob moves lag
-    // by two blocks (~3 ms) — imperceptible.
+    // median-of-5 CV conditioning: one snapshot per block for all matrix reads.
+    // Impulse spikes (WiFi bursts) vanish; sustained knob moves lag by two blocks
+    // (~3 ms) — imperceptible. cvmtx_track then follows the ch1/2 idle floors
+    // (1V/oct jacks sit ~21% up the scale by analog design) and runs the takeover.
+    static cvmed_t s_s3med[8];
+    int cvm[8];
     for (int c = 0; c < 8; c++) {
-        s3.cv_hist[c][s3.cv_hp] = io->cv[c];
-        uint16_t m[5];
-        memcpy(m, s3.cv_hist[c], sizeof(m));
-        for (int a = 0; a < 4; a++)              // tiny insertion sort
-            for (int b = a + 1; b < 5; b++)
-                if (m[b] < m[a]) { uint16_t t = m[a]; m[a] = m[b]; m[b] = t; }
-        s3.cv_med[c] = m[2];
+        cvm[c] = cvmed_step(&s_s3med[c], io->cv[c]);
+        s3.cv_med[c] = (uint16_t)cvm[c];          // the UI still reads this
     }
-    s3.cv_hp = (s3.cv_hp + 1) % 5;
+    { int cs = clock_core_src(); s3.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
+    cvmtx_track(&s3.mtx, cvm);
 
     // Gate workflow (Arlo, 2026-07-12): press triggers the voice as usual;
     // HOLD ~1 s while idle = arm the track. Armed: press = start recording,
@@ -746,8 +740,8 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         // CCW half sweeps down THROUGH ZERO into reverse, clamped at -100%.
         // Plateaus at unity and zero make both dependable knob targets.
         float rate = 1.0f;
-        if (v->src_speed >= 0) {
-            int pc = s3_mod_read(io, v->src_speed);
+        int pc;
+        if (s3_mod_read(S3M_SPD(i), &pc)) {
             // sticky unity: a wide dead zone in knob counts around centre,
             // each side rescaled from the plateau edge (no value jump)
             const int DZ = 180;
@@ -770,8 +764,9 @@ static void s3_process(int32_t out[MACHINE_BLOCK],
         if (v->crop_mode != S3_CROP_OFF) {
             cs = v->crop_start;
             ln = v->crop_len;
-            if (v->src_start >= 0) cs = (float)s3_mod_read(io, v->src_start) / 4095.0f * 0.98f;
-            if (v->src_len >= 0)   ln = 0.02f + (float)s3_mod_read(io, v->src_len) / 4095.0f * 0.98f;
+            int mc;
+            if (s3_mod_read(S3M_CS(i), &mc)) cs = (float)mc / 4095.0f * 0.98f;
+            if (s3_mod_read(S3M_LN(i), &mc)) ln = 0.02f + (float)mc / 4095.0f * 0.98f;
         }
         // slew: raw ADC noise jitters the window by 10s of ms on long takes —
         // jumpy crop shading, and the start noise kept re-snapping the
@@ -1214,6 +1209,7 @@ static cJSON *s3_preset_save(void)
     cJSON_AddNumberToObject(o, "s3v", 2);       // schema version gate
     cJSON_AddBoolToObject(o, "monitor", s3.monitor);
     cJSON_AddBoolToObject(o, "arm_mutes", s3.arm_mutes);
+    cvmtx_save(&s3.mtx, o);            // "mxs"/"mxa"/"mxm" — was m_sp/m_st/m_ln
     cJSON *va = cJSON_CreateArray();
     cJSON_AddItemToObject(o, "voices", va);
     for (int i = 0; i < S3_NVOICES; i++) {
@@ -1224,15 +1220,19 @@ static cJSON *s3_preset_save(void)
         cJSON_AddBoolToObject(vo, "rev", v->reverse);
         cJSON_AddNumberToObject(vo, "cs", v->crop_start);
         cJSON_AddNumberToObject(vo, "cl", v->crop_len);
-        cJSON_AddNumberToObject(vo, "m_sp", v->src_speed);
-        cJSON_AddNumberToObject(vo, "m_st", v->src_start);
-        cJSON_AddNumberToObject(vo, "m_ln", v->src_len);
         cJSON_AddNumberToObject(vo, "cm", v->crop_mode);
         cJSON_AddNumberToObject(vo, "level", v->level);
         cJSON_AddNumberToObject(vo, "pan", v->pan);
         cJSON_AddItemToArray(va, vo);
     }
     return o;
+}
+
+// one legacy source -> one matrix destination, as an ABS ("knob") entry
+static void s3_mtx_set(int dest, int src)
+{
+    s3.mtx.src[dest]  = (src >= 0 && src <= 7) ? (int8_t)src : -1;
+    s3.mtx.mode[dest] = (s3.mtx.src[dest] >= 0) ? CVM_ABS : CVM_OFFSET;
 }
 
 static void s3_preset_load(const cJSON *node)
@@ -1248,6 +1248,10 @@ static void s3_preset_load(const cJSON *node)
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor"))) s3.monitor = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "arm_mutes"))) s3.arm_mutes = cJSON_IsTrue(j);
+    cvmtx_load(&s3.mtx, node);
+    // a pre-matrix blob has no "mxs"; the per-voice m_sp/m_st/m_ln below migrate
+    // into it instead (cvmtx_load leaves the defaults standing in that case)
+    bool s3_legacy_map = !cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(node, "mxs"));
     // "clk_src" / "int_bpm" / "ppq" (pre-core-clock presets) are ignored: the
     // clock is a module-wide setting now and a preset must not repoint it
     cJSON *va = cJSON_GetObjectItemCaseSensitive(node, "voices");
@@ -1270,33 +1274,39 @@ static void s3_preset_load(const cJSON *node)
             float l = (float)j->valuedouble - v->crop_start;
             v->crop_len = (l < 0.02f || l > 1.0f) ? 1.0f : l;
         }
-        // matrix sources (-1 off / 0..7). A pre-matrix v2 blob carries the
-        // legacy single-dest "cv67" key instead — migrate it to the slot it
-        // used to drive (source was fixed at CV6/CV7 per voice back then).
-        bool have_matrix = false;
-        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "m_sp")) && cJSON_IsNumber(j)) {
-            v->src_speed = (j->valueint >= 0 && j->valueint <= 7) ? j->valueint : -1;
-            have_matrix = true;
+        // MIGRATION of the old per-voice matrix keys. A pre-matrix v2 blob
+        // carries the legacy single-dest "cv67" key instead — it names the slot
+        // the voice's own knob drove (fixed at CV6/CV7 per voice back then).
+        if (s3_legacy_map) {
+            bool have_map = false;
+            if ((j = cJSON_GetObjectItemCaseSensitive(vo, "m_sp")) && cJSON_IsNumber(j)) {
+                s3_mtx_set(S3M_SPD(i), j->valueint);
+                have_map = true;
+            }
+            if ((j = cJSON_GetObjectItemCaseSensitive(vo, "m_st")) && cJSON_IsNumber(j)) {
+                s3_mtx_set(S3M_CS(i), j->valueint);
+                have_map = true;
+            }
+            if (((j = cJSON_GetObjectItemCaseSensitive(vo, "m_ln")) && cJSON_IsNumber(j)) ||
+                ((j = cJSON_GetObjectItemCaseSensitive(vo, "m_en")) && cJSON_IsNumber(j))) {
+                s3_mtx_set(S3M_LN(i), j->valueint);
+                have_map = true;
+            }
+            if (!have_map &&
+                (j = cJSON_GetObjectItemCaseSensitive(vo, "cv67")) && cJSON_IsNumber(j)) {
+                s3_mtx_set(S3M_SPD(i), -1);
+                s3_mtx_set(S3M_CS(i),  -1);
+                s3_mtx_set(S3M_LN(i),  -1);
+                switch (j->valueint) {
+                    case 1: s3_mtx_set(S3M_SPD(i), 5 + i); break;
+                    case 2: s3_mtx_set(S3M_CS(i),  5 + i); break;
+                    case 3: s3_mtx_set(S3M_LN(i),  5 + i); break;
+                }
+            }
         }
-        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "m_st")) && cJSON_IsNumber(j))
-            v->src_start = (j->valueint >= 0 && j->valueint <= 7) ? j->valueint : -1;
-        if (((j = cJSON_GetObjectItemCaseSensitive(vo, "m_ln")) && cJSON_IsNumber(j)) ||
-            ((j = cJSON_GetObjectItemCaseSensitive(vo, "m_en")) && cJSON_IsNumber(j)))
-            v->src_len = (j->valueint >= 0 && j->valueint <= 7) ? j->valueint : -1;
         if ((j = cJSON_GetObjectItemCaseSensitive(vo, "cm")) && cJSON_IsNumber(j))
             v->crop_mode = (j->valueint >= 0 && j->valueint <= 3) ? j->valueint
                                                                   : S3_CROP_FREE;
-        if (!have_matrix &&
-            (j = cJSON_GetObjectItemCaseSensitive(vo, "cv67")) && cJSON_IsNumber(j)) {
-            v->src_speed = -1;
-            v->src_start = -1;
-            v->src_len = -1;
-            switch (j->valueint) {
-                case 1: v->src_speed = 5 + i; break;
-                case 2: v->src_start = 5 + i; break;
-                case 3: v->src_len   = 5 + i; break;
-            }
-        }
         if ((j = cJSON_GetObjectItemCaseSensitive(vo, "level")) && cJSON_IsNumber(j)) {
             float lv = (float)j->valuedouble;
             v->level = (lv < 0 || lv > 1.0f) ? 1.0f : lv;
@@ -1316,15 +1326,9 @@ extern const machine_ui_t s3_menu_ui;
 static int s3_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    static const char *const sp[] = { "V1 speed", "V2 speed" }, *const st[] = { "V1 start", "V2 start" },
-                      *const ln[] = { "V1 length", "V2 length" }, *const gt[] = { "V1 gate", "V2 gate" };
-    for (int i = 0; i < S3_NVOICES && i < 2; i++) {
-        const s3_voice_t *v = &s3.v[i];
-        MI_ADD(mi(gt[i], 8 + i));
-        if (v->src_speed >= 0) MI_ADD(mi(sp[i], v->src_speed));
-        if (v->src_start >= 0) MI_ADD(mi(st[i], v->src_start));
-        if (v->src_len   >= 0) MI_ADD(mi(ln[i], v->src_len));
-    }
+    static const char *const gt[] = { "V1 gate", "V2 gate" };
+    // speed / crop start / crop len per voice are CV MATRIX rows now
+    for (int i = 0; i < S3_NVOICES && i < 2; i++) MI_ADD(mi(gt[i], 8 + i));
     return n;
 }
 

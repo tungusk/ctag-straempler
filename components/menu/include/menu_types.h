@@ -49,6 +49,7 @@ typedef enum{
     M_S3_SETUP,
     M_S3_LOAD,
     M_S3_REC,
+    M_S3_MATRIX,
     M_DD_LIVE,
     M_DD_SETUP,
     M_DD_LOAD,

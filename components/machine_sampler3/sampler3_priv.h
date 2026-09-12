@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "clock.h"
+#include "cvmtx.h"
 
 // Sampler3 — the two-voice sampler rebuilt on the deck/tracker architecture:
 // one unpinned READER task owns ALL file I/O and fills per-voice PSRAM
@@ -28,6 +29,20 @@
 #define S3_LSC_FRAMES  (S3_RATE / 2)      // 0.5 s loop-start cache (~88 KB)
 #define S3_NAME_LEN    24
 #define S3_NVOICES     2
+
+// CV matrix destinations (2026-09-12). Sampler3 already had a hand-rolled matrix
+// — src_speed/src_start/src_len per voice, and s3_mod_read() is cvmtx_cv01() by
+// hand (median snapshot + ch1/2 floor rescale). Converting swaps both for the
+// shared widget, so these assignments appear in the web matrix and on the panel.
+//
+// Only the two speeds were assigned by default, because the FIRST prototype had
+// only K6 and K7 working and "speed-on-knob is how this machine works". The
+// second prototype has four, so the two crop STARTs take K5 and K8.
+enum { S3M_SPD_A = 0, S3M_CS_A, S3M_LN_A, S3M_SPD_B, S3M_CS_B, S3M_LN_B, S3M_N };
+#define S3M_SPD(i) ((i) ? S3M_SPD_B : S3M_SPD_A)
+#define S3M_CS(i)  ((i) ? S3M_CS_B  : S3M_CS_A)
+#define S3M_LN(i)  ((i) ? S3M_LN_B  : S3M_LN_A)
+extern const char *const s3_mtx_labels[S3M_N];
 #define S3_WF_W        144                // waveform thumbnail columns
 
 enum { S3_MODE_ONESHOT = 0, S3_MODE_LOOP };
@@ -119,9 +134,6 @@ typedef struct {
     volatile bool loading;           // stream (re)filling; ring reads parked
     volatile int  playmode;          // S3_MODE_*
     // -- params (UI-owned, audio reads) --------------------------------------
-    volatile int   src_speed;        // CV source per destination: -1 off,
-    volatile int   src_start;        // 0..7 = CV1..CV8 (knobs 6/7 are the
-    volatile int   src_len;          // fully-good knob+jack channels)
     volatile int   crop_mode;        // S3_CROP_*
     volatile float bpm;              // take tempo (sidecar stamp; 0 = unknown)
     volatile float level;            // 0..1
@@ -157,6 +169,7 @@ typedef struct {
 
 typedef struct {
     s3_voice_t v[S3_NVOICES];
+    cvmtx_t    mtx;              // was src_speed/src_start/src_len per voice
     volatile bool monitor;           // pass line-in through while armed+stopped
     volatile bool arm_mutes;         // arming a track mutes its playback
                                      // (sampler2 inheritance; toggleable)
@@ -170,14 +183,11 @@ typedef struct {
     // gate + pulses-per-beat carried together. Drives the synced-record
     // workflow and the tempo stamp. PPQ is a Record-page setting (1/2/4/8).
     // (the detector is the CORE clock — clock_core(), clock.h)
-    // ch1/2 idle ~21% up the scale by analog design (1V/oct jacks) — floor
-    // trackers so matrix reads from them span the full range when patched
-    int  cv12_floor[2];
-    // per-channel median-of-5 conditioning: WiFi-burst ADC spikes (±80
-    // counts on an idle knob) punch through slew and hysteresis — a median
-    // eats impulses without lagging sustained moves
-    uint16_t cv_hist[8][5];
-    uint8_t  cv_hp;
+    // per-channel median-of-5 conditioning: WiFi-burst ADC spikes (±80 counts on
+    // an idle knob) punch through slew and hysteresis — a median eats impulses
+    // without lagging sustained moves. The ring is cvsmooth's now, and the ch1/2
+    // idle-floor trackers moved into the matrix (cvmtx_t.floor12); this snapshot
+    // stays because the UI reads it.
     uint16_t cv_med[8];
     // internal clock: drives the synced-record workflow when no external
     // clock is locked (external always wins). 0 = off. 4 ppb, like ext.

@@ -16,6 +16,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "cvmtx.h"
 #include "recording.h"
 #include "beatlisten.h"
 #include "menu_config.h"
@@ -414,18 +415,16 @@ static int s3_live_handler(int it_id, int event, void *ev_data){
 // Standard scrollable settings list on the shared setup-menu framework.
 // Row grammar (Arlo, 2026-07-12): small option sets flip right on the click
 // (TOGGLE); numeric ranges keep click-to-edit + turn with a [ value ] bracket.
+// Speed CV / Start CV / Len CV were three per-voice rows here; they are matrix
+// destinations now, so one CV Matrix row reaches all six at once.
 static const setup_item_t s3_setup_items[] = {
-    {"Voice",    ST_TOGGLE}, {"Mode",     ST_TOGGLE}, {"Reverse",  ST_TOGGLE},
-    {"Crop",     ST_TOGGLE}, {"Speed CV", ST_TOGGLE}, {"Start CV", ST_TOGGLE},
-    {"Len CV",   ST_TOGGLE}, {"Level",    ST_RANGE},  {"Pan",      ST_RANGE},
-    {"Start",    ST_RANGE},  {"Length",   ST_RANGE},  {"Record",   ST_ACTION},
+    {"Voice",     ST_TOGGLE}, {"Mode",   ST_TOGGLE}, {"Reverse", ST_TOGGLE},
+    {"Crop",      ST_TOGGLE}, {"Level",  ST_RANGE},  {"Pan",     ST_RANGE},
+    {"Start",     ST_RANGE},  {"Length", ST_RANGE},
+    {"CV Matrix", ST_ACTION}, {"Record", ST_ACTION},
 };
-#define S3_SETUP_N 12
-
-static void src_name(int src, char *val, size_t n){
-    if (src < 0) snprintf(val, n, "off");
-    else snprintf(val, n, "CV%d", src + 1);
-}
+#define S3_SETUP_N ((int)(sizeof(s3_setup_items) / sizeof(s3_setup_items[0])))
+#define S3_ROW_MATRIX 8
 
 static void setup_value_str(int i, char *val, size_t n){
     s3_voice_t *v = &s3.v[s_voice_sel];
@@ -443,24 +442,14 @@ static void setup_value_str(int i, char *val, size_t n){
                 snprintf(val, n, v->bpm > 20.0f ? "QUANTx2" : "QUANTx2 (no bpm)");
             else snprintf(val, n, "FREE");
             break;
-        case 4: src_name(v->src_speed, val, n); break;
-        case 5: src_name(v->src_start, val, n); break;
-        case 6: src_name(v->src_len, val, n); break;
-        case 7: snprintf(val, n, "%d%%", (int)(v->level * 100 + 0.5f)); break;
-        case 8: snprintf(val, n, "%+d", (int)(v->pan * 100 + 0.5f)); break;
-        case 9: snprintf(val, n, "%d%%", (int)(v->crop_start * 100 + 0.5f)); break;
-        case 10: snprintf(val, n, "%d%%", (int)(v->crop_len * 100 + 0.5f)); break;
-        case 11: snprintf(val, n, "%s", s3.arm_target >= 0 ? "ARMED" : "open"); break;
+        case 4: snprintf(val, n, "%d%%", (int)(v->level * 100 + 0.5f)); break;
+        case 5: snprintf(val, n, "%+d", (int)(v->pan * 100 + 0.5f)); break;
+        case 6: snprintf(val, n, "%d%%", (int)(v->crop_start * 100 + 0.5f)); break;
+        case 7: snprintf(val, n, "%d%%", (int)(v->crop_len * 100 + 0.5f)); break;
+        case S3_ROW_MATRIX: snprintf(val, n, "..."); break;
+        case 9: snprintf(val, n, "%s", s3.arm_target >= 0 ? "ARMED" : "open"); break;
         default: val[0] = 0;
     }
-}
-
-// cycle a CV source: off -> CV1 -> ... -> CV8 -> off
-static int src_cycle(int src, int dir){
-    src += dir;
-    if (src < -1) src = 7;
-    if (src > 7) src = -1;
-    return src;
 }
 
 static void setup_adj(int i, int dir){
@@ -474,17 +463,14 @@ static void setup_adj(int i, int dir){
             v->q_cs = 0;               // selector indices are mode-specific:
             v->q_ln = 1 << 20;         // start fresh (clamps into range)
             break;
-        case 4: v->src_speed = src_cycle(v->src_speed, dir); break;
-        case 5: v->src_start = src_cycle(v->src_start, dir); break;
-        case 6: v->src_len   = src_cycle(v->src_len, dir); break;
-        case 7: {
+        case 4: {
             float lv = v->level + dir * 0.05f;
             if (lv < 0) lv = 0;
             if (lv > 1.0f) lv = 1.0f;
             v->level = lv;
             break;
         }
-        case 8: {
+        case 5: {
             float pn = v->pan + dir * 0.1f;
             if (pn < -1.0f) pn = -1.0f;
             if (pn > 1.0f) pn = 1.0f;
@@ -494,14 +480,14 @@ static void setup_adj(int i, int dir){
         // crop is ENGINE-side: live, no head rebuild, no menu flicker.
         // Start slides the WHOLE window (sampler2 semantics) — length is
         // preserved; the engine lets it give way only at EOF.
-        case 9: {
+        case 6: {
             float cs = v->crop_start + dir * 0.01f;
             if (cs < 0) cs = 0;
             if (cs > 0.98f) cs = 0.98f;
             v->crop_start = cs;
             break;
         }
-        case 10: {
+        case 7: {
             float cl = v->crop_len + dir * 0.01f;
             if (cl > 1.0f) cl = 1.0f;
             if (cl < 0.02f) cl = 0.02f;
@@ -516,8 +502,16 @@ static void setup_adj(int i, int dir){
 // switch changes every row's value — the framework repaints the whole list on
 // each event, so no special-case redraw is needed here.
 static int s3_setup_action(int i){
-    if (i == S3_SETUP_N - 1) return M_S3_REC;   // Record -> Record page
+    if (i == S3_ROW_MATRIX) return M_S3_MATRIX;   // the assignable CV matrix
+    if (i == S3_SETUP_N - 1) return M_S3_REC;     // Record -> Record page
     return 0;
+}
+
+static int s3_matrix_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return cvmtx_menu_event(&s3.mtx, event, "Sampler3 CV Matrix",
+                            M_S3_SETUP, M_S3_LIVE);
 }
 
 static setup_menu_t s3_setup = {
@@ -652,6 +646,8 @@ static void s3_register_pages(void *menusys){
     menusys_new_item(_ms, M_S3_SETUP); menusys_item_set_default_cb(_ms, M_S3_SETUP, s3_setup_handler);
     menusys_new_item(_ms, M_S3_LOAD);  menusys_item_set_default_cb(_ms, M_S3_LOAD, s3_load_handler);
     menusys_new_item(_ms, M_S3_REC);   menusys_item_set_default_cb(_ms, M_S3_REC, s3_rec_handler);
+    menusys_new_item(_ms, M_S3_MATRIX);
+    menusys_item_set_default_cb(_ms, M_S3_MATRIX, s3_matrix_handler);
 }
 
 static int s3_main_event(int event, void *ev_data){
@@ -679,5 +675,5 @@ const machine_ui_t s3_menu_ui = {
     .main_event = s3_main_event,
     .boot_target = M_S3_LIVE,
     .setup = &s3_setup,
-    .caps = MC_CLOCK,
+    .caps = MC_CLOCK | MC_MATRIX,
 };
