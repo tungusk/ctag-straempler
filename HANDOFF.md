@@ -9,6 +9,61 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-12 (evening) — web: SYSTEM card, card reordering, KEYBOARD
+
+All pushed and FLASHED (`bfc6325`, `e8d751f`, `251a0d7`, `48c2138`, `bc7f6e7`).
+Five OTAs; `.85` ends on `ota_1`. Rollback reaches the previous build.
+
+**SYSTEM card** (`e8d751f`) — DSP load/peak against the 1450 us block budget,
+PSRAM, internal RAM, SD, draw timing, uptime. Every figure already existed in
+`/sysinfo` or `/status` and was invisible unless you curled for it; nothing new
+is computed on the module. **Largest block gets its own row** because free total
+does not predict an alloc. Body is a `.tft` window like the setup screens.
+
+> **Traffic rule, and it applies to any future readout card:** `/status` is
+> already polled at 500 ms, so anything on it is FREE. The slow half fetches
+> only while the card is OPEN and `webPaused` is off — a resources card that
+> keeps talking while Arlo judges audio is measuring its own interference.
+> `foldSet()` fires a fetch on open, or the card shows its placeholder until
+> the next tick.
+
+> **TRAP: `tftRow()` esc()s its value.** These rows carry a meter element, so
+> `sysRow()` emits `.tft`'s markup (`.r`/`.l`/`.vv`/`.v`) directly. Widening
+> `tftRow` to accept markup would put an XSS-shaped hole in every setup screen.
+> Caught by seeing the spans render as literal text.
+
+> **TRAP: a new card needs THREE registrations, not one.** `#rsys` in the markup
+> was not enough — `balanceCols()` deals from `BAL_LEFT`/`BAL_RIGHT`/`BAL_FLOW`
+> and a card in none of them is never dealt, so it sat above FILES. It also
+> needs a CSS `order` for the one-column layout; the stylesheet says so in as
+> many words and it is the same bug that put settings above the panel in Sept.
+
+**Card reordering** (`48c2138`) — drag a card header. It sets the DEAL SEQUENCE,
+not a position: `balanceCols` still picks the column by height, because
+auto-balance is what keeps the columns even. One column is WYSIWYG; two or three
+is precedence. `BAL_FLOW` stays a var and `flowLoad()` rewrites it in place, so
+all six iteration sites are untouched. Persisted as `cardorder`; `flowReset()`
+restores. A card added since the user last dragged reinserts at its DEFAULT
+NEIGHBOUR, not appended.
+
+> **TRAP, found by driving it rather than looking at it:** the click suppressor
+> that stops a drag from also folding was one-shot on the click alone. A drag
+> does not always produce a click (touch, or a pointerup off the element), so an
+> armed suppressor ate the next unrelated click ANYWHERE on the page. Now also
+> disarmed on a 400 ms timer.
+
+**KEYBOARD** (`bc7f6e7`) — the MIDI card's visible label only. Ids stay `midi*`,
+the fold key stays `'midi'` (persisted per browser — renaming resets everyone's
+fold state), `MC_MIDI` untouched. Its wide band now spans the columns from the
+group's LEFT edge instead of centring: `.card.pnl`'s `margin:auto` centred a
+1016 card under a 1530 group, lining it up with nothing. Invisible at two
+columns, where both widths coincide — which is why it survived until the third
+column existed.
+
+**Owed by eye:** the wide keyboard at a real >=1530 px window (bench window is
+1204, so the three-column case is verified by construction only), and card
+reordering at one column.
+
 ## 2026-09-12 — the rework's REAL shape: undoing a two-knob workaround
 ### cvmtx extended (`da134ce`), then Deck (`2fa2c28`) and Tracker (`b44a2e6`)
 
