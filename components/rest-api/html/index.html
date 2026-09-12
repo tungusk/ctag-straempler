@@ -3255,37 +3255,34 @@ function balanceCols(){
     return;
   }
   // WIDE: a 1016 px band cannot sit inside a 502 px column, so the page splits
-  // into row A / band / row B. THE SPLIT IS WHERE THE KEYBOARD SITS IN THE FLOW
-  // — everything ahead of it in the deal order fills row A, everything after it
-  // fills row B — so expanding grows the card rightward from its own place
-  // instead of teleporting it under the panel (Arlo 2026-09-12: "it should be
-  // movable, but when it expands it should expand to the right").
+  // into row A / band / row B.
   //
-  // The old rule split on the PANEL'S HEIGHT: fill row A's right column until it
-  // matched the panel, drop the remainder below. That ignored where the card
-  // actually was, so toggling full moved eight unrelated cards and the reading
-  // order jumped top-right -> band -> bottom-LEFT. Arlo: "it spans columns but
-  // makes a mess".
+  // Row A is FILLED TO THE PANEL, taking flow cards IN ORDER until the column
+  // beside the panel has caught up with it; the rest goes below the band. Two
+  // earlier rules each got half of this right:
+  //   - splitting on the panel's height alone dealt by size and shuffled cards
+  //     past each other, so the reading order jumped ("makes a mess");
+  //   - splitting at the KEYBOARD'S place in the flow kept the order but left
+  //     535 px of dead space beside the panel, because the keyboard is first in
+  //     the flow and so nothing was above it to fill with.
+  // Taking a PREFIX in order does both: nothing overtakes anything, and the
+  // column fills. The last card in is allowed to overshoot the panel rather than
+  // being held back — stopping short is what leaves the hole.
   if(bot)bot.style.display='';
   BAL_LEFT.forEach(function(id){move(use[pcol],id);});
   BAL_RIGHT.forEach(function(id){move(use[pin],id);});
-  var cut=BAL_FLOW.indexOf('midihome');
-  var above=(cut<0)?BAL_FLOW.slice():BAL_FLOW.slice(0,cut);
-  var below=(cut<0)?[]:BAL_FLOW.slice(cut+1);
-  // The keyboard's own SLOT is the split point, so it falls in neither list and
-  // would never be moved — it would just sit in whichever column it last drifted
-  // into, and reappear there when the card un-widens. It is empty and
-  // display:contents while wide (the card is in the band), so it costs nothing:
-  // park it at the end of row A, which is where the band renders anyway.
-  if(cut>=0)above=above.concat(['midihome']);
-  var hs=[],k2;
-  for(k2=0;k2<use.length;k2++)hs[k2]=0;
-  BAL_LEFT.forEach(function(id){hs[pcol]+=h(id);});
-  BAL_RIGHT.forEach(function(id){hs[pin]+=h(id);});
-  above.forEach(function(id){deal(use,hs,id);});
+  var hp=h('panel'),hr2=0,rest=[],k2;
+  BAL_RIGHT.forEach(function(id){hr2+=h(id);});
+  BAL_FLOW.forEach(function(id){
+    // the keyboard's slot is empty while wide (its card is in the band), so it
+    // costs nothing and must still be parked somewhere definite — otherwise it
+    // sits wherever it last drifted and reappears there when un-widened
+    if(id==='midihome'){move(use[pin],id);return;}
+    if(hr2<hp){move(use[pin],id);hr2+=h(id);}else rest.push(id);
+  });
   var bset=[],bh=[];
   for(k2=0;k2<bcols.length&&k2<use.length;k2++){bset.push(bcols[k2]);bh.push(0);}
-  below.forEach(function(id){deal(bset,bh,id);});
+  rest.forEach(function(id){deal(bset,bh,id);});
 }
 // How many columns the window holds: 502 each + 12 gap, page gutter 24.
 function colCount(){var w=window.innerWidth;return w>=1554?3:(w>1040?2:1);}
