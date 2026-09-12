@@ -58,12 +58,21 @@ static void track_start_record(lp_track_t *t)
 }
 
 // ---- lifecycle ------------------------------------------------------------
+// CV1 cutoff   CV2 resonance   CV6 level   CV7 pan  — the same wiring as before,
+// now assignable. Cutoff and resonance stay on the 1V/oct jacks by default: they
+// are the "patch an envelope at it" controls, not knob jobs.
+const char *const lp_mtx_labels[LPM_N] = {
+    "Track level", "Track pan", "Cutoff", "Resonance",
+};
+static const int8_t lp_mtx_defaults[LPM_N] = { 5, 6, 0, 1 };
+
 static esp_err_t looper_start(void)
 {
     memset(&lp, 0, sizeof(lp));
     lp.sync_on = true;
     lp.bars = 4;
     lp.sel = 0;
+    cvmtx_init(&lp.mtx, lp_mtx_labels, LPM_N, lp_mtx_defaults);
     for (int i = 0; i < LP_TRACKS; i++) {
         lp.tr[i].buf = heap_caps_malloc(LP_BUF_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
         if (!lp.tr[i].buf) {
@@ -156,24 +165,31 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
     int cvm[8];
     for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&s_lmed[k], io->cv[k]);
 
-    // the two good knobs shape the selected track: CV6 = level, CV7 = pan.
-    // (knobs 5/8 are faulty on this unit, so per-track-fixed mapping is out;
-    // this is a focus-style control — values persist per track when deselected)
-    // skip a channel that is carrying the CLOCK — see clock_src_is_cv()
-    if (!clock_src_is_cv(clock_core_src(), 5)) lp.tr[lp.sel].vol = cvm[5] >> 4;   // CV6 -> 0..255
-    if (!clock_src_is_cv(clock_core_src(), 6)) lp.tr[lp.sel].pan = cvm[6];        // CV7 -> 0..4095
-
-    // filter mod on the jacks: rising CV1 OPENS the selected track's cutoff
-    // (patch an envelope/LFO to open it), CV2 raises resonance. The 1V/oct
-    // jacks idle ~880/4095 (below the 900 floor). Only overwrite the track's
-    // stored setting when the jack is actually driven (c > 0) — so each track
-    // REMEMBERS its cutoff/res and an unpatched jack doesn't slam it on select.
-    if (lp.filter_on) {
-        uint16_t c1 = cvm[0] > 900 ? cvm[0] - 900 : 0;   // 0..3195
-        uint16_t c2 = cvm[1] > 900 ? cvm[1] - 900 : 0;
-        if (c1) lp.tr[lp.sel].cutoff = 295 + (uint16_t)((uint32_t)c1 * 3800 / 3195);
-        if (c2) lp.tr[lp.sel].res    = 900 + (uint16_t)((uint32_t)c2 * 3000 / 3195);
-    }
+    // All four destinations are FOCUS-STYLE: they shape the SELECTED track and the
+    // values persist per track when you move away. The matrix carries the routing,
+    // the clock guard (skip_src, all eight channels rather than the two that used
+    // to be hand-checked) and the ch1/2 floor tracking the >900 gate stood in for.
+    //
+    // Selecting another track re-arms all four, which is what the old "only
+    // overwrite when the jack is actually driven (c > 0)" test was reaching for,
+    // done properly: an untouched control leaves the landed-on track's stored
+    // value alone, and a moving one takes over. It also now covers LEVEL and PAN,
+    // which had no such guard and did slam on select.
+    { int cs = clock_core_src(); lp.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
+    { static int s_sel_prev = -1;              // survives stop()/start() harmlessly:
+      if (lp.sel != s_sel_prev) {              // cvmtx_init re-arms everything anyway
+          s_sel_prev = lp.sel;
+          cvmtx_rearm(&lp.mtx);
+      } }
+    cvmtx_hold(&lp.mtx, LPM_CUTOFF, !lp.filter_on);
+    cvmtx_hold(&lp.mtx, LPM_RESO,   !lp.filter_on);
+    cvmtx_track(&lp.mtx, cvm);
+    { float k;
+      lp_track_t *t = &lp.tr[lp.sel];
+      if (cvmtx_abs(&lp.mtx, LPM_LEVEL,  &k)) t->vol    = (uint16_t)(k * 255.0f);
+      if (cvmtx_abs(&lp.mtx, LPM_PAN,    &k)) t->pan    = (uint16_t)(k * 4095.0f);
+      if (cvmtx_abs(&lp.mtx, LPM_CUTOFF, &k)) t->cutoff = 295 + (uint16_t)(k * 3800.0f);
+      if (cvmtx_abs(&lp.mtx, LPM_RESO,   &k)) t->res    = 900 + (uint16_t)(k * 3000.0f); }
 
     // per-block SVF coeffs for every track (cheap: 4 sinf per 1.45ms block)
     for (int i = 0; i < LP_TRACKS; i++) {
@@ -420,6 +436,7 @@ static cJSON *looper_preset_save(void)
     cJSON_AddNumberToObject(o, "bars", lp.bars);
     cJSON_AddBoolToObject(o, "monitor", lp.monitor);
     cJSON_AddBoolToObject(o, "filter", lp.filter_on);
+    cvmtx_save(&lp.mtx, o);
     return o;
 }
 
@@ -433,6 +450,8 @@ static void looper_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "bars")) && cJSON_IsNumber(j))    lp.bars = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor")))                  lp.monitor = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "filter")))                   lp.filter_on = cJSON_IsTrue(j);
+    cvmtx_load(&lp.mtx, node);
+    cvmtx_rearm(&lp.mtx);      // knobs recapture against the loaded values
 }
 
 extern const machine_ui_t looper_menu_ui;
@@ -440,8 +459,7 @@ extern const machine_ui_t looper_menu_ui;
 static int lp_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    if (!clock_src_is_cv(clock_core_src(), 5)) MI_ADD(mi("level (selected track)", 5));
-    if (!clock_src_is_cv(clock_core_src(), 6)) MI_ADD(mi("pan (selected track)", 6));
+    // level / pan / cutoff / resonance are CV MATRIX rows now
     if (clock_core_src() != LP_CLK_TR1) MI_ADD(mi("record / action (selected track)", 8));
     if (clock_core_src() != LP_CLK_TR2) MI_ADD(mi("play/stop (selected track)", 9));
     return n;

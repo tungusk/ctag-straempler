@@ -669,7 +669,6 @@ static void deck_stop(void)
 // rejects the outlier outright; slewing alone only smears it across a few blocks
 // and still clicks. Bench-caught on DoubleDecker, where CV7 is the crossfader and
 // the spike modulated the whole mix.
-static int s_cv6 = 0, s_cv7 = 0;
 static cvmed_t s_m6, s_m7;                  // per-channel median-of-5
 static trig_gate_t s_tg1, s_tg2;            // TR1/TR2 gate state
 static trig_combo_t s_tc;                   // the both-trig RESYNC gesture
@@ -687,7 +686,6 @@ static void dk_reset_statics(void)
     memset(&s_tg1, 0, sizeof(s_tg1));
     memset(&s_tg2, 0, sizeof(s_tg2));
     memset(&s_tc, 0, sizeof(s_tc));
-    s_cv6 = s_cv7 = 0;
     s_mv6 = s_mv7 = 0;
     s_c6_last = -1;
     s_loop_len_idx = 4;
@@ -716,7 +714,6 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     int cvm[8];
     { static cvmed_t s_med[8];
       for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&s_med[k], io->cv[k]); }
-    s_cv6 = cvm[5]; s_cv7 = cvm[6];        // kept for the UI meters
     { int cs = clock_core_src(); dk.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
     // the loop pair is meaningless with no loop: HOLD it, which also re-arms it
     // where the knob sits, so engaging a loop cannot fling the window (that is

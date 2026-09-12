@@ -729,9 +729,15 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     // below is a JITTER filter, not a gate, and a pulse train sails through it
     // and resizes the loop every pulse. Unassigned or not-yet-taken-over leaves
     // the held value standing, exactly as the old guard did.
+    // The SEED is load-bearing: loop_len and loop_pos_cv have no stored value of
+    // their own, so before the knob is touched there is nothing to hold and the
+    // window has to come from somewhere. It reads the destination's ASSIGNED
+    // channel — it used to be hardwired to CV7/CV6, which was right when the
+    // routing was too, but wrong the moment the matrix could point elsewhere.
     float kk;
-    int cv_len = (cv_len_h < 0) ? s_cvm[6] : cv_len_h;
-    int cv_pos = (cv_pos_h < 0) ? s_cvm[5] : cv_pos_h;
+    int lsc = cvmtx_src(&trk.mtx, TRKM_LLEN), psc = cvmtx_src(&trk.mtx, TRKM_LPOS);
+    int cv_len = (cv_len_h >= 0) ? cv_len_h : (lsc >= 0 ? s_cvm[lsc] : 0);
+    int cv_pos = (cv_pos_h >= 0) ? cv_pos_h : (psc >= 0 ? s_cvm[psc] : 0);
     if (cvmtx_abs(&trk.mtx, TRKM_LLEN, &kk)) cv_len = (int)(kk * 4095.0f);
     if (cvmtx_abs(&trk.mtx, TRKM_LPOS, &kk)) cv_pos = (int)(kk * 4095.0f);
     // (median: the +/-60 deadband below is a

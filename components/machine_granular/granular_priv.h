@@ -1,4 +1,5 @@
 #pragma once
+#include "cvmtx.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -36,6 +37,7 @@ typedef struct {
     volatile int  spray;          // 0..100 position jitter %
     volatile int  spread;         // 0..100 pan spread %
     volatile int  level;          // 0..255 (CV1 jack)
+    cvmtx_t mtx;                  // assignable CV matrix (destinations below)
     volatile bool freeze;         // hold the cloud position
 
     // engine state
@@ -51,6 +53,15 @@ typedef struct {
 } gr_state_t;
 
 extern gr_state_t gr;
+
+// CV matrix destinations (2026-09-12). Position and pitch were nailed to CV6/CV7
+// — the first prototype's only working knobs — and the level to the CV1 jack.
+// GRAIN SIZE and DENSITY are new to the knobs: they were menu-only because there
+// was nowhere to put them, and on a granular they are the two things you most
+// want to move by hand. Take-over is new too, so a stored value survives until
+// its control is actually moved.
+enum { GRM_POS = 0, GRM_PITCH, GRM_GRAIN, GRM_DENSITY, GRM_LEVEL, GRM_N };
+extern const char *const gr_mtx_labels[GRM_N];
 
 int  granular_load(const char *name);
 int  granular_list_samples(char out[][24], int max);

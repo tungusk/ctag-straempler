@@ -10,6 +10,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "cvmtx.h"
 #include "clock.h"
 #include "beatlisten.h"
 #include "menu_config.h"
@@ -94,8 +95,9 @@ static int glitch_live_handler(int it_id, int event, void *ev_data){
 // ---- Setup (shared framework: press cycles TOGGLEs, [ ] edits RANGEs) -------
 static const setup_item_t gl_setup_items[] = {
     {"Window ms", ST_RANGE},  {"Reverse", ST_TOGGLE}, {"Sync", ST_TOGGLE},
-    {"Division",  ST_TOGGLE}, {"Clock Src", ST_TOGGLE},
+    {"Division",  ST_TOGGLE}, {"Clock Src", ST_TOGGLE}, {"CV Matrix", ST_ACTION},
 };
+#define GL_ROW_MATRIX 5
 
 static void gl_setup_val(int i, char *v, size_t n){
     switch(i){
@@ -104,6 +106,7 @@ static void gl_setup_val(int i, char *v, size_t n){
         case 2: snprintf(v, n, "%s", gl.sync ? "ON" : "OFF"); break;
         case 3: snprintf(v, n, "%s", div_name(gl.division)); break;
         case 4: snprintf(v, n, "%s", clock_source_name(clock_core_src())); break;   // core clock
+        case GL_ROW_MATRIX: snprintf(v, n, "..."); break;
     }
 }
 
@@ -119,13 +122,22 @@ static void gl_adj(int i, int dir){
     }
 }
 
+static int gl_setup_action(int i){ return (i == GL_ROW_MATRIX) ? M_GLITCH_MATRIX : 0; }
+
+static int glitch_matrix_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return cvmtx_menu_event(&gl.mtx, event, "Glitch CV Matrix",
+                            M_GLITCH_SETUP, M_GLITCH_LIVE);
+}
+
 static setup_menu_t gl_setup = {
     .items = gl_setup_items,
-    .n = 5,
+    .n = (int)(sizeof(gl_setup_items) / sizeof(gl_setup_items[0])),
     .title = "Glitch Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_GLITCH_LIVE,
-    .render = gl_setup_val, .adjust = gl_adj, .action = NULL,
+    .render = gl_setup_val, .adjust = gl_adj, .action = gl_setup_action,
 };
 
 static int glitch_setup_handler(int it_id, int event, void *ev_data){
@@ -138,6 +150,8 @@ static void glitch_register_pages(void *menusys){
     menusys_t *_ms = (menusys_t *)menusys;
     menusys_new_item(_ms, M_GLITCH_LIVE);  menusys_item_set_default_cb(_ms, M_GLITCH_LIVE, glitch_live_handler);
     menusys_new_item(_ms, M_GLITCH_SETUP); menusys_item_set_default_cb(_ms, M_GLITCH_SETUP, glitch_setup_handler);
+    menusys_new_item(_ms, M_GLITCH_MATRIX);
+    menusys_item_set_default_cb(_ms, M_GLITCH_MATRIX, glitch_matrix_handler);
 }
 
 static int glitch_main_event(int event, void *ev_data){
@@ -163,5 +177,5 @@ const machine_ui_t glitch_menu_ui = {
     .main_event = glitch_main_event,
     .boot_target = M_GLITCH_LIVE,
     .setup = &gl_setup,
-    .caps = MC_CLOCK,
+    .caps = MC_CLOCK | MC_MATRIX,
 };

@@ -11,6 +11,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "cvmtx.h"
 #include "sample_ram.h"
 #include "sample_browser.h"
 #include "setup_menu.h"
@@ -110,7 +111,9 @@ static const setup_item_t gr_setup_items[] = {
     {"Spray",    ST_RANGE},
     {"Spread",   ST_RANGE},
     {"Sample",   ST_ACTION},
+    {"CV Matrix",ST_ACTION},
 };
+#define GR_ROW_MATRIX 5
 
 static void gr_render(int i, char *v, size_t n){
     switch(i){
@@ -119,6 +122,7 @@ static void gr_render(int i, char *v, size_t n){
         case 2: snprintf(v, n, "%d", gr.spray); break;
         case 3: snprintf(v, n, "%d", gr.spread); break;
         case 4: snprintf(v, n, "%s", gr.sample[0] ? gr.sample : "(none)"); break;
+        case GR_ROW_MATRIX: snprintf(v, n, "..."); break;
     }
 }
 
@@ -131,10 +135,21 @@ static void gr_adj(int i, int dir){
     }
 }
 
-static int gr_setup_action(int i){ if(i == 4) return M_GRAN_LOAD; return 0; }
+static int gr_setup_action(int i){
+    if (i == 4) return M_GRAN_LOAD;
+    if (i == GR_ROW_MATRIX) return M_GRAN_MATRIX;
+    return 0;
+}
+
+static int gran_matrix_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return cvmtx_menu_event(&gr.mtx, event, "Granular CV Matrix",
+                            M_GRAN_SETUP, M_GRAN_LIVE);
+}
 
 static setup_menu_t gr_setup = {
-    .items = gr_setup_items, .n = 5,
+    .items = gr_setup_items, .n = (int)(sizeof(gr_setup_items) / sizeof(gr_setup_items[0])),
     .title = "Granular Setup",
     .aff_label = "Machine", .aff_target = M_MORE,
     .live_target = M_GRAN_LIVE,
@@ -161,6 +176,8 @@ static void gran_register_pages(void *menusys){
     menusys_new_item(_ms, M_GRAN_LIVE);  menusys_item_set_default_cb(_ms, M_GRAN_LIVE, gran_live_handler);
     menusys_new_item(_ms, M_GRAN_SETUP); menusys_item_set_default_cb(_ms, M_GRAN_SETUP, gran_setup_handler);
     menusys_new_item(_ms, M_GRAN_LOAD);  menusys_item_set_default_cb(_ms, M_GRAN_LOAD, gran_load_handler);
+    menusys_new_item(_ms, M_GRAN_MATRIX);
+    menusys_item_set_default_cb(_ms, M_GRAN_MATRIX, gran_matrix_handler);
 }
 
 static int gran_main_event(int event, void *ev_data){
@@ -186,4 +203,5 @@ const machine_ui_t granular_menu_ui = {
     .main_event = gran_main_event,
     .boot_target = M_GRAN_LIVE,
     .setup = &gr_setup,
+    .caps = MC_MATRIX,
 };

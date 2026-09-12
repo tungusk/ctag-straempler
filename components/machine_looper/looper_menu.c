@@ -16,6 +16,7 @@
 #include "tftspi.h"
 #include <esp_http_server.h>
 #include "machine.h"
+#include "cvmtx.h"
 #include "clock.h"
 #include "beatlisten.h"
 #include "menu_config.h"
@@ -333,8 +334,10 @@ static const setup_item_t setup_items[] = {
     {"Clock PPQ", ST_RANGE },   // 5  ladder 1/2/4/8
     {"Save Trk",  ST_ACTION},   // 6
     {"Bounce",    ST_ACTION},   // 7
+    {"CV Matrix", ST_ACTION},   // 8
 };
-#define SETUP_N 8
+#define SETUP_N ((int)(sizeof(setup_items) / sizeof(setup_items[0])))
+#define SETUP_MATRIX_ROW 8
 #define SETUP_SAVE_ROW 6
 #define SETUP_BOUNCE_ROW 7
 static const char *s_save_msg = "";   // transient result shown on the Save row
@@ -386,8 +389,17 @@ static int looper_setup_action(int i){
         int r = looper_bounce();
         s_bounce_msg = (r == 0) ? "BOUNCED" : (r == -2) ? "STOP REC" : "EMPTY";
         if (r == 0) lp.sel = 0;   // the bounce lands on track 1 — focus it
+    } else if(i == SETUP_MATRIX_ROW){
+        return M_LOOPER_MATRIX;
     }
     return 0;
+}
+
+static int looper_matrix_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return cvmtx_menu_event(&lp.mtx, event, "Looper CV Matrix",
+                            M_LOOPER_SETUP, M_LOOPER_LIVE);
 }
 
 static setup_menu_t lp_setup = {
@@ -408,6 +420,8 @@ static void looper_register_pages(void *menusys){
     menusys_item_set_default_cb(_ms, M_LOOPER_LIVE, looper_live_handler);
     menusys_new_item(_ms, M_LOOPER_SETUP);
     menusys_item_set_default_cb(_ms, M_LOOPER_SETUP, looper_setup_handler);
+    menusys_new_item(_ms, M_LOOPER_MATRIX);
+    menusys_item_set_default_cb(_ms, M_LOOPER_MATRIX, looper_matrix_handler);
 }
 
 // main screen: lanes as a live backdrop BELOW the menu bar. Must not draw the
@@ -442,5 +456,5 @@ const machine_ui_t looper_menu_ui = {
     .web_uris = looper_web_uris,
     .n_web_uris = 1,
     .setup = &lp_setup,
-    .caps = MC_CLOCK,
+    .caps = MC_CLOCK | MC_MATRIX,
 };

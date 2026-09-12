@@ -1,4 +1,5 @@
 #pragma once
+#include "cvmtx.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include "clock.h"
@@ -34,6 +35,15 @@ typedef struct {
     volatile bool sync;           // window length follows the clock
     // clock: the CORE clock (clock_core(), clock.h), a module-wide setting
     volatile int  division;       // 0=1/4, 1=1/8, 2=1/16, 3=1/32 note
+    cvmtx_t mtx;                  // assignable CV matrix (destinations below)
 } gl_state_t;
 
 extern gl_state_t gl;
+
+// CV matrix destinations (2026-09-12). Window and pitch were nailed to CV6/CV7
+// because those were the only knobs the first prototype had; the level was nailed
+// to the CV1 jack. All three are assignable now, and — new here — they take over
+// on MOVEMENT instead of being read straight through, so a stored window survives
+// until the knob is touched.
+enum { GLM_WIN = 0, GLM_PITCH, GLM_LEVEL, GLM_N };
+extern const char *const gl_mtx_labels[GLM_N];

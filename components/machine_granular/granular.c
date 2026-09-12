@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "sample_ram.h"
+#include "clock.h"
 #include "machine.h"
 #include "cvsmooth.h"
 #include "audio.h"
@@ -95,6 +96,12 @@ static void spawn_grain(void)
 }
 
 // ---- lifecycle ------------------------------------------------------------
+// CV1 level   CV5 grain size   CV6 position   CV7 pitch   CV8 density
+const char *const gr_mtx_labels[GRM_N] = {
+    "Position", "Pitch", "Grain size", "Density", "Level",
+};
+static const int8_t gr_mtx_defaults[GRM_N] = { 5, 6, 4, 7, 0 };
+
 static esp_err_t granular_start(void)
 {
     memset(&gr, 0, sizeof(gr));
@@ -108,6 +115,7 @@ static esp_err_t granular_start(void)
     gr.spread   = 50;
     gr.level    = 255;
     gr.rng      = 0x1234567u;
+    cvmtx_init(&gr.mtx, gr_mtx_labels, GRM_N, gr_mtx_defaults);
     for (int i = 0; i <= 256; i++) s_hann[i] = 0.5f * (1.0f - cosf((float)M_PI * 2.0f * i / 256.0f));
 
     char first[1][24];
@@ -142,10 +150,18 @@ static void granular_process(int32_t out[MACHINE_BLOCK],
     // TR1 held (active low) = freeze the cloud position
     gr.freeze = !(io->trig_level & 1);
 
-    gr.position = cvm[5];     // knob 6 = position
-    gr.pitch_cv = cvm[6];     // knob 7 = pitch
-    uint16_t c1 = cvm[0] > 900 ? cvm[0] - 900 : 0;   // CV1 jack = level
-    gr.level = c1 ? (uint16_t)((uint32_t)c1 * 255 / 3195) : 255;
+    // the matrix carries the routing, the clock guard (skip_src) and the ch1/2
+    // floor tracking the >900 gate stood in for. Take-over means an unpatched jack
+    // or an untouched knob leaves the stored value alone, which is what the old
+    // "only if c1" test was reaching for.
+    { int cs = clock_core_src(); gr.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
+    cvmtx_track(&gr.mtx, cvm);
+    { float k;
+      if (cvmtx_abs(&gr.mtx, GRM_POS,     &k)) gr.position = (int)(k * 4095.0f);
+      if (cvmtx_abs(&gr.mtx, GRM_PITCH,   &k)) gr.pitch_cv = (int)(k * 4095.0f);
+      if (cvmtx_abs(&gr.mtx, GRM_GRAIN,   &k)) gr.grain_ms = 10 + (int)(k * 490.0f);
+      if (cvmtx_abs(&gr.mtx, GRM_DENSITY, &k)) gr.density  = 1 + (int)(k * 119.0f);
+      if (cvmtx_abs(&gr.mtx, GRM_LEVEL,   &k)) gr.level    = (int)(k * 255.0f); }
 
     if (!gr.freeze)
         gr.base_pos = (double)gr.position / 4095.0 * (double)(gr.len > 1 ? gr.len - 1 : 0);
@@ -226,6 +242,7 @@ static cJSON *granular_preset_save(void)
     cJSON_AddNumberToObject(o, "spray", gr.spray);
     cJSON_AddNumberToObject(o, "spread", gr.spread);
     cJSON_AddStringToObject(o, "sample", gr.sample);
+    cvmtx_save(&gr.mtx, o);
     return o;
 }
 
@@ -239,6 +256,8 @@ static void granular_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "spread")) && cJSON_IsNumber(j))   gr.spread = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])
         granular_load(j->valuestring);
+    cvmtx_load(&gr.mtx, node);
+    cvmtx_rearm(&gr.mtx);      // knobs recapture against the loaded values
 }
 
 extern const machine_ui_t granular_menu_ui;
@@ -246,9 +265,7 @@ extern const machine_ui_t granular_menu_ui;
 static int gr_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    MI_ADD(mi("level (when patched)", 0));
-    MI_ADD(mi("position", 5));
-    MI_ADD(mi("pitch", 6));
+    // level / position / pitch / grain size / density are CV MATRIX rows now
     MI_ADD(mi("freeze (hold)", 8));
     return n;
 }

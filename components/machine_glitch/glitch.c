@@ -43,6 +43,12 @@ static void capture_window(void)
     gl.play_pos = gl.reverse ? (double)(wl - 1) : 0.0;
 }
 
+// CV5 and CV8 are left free: Glitch's other parameters (reverse, sync, division)
+// are switches and enums, not knob jobs. They are one matrix edit away if wanted.
+//   CV1 level   CV6 window   CV7 pitch
+const char *const gl_mtx_labels[GLM_N] = { "Window", "Pitch", "Level" };
+static const int8_t gl_mtx_defaults[GLM_N] = { 5, 6, 0 };
+
 static esp_err_t glitch_start(void)
 {
     memset(&gl, 0, sizeof(gl));
@@ -53,6 +59,7 @@ static esp_err_t glitch_start(void)
     gl.pitch_cv = 2048;
     gl.level = 255;
     gl.division = 1;    // 1/8 note
+    cvmtx_init(&gl.mtx, gl_mtx_labels, GLM_N, gl_mtx_defaults);
     audio_status_set_voices("glitch", "");
     return ESP_OK;
 }
@@ -78,13 +85,18 @@ static void glitch_process(int32_t out[MACHINE_BLOCK],
 
     if (!gl.ring || !gl.win) { memset(out, 0, MACHINE_BLOCK * sizeof(int32_t)); return; }
 
-    // skip a channel that is carrying the CLOCK — see clock_src_is_cv()
-    if (!clock_src_is_cv(clock_core_src(), 5))
-        gl.win_ms = 20 + (int)((uint32_t)cvm[5] * 480 / 4095);   // knob6 = 20..500 ms
-    if (!clock_src_is_cv(clock_core_src(), 6))
-        gl.pitch_cv = cvm[6];                                    // knob7 = pitch
-    uint16_t c1 = cvm[0] > 900 ? cvm[0] - 900 : 0;        // CV1 jack = level
-    gl.level = c1 ? (uint16_t)((uint32_t)c1 * 255 / 3195) : 255;
+    // the matrix carries the routing, the clock guard (skip_src, all eight
+    // channels rather than the two that used to be hand-checked) and the ch1/2
+    // floor tracking that the >900 gate stood in for. Take-over is new: each
+    // destination is inert until its control MOVES, so the stored window and
+    // pitch survive a boot or a preset load instead of being overwritten on the
+    // first block by wherever the knob happens to sit.
+    { int cs = clock_core_src(); gl.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
+    cvmtx_track(&gl.mtx, cvm);
+    { float k;
+      if (cvmtx_abs(&gl.mtx, GLM_WIN,   &k)) gl.win_ms   = 20 + (int)(k * 480.0f);
+      if (cvmtx_abs(&gl.mtx, GLM_PITCH, &k)) gl.pitch_cv = (int)(k * 4095.0f);
+      if (cvmtx_abs(&gl.mtx, GLM_LEVEL, &k)) gl.level    = (int)(k * 255.0f); }
 
     // pitch increment (unity plateau around centre)
     if (gl.pitch_cv >= 1843 && gl.pitch_cv <= 2253) gl.inc = 1.0f;
@@ -142,6 +154,7 @@ static cJSON *glitch_preset_save(void)
     cJSON_AddBoolToObject(o, "reverse", gl.reverse);
     cJSON_AddBoolToObject(o, "sync", gl.sync);
     cJSON_AddNumberToObject(o, "division", gl.division);
+    cvmtx_save(&gl.mtx, o);
     return o;
 }
 
@@ -153,6 +166,8 @@ static void glitch_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "reverse"))) gl.reverse = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync"))) gl.sync = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "division")) && cJSON_IsNumber(j)) gl.division = j->valueint;
+    cvmtx_load(&gl.mtx, node);
+    cvmtx_rearm(&gl.mtx);      // knobs recapture against the loaded values
     // "clk_src" / "ppb" (pre-core-clock presets) are ignored: the clock is a
     // module-wide setting now and a preset must not silently repoint it
 }
@@ -162,8 +177,7 @@ extern const machine_ui_t glitch_menu_ui;
 static int gl_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    if (!clock_src_is_cv(clock_core_src(), 5)) MI_ADD(mi("window length", 5));
-    if (!clock_src_is_cv(clock_core_src(), 6)) MI_ADD(mi("pitch", 6));
+    // window / pitch / level are CV MATRIX rows now
     MI_ADD(mi("stutter (hold)", 8));
     MI_ADD(mi("stutter latch", 9));
     return n;

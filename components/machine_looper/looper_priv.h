@@ -1,4 +1,5 @@
 #pragma once
+#include "cvmtx.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include "svf.h"
@@ -37,6 +38,7 @@ typedef struct {
 typedef struct {
     lp_track_t tr[LP_TRACKS];
     volatile int  sel;            // selected lane (UI + trig target)
+    cvmtx_t mtx;                  // assignable CV matrix (destinations below)
 
     // settings (UI writes, engine reads)
     volatile bool sync_on;
@@ -55,6 +57,18 @@ typedef struct {
 } lp_state_t;
 
 extern lp_state_t lp;
+
+// CV matrix destinations (2026-09-12). All four are FOCUS-STYLE: they drive the
+// SELECTED track, and the values persist per track when you move away. The old
+// comment here said per-track-fixed mapping was out because "knobs 5/8 are faulty
+// on this unit" — that was the first prototype. Four rows keeps the focus model
+// (four tracks x two params would be eight destinations for four knobs), but the
+// channels are assignable now instead of nailed to CV6/CV7 and the CV1/CV2 jacks.
+//
+// Selecting another track RE-ARMS all four, so the track you land on keeps the
+// level and pan it had until you actually move a control.
+enum { LPM_LEVEL = 0, LPM_PAN, LPM_CUTOFF, LPM_RESO, LPM_N };
+extern const char *const lp_mtx_labels[LPM_N];
 
 // save track i's RAM loop to the SD library (LOOP_NNNN.RAW + .JSN). Returns 0
 // on success, -1 if the track is empty or the write failed. Call from UI task.
