@@ -560,7 +560,8 @@ body.nosbar .sbar{display:none}
 .kbk .kl{font-size:11px}
 .kbk .ks{font-size:8px;opacity:.75;margin-top:1px}
 .kbk.w{background:#ddd;color:#333;border-color:#bbb}
-.kbk.b{background:#222;color:#ccc;border-color:#000}
+.kbk.w .kl{font-weight:bold}   /* the letter is what you look for on a white key */
+.kbk.b{background:#222;color:#ccc;border-color:#ccc}   /* a dark key on a dark card needs the OUTLINE to read */
 .kbk.off{background:#141414;color:#3f3f3f;border-color:#242424}   /* not a note */
 .kbk.fn{background:#141414;color:#7a9;border-color:#2e3a38}       /* octave - and = */
 .kbk.on{background:var(--acc);color:#062;border-color:var(--acc)}
@@ -2893,9 +2894,15 @@ function midiAuto(){
   var card=document.getElementById('midicard'); if(!card)return;
   var tb=document.getElementById('kbtabs'); if(tb)tb.innerHTML=kbViewTabs();
   var fits=window.innerWidth>=1040;               // room for the full-width band?
-  var wide=fits&&midiWidthPref()==='full';
+  // The QWERTY board is a fixed shape that fills whatever it is given, so full
+  // width buys it nothing — the toggle is a PIANO control (Arlo 2026-09-12:
+  // "keys view doesnt need a full button... only for piano"). Computed here
+  // rather than forced into the pref, so the stored width survives a trip
+  // through the keys view and comes back with it.
+  var keysView=kbViewGet()==='keys';
+  var wide=fits&&!keysView&&midiWidthPref()==='full';
   var wb=document.getElementById('midiwbtn');
-  if(wb){wb.style.display=fits?'':'none';wb.textContent=wide?'1/2':'full';}
+  if(wb){wb.style.display=(fits&&!keysView)?'':'none';wb.textContent=wide?'1/2':'full';}
   if(card.classList.contains('wide')!==wide){
     card.classList.toggle('wide',wide);
     (wide?document.getElementById('midiband'):document.getElementById('midihome')).appendChild(card);
@@ -2982,7 +2989,9 @@ function kbViewGet(){try{return localStorage.getItem('kbview')==='keys'?'keys':'
 function kbViewSet(v){
   try{localStorage.setItem('kbview',v);}catch(e){}
   var tb=document.getElementById('kbtabs'); if(tb)tb.innerHTML=kbViewTabs();   // or the highlight goes stale
-  midiHeldClear(); midiDraw(); balanceSoon();
+  midiHeldClear();
+  midiAuto();      // re-decides wide + the width button, and redraws
+  balanceSoon();
 }
 function kbViewTabs(){
   var k=kbViewGet()==='keys';
