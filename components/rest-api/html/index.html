@@ -208,9 +208,10 @@ body.nosbar .sbar{display:none}
 /* everything under the two columns spans them: 502 + 12 + 502 */
 #p3>.card,#p3>.row{width:1016px;max-width:calc(100vw - 24px);margin-left:auto;margin-right:auto}
 /* 3 x 502 + 2 x 12 gap = 1530: full-width rows span whatever the page holds.
-   The WIDE MIDI card deliberately does NOT — it stays two columns (1016) and
-   centres, because a keyboard stretched over three is wider than it is useful
-   (Arlo 2026-09-11). */
+   The WIDE KEYBOARD card deliberately does NOT — it stays two columns (1016),
+   because a keyboard stretched over three is wider than it is useful (Arlo
+   2026-09-11). It aligns LEFT within the band rather than centring; see
+   #midiband. */
 #p3.c3>.card,#p3.c3>.row{width:1530px}   /* (#rparams>.card was here: the ADVANCED card now lives in the left column at panel width) */
 #rparams .rpcols{columns:2 300px;column-gap:12px}
 .psec{margin-top:6px}
@@ -487,7 +488,8 @@ body.nosbar .sbar{display:none}
    same reasoning. The two other accent FILLS in this sheet stay filled: .mdot.ws
    is a status lamp and .mkey.on is a key being held, and neither is a selection. */
 .ren{cursor:pointer;border-bottom:1px dotted #555}
-/* MIDI card: octave arrows, transport dot, view-shift buttons, full-width mode */
+/* KEYBOARD card (ids stay midi*: it is the MIDI stack underneath): octave
+   arrows, transport dot, view-shift buttons, full-width mode */
 /* .row.tight>* forces padding:3px 14px on every child — these need their own */
 /* the octave trio travels as one item, so the wide-mode gutter column does not
    stack the two buttons and the reading on three separate lines */
@@ -499,7 +501,17 @@ body.nosbar .sbar{display:none}
 .mdot.ws{background:#3fcf8f;box-shadow:0 0 5px #3fcf8f}
 .mdot.http{background:#fa0;box-shadow:0 0 5px #a70}
 .btn.kbnav{flex:0 0 16px;align-self:center;height:30px;padding:0;font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center}
-.card.pnl.wide{width:1016px}
+.card.pnl.wide{width:1016px;margin-left:0;margin-right:0}   /* .card.pnl's margin:auto centred it — see #midiband */
+/* FULL width parks the keyboard in #midiband, which spans TWO columns. The band
+   itself is as wide as the whole column group and centres exactly like it, then
+   the card sits at the band's LEFT edge. Centring the card instead (what
+   margin:auto did) lined it up with nothing at three columns: the group is
+   1530 and the card 1016, so it floated under the middle column. Two columns
+   and the two widths coincide, which is why this never showed until the third
+   column existed. A keyboard stretched over three is wider than it is useful
+   (Arlo 2026-09-11), so the card stays 1016 either way. */
+#midiband{display:flex;justify-content:flex-start;width:1016px;max-width:calc(100vw - 24px);margin:0 auto}
+#p3.c3 #midiband{width:1530px;max-width:calc(100vw - 24px)}
 #midihome{display:contents}   /* a box here would take #midicard's place as the flex item */
 /* Wide mode: a constant key width cannot fill 1016 px, so the leftovers either
    side of the keyboard become the control gutters and the header row goes away
@@ -643,7 +655,7 @@ body.cdragging .ph{cursor:grabbing}
        the keyboard and left typing / octave / width / Panic on screen, and the
        wide card bottomed out at 85 px instead of collapsing. -->
   <div id="midihome"><div class="card pnl" id="midicard" style="display:none">
-    <b class="ph" style="padding:0;margin:0"><span class="hlp" data-h="Impulse Tracker layout, two manuals an octave apart: Z S X D C V G B H N J M , L . ; / is the lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P the upper. Octave on - and = &#183; Space releases held notes &#183; Esc panics. Typing plays whether or not a key is on screen &#8212; &#8249; &#8250; only move the view. Plays Synth / Keys; MIDI wins over CV while a note is held.">MIDI</span></b>
+    <b class="ph" style="padding:0;margin:0"><span class="hlp" data-h="Impulse Tracker layout, two manuals an octave apart: Z S X D C V G B H N J M , L . ; / is the lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P the upper. Octave on - and = &#183; Space releases held notes &#183; Esc panics. Typing plays whether or not a key is on screen &#8212; &#8249; &#8250; only move the view. Plays Synth / Keys; MIDI wins over CV while a note is held.">KEYBOARD</span></b>
     <div class="row tight" id="midictl" style="align-items:center">
       <label style="flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;margin:0;color:#aaa;font-size:11px"><input type="checkbox" id="midityping" checked style="width:auto;margin:0"> typing</label>
       <span id="midioctg"><button class="btn octb" onclick="midiOct(-1)" title="octave down (-)">&#9666;</button>
@@ -768,7 +780,7 @@ body.cdragging .ph{cursor:grabbing}
   </div>
   <!-- FILES: the library is long, so the table scrolls INSIDE the card at a
        capped height instead of running the page to thousands of pixels. The
-       width button is the MIDI card's: half sits in a column, full spans both. -->
+       width button is the KEYBOARD card's: half sits in a column, full spans two. -->
   <div id="fileshome"><div class="card pnl" id="filescard">
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0">FILES</b>
@@ -910,7 +922,7 @@ body.cdragging .ph{cursor:grabbing}
   <!-- third column: only dealt into when the window can hold 3 x 502 -->
   <div class="rcol"></div>
   </div>
-  <div id="midiband"></div>   <!-- full-width mode parks the MIDI card here, spanning both columns -->
+  <div id="midiband"></div>   <!-- full-width mode parks the KEYBOARD card here, spanning two columns -->
   <!-- row B: only used when the wide MIDI band splits the page. A 1016 px band
        cannot live inside a 502 px column, so when it is on, row A runs panel |
        cards-to-the-panel's-height, then the band, then the rest continues here
@@ -3474,7 +3486,7 @@ flowLoad();      // the user's card order, before the first balanceCols
 sysInit();       // SYSTEM card: /sysinfo on a slow timer, audio off the 500 ms poll
 bcastInit();     // broadcast Listen link + player URL (:8000)
 webLoad();       // browser-side prefs before the first render
-midiAuto();      // MIDI card width follows the window
+midiAuto();      // KEYBOARD card width follows the window
 tab(3);          // the only page; tab() no-ops on the ids that are gone
 loadFiles();loadMods();filesAuto();   // the library is on this page now, nothing clicks a tab to fetch it
 foldAll();       // MACHINE / MIDI / CLOCK / BOUNCE / ICECAST / BROADCAST fold too
