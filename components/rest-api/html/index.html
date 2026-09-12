@@ -302,28 +302,58 @@ body.nosbar .sbar{display:none}
 .mxc select.on{border-color:#3a7;color:#6c9}
 .mxc select.pk{border-color:#2e4e5e;color:#7fb2cc}
 /* the GRID view of the matrix (2026-09-11) */
-.gwrap{overflow-x:auto;margin:4px 0 2px}
+.gwrap{overflow-x:auto;margin:4px 0 2px;display:flex;justify-content:flex-start}
 .gmtx{width:auto;border-collapse:collapse}
-.gmtx th.gh{color:#8aa;font-size:10px;font-weight:normal;text-align:center;padding:2px 0 4px;width:22px;min-width:22px;white-space:nowrap;letter-spacing:0}
+/* the row view's .mxcard .mtx{width:100%} was stretching this table and
+   inflating the channel columns to 67px against 21px cells — the grid must
+   keep its natural width so the cells stay square (Arlo 09-11) */
+.mxcard table.gmtx{width:auto}
+.gmtx th.gh{color:#8aa;font-size:10px;font-weight:normal;text-align:center;padding:2px 0 4px;width:21px;min-width:21px;white-space:nowrap;letter-spacing:0}
 .gmtx th.gh.goff{color:#666;width:30px;min-width:30px}
 .gmtx tr.gcap th{color:#5a6a6a;font-size:9px;font-weight:normal;letter-spacing:2px;padding:0 0 1px;border-bottom:1px solid #242424}
 .gmtx .gsep{border-left:1px solid #2e3a38}
 .gmtx th.gh{border-right:1px solid #1e1e1e}
 .gmtx tbody tr:hover td{background:var(--fhov)}
 .gmtx tbody tr td.gdf{background:#12301e}
-.gmtx th.gdest{text-align:left;padding:2px 12px 4px 2px;color:#8aa;font-size:10px;font-weight:normal;border-right:1px solid #242424}
-.gmtx td.gc{text-align:center;width:22px;min-width:22px;padding:3px 0;border-bottom:1px solid #1a1a1a;border-right:1px solid #1e1e1e}
+.gmtx th.gdest{text-align:left;padding:2px 8px 4px 2px;color:#8aa;font-size:9px;font-weight:normal;border-right:1px solid #242424;width:1px;white-space:nowrap}
+.gmtx td.gc{text-align:center;width:21px;min-width:21px;padding:0;border-bottom:1px solid #1a1a1a;border-right:1px solid #1e1e1e}
 .gmtx td.gc.gdf{background:#12301e}
 .gmtx td.gc.gx{border-bottom:1px solid #1a1a1a}
 .gmtx input.gcell{-webkit-appearance:none;appearance:none;width:12px;height:12px;margin:0;padding:0;
-  border:1px solid #3a3a3a;border-radius:50%;background:transparent;cursor:pointer;vertical-align:middle}
+  border:1px solid #3a3a3a;border-radius:50%;background:transparent;cursor:pointer;vertical-align:top}
 .gmtx input.gcell:hover{border-color:#5d7a72}
 .gmtx input.gcell:checked{border-color:var(--acc);
   background:radial-gradient(circle at center,var(--acc) 0 3px,transparent 3.5px)}
 .gmtx input.gcell:focus-visible{outline:1px solid var(--acc);outline-offset:1px}
-.gmtx td.gdest{padding:0 12px 0 2px;color:#93a8a2;white-space:nowrap;border-bottom:1px solid #1a1a1a;border-right:1px solid #242424}
-.gmtx td.gctl{padding-left:10px;white-space:nowrap;border-bottom:1px solid #1a1a1a}
-.gmtx td.gctl input[type=range]{width:90px;vertical-align:middle}
+.gmtx .goffl{position:relative;display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;cursor:pointer;vertical-align:top}
+.gmtx .goffl span{color:transparent;font-size:11px;line-height:12px;user-select:none}
+.gmtx .goffl:hover span{color:#3d3d3d}
+.gmtx .goffl input.gcell:checked + span{color:#5f5f5f}
+.gmtx .goffl:hover input.gcell:checked + span{color:#828282}
+.gmtx td.goffc input.gcell{position:absolute;inset:0;width:12px;height:12px;opacity:0;border:none;background:none;margin:0}
+.gmtx td.goffc,.gmtx th.gh.goff{width:30px;min-width:30px}
+.gmtx .gfill{width:100%;border-bottom:1px solid #1a1a1a}
+.gmtx td.gdest{padding:0 8px 0 2px;color:#93a8a2;font-size:9px;width:1px;white-space:nowrap;border-bottom:1px solid #1a1a1a;border-right:1px solid #242424}
+.gmtx td.gctl{padding-left:10px;white-space:nowrap;border-bottom:1px solid #1a1a1a;width:1px}
+.gmtx tbody tr{height:20px}
+.gmtx tbody td{height:20px;line-height:20px;padding-top:0;padding-bottom:0;overflow:hidden}
+/* collapse the text strut in every cell that holds only controls: a 13px
+   strut around vertical-align:middle inputs inflated the line box and made
+   rows 31px instead of 20px, unevenly (Arlo: "out of square") */
+.gmtx td.gc,.gmtx td.gctl{line-height:0;font-size:0}
+.gmtx .gctlw{display:flex;align-items:center;height:20px;overflow:hidden}
+.gmtx .gcw{display:flex;align-items:center;justify-content:center;height:20px}
+.gmtx .mxmode,.gmtx .gamt{flex:0 0 auto}
+/* no pill on the mode label: the 1px border was the last thing making the
+   control rows 2px taller than the bare ones. Plain text, colour carries state. */
+.gmtx .mxmode{border:none;background:none;border-radius:0;height:14px;line-height:14px;
+  font-size:10px;padding:0;width:32px;text-align:left;color:#7d8f8a;cursor:pointer}
+.gmtx .mxmode:hover{color:#cfe3dd}
+.gmtx .mxmode.on{color:#5aa8d8}
+.gmtx .gamt{display:inline-block;width:36px;text-align:left;color:#9ab;font-size:11px;line-height:14px;
+  cursor:ew-resize;user-select:none;margin-right:8px;padding:0 1px;border-bottom:1px dotted #3a3a3a}
+.gmtx .gamt:hover{color:#cfe3dd;border-bottom-color:#5d7a72}
+.gmtx .gamt.drag{color:var(--acc);border-bottom-color:var(--acc)}
 .gmtx .gnote{color:#666;font-size:10px}
 .tabs.mxview .tab{padding:1px 8px;font-size:11px;line-height:16px}
 .gfix{margin-top:6px;color:#666;font-size:10px}
@@ -1770,10 +1800,10 @@ function rpMatrixGrid(d){
 
   h += '<div class="gwrap"><table class="mtx gmtx"><thead>';
   // a caption row so the bare numbers still read as CV 1-8 / TR 1-2
-  h += '<tr class="gcap"><th></th><th></th><th colspan="8">CV</th><th colspan="2">TR</th><th></th></tr><tr>';
+  h += '<tr class="gcap"><th></th><th></th><th colspan="8">CV</th><th colspan="2">TR</th><th></th><th></th></tr><tr>';
   h += '<th class="gdest">destination</th>';
   GCOL.forEach(function(c){ h += '<th class="gh' + (c < 0 ? ' goff' : '') + (c === 0 || c === 8 ? ' gsep' : '') + '">' + gcolName(c) + '</th>'; });
-  h += '<th class="gctl"></th></tr></thead><tbody>';
+  h += '<th class="gctl"></th><th class="gfill"></th></tr></thead><tbody>';
 
   function row(rowId, kind, label, cur, e, amt, mode, note){
     var s = '<tr data-grow="' + rowId + '" data-mode="' + (mode ? 1 : 0) + '">';
@@ -1781,19 +1811,22 @@ function rpMatrixGrid(d){
     GCOL.forEach(function(c){
       var ok = gLegal(kind, e, c), on = (cur === c);
       var dflt = (kind === 'dest' && mxDef[+rowId] === c && c >= 0);
-      s += '<td class="gc' + (ok ? '' : ' gx') + (dflt ? ' gdf' : '') + (c === 0 || c === 8 ? ' gsep' : '') + '">'
-        + (ok ? '<input type="radio" class="gcell" name="g' + rowId + '" data-row="' + rowId + '" value="' + c + '"'
-              + (on ? ' checked' : '') + ' onchange="mxRerender(mxCollect())">' : '')
-        + '</td>';
+      s += '<td class="gc' + (ok ? '' : ' gx') + (dflt ? ' gdf' : '') + (c < 0 ? ' goffc' : '') + (c === 0 || c === 8 ? ' gsep' : '') + '">'
+        + '<span class="gcw">'
+        + (!ok ? ''
+           : c < 0 ? '<label class="goffl"><input type="radio" class="gcell" name="g' + rowId + '" data-row="' + rowId + '" value="' + c + '"'
+              + (on ? ' checked' : '') + ' onchange="mxRerender(mxCollect())"><span>&#215;</span></label>'
+           : '<input type="radio" class="gcell" name="g' + rowId + '" data-row="' + rowId + '" value="' + c + '"'
+              + (on ? ' checked' : '') + ' onchange="mxRerender(mxCollect())">')
+        + '</span></td>';
     });
-    s += '<td class="gctl">';
+    s += '<td class="gctl"><div class="gctlw">';
     if (kind === 'dest' && cur >= 0) {
-      s += '<button class="mxmode' + (mode ? ' on' : '') + '" title="offset (± amount) or knob (absolute: takes over once moved)" onclick="gModeTog(this)">' + (mode ? 'knob' : '&#177;') + '</button>'
-        + '<input type="range" min="-100" max="100" step="1" value="' + amt + '"' + (mode ? ' hidden' : '')
-        + ' oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\'">'
-        + '<span class="amt"' + (mode ? ' hidden' : '') + '>' + (amt > 0 ? '+' : '') + amt + '%</span>';
+      s += '<span class="gamt"' + (mode ? ' hidden' : '') + ' data-amt="' + amt + '" title="drag to set the depth (shift = fine)" onpointerdown="gAmtDrag(event)">'
+        + (amt > 0 ? '+' : '') + amt + '%</span>'
+        + '<button class="mxmode' + (mode ? ' on' : '') + '" title="offset (\u00b1 amount) or knob (absolute: takes over once moved)" onclick="gModeTog(this)">' + (mode ? 'knob' : '&#177;') + '</button>';
     }
-    s += '</td></tr>';
+    s += '</div></td><td class="gfill"></td></tr>';
     return s;
   }
 
@@ -1821,6 +1854,24 @@ function rpMatrixGrid(d){
   return h + '</div>';
 }
 
+// drag the figure left/right to set the offset depth; shift for fine. Nothing
+// posts until Apply, same as everything else on this card.
+function gAmtDrag(e){
+  var el=e.currentTarget, x0=e.clientX, v0=+el.dataset.amt||0;
+  el.setPointerCapture(e.pointerId); el.classList.add('drag');
+  function mv(ev){
+    var v=Math.round(v0+(ev.clientX-x0)*(ev.shiftKey?0.25:0.8));
+    v=v<-100?-100:v>100?100:v;
+    el.dataset.amt=v; el.textContent=(v>0?'+':'')+v+'%';
+  }
+  function up(){
+    el.classList.remove('drag');
+    el.removeEventListener('pointermove',mv); el.removeEventListener('pointerup',up);
+    mxRerender(mxCollect());
+  }
+  el.addEventListener('pointermove',mv); el.addEventListener('pointerup',up);
+  e.preventDefault();
+}
 function gModeTog(b){
   var tr = b.closest('tr');
   tr.dataset.mode = tr.dataset.mode === '1' ? '0' : '1';
@@ -1844,8 +1895,8 @@ function mxCollectGrid(){
     }
     var dest = +id;
     if (ch >= 0 && dest >= 0 && dest < mxN) {
-      var m = +tr.dataset.mode, rng = tr.querySelector('input[type=range]');
-      mxs[dest] = ch; mxm[dest] = m; mxa[dest] = m ? 0 : (rng ? parseInt(rng.value) || 0 : 0);
+      var m = +tr.dataset.mode, am = tr.querySelector('.gamt');
+      mxs[dest] = ch; mxm[dest] = m; mxa[dest] = m ? 0 : (am ? parseInt(am.dataset.amt) || 0 : 0);
     }
   });
   return { mxs: mxs, mxa: mxa, mxm: mxm, picks: picks };
