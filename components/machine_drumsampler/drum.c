@@ -6,6 +6,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "cJSON.h"
+#include "clock.h"
 #include "machine.h"
 #include "cvsmooth.h"
 #include "audio.h"
@@ -106,6 +107,14 @@ static void voice_setup(dr_pad_t *p, dr_voice_t *v)
     if (!v->len || v->ll >= v->len - v->st) v->ll = 0;
 }
 
+// CV5 filter / CV6 pad level / CV7 pad decay / CV8 resonance. Level and decay
+// keep the two knobs the first prototype had; the filter pair, which used to
+// borrow them, takes the two that now work.
+const char *const dr_mtx_labels[DRM_N] = {
+    "Pad level", "Pad decay", "Filter", "Resonance",
+};
+static const int8_t dr_mtx_defaults[DRM_N] = { 5, 6, 4, 7 };
+
 static esp_err_t drum_start(void)
 {
     memset(&dr, 0, sizeof(dr));
@@ -136,8 +145,11 @@ static esp_err_t drum_start(void)
     dr.flt_cv = 2048;       // centre = bypass
     dr.flt_res_cv = 0;      // clean
     dr.flt_q = DR_Q_CLEAN;
-    dr.flt_ref_f = -1;      // pickup: seize the reference on the first block
-    dr.flt_ref_q = -1;
+    cvmtx_init(&dr.mtx, dr_mtx_labels, DRM_N, dr_mtx_defaults);
+    dr.knob_last[0] = dr.knob_last[1] = -1;
+    // the pads apply in STEPS and flag the autosave themselves, so the widget's
+    // continuous liveness must not flag it too; the filter tracks and does
+    dr.mtx.nodirty = (1u << DRM_LEVEL) | (1u << DRM_DECAY);
     svf_reset(&dr.flt_l);
     svf_reset(&dr.flt_r);
     dr.sens = 1;            // Med
@@ -177,64 +189,62 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
     // (no "is pad 0 loaded" guard any more: with lazy allocation an empty pad 0 is
     // normal. Every read is gated on its own layer's buf/len.)
 
-    // ---- CV6/CV7 perform the SELECTED PAD (move-to-take-over; see drum_priv.h) --
-    // A channel already spoken for as a CV-select selector is left alone — the
-    // selectors default to exactly these two channels, and one knob can't both
-    // address a pad and set its level. In Direct mode the selectors don't exist,
-    // so nothing blocks the knobs there.
-    bool lv_free = !(dr.cv_select && (dr.sel_src[0] == DR_MOD_LEVEL_CV ||
-                                      dr.sel_src[1] == DR_MOD_LEVEL_CV));
-    bool dc_free = !(dr.cv_select && (dr.sel_src[0] == DR_MOD_DECAY_CV ||
-                                      dr.sel_src[1] == DR_MOD_DECAY_CV));
-    // MEDIAN-OF-5 on the performance knobs (cvsmooth.h). The grab-then-track guard
-    // below rejects small JITTER but PASSES a big excursion — so a lone ADC outlier
-    // (a steady ~1221 reporting ONE sample of 4) both falsely SEIZES the knob and
-    // slams the value: the pad level jumps, and the master filter's cutoff drops to
-    // the floor for a block. A median rejects the outlier outright.
-    int lv = cvm[DR_MOD_LEVEL_CV], dc = cvm[DR_MOD_DECAY_CV];
-    if (!dr.knob_seen) {                          // first block: adopt, don't apply
-        dr.knob_last[0] = lv;
-        dr.knob_last[1] = dc;
-        dr.knob_seen = true;
+    // ---- THE KNOBS. The pads and the master filter used to SHARE CV6/CV7,
+    // arbitrated by whether the encoder sat on the filter box; they have a knob
+    // each now and both are live at once. What survives is the take-over, which
+    // was never about the knob shortage: a physical knob's position need not match
+    // the parameter, so selecting a pad — or booting — must not slam its stored
+    // level to wherever the knob happens to sit.
+    //
+    // A channel already spoken for as a CV-select selector is still left alone:
+    // one knob cannot both address a pad and set its level. In Direct mode the
+    // selectors don't exist, so nothing blocks the knobs there.
+    { int cs = clock_core_src(); dr.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
+    for (int d = 0; d < DRM_N; d++) {
+        int sc = cvmtx_src(&dr.mtx, d);
+        bool taken = dr.cv_select && sc >= 0 &&
+                     (dr.sel_src[0] == sc || dr.sel_src[1] == sc);
+        bool off = (d == DRM_LEVEL || d == DRM_DECAY) ? !dr.cv_mod : !dr.flt_box;
+        cvmtx_hold(&dr.mtx, d, taken || off);
     }
+    // selecting another pad re-arms its two knobs, so the new pad keeps the level
+    // and decay it was given until the knob is actually moved. This is what the
+    // per-pad half of the old take-over did, and unlike it, it cannot be bypassed
+    // by whichever UI path changed the selection.
+    // (this static survives stop()/start(), but harmlessly: cvmtx_init re-arms
+    //  every destination on entry, so a stale match costs nothing)
+    { static int s_sel_prev = -1;
+      if (dr.sel_pad != s_sel_prev) {
+          s_sel_prev = dr.sel_pad;
+          cvmtx_rearm_dest(&dr.mtx, DRM_LEVEL);
+          cvmtx_rearm_dest(&dr.mtx, DRM_DECAY);
+          dr.knob_last[0] = dr.knob_last[1] = -1;   // "nothing applied yet"
+      } }
+    cvmtx_track(&dr.mtx, cvm);
 
-    // the knobs aim at ONE thing: the selected pad, or the filter box
-    if (dr.cv_mod && dr.flt_box && dr.sel_filter) {
-        // grab-then-track: nothing moves until the knob leaves where it sat when
-        // the box was selected, and then it tracks continuously — a sweep can't
-        // be stepped like a pad parameter
-        if (dr.flt_ref_f < 0) dr.flt_ref_f = lv;
-        if (dr.flt_ref_q < 0) dr.flt_ref_q = dc;
-        int df = lv - dr.flt_ref_f, dq = dc - dr.flt_ref_q;
-        if (df < 0) df = -df;
-        if (dq < 0) dq = -dq;
-        if (lv_free) {
-            if (!dr.flt_take_f && df > DR_MOD_MOVE) dr.flt_take_f = true;
-            if (dr.flt_take_f) dr.flt_cv = lv;
-        }
-        if (dc_free) {
-            if (!dr.flt_take_q && dq > DR_MOD_MOVE) dr.flt_take_q = true;
-            if (dr.flt_take_q) dr.flt_res_cv = dc;
-        }
-        // autosave: the sweep tracks CONTINUOUSLY once seized, so flag only a
-        // real excursion since the last flag — not the per-block jitter — or
-        // the dirty poll's backstop would fire forever
-        static int s_df_flag = -1, s_dq_flag = -1;
-        if (dr.flt_take_f) {
-            int d2 = dr.flt_cv - s_df_flag;
-            if (d2 < 0) d2 = -d2;
-            if (s_df_flag < 0 || d2 > DR_MOD_MOVE) { s_df_flag = dr.flt_cv; machine_state_dirty(); }
-        }
-        if (dr.flt_take_q) {
-            int d2 = dr.flt_res_cv - s_dq_flag;
-            if (d2 < 0) d2 = -d2;
-            if (s_dq_flag < 0 || d2 > DR_MOD_MOVE) { s_dq_flag = dr.flt_res_cv; machine_state_dirty(); }
-        }
-    } else if (dr.cv_mod) {
+    // the FILTER tracks continuously once seized — a DJ sweep has to be smooth,
+    // and the widget's own dirty hysteresis replaces the hand-rolled flag pair
+    { float k;
+      if (cvmtx_abs(&dr.mtx, DRM_FILT, &k)) dr.flt_cv     = (int)(k * 4095.0f);
+      if (cvmtx_abs(&dr.mtx, DRM_RESO, &k)) dr.flt_res_cv = (int)(k * 4095.0f); }
+
+    // the PADS apply in STEPS. Kept host-side deliberately: tracking them
+    // continuously would re-write attack/start/loop every block, so a value set on
+    // the Pads row could never stand while the knob was live.
+    {
+        float k;
+        int lv = 0, dc = 0;
+        bool lv_free = cvmtx_abs(&dr.mtx, DRM_LEVEL, &k); if (lv_free) lv = (int)(k * 4095.0f);
+        bool dc_free = cvmtx_abs(&dr.mtx, DRM_DECAY, &k); if (dc_free) dc = (int)(k * 4095.0f);
         int sel = dr.sel_pad;
         if (sel < 0 || sel >= DR_PADS) sel = 0;
         dr_pad_t *sp = &dr.pad[sel];
-        int dlv = lv - dr.knob_last[0], ddc = dc - dr.knob_last[1];
+        // knob_last < 0 = nothing applied since the last re-arm, so the block the
+        // knob goes LIVE on applies straight away — that block IS the take-over,
+        // and measuring the deadband from the previous pad's last value would put
+        // an arbitrary amount of extra travel in front of it.
+        int dlv = (dr.knob_last[0] < 0) ? 4096 : lv - dr.knob_last[0];
+        int ddc = (dr.knob_last[1] < 0) ? 4096 : dc - dr.knob_last[1];
         if (dlv < 0) dlv = -dlv;
         if (ddc < 0) ddc = -ddc;
         if (lv_free && dlv > DR_MOD_MOVE) {
@@ -713,7 +723,8 @@ static cJSON *drum_preset_save(void)
     cJSON_AddBoolToObject(o, "flt", dr.flt_box);      // master filter box exists
     cJSON_AddBoolToObject(o, "flton", dr.flt_on);     // ...and is engaged
     cJSON_AddNumberToObject(o, "fcv", dr.flt_cv);     // sweep + resonance knob
-    cJSON_AddNumberToObject(o, "fres", dr.flt_res_cv);// positions (knob pickup
+    cJSON_AddNumberToObject(o, "fres", dr.flt_res_cv);
+    cvmtx_save(&dr.mtx, o);           // "mxs"/"mxa"/"mxm"// positions (knob pickup
                                                       // holds them until moved)
     cJSON_AddNumberToObject(o, "sens", dr.sens);
     cJSON_AddNumberToObject(o, "sel0", dr.sel_src[0]);
@@ -770,6 +781,11 @@ static void drum_preset_load(const cJSON *node)
         int f = j->valueint;
         dr.flt_res_cv = (f < 0) ? 0 : (f > 4095 ? 4095 : f);
     }
+    // no migration needed: the level/decay/filter channels were hard-wired, never
+    // stored, so a pre-matrix preset simply keeps the defaults
+    cvmtx_load(&dr.mtx, node);
+    cvmtx_rearm(&dr.mtx);      // knobs recapture against the loaded values
+    dr.knob_last[0] = dr.knob_last[1] = -1;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sens")) && cJSON_IsNumber(j)) {
         dr.sens = j->valueint;
         if (dr.sens < 0) dr.sens = 0;
@@ -870,10 +886,7 @@ static int dr_inputs(machine_input_t *o, int max)
         if (dr.sel_src[0] >= 0) MI_ADD(mi("pad select A", dr.sel_src[0] & 7));
         if (dr.sel_src[1] >= 0) MI_ADD(mi("pad select B", dr.sel_src[1] & 7));
     }
-    if (dr.cv_mod) {
-        MI_ADD(mi("level (selected pad)", DR_MOD_LEVEL_CV));
-        MI_ADD(mi("decay / CW target (selected pad)", DR_MOD_DECAY_CV));
-    }
+    // pad level / decay and the master filter are CV MATRIX rows now
     return n;
 }
 

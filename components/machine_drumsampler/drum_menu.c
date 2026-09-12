@@ -14,6 +14,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "cvmtx.h"
 #include "sample_ram.h"
 #include "sample_browser.h"
 #include "setup_menu.h"
@@ -324,10 +325,11 @@ static void draw_pad_cell(int i, bool lit){
 static int s_fbox_mode = -1, s_fbox_cell = -1, s_fbox_on = -1, s_fbox_sel = -1;
 
 static void filter_label(char *s, size_t n){
-    // in CV-select mode the selectors default to EXACTLY knob6/knob7, so the
-    // filter knobs are blocked. Say so — a dead knob reads as broken hardware.
-    bool blocked = dr.cv_select &&
-                   (dr.sel_src[0] == DR_MOD_LEVEL_CV || dr.sel_src[1] == DR_MOD_LEVEL_CV);
+    // a selector CV can still be pointed at the filter's own channel, which
+    // blocks the knob. Say so — a dead knob reads as broken hardware.
+    int fsc = cvmtx_src(&dr.mtx, DRM_FILT);
+    bool blocked = dr.cv_select && fsc >= 0 &&
+                   (dr.sel_src[0] == fsc || dr.sel_src[1] == fsc);
     // the box always SAYS what it is (Arlo). The mode rides along once it is
     // sweeping, and the strip underneath shows how far the sweep has gone — the
     // cutoff in Hz was detail nobody was reading mid-performance.
@@ -472,9 +474,9 @@ static void live_select(int dir){
     int prev_pad = dr.sel_pad;
     bool was_box = dr.sel_filter;
     if (s_slot[cur][0] < 0){                   // landed on the filter box
-        dr.sel_filter = true;
-        dr.flt_take_f = dr.flt_take_q = false; // arm the knob pickup: the sweep
-        dr.flt_ref_f = dr.flt_ref_q = -1;      // must not jump to where a knob sits
+        dr.sel_filter = true;   // the filter has its own knobs now — selecting the
+                                // box no longer changes what any knob means, so
+                                // there is no pickup to arm here
     } else {
         dr.sel_filter = false;
         dr.sel_pad = s_slot[cur][0];
@@ -877,7 +879,7 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
 // items/n) is rebuilt whenever the trigger mode changes; s_rows[] maps a visible
 // index back to its R_* id for the render/adjust/action callbacks.
 enum { R_PADEDIT = 0, R_TRIG, R_SENS, R_SEL1, R_SEL2, R_VEL,
-       R_KNOB, R_FILTER, R_FX1, R_FX2, R_FX3, R_RVTAP, R_COUNT };
+       R_KNOB, R_FILTER, R_MATRIX, R_FX1, R_FX2, R_FX3, R_RVTAP, R_COUNT };
 
 // the full kind table: Pad Setup + the three FX slots open pages (ACTION), the
 // two selector CVs are wide (none + 8 channels) so they keep click-to-edit
@@ -894,6 +896,7 @@ static const setup_item_t dr_all_items[R_COUNT] = {
     [R_VEL]     = {"Velocity",   ST_TOGGLE},
     [R_KNOB]    = {"Knob 6/7",   ST_TOGGLE},
     [R_FILTER]  = {"Filter",     ST_TOGGLE},
+    [R_MATRIX]  = {"CV Matrix",  ST_ACTION},
     [R_FX1]     = {"FX1",        ST_ACTION},
     [R_FX2]     = {"FX2",        ST_ACTION},
     [R_FX3]     = {"FX3 Reverb", ST_ACTION},
@@ -933,6 +936,7 @@ static void setup_value_str(int id, char *v, size_t n){
         case R_VEL:  snprintf(v, n, "%s", dr.velocity ? "ON" : "OFF"); break;
         case R_KNOB: snprintf(v, n, "%s", dr.cv_mod ? "level/decay" : "OFF"); break;
         case R_FILTER: snprintf(v, n, "%s", dr.flt_box ? "box" : "OFF"); break;
+        case R_MATRIX: snprintf(v, n, "..."); break;
         case R_FX1: snprintf(v, n, "%s >", fxrack_slot_name(&dr_rk, 0)); break;
         case R_FX2: snprintf(v, n, "%s >", fxrack_slot_name(&dr_rk, 1)); break;
         case R_FX3: snprintf(v, n, "%s >", fxrack_slot_name(&dr_rk, 2)); break;
@@ -986,10 +990,18 @@ static int s_setup_return = -1;  // Setup row to restore on return from the sub-
 static int dr_setup_action(int i){
     int id = s_rows[i];
     if (id == R_PADEDIT) return M_DRUM_PADS;   // per-pad editor
+    if (id == R_MATRIX)  return M_DRUM_MATRIX; // the assignable CV matrix
     if (id == R_FX1){ s_setup_return = i; s_cur_slot = 0; return M_DRUM_FX; }
     if (id == R_FX2){ s_setup_return = i; s_cur_slot = 1; return M_DRUM_FX; }
     if (id == R_FX3){ s_setup_return = i; s_cur_slot = 2; return M_DRUM_FX; }
     return 0;
+}
+
+static int drum_matrix_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return cvmtx_menu_event(&dr.mtx, event, "Drums CV Matrix",
+                            M_DRUM_SETUP, M_DRUM_LIVE);
 }
 
 static setup_menu_t dr_setup = {
@@ -1061,6 +1073,8 @@ static void drum_register_pages(void *menusys){
     menusys_new_item(_ms, M_DRUM_LIVE);  menusys_item_set_default_cb(_ms, M_DRUM_LIVE, drum_live_handler);
     menusys_new_item(_ms, M_DRUM_PADS);  menusys_item_set_default_cb(_ms, M_DRUM_PADS, drum_pads_handler);
     menusys_new_item(_ms, M_DRUM_LOAD);  menusys_item_set_default_cb(_ms, M_DRUM_LOAD, drum_load_handler);
+    menusys_new_item(_ms, M_DRUM_MATRIX);
+    menusys_item_set_default_cb(_ms, M_DRUM_MATRIX, drum_matrix_handler);
     menusys_new_item(_ms, M_DRUM_SETUP); menusys_item_set_default_cb(_ms, M_DRUM_SETUP, drum_setup_handler);
     menusys_new_item(_ms, M_DRUM_FX);    menusys_item_set_default_cb(_ms, M_DRUM_FX, drum_fx_handler);
 }
@@ -1095,5 +1109,5 @@ const machine_ui_t drum_menu_ui = {
     .main_event = drum_main_event,
     .boot_target = M_DRUM_LIVE,
     .setup = &dr_setup,
-    .caps = MC_FX,
+    .caps = MC_FX | MC_MATRIX,
 };

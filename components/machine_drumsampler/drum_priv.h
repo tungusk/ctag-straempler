@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "svf.h"
+#include "cvmtx.h"
 #include "fxrack.h"     // brings reverb/fxdelay/overdrive/flanger/tremolo/fxfilter
 
 // Drum sampler — four one-shot pads, each a mono PSRAM buffer, triggered from the
@@ -137,13 +138,24 @@ typedef struct {
     volatile bool fx_on;
 } dr_pad_t;
 
-// CV6/CV7 perform the SELECTED pad: knob6 = level, knob7 = decay (knobs 6/7 are
-// this unit's two fully-good CV channels). They take over a value only when the
-// control MOVES — otherwise selecting a pad, or booting, would slam its stored
-// level/decay to wherever the knob happens to be sitting.
-#define DR_MOD_LEVEL_CV 5         // 0-based: CV6
-#define DR_MOD_DECAY_CV 6         // 0-based: CV7
-#define DR_MOD_MOVE     100       // ~2.5 % of range: past CV noise, under a nudge
+// CV matrix destinations (2026-09-12). Drums was the plainest two-knob multiplexer
+// left: CV6 and CV7 were hard-wired, and the SAME pair meant either the selected
+// pad's level+decay or the master filter's cutoff+resonance, arbitrated by whether
+// the encoder happened to be sitting on the filter box. That was the first
+// prototype, where K6 and K7 were the only working knobs. The second has four, so
+// the filter takes K5/K8 and the arbitration is gone — pads and filter are live at
+// the same time.
+//
+// Level and decay KEEP K6/K7: they are what this machine is played with, and both
+// are neutral at noon (unity level, untouched sample) the way Arlo wants the
+// middle pair.
+//   CV5 filter   CV6 pad level   CV7 pad decay   CV8 resonance
+enum { DRM_LEVEL = 0, DRM_DECAY, DRM_FILT, DRM_RESO, DRM_N };
+extern const char *const dr_mtx_labels[DRM_N];
+
+#define DR_MOD_MOVE     100       // ~2.5 % of range: past CV noise, under a nudge.
+                                  // Still the PAD step size — see drum.c for why
+                                  // the pads stay stepped while the filter tracks.
 
 #define DR_LEVEL_UNITY  255       // knob6 at 12 o'clock: the sample, unchanged
 #define DR_LEVEL_MAX    1023      // fully clockwise: 4x into the soft clipper
@@ -202,13 +214,10 @@ typedef struct {
     volatile int  flt_cv;         // last ACCEPTED sweep knob (knob6), UI reads
     volatile int  flt_res_cv;     // last ACCEPTED resonance knob (knob7), UI reads
     volatile int  flt_mode;       // 0 bypass / 1 LP / 2 HP  (engine writes, UI reads)
-    // knob pickup: selecting the box must NOT slam the filter to wherever knob6
-    // happens to sit. The UI arms these at -1; the engine seizes the reference on
-    // its next block and applies nothing until the knob moves past DR_MOD_MOVE —
-    // after which it tracks CONTINUOUSLY (a DJ sweep has to be smooth, unlike the
-    // pads' stepped take-over).
-    volatile int  flt_ref_f, flt_ref_q;
-    bool  flt_take_f, flt_take_q;
+                                  // (knob pickup is the matrix's now: the sweep is
+                                  // dead until the knob MOVES, then tracks
+                                  // CONTINUOUSLY — a DJ sweep has to be smooth,
+                                  // unlike the pads' stepped take-over below)
     float flt_f, flt_q;           // slewed coefficient + damping (engine only)
     svf_t flt_l, flt_r;           // engine only
 
@@ -238,11 +247,10 @@ typedef struct {
     fxfilter_t  filt, band;
     int8_t      fx_slot[FX_NSLOT_GEN];
 
-    // knob take-over state for the PADS (was function-static in drum_process,
-    // where it survived stop()/start() and let a machine re-entry inherit the
-    // last session's reference)
-    int  knob_last[2];
-    bool knob_seen;
+    cvmtx_t mtx;                  // assignable CV matrix (destinations above)
+    // where the pad knobs last APPLIED a value. The matrix owns take-over now;
+    // this is only the DR_MOD_MOVE step deadband sitting on top of it.
+    int  knob_last[2];        // -1 = nothing applied since the last re-arm
 } dr_state_t;
 
 extern dr_state_t dr;
