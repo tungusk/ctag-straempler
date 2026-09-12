@@ -9,6 +9,67 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-12 — the rework's REAL shape: undoing a two-knob workaround
+### cvmtx extended (`da134ce`), then Deck (`2fa2c28`) and Tracker (`b44a2e6`)
+
+**Arlo supplied the fact that reframes all of this:** these machines were
+developed on the FIRST prototype, which had unusable knobs — only K6 and K7
+worked. Every context-switch conditional in the machines is **multiplexing**,
+fitting four-plus jobs onto two knobs. `synth.c:102` says it plainly. The second
+prototype has four working knobs, so the multiplexing can come out.
+
+**But multiplexing and PICKUP are different things**, and undoing the first must
+not destroy the second. Pickup exists because a physical knob's position may not
+match the parameter — true on any hardware. When I described Deck's pickup as
+code the conversion would "delete", Arlo pushed back: if the matrix cannot
+express the prior art, **the matrix should grow**. It could not, so it did.
+
+**cvmtx gained three things (`da134ce`), all invisible until a host opts in:**
+1. **`CVM_TK_CATCH`** beside the existing grab. Deck's `DK_PICKUP` (120/4096 =
+   0.029) compares the knob to its CAPTURED POSITION — same as `CVM_TAKEOVER`
+   0.030, so Deck always fitted. Tracker's `TRK_PASSTOL` compares to the
+   PARAMETER'S CURRENT VALUE — pass-through, nothing jumps — and cvmtx could not
+   do that. `CVM_CATCH_TOL` is `TRK_PASSTOL`/4095 verbatim. Deck's `DK_PASSTOL`
+   is the same 90, which is a good sign the constant is right.
+2. **`rearm` is a bit per destination** (`cvmtx_rearm_dest`), because Deck
+   re-arms only its loop knobs and DoubleDecker only one deck's.
+3. **`hold`**, a bit per destination. While held the capture follows the knob,
+   so clearing the bit arms it exactly where the knob sits — that IS Deck's
+   re-arm-on-loop-disengage, for free.
+
+> **TRAP, and it was four instances not one:** `m->rearm = true` on a `uint16_t`
+> sets ONLY BIT 0. Left alone it would have silently rearmed destination 0 only,
+> across Tape, Synth and Keys. Kept GLOBAL (`0xFFFFu`) rather than "improved" to
+> per-destination — editing a matrix row disarms every knob today and that is
+> deliberate safety.
+
+**Deck** (`2fa2c28`) — four jobs on two knobs via `dk.loop_active`: looping the
+loop window/length (GRAB), released the DJ filter/speed (CATCH). Demultiplexed
+one per knob; Filter and Speed keep K6/K7 as the noon-neutral pair, the loop
+pair moves to K5/K8. `cvmtx_hold` on the loop pair while unlooped reproduces
+`s_cv6_ref = -1`. Deleted `s_cv6_ref`, `s_cv7_ref`, `s_pk6`, `s_pk7`,
+`DK_PICKUP`, `DK_PASSTOL` and both clock guards. **Kept host-side** (judgements
+about Deck's own parameters, not generic knob behaviour): the quantized ladder,
+the 40-count boundary hysteresis, the 3-block confirm, the `flt_f` slew.
+
+**Tracker** (`b44a2e6`) — identical shape, and the first user of CATCH. Filter
+keeps K6, Loop Len keeps K7, Loop Pos → K5, Reso → K8.
+**Caught by the checklist:** `filt_cv`/`flt_res_cv` were recomputed from CV every
+block so they never needed a starting value; as CATCH *bases* they do, and
+memset's 0 would have booted the filter fully LP-closed with the knob only able
+to catch it at the far left. Now 2048 (bypass) and 0.
+
+**Add to the pre-flight checklist:** *a field that was previously derived every
+block becomes a base value when it becomes an ABS destination — check its
+power-on default is musically neutral.*
+
+**DoubleDecker is NOT the same job.** It already HAS a hand-rolled matrix —
+`DD_KNOB_FIXED` with `dd.cv_filt`/`cv_fader`/`cv_lpos[2]`/`cv_llen[2]`, and
+`dd_eff_*()` is `mxs[]` by another name. More importantly it has **six jobs and
+four knobs**, so unlike Deck and Tracker it CANNOT fully demultiplex —
+`knob_mode` and `dd_addressed()` stay meaningful. Converting it is replacing a
+bespoke matrix with the shared one, not adding one.
+
 ## 2026-09-12 — MACHINE-SIDE CV REWORK begins: Slicer gets a matrix (`74710cf`)
 
 Arlo: "essential". The Tier-2 machines carry hand-rolled CV instead of a
