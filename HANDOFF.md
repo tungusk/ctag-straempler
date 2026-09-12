@@ -70,6 +70,65 @@ four knobs**, so unlike Deck and Tracker it CANNOT fully demultiplex —
 `knob_mode` and `dd_addressed()` stay meaningful. Converting it is replacing a
 bespoke matrix with the shared one, not adding one.
 
+### DoubleDecker DONE (`59fa12c` widget, `eaf16bc` machine)
+
+Two more widget additions, both because DD asked for them and both inert until a
+host opts in:
+
+4. **`cvmtx_override()`** — a per-destination source override with the user's
+   assignment PRESERVED UNDERNEATH, so leaving the mode restores the map with no
+   bookkeeping in the machine. This is what `dd_eff_filt()` etc. *were*: the
+   question they answer is "which channel does this job read", and in contextual
+   mode the MACHINE answers it. `cvmtx_src()` returns the effective source and
+   every CV read and the panel page go through it (`*` suffix when overridden).
+   Runtime only — persistence is untouched.
+5. **`cvmtx_set_catch_tol()`** — how near the knob must come is a judgement about
+   the PARAMETER. Deck and Tracker want 90/4096, DD's filter 60 (a filter jump is
+   very audible), its fader 0.03 (a jump is only a gain step, and a dead fader
+   mid-set is worse). 0 = the default, so nothing that does not call it changes.
+
+> **TRAP (build, not runtime):** adding `cvmtx_src()`'s own bounds check let GCC
+> prove `d` could reach `CVMTX_MAX` in every loop bounded by `m->n`, and IDF 4.3
+> builds `-Werror=array-bounds`. Fixed with one `cvm_n()` clamp helper used as
+> the limit everywhere — which also means a bad `n` cannot walk off the arrays.
+
+**What actually converted, and what deliberately did not.** Only the DJ FILTER
+moved onto the widget's takeover. The other two pickups stay host-side:
+
+- the **crossfader's** is entangled with the auto/held/manual takeover-fade state
+  machine (`dd.xf_cv` drives the grab that promotes auto→manual);
+- the **loop knobs'** lives in the **QUANTIZED domain** — it catches when the
+  ladder rung index or the start-beat slot matches, not when a value does, and
+  the bin width is per-track. Neither GRAB nor CATCH can express that, and it
+  should not try to: same family as Deck's ladder and hysteresis.
+
+Those destinations are read raw through `cvmtx_src()` and marked `nodirty`.
+
+**Loop LENGTH moved to CV8.** It shared the filter's channel only because CV8 was
+the clock input when that compromise was made; the core clock has defaulted to
+CV4 since `e9c712a`. Fixed defaults are now CV5 window / CV6 filter / CV7 fader /
+CV8 length, with both decks sharing the loop pair and focus arbitrating. The
+borrow machinery STAYS — sharing is one assignment away and it is what makes both
+decks workable at once — but nothing in the defaults triggers it.
+
+**`knob_mode` default flipped to FIXED.** Contextual is the two-knob workaround;
+on four knobs it only takes routing away. Existing presets keep whatever they
+saved (`kmode`), so this is the fresh-start default only.
+
+Deletions: the 130-line bespoke CV Map page (now `cvmtx_menu_event`), the six
+`mi_pick` input-map rows, `dualdeck_rearm_loop_knobs()`, and the fader's own
+`clock_src_is_cv()` test. Re-targeting a loop control now folds into `ctx_sig`,
+so the re-arm fires for the matrix page, the web editor and preset loads alike —
+where the old call could only fire for the page that made it. Presets carrying
+`cvf`/`cvx`/`cvp*`/`cvl*` migrate on load.
+
+**Watch for, first time it is played:** `dd_ch()` answers -1 for OFF as well as
+for the clock, and an unassigned filter or fader is now FROZEN rather than
+reading channel 0. That is correct but it is new — a matrix row set to "off" used
+to be impossible on this machine.
+
+**Remaining in the rework: Sampler3, Drums.**
+
 ## 2026-09-12 — MACHINE-SIDE CV REWORK begins: Slicer gets a matrix (`74710cf`)
 
 Arlo: "essential". The Tier-2 machines carry hand-rolled CV instead of a
