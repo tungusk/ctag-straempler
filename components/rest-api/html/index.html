@@ -495,6 +495,13 @@ body.nosbar .sbar{display:none}
    stack the two buttons and the reading on three separate lines */
 #midioctg{display:flex;align-items:center;gap:2px;flex:0 0 auto}
 .row.tight>#midioctg{padding:0;margin-left:14px}
+/* #midikbd is the keyboard CANVAS, not a button: the 14 px side padding gave it
+   a content box 28 px narrower than the row, while both renderers sized their
+   keys against the ROW. The piano centres and so only lost a sliver; the QWERTY
+   board is left-aligned and had its '=' key clipped by overflow:hidden. Measured
+   before believing it — the board reported left:14px inside a "width:100%" box,
+   which is what gave the padding away. */
+.row.tight>#midikbd{padding:0}
 .octb{padding:2px 7px;font-size:11px;line-height:1.3;flex:0 0 auto}
 #midioct{flex:0 0 30px;color:#ccc;font-size:11px;text-align:center}
 .mdot{width:8px;height:8px;border-radius:50%;background:#555;display:inline-block;flex:0 0 8px;padding:0}   /* NOT scoped to .row.tight — it rides inside #midiaux */
@@ -542,6 +549,22 @@ body.nosbar .sbar{display:none}
 .mkey.b .u,.mkey.b .d{color:#999}
 .mkey.on{background:var(--acc)}
 .mkey.on .u,.mkey.on .d{color:#062}
+/* QWERTY view: the same notes on the board you actually play them on. Absolute
+   positions because the rows are STAGGERED — a flex row cannot offset itself by
+   three quarters of a key. Colour is the note, not the key: naturals white,
+   sharps black, and because Impulse Tracker puts naturals on the letter rows and
+   sharps on the row above, the piano pattern appears in the stagger by itself. */
+.kbk{position:absolute;box-sizing:border-box;border:1px solid #333;border-radius:3px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-family:monospace;line-height:1.05;overflow:hidden;cursor:pointer;user-select:none}
+.kbk .kl{font-size:11px}
+.kbk .ks{font-size:8px;opacity:.75;margin-top:1px}
+.kbk.w{background:#ddd;color:#333;border-color:#bbb}
+.kbk.b{background:#222;color:#ccc;border-color:#000}
+.kbk.off{background:#141414;color:#3f3f3f;border-color:#242424}   /* not a note */
+.kbk.fn{background:#141414;color:#7a9;border-color:#2e3a38}       /* octave - and = */
+.kbk.on{background:var(--acc);color:#062;border-color:var(--acc)}
+.kbk.on .ks{opacity:.9}
 /* card help: the explainer paragraph moves into a hover on the card title, dotted like .ren */
 .hlp{position:relative;border-bottom:1px dotted #2f5566;cursor:help}
 .hlp:hover:after{content:attr(data-h);position:absolute;left:0;top:20px;width:330px;max-width:min(70vw,330px);
@@ -662,6 +685,7 @@ body.cdragging .ph{cursor:grabbing}
       <span id="midioct">C4</span>
       <button class="btn octb" onclick="midiOct(1)" title="octave up (=)">&#9656;</button></span>
       <span style="flex:1"></span>
+      <span id="kbtabs"></span>
       <span id="midiaux"><span id="midist" class="mdot" title="transport"></span>
       <button class="btn" id="midiwbtn" onclick="midiWideToggle()" title="card width">full</button>
       <button class="btn" onclick="midiSend('x');midiHeldClear()">Panic</button></span>
@@ -2867,6 +2891,7 @@ function midiWideToggle(){   // wide splits the page around the band; re-lay it 
 }
 function midiAuto(){
   var card=document.getElementById('midicard'); if(!card)return;
+  var tb=document.getElementById('kbtabs'); if(tb)tb.innerHTML=kbViewTabs();
   var fits=window.innerWidth>=1040;               // room for the full-width band?
   var wide=fits&&midiWidthPref()==='full';
   var wb=document.getElementById('midiwbtn');
@@ -2885,7 +2910,90 @@ function midiAuto(){
   }
   midiDraw();
 }
+// ---- QWERTY view -----------------------------------------------------------
+// The same notes drawn as the COMPUTER keyboard you actually play them on:
+// real ANSI rows with their real stagger, each key coloured by the note it
+// sends. Because the Impulse Tracker layout puts naturals on the letter rows
+// and sharps on the row above, the piano pattern falls out of the stagger on
+// its own — which is the thing the piano view cannot show you.
+//
+// Rows are [offset in key units, "keys"]. The ANSI stagger measured from the
+// number row: Q +0.5, A +0.75, Z +1.25.
+var KB_ROWS=[
+  [0,    ['1','2','3','4','5','6','7','8','9','0','-','=']],
+  [0.5,  ['q','w','e','r','t','y','u','i','o','p']],
+  [0.75, ['a','s','d','f','g','h','j','k','l',';']],
+  [1.25, ['z','x','c','v','b','n','m',',','.','/']]
+];
+var KB_FN={'-':'oct-','=':'oct+'};              // not notes, but they do something
+function kbIsBlack(semi){return [1,3,6,8,10].indexOf((midiBase+semi)%12)>=0;}
+function midiDrawKeys(){
+  var el=document.getElementById('midikbd'); if(!el)return;
+  var row=document.getElementById('midirow'); var rowW=row?row.clientWidth:0;
+  if(!rowW)return;
+  var pv=document.getElementById('midiprev'),nx=document.getElementById('midinext');
+  if(pv)pv.style.display='none'; if(nx)nx.style.display='none';   // nothing to scroll: the whole board is here
+  // widest row including its offset decides the unit, so the board always fits
+  var span=0,i,j;
+  for(i=0;i<KB_ROWS.length;i++)span=Math.max(span,KB_ROWS[i][0]+KB_ROWS[i][1].length);
+  // Fill the row, same as the piano view does. Capped at 72 px, which is roughly
+  // the 19 mm pitch of a real keycap — past that it stops reading as a keyboard
+  // and starts reading as a novelty. Floored at 18 so the half-width card still
+  // shows a legible board rather than confetti.
+  var u=Math.max(18,Math.min(72,Math.floor(rowW/span)));
+  var gap=Math.max(2,Math.round(u*0.07)), kw=u-gap, kh=Math.round(u*0.92);
+  // The board is exactly as wide as its container and starts at x=0. It used to
+  // be sized to its content and centred with margin:0 auto, and the '=' key was
+  // clipped by #midikbd's overflow:hidden — the box did NOT centre where the
+  // arithmetic said (measured 14 px in, not 3.5), so the last key's right edge
+  // landed outside. Not worth chasing: u = floor(rowW/span) already guarantees
+  // span*u fits, so left-aligning makes overflow impossible by construction
+  // rather than by a margin calculation being right.
+  var h='<div style="position:relative;height:'+(KB_ROWS.length*(kh+gap))+'px;width:100%">';
+  for(i=0;i<KB_ROWS.length;i++){
+    var off=KB_ROWS[i][0], keys=KB_ROWS[i][1], y=i*(kh+gap);
+    for(j=0;j<keys.length;j++){
+      var k=keys[j], x=Math.round((off+j)*u);
+      var semi=(k in MT_KEYS)?MT_KEYS[k]:-1;
+      var cls='kbk', lbl=k.toUpperCase(), sub='';
+      if(semi>=0){
+        cls+=kbIsBlack(semi)?' b':' w';
+        if(midiHeld[midiBase+semi])cls+=' on';
+        sub=MT_NAME[(midiBase+semi)%12];
+      } else if(k in KB_FN){ cls+=' fn'; sub=KB_FN[k]; }   // clickable below
+      else cls+=' off';
+      h+='<div class="'+cls+'"'+(semi>=0?' data-n="'+(midiBase+semi)+'"':'')
+        +' style="left:'+x+'px;top:'+y+'px;width:'+kw+'px;height:'+kh+'px">'
+        +'<span class="kl">'+esc(lbl)+'</span>'
+        +(sub?'<span class="ks">'+esc(sub)+'</span>':'')+'</div>';
+    }
+  }
+  el.innerHTML=h+'</div>';
+  midiBindKeys(el);
+  // - and = shift the octave from the keyboard, so they do here too
+  el.querySelectorAll('.kbk.fn').forEach(function(k){
+    var d=k.querySelector('.ks').textContent==='oct+'?1:-1;
+    k.addEventListener('click',function(){midiOct(d);});
+  });
+}
+var MT_NAME=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+function kbViewGet(){try{return localStorage.getItem('kbview')==='keys'?'keys':'piano';}catch(e){return 'piano';}}
+function kbViewSet(v){
+  try{localStorage.setItem('kbview',v);}catch(e){}
+  var tb=document.getElementById('kbtabs'); if(tb)tb.innerHTML=kbViewTabs();   // or the highlight goes stale
+  midiHeldClear(); midiDraw(); balanceSoon();
+}
+function kbViewTabs(){
+  var k=kbViewGet()==='keys';
+  return '<div class="tabs mxview foldhide" style="flex:0 0 auto;margin-right:8px">'
+    +'<div class="tab'+(k?'':' on')+'" title="piano keys" onclick="kbViewSet(\'piano\')">piano</div>'
+    +'<div class="tab'+(k?' on':'')+'" title="the computer keyboard you play it on" onclick="kbViewSet(\'keys\')">keys</div>'
+    +'</div>';
+}
+
 function midiDraw(){
+  if(kbViewGet()==='keys')return midiDrawKeys();
   var el=document.getElementById('midikbd');if(!el)return;
   var m=midiWhiteMap();
   // Decide the nav buttons BEFORE measuring: reading #midikbd first and showing
@@ -2930,7 +3038,11 @@ function midiDraw(){
       +'<span class="u">'+MT_LBL[i].u+'</span><span class="d">'+MT_LBL[i].d+'</span></div>';
   }
   el.innerHTML=h+'</div>';
-  el.querySelectorAll('.mkey').forEach(function(k){
+  midiBindKeys(el);
+}
+// both views draw pressable keys carrying data-n, so they bind identically
+function midiBindKeys(el){
+  el.querySelectorAll('[data-n]').forEach(function(k){
     var n=parseInt(k.getAttribute('data-n'));
     k.addEventListener('mousedown',function(e){e.preventDefault();midiOn(n);});
     k.addEventListener('mouseup',function(){midiOff(n);});
