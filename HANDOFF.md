@@ -173,6 +173,48 @@ UI path is a re-arm the other paths bypass.**
 | Sampler3 `a8fe5f7` | bespoke matrix + hand-rolled `cvmtx_cv01` | 6 dests, takeover new |
 | Drums `9cce1f5` | 2 knobs meaning 4 things by encoder position | 4 dests |
 
+### The three that were missed (`15c1ead`)
+
+Glitch, Granular and Looper. **The rework was scoped from the Tier-2 note rather
+than from a sweep, and three machines fell outside it.** Found by auditing every
+`machine_*` for `cvmtx_init` vs raw `io->cv[]` — the audit is a one-liner and it
+should have run at the START of the rework, not the end:
+
+```
+for d in components/machine_*; do
+  grep -rl cvmtx_init $d >/dev/null && echo "$d ok" || grep -l "io->cv\[" $d/*.c
+done
+```
+
+Same story as the rest: CV6/CV7 hard-wired, K5/K8 unused, CV1/CV2 nailed to a
+level or a filter. **Take-over is new on all three.** All three also carried
+`cvm[0] > 900 ? cvm[0] - 900 : 0` — a hardcoded stand-in for the ch1/2 idle-floor
+tracker, now `cvmtx_t.floor12`. Sampler3 had its own copy of the same hack.
+
+Granular gains grain size (K5) and density (K8) — menu-only before because there
+was nowhere to put them. Looper stays FOCUS-STYLE (four rows on the selected
+track, not 4 tracks x 2 params = eight destinations for four knobs).
+
+**Two fixes to earlier commits in this same rework, both found by the sweep:**
+- **Tracker `b44a2e6`** — the loop window's SEED still read `s_cvm[6]`/`s_cvm[5]`
+  directly. The seed is load-bearing (`loop_len`/`loop_pos_cv` have no stored
+  value), but it read a FIXED channel while the matrix could point the
+  destination elsewhere. Reads the assigned channel now.
+- **Deck `2fa2c28`** — `s_cv6`/`s_cv7` written every block "for the UI meters",
+  read by nothing. Deleted.
+
+> **The lesson worth keeping:** converting a machine leaves *residue* — a seed, a
+> meter, a display copy — that still names the old fixed channel and compiles
+> fine. Grep the machine for `cvm[` / `io->cv[` after converting it, not just
+> before.
+
+### FINAL STATE — every machine that reads CV is on the matrix
+
+Synth, Keys, Tape (stage 3, `64e2fa0..51e6f8e`) · Slicer `74710cf` · Deck
+`2fa2c28` · Tracker `b44a2e6` · DoubleDecker `eaf16bc` · Sampler3 `a8fe5f7` ·
+Drums `9cce1f5` · Glitch + Granular + Looper `15c1ead`.
+Editor, Freesound and Radio take no CV. Sampler2 is pulled.
+
 **Nothing here has been played yet.** Six machines moved their knob layouts in
 one pass; that is a lot of feel to check at once, and the useful order is
 probably Drums and Slicer first (most changed), then Deck and Tracker.
