@@ -3,6 +3,16 @@
 #include <stdbool.h>
 #include "clock.h"
 #include "svf.h"
+#include "cvmtx.h"
+
+// CV matrix destinations (2026-09-12). Like Deck, Tracker was written for the
+// first prototype's two working knobs and multiplexed FOUR jobs onto them via
+// trk.loop_engage: looping CV6/CV7 were the loop position and length ladder,
+// released they were the DJ filter and its resonance. Demultiplexed now, one
+// job per knob. The filter's takeover is CATCH (was TRK_PASSTOL) — it must not
+// jump, which is the whole reason the widget grew a second takeover style.
+enum { TRKM_LPOS = 0, TRKM_FILT, TRKM_LLEN, TRKM_RESO, TRKM_N };
+extern const char *const trk_mtx_labels[TRKM_N];
 
 // Tracker — a multi-format module player (MOD/XM/IT/S3M/669/… via libxmp).
 // Architecture mirrors the deck: an unpinned RENDER task owns the libxmp
@@ -123,7 +133,8 @@ typedef struct {
     // (window + length); on release the filter comes back by PASS-THROUGH pickup —
     // inert until the knob crosses back through the value the engine is using — so
     // leaving a loop can never slam the filter open or shut.
-    volatile int  filt_cv;         // frozen while the loop owns the knob
+    cvmtx_t  mtx;                  // assignable CV matrix (destinations above)
+    volatile int  filt_cv;         // DJ filter position, 2048 +/- 150 = bypass
     volatile int  flt_res_cv;
     volatile int  flt_mode;        // 0 off, 1 LP, 2 HP (UI)
     float flt_f, flt_q;

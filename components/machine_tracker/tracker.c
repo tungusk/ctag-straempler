@@ -604,6 +604,16 @@ static void render_task(void *pv)
 }
 
 // ---- lifecycle --------------------------------------------------------------
+const char *const trk_mtx_labels[TRKM_N] = {
+    "Loop Pos", "Filter", "Loop Len", "Reso"
+};
+// K5 = 4, K6 = 5, K7 = 6, K8 = 7. Each job keeps ONE of the two homes it used
+// to share: Filter stays on K6 (the noon-neutral middle knob, bypass at 12) and
+// Loop Len stays on K7; Loop Pos moves out to K5 and Reso to K8.
+static const int8_t trk_mtx_defaults[TRKM_N] = {
+    /* LPOS */ 4, /* FILT */ 5, /* LLEN */ 6, /* RESO */ 7
+};
+
 static esp_err_t tracker_start(void)
 {
     char keep_file[TRK_NAME_LEN];
@@ -619,6 +629,15 @@ static esp_err_t tracker_start(void)
     mkdir(TRK_DIR_VFS, 0777);
     sd_lock_give();
     trk.loop = keep_loop; trk.sync = keep_sync; trk.amiga = keep_amiga;
+    // These were recomputed from CV every block, so they never needed a sensible
+    // starting value. As CATCH bases they do: filt_cv 0 would boot the filter
+    // fully LP-closed and the knob could only catch it at the far left.
+    trk.filt_cv = 2048;              // the bypass notch
+    trk.flt_res_cv = 0;
+    cvmtx_init(&trk.mtx, trk_mtx_labels, TRKM_N, trk_mtx_defaults);
+    cvmtx_set_takeover(&trk.mtx, TRKM_FILT, CVM_TK_CATCH);   // was TRK_PASSTOL
+    cvmtx_set_takeover(&trk.mtx, TRKM_RESO, CVM_TK_CATCH);
+    trk.mtx.nodirty = (uint16_t)(1u << TRKM_LPOS);   // window moves are performance
     strlcpy(trk.file, keep_file, sizeof(trk.file));
     trk.tf_cur = 1.0f;
     trk.loop_len = 4;               // sane until process() reads CV7
@@ -674,6 +693,8 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     static cvmed_t s_tmed[8];
     static int s_cvm[8];
     for (int k = 0; k < 8; k++) s_cvm[k] = cvmed_step(&s_tmed[k], io->cv[k]);
+    { int cs = clock_core_src(); trk.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
+    cvmtx_track(&trk.mtx, s_cvm);
 
     // transport gates — the unified TR grammar (convergence S4, shared
     // trig_gate.h): TR1 tap = play/pause (fires on RELEASE now), TR1
@@ -704,11 +725,15 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     static const int lad_div[15] = {16, 8, 4, 2, 0, 0, 0, 0,  0,  0,  0,   0,   0,   0,    0};
     #define TRK_LEN_STEPS 15
     static int cv_len_h = -1, cv_pos_h = -1;
-    // HOLD a channel carrying the CLOCK (clock_src_is_cv): the deadband below is a
-    // jitter filter, not a gate — a pulse train sails through it and resizes the
-    // loop every pulse.
-    int cv_len = clock_src_is_cv(clock_core_src(), 6) ? (cv_len_h < 0 ? s_cvm[6] : cv_len_h) : s_cvm[6];
-    int cv_pos = clock_src_is_cv(clock_core_src(), 5) ? (cv_pos_h < 0 ? s_cvm[5] : cv_pos_h) : s_cvm[5];
+    // mtx.skip_src replaces the per-channel clock_src_is_cv holds: the deadband
+    // below is a JITTER filter, not a gate, and a pulse train sails through it
+    // and resizes the loop every pulse. Unassigned or not-yet-taken-over leaves
+    // the held value standing, exactly as the old guard did.
+    float kk;
+    int cv_len = (cv_len_h < 0) ? s_cvm[6] : cv_len_h;
+    int cv_pos = (cv_pos_h < 0) ? s_cvm[5] : cv_pos_h;
+    if (cvmtx_abs(&trk.mtx, TRKM_LLEN, &kk)) cv_len = (int)(kk * 4095.0f);
+    if (cvmtx_abs(&trk.mtx, TRKM_LPOS, &kk)) cv_pos = (int)(kk * 4095.0f);
     // (median: the +/-60 deadband below is a
                                                 // JITTER filter — a 1200-count outlier
                                                 // sails straight through it and resizes
@@ -760,24 +785,26 @@ static void tracker_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE
     #define TRK_FLT_FMAX  1.0f
     #define TRK_Q_CLEAN   2.0f
     #define TRK_Q_SQUELCH 0.10f
-    #define TRK_PASSTOL   90
-    static int pk6 = -2, pk7 = -2;        // -2 live, -1 armed (waiting to be crossed)
+    // pk6/pk7 + TRK_PASSTOL are gone: CVM_TK_CATCH is that mechanism, and the
+    // tolerance moved into the widget verbatim as CVM_CATCH_TOL. The rearm on
+    // loop release survives per destination, for the case where the user has
+    // assigned Filter or Reso to a channel the loop pair also uses.
     static bool loop_was = false;
-    if (trk.loop_engage && !loop_was) { /* engage: the loop takes the knobs */ }
-    if (!trk.loop_engage && loop_was) pk6 = pk7 = -1;   // release: arm the pickups
+    if (!trk.loop_engage && loop_was) {
+        cvmtx_rearm_dest(&trk.mtx, TRKM_FILT);
+        cvmtx_rearm_dest(&trk.mtx, TRKM_RESO);
+    }
     loop_was = trk.loop_engage;
 
-    if (!trk.loop_engage) {
-        int c6 = s_cvm[5], c7 = s_cvm[6];   // MEDIAN, never the raw pin: a lone ADC
-                                            // outlier both slams the cutoff AND can land
-                                            // within TRK_PASSTOL of the frozen value,
-                                            // falsely releasing the pickup that exists
-                                            // to stop exactly that slam
-        if (pk6 != -2) { int d = c6 - trk.filt_cv;    if (d < 0) d = -d; if (d <= TRK_PASSTOL) pk6 = -2; }
-        if (pk7 != -2) { int d = c7 - trk.flt_res_cv; if (d < 0) d = -d; if (d <= TRK_PASSTOL) pk7 = -2; }
-        if (pk6 == -2) trk.filt_cv = c6;
-        if (pk7 == -2) trk.flt_res_cv = c7;
-    }
+    // Filter and Reso have their own knobs now — no longer borrowed by the loop,
+    // so no loop_engage gate. CATCH takeover (was TRK_PASSTOL, now the widget's):
+    // the knob is inert until it reaches the value in use, so nothing jumps. The
+    // conditioned read cvmtx uses is the same median that stopped a lone ADC
+    // outlier from both slamming the cutoff and falsely releasing the pickup.
+    cvmtx_set_base(&trk.mtx, TRKM_FILT, (float)trk.filt_cv    / 4095.0f);
+    cvmtx_set_base(&trk.mtx, TRKM_RESO, (float)trk.flt_res_cv / 4095.0f);
+    if (cvmtx_abs(&trk.mtx, TRKM_FILT, &kk)) trk.filt_cv    = (int)(kk * 4095.0f);
+    if (cvmtx_abs(&trk.mtx, TRKM_RESO, &kk)) trk.flt_res_cv = (int)(kk * 4095.0f);
     {
         int fcv = trk.filt_cv;
         int mode = 0;
@@ -869,6 +896,7 @@ static cJSON *tracker_preset_save(void)
     cJSON_AddBoolToObject(o, "amiga", trk.amiga);
     cJSON_AddBoolToObject(o, "show_text", trk.show_text);
     cJSON_AddBoolToObject(o, "loop_freeze", trk.loop_freeze);
+    cvmtx_save(&trk.mtx, o);                // "mxs"/"mxa"/"mxm"
     return o;
 }
 
@@ -880,8 +908,11 @@ static void tracker_preset_load(const cJSON *node)
                                     // the play bar is the page, not a caption block
     trk.loop_freeze = false;
     trk.file[0] = 0;
+    cvmtx_reset_defaults(&trk.mtx);
     if (!node) return;
     cJSON *j;
+    cvmtx_load(&trk.mtx, node);
+    cvmtx_rearm(&trk.mtx);         // knobs recapture against the loaded values
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop")))  trk.loop  = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync")))  trk.sync  = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "amiga"))) trk.amiga = cJSON_IsTrue(j);
@@ -906,8 +937,8 @@ extern const machine_ui_t tracker_menu_ui;
 static int trk_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    if (!clock_src_is_cv(clock_core_src(), 5)) MI_ADD(mi("loop position / DJ sweep", 5));
-    if (!clock_src_is_cv(clock_core_src(), 6)) MI_ADD(mi("loop length / resonance", 6));
+    // the four continuous jobs are CV MATRIX destinations now, one per knob;
+    // the clock_src_is_cv guards that hid them are mtx.skip_src
     MI_ADD(mi("play/stop (hold: restart)", 8));
     MI_ADD(mi("loop on/off", 9));
     return n;

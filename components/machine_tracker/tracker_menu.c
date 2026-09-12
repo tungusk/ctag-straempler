@@ -15,6 +15,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "cvmtx.h"
 #include "clock.h"
 #include "beatlisten.h"
 #include "menu_config.h"
@@ -384,6 +385,7 @@ static const setup_item_t trk_setup_items[] = {
     {"Clock",       ST_RANGE},
     {"Info Text",   ST_TOGGLE},
     {"Loop Freeze", ST_TOGGLE},
+    {"CV Matrix",   ST_ACTION},   // -> M_TRACKER_MATRIX
 };
 
 static void trk_setup_render(int i, char *v, size_t n){
@@ -413,13 +415,21 @@ static void trk_setup_adj(int i, int dir){
     }
 }
 
+static int tracker_matrix_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return cvmtx_menu_event(&trk.mtx, event, "Tracker CV Matrix",
+                            M_TRACKER_SETUP, M_TRACKER_LIVE);
+}
+
 static int trk_setup_action(int i){
+    if (i == 8) return M_TRACKER_MATRIX;   // the assignable CV matrix
     if (i == 0){ refresh_mods(); s_load_ret = M_TRACKER_SETUP; return M_TRACKER_LOAD; }
     return 0;
 }
 
 static setup_menu_t trk_setup = {
-    .items = trk_setup_items, .n = 8, .title = "Tracker Setup",
+    .items = trk_setup_items, .n = 9, .title = "Tracker Setup",
     .aff_label = "Machine", .aff_target = M_MORE, .live_target = M_TRACKER_LIVE,
     .render = trk_setup_render, .adjust = trk_setup_adj, .action = trk_setup_action,
 };
@@ -489,6 +499,7 @@ static void tracker_register_pages(void *menusys){
     menusys_new_item(_ms, M_TRACKER_LIVE);  menusys_item_set_default_cb(_ms, M_TRACKER_LIVE, tracker_live_handler);
     menusys_new_item(_ms, M_TRACKER_SETUP); menusys_item_set_default_cb(_ms, M_TRACKER_SETUP, tracker_setup_handler);
     menusys_new_item(_ms, M_TRACKER_LOAD);  menusys_item_set_default_cb(_ms, M_TRACKER_LOAD, tracker_load_handler);
+    menusys_new_item(_ms, M_TRACKER_MATRIX); menusys_item_set_default_cb(_ms, M_TRACKER_MATRIX, tracker_matrix_handler);
 }
 
 static const char *const tracker_main_items[] = {"Live", "Setup"};
@@ -503,5 +514,5 @@ const machine_ui_t tracker_menu_ui = {
     .register_pages = tracker_register_pages,
     .boot_target = M_TRACKER_LIVE,
     .setup = &trk_setup,
-    .caps = MC_CLOCK,
+    .caps = MC_CLOCK | MC_MATRIX,
 };

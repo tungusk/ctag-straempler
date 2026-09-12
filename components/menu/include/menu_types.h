@@ -43,6 +43,7 @@ typedef enum{
     M_DECK_LOAD,
     M_TRACKER_LIVE,
     M_TRACKER_SETUP,
+    M_TRACKER_MATRIX,
     M_TRACKER_LOAD,
     M_S3_LIVE,
     M_S3_SETUP,
