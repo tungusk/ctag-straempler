@@ -404,7 +404,7 @@ body.nosbar .sbar{display:none}
   #fscard{order:3}#rdcard{order:3}#edcard{order:3}                   /* the active machine's own card */
   #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}                   /* patching */
   #filescard{order:7}#machcard{order:8}                              /* library, then the selector */
-  #rsetup{order:9}#rglob{order:11}#rparams{order:12}                 /* settings */
+  #rsetup{order:9}#rsys{order:10}#rglob{order:11}#rparams{order:12}  /* settings */
   #rm{order:13}#outcard{order:14}                                    /* capture / streaming */
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
@@ -3017,7 +3017,7 @@ var BAL_LEFT=['panel','midihome'];
 // FILES is PINNED at the TOP of the right column, above MACHINE (Arlo
 // 2026-09-10) — not dealt with the flow cards, open or folded.
 var BAL_RIGHT=['fileshome','machcard','fscard','rdcard','edcard'];
-var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rglob','rparams','rm','outcard'];
+var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rsys','rglob','rparams','rm','outcard'];
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');
