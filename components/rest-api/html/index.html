@@ -546,6 +546,15 @@ body.nosbar .sbar{display:none}
 .sysm>i{display:block;height:100%;transition:width .25s linear}
 .tft .r .v.sysv{min-width:96px}
 .sysg{color:#777}   /* the "of 4.0 MB" half of a reading: present, not competing */
+/* card reordering. The dragged card fades; the card being dropped onto grows an
+   accent edge on the side the drop will land. body.cdragging kills text
+   selection everywhere, because a drag that starts on a header and travels
+   across the page otherwise paints half the UI blue. */
+body.cdragging{user-select:none;-webkit-user-select:none;cursor:grabbing}
+body.cdragging .ph{cursor:grabbing}
+.cdrag{opacity:.45}
+.cdropb{box-shadow:0 -3px 0 0 var(--acc)}
+.cdropa{box-shadow:0 3px 0 0 var(--acc)}
 .bar>i{display:block;height:100%;background:#0af}
 /* A card is a DARK slab on the page ground AND carries a hairline edge — mocked
    the three ways side by side against the real cards (Arlo 2026-09-10): flat on
@@ -3017,7 +3026,124 @@ var BAL_LEFT=['panel','midihome'];
 // FILES is PINNED at the TOP of the right column, above MACHINE (Arlo
 // 2026-09-10) — not dealt with the flow cards, open or folded.
 var BAL_RIGHT=['fileshome','machcard','fscard','rdcard','edcard'];
-var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','rsys','rglob','rparams','rm','outcard'];
+// The FLOW cards, in deal order. BAL_FLOW is a var, not a const, because the
+// user can reorder it by dragging a card header — flowLoad() rewrites it in
+// place so every site that iterates it below needs no idea that happened.
+//
+// WHAT DRAGGING ACTUALLY DOES, and it is worth being honest about: this sets
+// the DEAL SEQUENCE, not a position. balanceCols() still chooses the column, by
+// height, because auto-balance is what keeps the columns even. So in one column
+// a drag is exactly WYSIWYG; in two or three it sets precedence — drag a card
+// up and it is placed earlier, which usually but not always means higher. True
+// free positioning would mean retiring the balancer, and the balancer encodes
+// decisions Arlo made (panel in the middle at three columns, FILES pinned
+// top-right, an open file list owning its column) that would become his to
+// maintain by hand.
+var BAL_FLOW_DEF=['rmatrix','rfx','clkcard','rsetup','rsys','rglob','rparams','rm','outcard'];
+var BAL_FLOW=BAL_FLOW_DEF.slice();
+function flowLoad(){
+  var saved=[];
+  try{saved=(localStorage.getItem('cardorder')||'').split(',').filter(Boolean);}catch(e){}
+  // keep only ids we still ship, so a removed card cannot wedge the list
+  var out=saved.filter(function(id){return BAL_FLOW_DEF.indexOf(id)>=0;});
+  // A card added to the build SINCE the user last dragged goes back to its
+  // DEFAULT NEIGHBOUR, not to the end — appending would quietly bury every new
+  // card underneath a year-old preference.
+  BAL_FLOW_DEF.forEach(function(id,i){
+    if(out.indexOf(id)>=0)return;
+    var at=0;
+    for(var k=i-1;k>=0;k--){var pv=out.indexOf(BAL_FLOW_DEF[k]);if(pv>=0){at=pv+1;break;}}
+    out.splice(at,0,id);
+  });
+  BAL_FLOW=out;
+  // Narrow window sequences by CSS `order`, not by DOM order, so a custom
+  // sequence has to be written as inline order to beat the media query. Only
+  // once customised: untouched, the stylesheet's own numbering stands.
+  var custom=saved.length>0;
+  BAL_FLOW.forEach(function(id,i){
+    var e=document.getElementById(id); if(!e)return;
+    e.style.order = custom ? String(20+i) : '';
+  });
+}
+function flowSave(){
+  try{localStorage.setItem('cardorder',BAL_FLOW.join(','));}catch(e){}
+}
+function flowReset(){
+  try{localStorage.removeItem('cardorder');}catch(e){}
+  BAL_FLOW_DEF.forEach(function(id){var e=document.getElementById(id);if(e)e.style.order='';});
+  flowLoad(); balanceCols();
+}
+// ---- dragging a card header reorders the flow -----------------------------
+// The header is ALSO the fold toggle, so the two are told apart by distance: a
+// press that never travels DRAG_SLOP is a click and folds; past it, it is a
+// drag and the click is swallowed on the way up. No grip glyph — fifteen cards
+// each growing a handle is a lot of furniture for an occasional action.
+var DRAG_SLOP=5;
+function flowDragInit(){
+  BAL_FLOW.forEach(function(id){
+    var e=document.getElementById(id); if(!e)return;
+    // '.ph,.sub' because ADVANCED is a subFold and heads its slot with a .sub.
+    // querySelector returns the first match in DOCUMENT order, not selector
+    // order, so a card with both still hands back its own .ph.
+    var ph=e.querySelector('.ph,.sub'); if(!ph||ph.dataset.fdrag)return;   // rm has no header
+    ph.dataset.fdrag=id;
+    ph.addEventListener('pointerdown',flowDown);
+    ph.title='drag to reorder';
+  });
+}
+function flowDown(ev){
+  if(ev.button)return;
+  var ph=ev.currentTarget, id=ph.dataset.fdrag, el=document.getElementById(id);
+  if(!el)return;
+  var x0=ev.clientX, y0=ev.clientY, live=false, tgt=null, before=true;
+  function clear(){
+    document.querySelectorAll('.cdropb,.cdropa').forEach(function(n){n.classList.remove('cdropb','cdropa');});
+  }
+  function mv(e){
+    if(!live){
+      if(Math.abs(e.clientX-x0)<DRAG_SLOP&&Math.abs(e.clientY-y0)<DRAG_SLOP)return;
+      live=true; el.classList.add('cdrag'); document.body.classList.add('cdragging');
+      ph.setPointerCapture(e.pointerId);
+    }
+    // pointer capture means elementFromPoint is the only way to see what is
+    // under the cursor — the events all come to us now
+    clear(); tgt=null;
+    var under=document.elementFromPoint(e.clientX,e.clientY);
+    while(under&&under!==document.body){
+      if(under.parentElement&&under.parentElement.className==='rcol'&&BAL_FLOW.indexOf(under.id)>=0)break;
+      under=under.parentElement;
+    }
+    if(!under||under===document.body||under===el)return;
+    var r=under.getBoundingClientRect();
+    before=(e.clientY < r.top+r.height/2);
+    tgt=under; under.classList.add(before?'cdropb':'cdropa');
+  }
+  function up(e){
+    ph.removeEventListener('pointermove',mv); ph.removeEventListener('pointerup',up);
+    ph.removeEventListener('pointercancel',up);
+    if(!live)return;                                  // a plain click: let it fold
+    el.classList.remove('cdrag'); document.body.classList.remove('cdragging'); clear();
+    // Swallow the click this press is about to produce, or the card folds too.
+    // DISARM ON A TIMER as well as on the click: a drag does not always produce
+    // one — touch may not, and a pointerup off the element does not — and an
+    // armed one-shot then eats the next unrelated click ANYWHERE on the page.
+    // (Caught in test: after a drag, the very next header click did nothing.)
+    var swT=0;
+    function sw(c){c.stopPropagation();c.preventDefault();disarm();}
+    function disarm(){clearTimeout(swT);window.removeEventListener('click',sw,true);}
+    window.addEventListener('click',sw,true);
+    swT=setTimeout(disarm,400);
+    if(tgt){
+      var from=BAL_FLOW.indexOf(id); BAL_FLOW.splice(from,1);
+      var at=BAL_FLOW.indexOf(tgt.id); if(!before)at++;
+      BAL_FLOW.splice(at,0,id);
+      flowSave(); flowLoad(); balanceCols();
+    }
+  }
+  ph.addEventListener('pointermove',mv);
+  ph.addEventListener('pointerup',up);
+  ph.addEventListener('pointercancel',up);
+}
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');
@@ -3132,7 +3258,7 @@ function fitFiles(cols,pin){
   sc.style.maxHeight=t+'px';
 }
 var balT;
-function balanceSoon(){clearTimeout(balT);balT=setTimeout(balanceCols,60);}
+function balanceSoon(){clearTimeout(balT);balT=setTimeout(function(){balanceCols();flowDragInit();},60);}
 function capsApply(d){
   if(!d)return;
   MACHCARD.forEach(function(c){
@@ -3344,6 +3470,7 @@ function pollStatus(){
 setInterval(pollStatus,500);
 pollImport();
 // (perform faders are built into the input-meter columns by loadRemote)
+flowLoad();      // the user's card order, before the first balanceCols
 sysInit();       // SYSTEM card: /sysinfo on a slow timer, audio off the 500 ms poll
 bcastInit();     // broadcast Listen link + player URL (:8000)
 webLoad();       // browser-side prefs before the first render
@@ -3351,6 +3478,8 @@ midiAuto();      // MIDI card width follows the window
 tab(3);          // the only page; tab() no-ops on the ids that are gone
 loadFiles();loadMods();filesAuto();   // the library is on this page now, nothing clicks a tab to fetch it
 foldAll();       // MACHINE / MIDI / CLOCK / BOUNCE / ICECAST / BROADCAST fold too
+flowDragInit();  // card headers become drag handles (balanceSoon re-attaches
+                 // them after a re-template, which drops the listener)
 midiAuto();      // again: #midi_body only exists once foldAll has wrapped the card
 pollStatus();
 </script>
