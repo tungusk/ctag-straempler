@@ -11,7 +11,10 @@
 #include "cvmtx.h"
 #include "machine.h"    // machine_state_dirty() for ABS knob moves
 
-#define CVM_TAKEOVER 0.03f   // the hosts' knob threshold, lifted verbatim
+#define CVM_TAKEOVER 0.03f   // GRAB: movement that takes over, lifted verbatim
+                             // from the hosts (deck's DK_PICKUP = 120/4096 = 0.029)
+#define CVM_CATCH_TOL 0.022f // CATCH: how close the knob must pass to the value,
+                             // = tracker's TRK_PASSTOL 90/4095
 
 void cvmtx_reset_defaults(cvmtx_t *m)
 {
@@ -20,7 +23,7 @@ void cvmtx_reset_defaults(cvmtx_t *m)
         m->mode[d] = (m->src[d] >= 0) ? CVM_ABS : CVM_OFFSET;
         m->amt[d] = 0.0f;
     }
-    m->rearm = true;
+    m->rearm = 0xFFFFu;      // every dest recaptures (was a single bool)
 }
 
 void cvmtx_init(cvmtx_t *m, const char *const *labels, int n, const int8_t *def_src)
@@ -34,7 +37,25 @@ void cvmtx_init(cvmtx_t *m, const char *const *labels, int n, const int8_t *def_
     cvmtx_reset_defaults(m);
 }
 
-void cvmtx_rearm(cvmtx_t *m) { m->rearm = true; }
+void cvmtx_rearm(cvmtx_t *m) { m->rearm = 0xFFFFu; }
+void cvmtx_rearm_dest(cvmtx_t *m, int d)
+{ if (d >= 0 && d < CVMTX_MAX) m->rearm |= (uint16_t)(1u << d); }
+
+void cvmtx_set_takeover(cvmtx_t *m, int d, int tk)
+{ if (d >= 0 && d < CVMTX_MAX) m->tk[d] = (uint8_t)(tk == CVM_TK_CATCH ? CVM_TK_CATCH : CVM_TK_GRAB); }
+
+// the host's current value for this destination, 0..1 — CATCH is "the knob has
+// reached what the parameter already is", so the widget has to be told what
+// that is whenever anything OTHER than the knob changes it (UI, preset load).
+void cvmtx_set_base(cvmtx_t *m, int d, float v01)
+{ if (d >= 0 && d < CVMTX_MAX) m->base01[d] = v01 < 0.0f ? 0.0f : (v01 > 1.0f ? 1.0f : v01); }
+
+void cvmtx_hold(cvmtx_t *m, int d, bool held)
+{
+    if (d < 0 || d >= CVMTX_MAX) return;
+    if (held) m->hold |=  (uint16_t)(1u << d);
+    else      m->hold &= (uint16_t)~(1u << d);
+}
 
 bool cvmtx_is_default(const cvmtx_t *m, int d)
 {
@@ -51,17 +72,24 @@ void cvmtx_track(cvmtx_t *m, const int cvm[8])
     // ABS takeover: capture on (re)arm, go live past the threshold, hold on
     // the clock channel, flag committed moves for the autosave (hysteresis —
     // a live knob tracks every block)
-    bool rearm = m->rearm;
-    m->rearm = false;
+    uint16_t rearm = m->rearm;
+    m->rearm = 0;
     for (int d = 0; d < m->n; d++) {
         if (m->mode[d] != CVM_ABS || m->src[d] < 0) { m->live[d] = false; continue; }
         float k = cvmtx_cv01(m, cvm, m->src[d]);
         m->pos01[d] = k;
-        if (rearm || m->src[d] == m->skip_src) {
+        // HELD behaves exactly like re-armed, every block: the capture follows
+        // the knob, so releasing the hold arms it where the knob actually is
+        if (((rearm >> d) & 1u) || m->src[d] == m->skip_src || ((m->hold >> d) & 1u)) {
             m->capt[d] = k; m->live[d] = false; m->last01[d] = -1.0f;
             continue;
         }
-        if (!m->live[d] && fabsf(k - m->capt[d]) > CVM_TAKEOVER) m->live[d] = true;
+        if (!m->live[d])
+            m->live[d] = (m->tk[d] == CVM_TK_CATCH)
+                       ? (fabsf(k - m->base01[d]) <= CVM_CATCH_TOL)
+                       : (fabsf(k - m->capt[d])   >  CVM_TAKEOVER);
+        // a live knob IS the value, so CATCH has something true to cross next time
+        if (m->live[d]) m->base01[d] = k;
         if (m->live[d] && !(m->nodirty & (1u << d)) &&
             (m->last01[d] < 0 || fabsf(k - m->last01[d]) > CVM_TAKEOVER)) {
             m->last01[d] = k;
@@ -157,11 +185,11 @@ int cvmtx_menu_event(cvmtx_t *m, int event, const char *title,
     switch (event) {
         case EV_ENTERED_MENU: s_pos = 0; s_field = 0; mtx_redraw(m, title); break;
         case EV_FWD:
-            if (s_field == 1)      { int s = m->src[s_pos] + 1; if (s > 7)  s = -1; m->src[s_pos] = (int8_t)s; m->rearm = true; }
+            if (s_field == 1)      { int s = m->src[s_pos] + 1; if (s > 7)  s = -1; m->src[s_pos] = (int8_t)s; m->rearm = 0xFFFFu; }
             else if (s_field == 2) {   // amount ... +100% > knob (ABSOLUTE)
                 if (m->mode[s_pos] != CVM_ABS) {
                     float a = m->amt[s_pos] + 0.05f;
-                    if (a > 1.001f) { m->mode[s_pos] = CVM_ABS; m->amt[s_pos] = 1.0f; m->rearm = true; }
+                    if (a > 1.001f) { m->mode[s_pos] = CVM_ABS; m->amt[s_pos] = 1.0f; m->rearm = 0xFFFFu; }
                     else m->amt[s_pos] = a > 1.0f ? 1.0f : a;
                 }
             }
@@ -169,7 +197,7 @@ int cvmtx_menu_event(cvmtx_t *m, int event, const char *title,
             mtx_redraw(m, title);
             break;
         case EV_BWD:
-            if (s_field == 1)      { int s = m->src[s_pos] - 1; if (s < -1) s = 7; m->src[s_pos] = (int8_t)s; m->rearm = true; }
+            if (s_field == 1)      { int s = m->src[s_pos] - 1; if (s < -1) s = 7; m->src[s_pos] = (int8_t)s; m->rearm = 0xFFFFu; }
             else if (s_field == 2) {   // knob > +100% > ... -100%
                 if (m->mode[s_pos] == CVM_ABS) { m->mode[s_pos] = CVM_OFFSET; m->amt[s_pos] = 1.0f; }
                 else { float a = m->amt[s_pos] - 0.05f; if (a < -1.0f) a = -1.0f; m->amt[s_pos] = a; }
@@ -250,5 +278,5 @@ void cvmtx_load(cvmtx_t *m, const cJSON *node)
                 m->amt[d] = 0.0f;
             }
     }
-    m->rearm = true;
+    m->rearm = 0xFFFFu;   // ALL dests, as before the bitmask
 }

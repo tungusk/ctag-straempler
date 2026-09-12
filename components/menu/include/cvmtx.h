@@ -37,6 +37,25 @@
 #define CVM_OFFSET 0
 #define CVM_ABS    1
 
+// TAKEOVER BEHAVIOUR (2026-09-12) — an ABS entry has to decide WHEN a physical
+// knob whose position may not match the parameter is allowed to start driving
+// it. The machines had written two different answers before this widget
+// existed, and they feel different, so both live here now:
+//
+//   GRAB   the knob is dead until it MOVES, then the parameter jumps to it.
+//          Compares against the position captured at the last (re)arm.
+//          Deck's DK_PICKUP (120/4096 = 0.029) is this, to a rounding error.
+//
+//   CATCH  the knob is dead until it CROSSES the parameter's current value,
+//          so there is no jump at all. Compares against base01[], which the
+//          host keeps current via cvmtx_set_base(). Tracker's TRK_PASSTOL is
+//          this, and its filter needs it: grabbing would slam the cutoff,
+//          which is the exact thing its pickup exists to prevent.
+//
+// GRAB is the default, so every host written before this keeps its behaviour.
+#define CVM_TK_GRAB   0
+#define CVM_TK_CATCH  1
+
 typedef struct {
     const char *const *labels;   // host's destination names (static storage)
     int n;                       // destinations, <= CVMTX_MAX
@@ -49,9 +68,16 @@ typedef struct {
     bool   live[CVMTX_MAX];      // moved past threshold -> drives the dest
     float  last01[CVMTX_MAX];    // last committed position (dirty hysteresis)
     float  pos01[CVMTX_MAX];     // this block's conditioned position (cvmtx_abs)
-    bool   rearm;                // next track(): recapture, everything un-live
+    uint8_t tk[CVMTX_MAX];       // CVM_TK_GRAB (default) / CVM_TK_CATCH
+    float  base01[CVMTX_MAX];    // host's CURRENT value 0..1 — what CATCH crosses
+    uint16_t rearm;              // BIT PER DEST: next track() recaptures + un-lives
     int8_t skip_src;             // -1, or the CV channel that must never take over (clock)
     uint16_t nodirty;            // bit per dest: ABS moves there don't flag autosave
+    uint16_t hold;               // bit per dest: cannot take over while set. The
+                                 // capture follows the knob meanwhile, so clearing
+                                 // the bit arms it exactly where the knob sits —
+                                 // that is Deck's re-arm-on-loop-disengage and
+                                 // DoubleDecker's dd_addressed(), for free.
     int    floor12[2];           // tracked ch1/2 idle floor (audio task)
 } cvmtx_t;
 
@@ -59,6 +85,10 @@ typedef struct {
 void cvmtx_init(cvmtx_t *m, const char *const *labels, int n, const int8_t *def_src);
 void cvmtx_reset_defaults(cvmtx_t *m);   // everything off, then the defaults as ABS
 void cvmtx_rearm(cvmtx_t *m);            // preset/patch load, engine change: recapture
+void cvmtx_rearm_dest(cvmtx_t *m, int d);            // just one destination
+void cvmtx_set_takeover(cvmtx_t *m, int d, int tk);  // CVM_TK_*, at init
+void cvmtx_set_base(cvmtx_t *m, int d, float v01);   // the host's current value (CATCH)
+void cvmtx_hold(cvmtx_t *m, int d, bool held);       // gate a dest out of takeover
 bool cvmtx_is_default(const cvmtx_t *m, int d);   // entry d == its default (page marker)
 
 // once per audio block, before any cvmtx_val/cvmtx_abs read: follow the ch1/2
