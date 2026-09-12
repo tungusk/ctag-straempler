@@ -3271,14 +3271,41 @@ function balanceCols(){
   if(bot)bot.style.display='';
   BAL_LEFT.forEach(function(id){move(use[pcol],id);});
   BAL_RIGHT.forEach(function(id){move(use[pin],id);});
-  var hp=h('panel'),hr2=0,rest=[],k2;
-  BAL_RIGHT.forEach(function(id){hr2+=h(id);});
+  // EVERY row-A column that is not the panel's gets filled, not just the pin.
+  // This used to deal only into `pin`, which at THREE columns left column 0
+  // entirely EMPTY — a whole 502 px of nothing beside the panel, which is the
+  // "bunch of white space" (Arlo 2026-09-12, who correctly guessed "perhaps it
+  // isolates to 3 column view"). Two columns hid it because pin IS the only
+  // other column there.
+  var hp=h('panel'),rest=[],k2;
+  var fset=[],fh=[];
+  for(k2=0;k2<use.length;k2++){
+    if(k2===pcol)continue;
+    fset.push(use[k2]);
+    fh.push(k2===pin?BAL_RIGHT.reduce(function(a,id){return a+h(id);},0):0);
+  }
   BAL_FLOW.forEach(function(id){
     // the keyboard's slot is empty while wide (its card is in the band), so it
     // costs nothing and must still be parked somewhere definite — otherwise it
     // sits wherever it last drifted and reappears there when un-widened
     if(id==='midihome'){move(use[pin],id);return;}
-    if(hr2<hp){move(use[pin],id);hr2+=h(id);}else rest.push(id);
+    // fill while ANY of them is still short of the panel, into the shortest
+    var mn=Math.min.apply(null,fh);
+    if(mn<hp)deal(fset,fh,id); else rest.push(id);
+  });
+  var hr2=Math.max.apply(null,fh);
+  // The band waits for the TALLER row-A column, so whatever the shorter one is
+  // missing shows as a notch above the keyboard. The panel column is the short
+  // one — it holds only the panel, at a height nothing can be done about — so
+  // top it up from what is left, in order, with anything that still fits under
+  // the band line. Arlo: "putting them above the expanded keyboard if theres
+  // room". Cards that do not fit stay put rather than being reordered around,
+  // and the loop re-reads the gap each time so it can place several small ones.
+  var rowAh=Math.max(h('panel'),hr2), pcH=h('panel'), lifted=[];
+  rest=rest.filter(function(id){
+    var c=h(id);
+    if(c>0&&pcH+c<=rowAh){move(use[pcol],id);pcH+=c;lifted.push(id);return false;}
+    return true;
   });
   var bset=[],bh=[];
   for(k2=0;k2<bcols.length&&k2<use.length;k2++){bset.push(bcols[k2]);bh.push(0);}
