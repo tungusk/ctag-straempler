@@ -9,7 +9,7 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
-## 2026-09-12 (evening) — web: SYSTEM card, card reordering, KEYBOARD
+## 2026-09-12 (evening) — web: SYSTEM card, KEYBOARD, QWERTY view
 
 All pushed and FLASHED (`bfc6325`, `e8d751f`, `251a0d7`, `48c2138`, `bc7f6e7`).
 Five OTAs; `.85` ends on `ota_1`. Rollback reaches the previous build.
@@ -38,19 +38,17 @@ does not predict an alloc. Body is a `.tft` window like the setup screens.
 > needs a CSS `order` for the one-column layout; the stylesheet says so in as
 > many words and it is the same bug that put settings above the panel in Sept.
 
-**Card reordering** (`48c2138`) — drag a card header. It sets the DEAL SEQUENCE,
-not a position: `balanceCols` still picks the column by height, because
-auto-balance is what keeps the columns even. One column is WYSIWYG; two or three
-is precedence. `BAL_FLOW` stays a var and `flowLoad()` rewrites it in place, so
-all six iteration sites are untouched. Persisted as `cardorder`; `flowReset()`
-restores. A card added since the user last dragged reinserts at its DEFAULT
-NEIGHBOUR, not appended.
+**Card reordering** (`48c2138`) — BUILT AND THEN REVERTED the same night
+(`f16a225`). Arlo: *"it flowed better without it."* Drag set the DEAL SEQUENCE,
+not a position, because `balanceCols` still picks the column by height; in two
+or three columns that is a distinction you have to hold in your head for a
+payoff that was not there. **Do not rebuild it without a reason that survives
+that sentence.** The auto-balancer was already doing the job.
 
-> **TRAP, found by driving it rather than looking at it:** the click suppressor
-> that stops a drag from also folding was one-shot on the click alone. A drag
-> does not always produce a click (touch, or a pointerup off the element), so an
-> armed suppressor ate the next unrelated click ANYWHERE on the page. Now also
-> disarmed on a 400 ms timer.
+> **TRAP worth keeping from it:** a one-shot click suppressor must ALSO disarm on
+> a timer. A drag does not always produce a click (touch; a pointerup off the
+> element), and the armed listener then eats the next unrelated click ANYWHERE on
+> the page. Found by driving the UI, not by reading it.
 
 **KEYBOARD** (`bc7f6e7`) — the MIDI card's visible label only. Ids stay `midi*`,
 the fold key stays `'midi'` (persisted per browser — renaming resets everyone's
@@ -63,6 +61,46 @@ column existed.
 **Owed by eye:** the wide keyboard at a real >=1530 px window (bench window is
 1204, so the three-column case is verified by construction only), and card
 reordering at one column.
+
+### Later the same evening — the keyboard
+
+**The keyboard is a flow card, not pinned** (`87c5e5e`). It was in `BAL_LEFT`
+beside the panel. Full width still breaks the page into row A / band / row B,
+but the break is now WHERE THE KEYBOARD SITS IN THE DEAL ORDER instead of at the
+panel's height — the old rule ignored where the card was, so going full moved
+eight unrelated cards ("it spans columns but makes a mess"). **Kept after the
+drag revert: it is not part of that feature.**
+
+**Keys fill the band.** `MIDI_KEYW` was a fixed 42 and the code said the keys
+"need not fill the card", so a 1016 px band drew ~630 px of keys. In wide mode
+the leftover now buys BIGGER KEYS, capped at 72 (a real keycap pitch).
+
+**QWERTY view** (`56e1260`, `5b69242`) — `piano|keys` tabs, same idiom as the
+matrix. Draws the notes on the computer keyboard: real ANSI rows at their real
+stagger (Q +0.5, A +0.75, Z +1.25). **The piano pattern falls out for free**,
+because Impulse Tracker puts naturals on the letter rows and sharps on the row
+above. Black keys need a WHITE outline (a dark key on a dark card reads by its
+outline). The width toggle is piano-only, and `wide` is COMPUTED false in keys
+view rather than the pref being rewritten — forcing it would discard a stored
+`full`, and hiding the button while wide would strand the card.
+
+**FILES only owns a column at THREE** (`2e30e14`). It had owned the last column
+since 09-10 with everything else spreading over "the columns that are left" —
+which is ONE at two columns, so opening the list stacked fifteen cards into a
+tower and stretched the list to 2312 px to match. Fine when written; the column
+has since gained SYSTEM and the keyboard.
+
+> **THE TRAP OF THE NIGHT, three times: `.row.tight>*{padding:3px 14px}` is a
+> BUTTON rule and it hits every child.** `#midioctg` and `#midikbd` were already
+> exempted; `#kbtabs` was not, and its 28 px pushed Panic 12 px outside the card.
+> `#midikbd`'s cost both renderers 28 px of width they thought they had — the
+> QWERTY board's '=' key was clipped by `overflow:hidden`. **Exempt any new
+> non-button child of that row.** The header also wraps now as a backstop.
+
+**OPEN:** the piano header wraps to FOUR lines at half width — children sum to
+562 px in a 480 px row and the spacer eats 161 px. Arlo: "should be one row
+across the top". Not fixed. The `flex-wrap` backstop is what lets it stack
+rather than overflow; the fix is to drop the spacer so the row fits on one line.
 
 ## 2026-09-12 — the rework's REAL shape: undoing a two-knob workaround
 ### cvmtx extended (`da134ce`), then Deck (`2fa2c28`) and Tracker (`b44a2e6`)
