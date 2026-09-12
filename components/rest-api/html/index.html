@@ -3225,7 +3225,16 @@ function balanceCols(){
     var fb=document.getElementById('files_body');
     var filesOpen=!!fb&&getComputedStyle(fb).display!=='none';
     var flow=BAL_FLOW,k;
-    if(filesOpen){
+    // ...but only with THREE columns to play with. "Everything else spreads over
+    // the columns that are left" leaves exactly ONE at two columns, so opening
+    // FILES stacked every other card — panel, keyboard, matrix, FX, clock,
+    // setup, system, global, out — into a single tower beside a list stretched
+    // to 2300 px to match it. Both columns unusable, and the keyboard shoved
+    // under the panel every time the list opened (Arlo 2026-09-12: "files and
+    // keyboard cards fight a little bit"). At two columns FILES is an ordinary
+    // card again and keeps the stylesheet's 60vh cap, which is what makes it a
+    // SCROLLER rather than a 2000 px page.
+    if(filesOpen&&use.length>=3){
       // FILES gets the LAST column to ITSELF — MACHINE and the machine's own
       // card are displaced under the panel, keyboard or no keyboard (Arlo
       // 2026-09-10). The list is the tallest thing on the page when it is open;
