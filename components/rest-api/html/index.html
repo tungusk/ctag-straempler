@@ -542,7 +542,15 @@ body.nosbar .sbar{display:none}
 #midicard.wide>.ph{position:absolute;top:8px;left:10px;margin:0;z-index:1}
 #midicard.wide>#midi_body{display:flex;align-items:center;gap:12px}
 #midicard.wide #midictl{flex:0 0 118px;flex-direction:column;align-items:flex-start;gap:8px;margin:0;padding-top:24px}
-#midicard.wide #midictl>span[style*="flex:1"]{display:none}
+#midicard.wide #midictl>#midispc{display:none}
+/* The spacer is a SPACER — it had inherited `.row.tight>*`'s 28 px of button
+   padding, and at half width that was the whole problem: the header's real
+   content is 401 px in a 480 px row, but the padding pushed the line to 483 and
+   it wrapped to four lines (Arlo: "the 1/2 view buttons are wrapping again").
+   Three pixels. Fourth child of this row to need the exemption; the id replaces
+   an attribute-substring match on the inline style, which was one edit away
+   from silently not matching. */
+.row.tight>#midispc{padding:0}
 #midicard.wide #midirow{flex:1 1 auto;min-width:0;margin-top:0}
 #midicard.wide #midiaux{flex-direction:column;align-items:flex-end;gap:8px}
 #midicard.wide #mididev{flex:0 0 130px;margin-top:0}
@@ -683,10 +691,10 @@ body.nosbar .sbar{display:none}
       <span id="midioctg"><button class="btn octb" onclick="midiOct(-1)" title="octave down (-)">&#9666;</button>
       <span id="midioct">C4</span>
       <button class="btn octb" onclick="midiOct(1)" title="octave up (=)">&#9656;</button></span>
-      <span style="flex:1"></span>
+      <span id="midispc" style="flex:1"></span>
       <span id="kbtabs"></span>
       <span id="midiaux"><span id="midist" class="mdot" title="transport"></span>
-      <button class="btn" id="midiwbtn" onclick="midiWideToggle()" title="card width">full</button>
+      <button class="btn" id="midiwbtn" onclick="midiWideToggle()" title="card width">2x</button>
       <button class="btn" onclick="midiSend('x');midiHeldClear()">Panic</button></span>
     </div>
     <div class="row tight" id="midirow" style="gap:4px;align-items:stretch;margin-top:6px">
@@ -803,7 +811,7 @@ body.nosbar .sbar{display:none}
   </div>
   <!-- FILES: the library is long, so the table scrolls INSIDE the card at a
        capped height instead of running the page to thousands of pixels. The
-       width button is the KEYBOARD card's: half sits in a column, full spans two. -->
+       width button is the KEYBOARD card's: 1/2 sits in a column, 2x spans two. -->
   <div id="fileshome"><div class="card pnl" id="filescard">
     <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" style="flex:1;padding:0;margin:0">FILES</b>
@@ -2891,7 +2899,14 @@ function midiWideToggle(){   // wide splits the page around the band; re-lay it 
 function midiAuto(){
   var card=document.getElementById('midicard'); if(!card)return;
   var tb=document.getElementById('kbtabs'); if(tb)tb.innerHTML=kbViewTabs();
-  var fits=window.innerWidth>=1040;               // room for the full-width band?
+  // Full width is a TWO-COLUMN feature. The band is capped at 1016 px because a
+  // keyboard stretched over three columns is wider than it is useful (Arlo
+  // 2026-09-11) — but that means at three columns it spans 1016 of 1530 and
+  // leaves 502 px of dead air beside it, AND still forces the row A / band /
+  // row B split on a layout that had room for everything anyway. So there is no
+  // case for it there (Arlo 2026-09-12). At two columns the band is exactly the
+  // page, which is what it was designed for.
+  var fits=colCount()===2;                       // room for the full-width band?
   // The QWERTY board is a fixed shape that fills whatever it is given, so full
   // width buys it nothing — the toggle is a PIANO control (Arlo 2026-09-12:
   // "keys view doesnt need a full button... only for piano"). Computed here
@@ -2900,7 +2915,8 @@ function midiAuto(){
   var keysView=kbViewGet()==='keys';
   var wide=fits&&!keysView&&midiWidthPref()==='full';
   var wb=document.getElementById('midiwbtn');
-  if(wb){wb.style.display=(fits&&!keysView)?'':'none';wb.textContent=wide?'1/2':'full';}
+  // the button says what it WILL do, so it pairs: "2x" to expand, "1/2" to halve
+  if(wb){wb.style.display=(fits&&!keysView)?'':'none';wb.textContent=wide?'1/2':'2x';}
   if(card.classList.contains('wide')!==wide){
     card.classList.toggle('wide',wide);
     (wide?document.getElementById('midiband'):document.getElementById('midihome')).appendChild(card);
