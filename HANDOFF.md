@@ -9,6 +9,57 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-11 night — a GRID view of the CV matrix (`9db80fe`, `fdf64cf`, `d496f70`)
+
+A second view of the same card, switchable, **row view still the default**. The
+firmware stores ONE SOURCE PER DESTINATION (`mxs[dest]=cv`), which is radio-button
+semantics exactly, so destinations x channels is the shape the data already has —
+and an illegal state cannot be drawn. Destinations down the LEFT, `off | CV1-8 |
+TR1-2` across the top, one radio per row.
+
+- **Cells the firmware would reject are not rendered**: TR columns absent on
+  matrix rows (mxs is CV-only), CV columns absent on TR-only input-map entries.
+  A ring means pickable, nothing means unavailable — hatching said it twice and
+  was dropped.
+- **One collector.** Both views feed `mxCollect()` returning the same
+  `{mxs,mxa,mxm,picks}`, so `rpApply` / `mxRerender` / `mxReset` are untouched.
+  `rpMatrix` / `mxCollect` are two-line dispatchers over `rpMatrixRows` /
+  `rpMatrixGrid` and `mxCollectRows` / `mxCollectGrid`. No second apply path.
+- Switching **carries unapplied edits** (`mxViewSet` collects first); the choice
+  persists per browser in `localStorage`.
+- Header control is a `rows|grid` pair in the existing `.tab/.tab.on` vocabulary
+  (as FILES' Samples|Modules), NOT one button labelled with the view you are not
+  in — that read equally well as "you are here".
+- The depth is a **drag-scrub figure** (shift = fine), not a slider: a 52px track
+  was useless at this density and was the widest thing in the row.
+
+**LAYOUT TRAPS — all cost real time, all found by ISOLATION not theory:**
+1. **Row height came from the RADIO cells, not the controls.** Emptying the ctl
+   cell changed nothing; emptying the radio cells dropped the row 31->20. Those
+   cells carried a text strut, and `vertical-align:middle` inline boxes against a
+   strut inflate the line box far past their content. **Every cell that holds
+   only controls now wraps them in a fixed-height flex box** (`.gcw`, `.gctlw`) —
+   after that, row height stops depending on contents at all (label size included).
+2. **`.mxcard .mtx{width:100%}` from the row view was stretching the grid table**,
+   dumping ~50px of slack into the off column (65px wide against 21px cells) and
+   leaving the channel block stranded mid-card. `.gwrap` is a flex container now,
+   plus a trailing filler cell for any remainder.
+3. **Native radios draw a bright white disc unchecked** — at 11 per row that
+   swamped the selections. Drawn instead: faint ring, transparent fill, accent
+   when lit. The **off** column is a dim `×` glyph, never a ring and never
+   green: a lit radio there read as "connected" when it means the opposite.
+4. **An `<input>` cannot reliably carry `::after`**, so the off marker is a
+   `<label>` with an invisible radio and a span holding the glyph.
+
+**METHOD NOTE (the real lesson):** six rounds of guessing at a 2px discrepancy,
+one isolation call to find it. Empty the suspects one at a time before theorising
+about the cascade. Also: judge sizing from a 1:1 capture — every `zoom` crop is
+magnified (~1.6x here) and makes 10px type look like 18px.
+
+Tape's 14 rows: card 504px -> 382px, cells 21x21, labels 10px. Slicer (no cvmtx)
+degrades to picks + the fixed-jobs footer. **.85 runs `d496f70`.** Arlo is
+testing it by hand.
+
 ## 2026-09-11 PM — the CV matrix reads one way down the column (`7994943`, `0ce0ee8`)
 
 Arlo: on Tape, CV 4 read `Clock [CV4]` and TR 1 read `Play/stop [TR1]` — a
