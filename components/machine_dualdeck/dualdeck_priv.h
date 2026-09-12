@@ -5,6 +5,7 @@
 #include "clock.h"
 #include "svf.h"
 #include "sampfile.h"
+#include "cvmtx.h"
 
 // Dual-deck — a clock-locked track BLENDER, not a DJ rig (the design reframe:
 // manual beatmatching is what eats controls; here both decks phase-lock to the
@@ -37,7 +38,24 @@
 #define DD_NAME_LEN    24
 #define DD_WF_W        120                    // waveform columns per deck
 enum { DD_LAY_V = 0, DD_LAY_H = 1 };   // stacked single-decks / side-by-side panels
-enum { DD_KNOB_CTX = 0, DD_KNOB_FIXED = 1 };   // contextual knobs / the explicit CV Map
+enum { DD_KNOB_CTX = 0, DD_KNOB_FIXED = 1 };   // contextual knobs / the explicit matrix
+
+// CV matrix destinations (2026-09-12), replacing the bespoke CV Map. DoubleDecker
+// is the one machine in this rework that CANNOT simply demultiplex: it has SIX
+// performable jobs and the panel has FOUR knobs, so an arbiter has to stay. What
+// changes is that the arbitration is now visible and assignable like every other
+// machine's, instead of a private page with its own storage keys.
+//
+// CONTEXTUAL knob mode is the FIRST prototype's workaround — with only K6 and K7
+// alive it forced every job onto those two, derived from focus and loop status.
+// It is now expressed as cvmtx_override(), so the user's map survives underneath
+// and switching back to fixed restores it. On the second prototype fixed mode is
+// the better default and contextual is the legacy option.
+enum { DDM_FILT = 0, DDM_XFADE, DDM_LWIN_A, DDM_LLEN_A, DDM_LWIN_B, DDM_LLEN_B, DDM_N };
+extern const char *const dd_mtx_labels[DDM_N];
+// dest index for deck i's window / length
+#define DDM_LWIN(i) (((i) & 1) ? DDM_LWIN_B : DDM_LWIN_A)
+#define DDM_LLEN(i) (((i) & 1) ? DDM_LLEN_B : DDM_LLEN_A)
 
 typedef struct {
     // streaming — PLAYBACK-ORDER frame space (the deck's 2026-07-13 loop
@@ -171,13 +189,11 @@ typedef struct {
     //
     // FADER LOCK is the escape hatch: with both decks looping, no focus position
     // exposes the crossfader. Locked, CV7 stays the fader in every context and the
-    // loop LENGTH falls back to its CV Map channel.
+    // loop LENGTH falls back to its matrix channel.
     volatile int knob_mode;        // DD_KNOB_CTX / DD_KNOB_FIXED
     volatile bool fader_lock;      // CV7 is ALWAYS the fader
-    volatile int cv_fader;         // 0..7
-    volatile int cv_filt;
-    volatile int cv_lpos[2];       // per deck: loop window position
-    volatile int cv_llen[2];       // per deck: loop length
+    cvmtx_t mtx;                   // assignable CV matrix (destinations above);
+                                   // was cv_fader/cv_filt/cv_lpos[]/cv_llen[]
 
     // per-deck DJ filter: CV6 sweeps the FOCUSED deck's filter; each deck filters
     // its own signal before the crossfade sum. [0]=deck A, [1]=deck B.
@@ -218,4 +234,3 @@ void dualdeck_arm_start(int deck);
 void dualdeck_arm_stop(int deck);
 void dualdeck_loop_toggle(int deck);   // TR2 grammar; safe from UI too
 void dualdeck_resync(int deck);        // BOTH-TRIG gesture: the beat lands NOW
-void dualdeck_rearm_loop_knobs(int deck);   // re-target a loop CV: dead until MOVED

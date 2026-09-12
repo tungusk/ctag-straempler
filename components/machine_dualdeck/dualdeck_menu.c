@@ -15,6 +15,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "cvmtx.h"
 #include "audio.h"
 #include "sample_ram.h"
 #include "sample_browser.h"
@@ -558,7 +559,7 @@ static const setup_item_t dd_setup_items[] = {
     {"Layout",     ST_TOGGLE},   // 4  stacked / side by side
     {"Knobs",      ST_TOGGLE},   // 5  contextual / fixed  (DD_ROW_KNOBS)
     {"Fader Lock", ST_TOGGLE},   // 6  on / off            (DD_ROW_FLOCK)
-    {"CV Map",     ST_ACTION},   // 7  sub-page            (DD_ROW_CVMAP)
+    {"CV Matrix",  ST_ACTION},   // 7  sub-page            (DD_ROW_CVMAP)
 };
 #define DD_SETUP_N ((int)(sizeof(dd_setup_items) / sizeof(dd_setup_items[0])))
 
@@ -584,8 +585,8 @@ static void setup_value_str(int i, char *v, size_t n){
         case DD_ROW_FLOCK:
             snprintf(v, n, "%s", dd.fader_lock ? "on" : "off");
             break;
-        case DD_ROW_CVMAP:
-            snprintf(v, n, "%s", dd.knob_mode == DD_KNOB_CTX ? "(fixed only)" : "...");
+        case DD_ROW_CVMAP:      // contextual mode overrides the map it would show
+            snprintf(v, n, "%s", dd.knob_mode == DD_KNOB_CTX ? "(overridden)" : "...");
             break;
         default: v[0] = 0;
     }
@@ -650,113 +651,16 @@ static int dd_setup_handler(int it_id, int event, void *ev_data){
 }
 
 // ---- registration ---------------------------------------------------------
-// ---- CV MAP (Arlo: "selectable cv for the functions assignable in each deck.
-// sub menu like the drums"). Every performable function names its own channel.
-// The two loops get their OWN pair PER DECK — so put them on free CVs and both
-// decks can be worked at once, instead of the trigs' focused-deck compromise.
-// Leave them on the filter's and fader's channels (the default) and you get the
-// old behaviour: the loop BORROWS those knobs and hands them back by pickup.
-static const char *const cv_labels[] = {
-    "Crossfade", "Filter", "1 Loop Pos", "1 Loop Len", "2 Loop Pos", "2 Loop Len",
-};
-#define DD_CV_N 6
-
-static volatile int *cv_slot(int i){
-    switch(i){
-        case 0: return &dd.cv_fader;
-        case 1: return &dd.cv_filt;
-        case 2: return &dd.cv_lpos[0];
-        case 3: return &dd.cv_llen[0];
-        case 4: return &dd.cv_lpos[1];
-        case 5: return &dd.cv_llen[1];
-    }
-    return &dd.cv_filt;
-}
-
-#define CV_ROW_Y(i) (TFT_getfontheight() + 14 + (i) * (TFT_getfontheight() + 8))
-
-static void cv_row_redraw(int i, int pos, int sel){
-    int fh = TFT_getfontheight();
-    int y = CV_ROW_Y(i);
-    bool editing = (i == pos && sel);
-    _bg = (i == pos) ? (color_t){10, 18, 56} : TFT_BLACK;
-    _fg = editing ? TFT_CYAN : TFT_WHITE;
-    TFT_fillRect(0, y - 2, _width, fh + 6, _bg);
-    TFT_print((char*)cv_labels[i], 8, y);
-    int ch = (*cv_slot(i)) & 7;
-    char raw[16], val[20];
-    snprintf(raw, sizeof(raw), "CV%d", ch + 1);
-    if (editing) snprintf(val, sizeof(val), "[ %s ]", raw);
-    else snprintf(val, sizeof(val), "%s", raw);
-    // AMBER = this knob gets BORROWED (it shares the filter's or the fader's
-    // channel while a loop is engaged). RED = the assignment is BROKEN: a control on
-    // the CLOCK channel reads the pulse train, not a knob — pulses grab the
-    // reference and the gaps between them remap the loop, which collapses it to a
-    // stutter within milliseconds. The engine ignores such a control outright; the
-    // page has to say so rather than let it look assigned.
-    bool on_clock = clock_src_is_cv(clock_core_src(), ch);
-    bool shares = (i >= 2) && (ch == (dd.cv_filt & 7) || ch == (dd.cv_fader & 7));
-    _fg = editing ? TFT_CYAN
-                  : on_clock ? (color_t){230, 70, 70}
-                  : shares   ? (color_t){190, 160, 70}
-                             : TFT_WHITE;
-    TFT_print(val, _width - TFT_getStringWidth(val) - 10, y);
-    _bg = TFT_BLACK;
-}
-
-static void cv_redraw(int pos, int sel){
-    TFT_resetclipwin();
-    TFT_fillScreen(TFT_BLACK);
-    _bg = TFT_BLACK; _fg = TFT_WHITE;
-    TFT_print("DoubleDecker CV Map", 6, 4);
-    if (dd.knob_mode == DD_KNOB_CTX) {
-        // Do not show a map that the engine is ignoring — that is how a UI lies.
-        _fg = (color_t){230, 170, 0};
-        TFT_setFont(DEF_SMALL_FONT, NULL);
-        TFT_print("KNOBS = CONTEXTUAL: this map is not in force", 6,
-                  TFT_getfontheight() + 6);
-        TFT_setFont(DEFAULT_FONT, NULL);
-        _fg = TFT_WHITE;
-    }
-    for (int i = 0; i < DD_CV_N; i++) cv_row_redraw(i, pos, sel);
-    _fg = (color_t){90, 90, 90};
-    TFT_setFont(DEF_SMALL_FONT, NULL);
-    TFT_print("amber: borrowed while looping   red: on the CLOCK channel (ignored)", 6,
-              _height - TFT_getfontheight() - 1);
-    TFT_setFont(DEFAULT_FONT, NULL);
-}
-
-static int dd_cv_handler(int it_id, int event, void *ev_data){
-    static int pos = 0, sel = 0;
-    switch(event){
-        case EV_ENTERED_MENU: pos = 0; sel = 0; cv_redraw(pos, sel); break;
-        case EV_FWD:
-        case EV_BWD: {
-            int dir = (event == EV_FWD) ? +1 : -1;
-            if(sel){
-                volatile int *slot = cv_slot(pos);
-                *slot = (*slot + (dir > 0 ? 1 : 7)) & 7;
-                // Re-target a LIVE loop knob and it must go DEAD until moved again,
-                // or the newly-assigned knob's current position instantly becomes a
-                // window/length command and the loop jumps.
-                if (pos >= 2) dualdeck_rearm_loop_knobs((pos - 2) / 2);
-                cv_redraw(pos, sel);        // sharing marks can change on any row
-            } else {
-                pos += dir;
-                if(pos >= DD_CV_N) pos = 0;
-                if(pos < 0) pos = DD_CV_N - 1;
-                cv_redraw(pos, sel);
-            }
-            break;
-        }
-        case EV_SHORT_PRESS:
-            sel = !sel;
-            cv_row_redraw(pos, pos, sel);
-            break;
-        case EV_LONG_PRESS: return M_DD_SETUP;
-        default: break;
-    }
-    return 0;
+// ---- CV MATRIX. Was a bespoke CV Map page with its own storage keys and its own
+// amber/red warnings; it is the shared widget now, so DoubleDecker's assignments
+// show up in the web matrix and on the panel like every other machine's. The red
+// "on the CLOCK channel" mark is cvmtx's skip_src, and the amber "borrowed while
+// looping" is simply two rows sharing a channel, which the grid shows directly.
+static int dd_cv_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return cvmtx_menu_event(&dd.mtx, event, "DoubleDecker CV Matrix",
+                            M_DD_SETUP, M_DD_LIVE);
 }
 
 static void dd_register_pages(void *menusys){
@@ -781,5 +685,5 @@ const machine_ui_t dualdeck_menu_ui = {
     .register_pages = dd_register_pages,
     .boot_target = M_DD_LIVE,
     .setup = &dd_setup,
-    .caps = MC_CLOCK,
+    .caps = MC_CLOCK | MC_MATRIX,
 };

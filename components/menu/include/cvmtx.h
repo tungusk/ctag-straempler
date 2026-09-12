@@ -85,6 +85,14 @@ typedef struct {
                                  // init and reset write CVM_NO_OVR explicitly.
     uint8_t tk[CVMTX_MAX];       // CVM_TK_GRAB (default) / CVM_TK_CATCH
     float  base01[CVMTX_MAX];    // host's CURRENT value 0..1 — what CATCH crosses
+    float  ctol[CVMTX_MAX];      // CATCH tolerance, 0 = CVM_CATCH_TOL. How close
+                                 // the knob must come is a judgement about the
+                                 // PARAMETER, not about knobs: Deck's filter and
+                                 // Tracker want 90/4096, DoubleDecker's DJ filter
+                                 // 60 (tighter — a filter jump is very audible)
+                                 // and its crossfader 0.03 (looser — a fader jump
+                                 // is only a gain step, and a dead fader mid-set
+                                 // is worse than a small one).
     uint16_t rearm;              // BIT PER DEST: next track() recaptures + un-lives
     int8_t skip_src;             // -1, or the CV channel that must never take over (clock)
     uint16_t nodirty;            // bit per dest: ABS moves there don't flag autosave
@@ -103,6 +111,7 @@ void cvmtx_rearm(cvmtx_t *m);            // preset/patch load, engine change: re
 void cvmtx_rearm_dest(cvmtx_t *m, int d);            // just one destination
 void cvmtx_set_takeover(cvmtx_t *m, int d, int tk);  // CVM_TK_*, at init
 void cvmtx_set_base(cvmtx_t *m, int d, float v01);   // the host's current value (CATCH)
+void cvmtx_set_catch_tol(cvmtx_t *m, int d, float t);// CATCH nearness, 0 = default
 void cvmtx_hold(cvmtx_t *m, int d, bool held);       // gate a dest out of takeover
 void cvmtx_override(cvmtx_t *m, int d, int src);     // machine drives this source
 void cvmtx_override_clear(cvmtx_t *m);               // back to the user's map

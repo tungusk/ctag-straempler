@@ -423,6 +423,19 @@ static int s_c6_last[2] = {-1, -1};          // knob position the last move was 
 static int s_len_idx[2] = {4, 4};            // ladder index while looping
 static int s_win_idx[2] = {-1, -1};          // window SLOT index while looping (-1 = none)
 
+// Six jobs, four knobs. The FIXED defaults give each of the four its own job and
+// leave the two decks sharing the loop pair (focus arbitrates, dd_addressed) —
+// give deck B its own channels and both decks go live at once, which is the whole
+// point of the matrix. Loop LENGTH is CV8, not CV6: on the first prototype it had
+// to share the filter's channel because CV8 was the clock input, and that sharing
+// is exactly the borrow machinery below. The core clock defaults to CV4 now, so
+// CV8 is free and the filter stops being borrowed at all.
+//   CV5 loop window   CV6 DJ filter (noon = bypass)   CV7 crossfade   CV8 loop length
+const char *const dd_mtx_labels[DDM_N] = {
+    "DJ filter", "Crossfade", "Loop Win A", "Loop Len A", "Loop Win B", "Loop Len B",
+};
+static const int8_t dd_mtx_defaults[DDM_N] = { 5, 6, 4, 7, 4, 7 };
+
 static void dd_reset_statics(void)
 {
     memset(s_tg, 0, sizeof(s_tg));
@@ -471,30 +484,49 @@ static void dd_loop_remap(dd_deck_t *v, uint32_t new_start, uint32_t new_len)
 static inline uint32_t dd_live_start(dd_deck_t *v){ return v->rm_at ? v->rm_start : v->loop_start; }
 static inline uint32_t dd_live_len(dd_deck_t *v)  { return v->rm_at ? v->rm_len   : v->loop_len_fr; }
 
-// A loop knob that has just been RE-TARGETED (its CV Map slot changed) must go dead
-// until it MOVES — otherwise the new knob's resting position is read as a command and
-// the window jumps the instant you reassign it.
-// THE ROUTING, in one place. Contextual mode ignores the CV Map and derives the
-// channels from focus + loop status; fixed mode is the CV Map verbatim. Everything
-// downstream (the knob loop, the borrow test, the catch-up on release) reads these,
-// so the two modes cannot drift apart.
-static inline int dd_eff_filt(void)
+// THE ROUTING, in one place — now the shared matrix. Contextual mode overrides
+// the sources from focus + loop status; fixed mode is the user's map verbatim.
+// Everything downstream (the knob loop, the borrow test, the catch-up on release)
+// reads these, so the two modes cannot drift apart.
+//
+// dd_ch() also answers -1 for OFF and for the CLOCK channel. A loop control on the
+// clock reads the pulse train, not a knob: pulses grab the reference and the gaps
+// between them remap the loop, which collapses it to a stutter within milliseconds
+// (Arlo: "the loops are jumping around on their own"). One guard for all six
+// destinations now, where there used to be two hand-placed ones.
+static inline int dd_ch(int dest)
 {
-    return (dd.knob_mode == DD_KNOB_CTX) ? 5 : (dd.cv_filt & 7);      // CV6
+    int c = cvmtx_src(&dd.mtx, dest);
+    if (c < 0 || c > 7) return -1;
+    int clk = clock_core_src();
+    return (clk >= 0 && clk <= 7 && c == clk) ? -1 : c;
 }
-static inline int dd_eff_fader(void)
+// two controls collide only if BOTH are actually assigned — -1 == -1 is not a clash
+static inline bool dd_same(int a, int b) { return a >= 0 && a == b; }
+
+static inline int dd_eff_filt(void)      { return dd_ch(DDM_FILT); }
+static inline int dd_eff_fader(void)     { return dd_ch(DDM_XFADE); }
+static inline int dd_eff_lpos(int i)     { return dd_ch(DDM_LWIN(i)); }
+static inline int dd_eff_llen(int i)     { return dd_ch(DDM_LLEN(i)); }
+
+// CONTEXTUAL mode, applied once per block before anything reads the routing.
+// The overrides sit ON TOP of src[] — the user's map is untouched underneath, so
+// switching back to fixed restores it with no bookkeeping here.
+static inline void dd_apply_knob_mode(void)
 {
-    return (dd.knob_mode == DD_KNOB_CTX) ? 6 : (dd.cv_fader & 7);     // CV7
-}
-static inline int dd_eff_lpos(int i)
-{
-    return (dd.knob_mode == DD_KNOB_CTX) ? 5 : (dd.cv_lpos[i & 1] & 7);
-}
-static inline int dd_eff_llen(int i)
-{
-    if (dd.knob_mode != DD_KNOB_CTX) return dd.cv_llen[i & 1] & 7;
+    if (dd.knob_mode != DD_KNOB_CTX) { cvmtx_override_clear(&dd.mtx); return; }
+    cvmtx_override(&dd.mtx, DDM_FILT,   5);          // CV6 — the house sweep
+    cvmtx_override(&dd.mtx, DDM_XFADE,  6);          // CV7 — the fader
+    cvmtx_override(&dd.mtx, DDM_LWIN_A, 5);
+    cvmtx_override(&dd.mtx, DDM_LWIN_B, 5);
     // fader locked: the fader keeps CV7, so the length falls back to its map channel
-    return dd.fader_lock ? (dd.cv_llen[i & 1] & 7) : 6;               // CV7
+    if (dd.fader_lock) {
+        cvmtx_override(&dd.mtx, DDM_LLEN_A, CVM_NO_OVR);
+        cvmtx_override(&dd.mtx, DDM_LLEN_B, CVM_NO_OVR);
+    } else {
+        cvmtx_override(&dd.mtx, DDM_LLEN_A, 6);
+        cvmtx_override(&dd.mtx, DDM_LLEN_B, 6);
+    }
 }
 // which decks' loop knobs are LIVE. Contextual: only the focused deck (the knobs
 // physically are its loop's). Fixed: the focused deck, or any deck whose loop owns
@@ -504,18 +536,10 @@ static inline bool dd_addressed(int i)
 {
     if (i == dd.focus) return true;
     if (dd.knob_mode == DD_KNOB_CTX) return false;
-    int lp = dd.cv_lpos[i & 1] & 7, ll = dd.cv_llen[i & 1] & 7;
-    int olp = dd.cv_lpos[!(i & 1)] & 7, oll = dd.cv_llen[!(i & 1)] & 7;
-    return lp != olp && lp != oll && ll != olp && ll != oll;
-}
-
-void dualdeck_rearm_loop_knobs(int deck)
-{
-    int d = deck & 1;
-    s_cv6_ref[d] = s_cv7_ref[d] = -1;
-    s_mv6[d] = s_mv7[d] = 0;
-    s_c6_last[d] = -1;
-    s_win_idx[d] = -1;
+    int lp = dd_eff_lpos(i), ll = dd_eff_llen(i);
+    int olp = dd_eff_lpos(!(i & 1)), oll = dd_eff_llen(!(i & 1));
+    return !dd_same(lp, olp) && !dd_same(lp, oll)
+        && !dd_same(ll, olp) && !dd_same(ll, oll);
 }
 
 void dualdeck_loop_toggle(int deck)
@@ -549,8 +573,9 @@ void dualdeck_loop_toggle(int deck)
         {
             int d = deck & 1;
             int lp = dd_eff_lpos(d), ll = dd_eff_llen(d);
-            if (lp == dd_eff_filt()  || ll == dd_eff_filt())  { s_catch_f = 420; s_flt_pick = 1; }
-            if (lp == dd_eff_fader() || ll == dd_eff_fader()) { s_catch_x = 420; s_xf_pick = 1; }
+            int fc = dd_eff_filt(), xc = dd_eff_fader();
+            if (dd_same(lp, fc) || dd_same(ll, fc)) { s_catch_f = 420; s_flt_pick = 1; }
+            if (dd_same(lp, xc) || dd_same(ll, xc)) { s_catch_x = 420; s_xf_pick = 1; }
         }
         s_cv6_ref[deck & 1] = s_cv7_ref[deck & 1] = -2;
         return;
@@ -761,20 +786,29 @@ static esp_err_t dualdeck_start(void)
     // DEFAULTS: the loops never touch the FADER, and never touch the CLOCK. The
     // crossfader (CV7) stays live at all times — Arlo, in performance: "cant access
     // the crossfader on non looped deck2"; a dead fader mid-blend is worse than any
-    // knob shortage. The loop's LENGTH shares the FILTER's channel (CV6), so a loop
-    // borrows the filter — frozen, harmless, handed back by catch-up. Putting it on
-    // CV8 instead (the first attempt) put a loop knob on the CLOCK INPUT.
-    dd.knob_mode = DD_KNOB_CTX;     // contextual: focus + loop status drive CV6/CV7
+    // knob shortage. The loop's LENGTH used to share the FILTER's channel, so a loop
+    // borrowed the filter — frozen, harmless, handed back by catch-up. It has CV8 of
+    // its own now: CV8 was the CLOCK input when that compromise was made, and the
+    // core clock has defaulted to CV4 since. The borrow machinery stays, because
+    // sharing is still one assignment away and it is what makes both decks workable
+    // at once, but nothing in the defaults triggers it any more.
+    //
+    // FIXED is now the default. Contextual mode existed because the first
+    // prototype had two usable knobs; on four it only takes routing away.
+    dd.knob_mode = DD_KNOB_FIXED;
     dd.fader_lock = false;
-    dd.cv_filt = 5;                 // CV6 — the house sweep channel
-    dd.cv_fader = 6;                // CV7 — the fader, always yours
-    dd.cv_lpos[0] = dd.cv_lpos[1] = 4;   // CV5 = loop window
-    dd.cv_llen[0] = dd.cv_llen[1] = 5;   // CV6 = loop length — NOT CV8, which is the
-                                         // CLOCK input (clk_src default). A loop knob
-                                         // on the clock reads the pulse train. It
-                                         // shares the FILTER's channel instead, so a
-                                         // loop borrows the filter (harmless, frozen)
-                                         // and NEVER the fader (a dead fader is not).
+    cvmtx_init(&dd.mtx, dd_mtx_labels, DDM_N, dd_mtx_defaults);
+    // the DJ filter is the one plain value knob here, so it uses the widget's
+    // CATCH (was s_flt_pick, 60 counts). The fader keeps its own pickup because
+    // that is entangled with the takeover-fade state machine, and the loop knobs
+    // keep theirs because it lives in the QUANTIZED domain — a rung index and a
+    // start-beat slot, not a value — which no generic takeover can express.
+    cvmtx_set_takeover(&dd.mtx, DDM_FILT, CVM_TK_CATCH);
+    cvmtx_set_catch_tol(&dd.mtx, DDM_FILT, 60.0f / 4096.0f);
+    // performance moves, not patch edits — and the four loop destinations plus the
+    // fader are read raw, so the widget's own liveness must not flag the autosave
+    dd.mtx.nodirty = (1u << DDM_XFADE) | (1u << DDM_LWIN_A) | (1u << DDM_LLEN_A)
+                   | (1u << DDM_LWIN_B) | (1u << DDM_LLEN_B);
     dd.xf = 0.0f;
     dd.filt_cv[0] = dd.filt_cv[1] = 2048;   // both filters start CENTRE (off), not a heavy LP at 0
     dd.manual = true;
@@ -858,20 +892,24 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // both decks. A median rejects the outlier; slewing only smears it.
     int cvv[8];
     for (int k = 0; k < 8; k++) cvv[k] = cvmed_step(&s_med[k], io->cv[k]);
+    // routing first: everything below reads dd_eff_*(), which reads the matrix
+    dd_apply_knob_mode();
+    { int cs = clock_core_src(); dd.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
 
     // ---- WHAT DO THE KNOBS MEAN RIGHT NOW. A loop BORROWS a knob when it shares
     // that knob's channel AND the loop is actually being addressed — in contextual
     // mode that is the focused deck's loop taking CV6/CV7; in fixed mode it is
-    // whatever the CV Map says. A loop that is NOT addressed cannot borrow anything,
+    // whatever the matrix says. A loop that is NOT addressed cannot borrow anything,
     // so an unfocused deck's loop can no longer freeze your filter.
-    int c_flt = cvv[dd_eff_filt()];
-    int c_fad = cvv[dd_eff_fader()];
-    bool flt_taken = false, fad_taken = false;
+    int flt_ch = dd_eff_filt(), fad_ch = dd_eff_fader();
+    int c_fad = (fad_ch >= 0) ? cvv[fad_ch] : dd.xf_cv;
+    // an UNASSIGNED control is not merely un-borrowed, it is dead: freeze it
+    bool flt_taken = (flt_ch < 0), fad_taken = (fad_ch < 0);
     for (int i = 0; i < 2; i++) {
         if (!dd.d[i].loop_active || !dd_addressed(i)) continue;
         int lp = dd_eff_lpos(i), ll = dd_eff_llen(i);
-        if (lp == dd_eff_filt()  || ll == dd_eff_filt())  flt_taken = true;
-        if (lp == dd_eff_fader() || ll == dd_eff_fader()) fad_taken = true;
+        if (dd_same(lp, flt_ch) || dd_same(ll, flt_ch)) flt_taken = true;
+        if (dd_same(lp, fad_ch) || dd_same(ll, fad_ch)) fad_taken = true;
     }
 
     // ---- LOOP KNOBS, per deck. A deck answers its loop knobs when it is FOCUSED,
@@ -886,11 +924,17 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // arrived at will not jump when the knob is nowhere near its window — it stays
     // dead until you MOVE it.
     // ANY context change re-arms the loop knobs: focus moving, the focused deck's
-    // loop engaging or releasing, or the knob mode itself changing. A knob whose
-    // MEANING just changed must be dead until it MOVES, or its resting position is
-    // instantly read as a window/length command and the loop jumps.
+    // loop engaging or releasing, the knob mode itself changing — or a loop control
+    // being RE-TARGETED to another channel, from the matrix page, the web editor or
+    // a preset load. A knob whose MEANING just changed must be dead until it MOVES,
+    // or its resting position is instantly read as a window/length command and the
+    // loop jumps. Folding the routing in here is what replaced the CV Map page's
+    // dualdeck_rearm_loop_knobs() call, and unlike it, it cannot be bypassed.
     int ctx_sig = dd.focus | (dd.d[0].loop_active ? 2 : 0) | (dd.d[1].loop_active ? 4 : 0)
                 | (dd.knob_mode << 3) | (dd.fader_lock ? 16 : 0);
+    for (int i = 0; i < 2; i++)                       // 4 bits each, -1 -> 0
+        ctx_sig |= ((dd_eff_lpos(i) + 1) << (5 + 8 * i))
+                |  ((dd_eff_llen(i) + 1) << (9 + 8 * i));
     if (ctx_sig != s_focus_prev) {
         // focus flipped -> CV6 now sweeps the OTHER deck's filter: pick it up so
         // it doesn't snap (bit 0 of ctx_sig is dd.focus)
@@ -910,16 +954,9 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         int lp = dd_eff_lpos(i), ll = dd_eff_llen(i);
         uint32_t beat_tf = (uint32_t)(60.0f * DD_RATE / v->track_bpm);
         if (!beat_tf) continue;
-        // THE CLOCK IS NOT A KNOB. A loop control assigned to the clock channel
-        // reads the PULSE TRAIN: pulses grab the reference, the lows between them
-        // remap the loop, and it collapses to a stutter within milliseconds of
-        // engaging (Arlo: "the loops are jumping around on their own" — the default
-        // loop-length channel was CV8, which is also the default clock input).
-        // preset_load can reload a colliding assignment, so the GUARD is the robust
-        // half of the fix; the defaults are merely the polite half.
-        // TR/AUDIO clock sources occupy no CV channel — nothing to collide with
-        int clk = (clock_core_src() <= 7) ? clock_core_src() : -1;
-        bool pos_ok = (lp != clk), len_ok = (ll != clk);
+        // dd_ch() has already ruled out OFF and the clock channel (see there —
+        // a loop control on the pulse train collapses the loop to a stutter)
+        bool pos_ok = (lp >= 0), len_ok = (ll >= 0);
         int c6 = pos_ok ? cvv[lp] : 0;         // window position
         int c7 = len_ok ? cvv[ll] : 0;         // window length
         // PICKUP (contextual, Arlo): on entering loop mode the knobs are ARMED
@@ -1006,6 +1043,16 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         }
     }
 
+    // ---- THE WIDGET'S TAKEOVER PASS. It runs here, not up with the median, so
+    // that everything it depends on is already decided this block: the borrow test
+    // (hold), the focus/loop context change (s_flt_pick) and the focused deck's
+    // current cutoff (the CATCH target). Only the DJ filter reads its result — the
+    // fader and the four loop controls are read raw, for the reasons at init.
+    cvmtx_hold(&dd.mtx, DDM_FILT, flt_taken);
+    cvmtx_set_base(&dd.mtx, DDM_FILT, (float)dd.filt_cv[dd.focus] / 4095.0f);
+    if (s_flt_pick) { cvmtx_rearm_dest(&dd.mtx, DDM_FILT); s_flt_pick = 0; }
+    cvmtx_track(&dd.mtx, cvv);
+
     // ---- COMING BACK from a borrow. NOT pass-through pickup: that is right for
     // the deck's SPEED knob (a jump there slams the tempo) but wrong for a fader,
     // where a jump is merely a gain step — and it left the crossfader DEAD until
@@ -1024,7 +1071,6 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
         if (d < 0.01f) s_catch_x = 0;
         else s_catch_x--;
     }
-    bool flt_live = !flt_taken;
     bool xf_live  = !fad_taken;
     float xf_slew  = (s_catch_x > 0) ? 0.004f : 0.2f;   // ~0.6 s catch-up, else snappy
     int c7 = c_fad;
@@ -1035,9 +1081,9 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // auto/held to manual — the pickup. Handing straight back to manual on
     // fade completion would snap the mix to wherever the knob happens to
     // sit, defeating the takeover entirely (caught on first bench test).
-    // HOLD when that channel carries the CLOCK (clock_src_is_cv): xf_cv drives the
+    // HOLD when that channel carries the CLOCK (dd_ch returns -1): xf_cv drives the
     // crossfade PICKUP, so a pulse train would fake the grab and steal the fade.
-    if (!clock_src_is_cv(clock_core_src(), 6)) dd.xf_cv = c7;   // knob7 = crossfade (CV6 is the filter, house rule)
+    if (fad_ch >= 0) dd.xf_cv = c7;   // dd_ch() already excluded the clock channel
     if (!dd.manual && xf_live) {       // auto or held: watch for the grab.
         // The move must PERSIST (~12 ms) — a single-block WiFi ADC spike on
         // the knob read faked a grab and killed every takeover fade the
@@ -1075,14 +1121,11 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     // CV6 sweeps the FOCUSED deck's cutoff; the other deck's filter FREEZES at its
     // last value. PICKUP: after a loop release OR a focus switch the knob is inert
     // until it sweeps back to the focused deck's cutoff, so it never snaps.
-    if (flt_live) {
-        int fdk = dd.focus;
-        if (s_flt_pick) {
-            int d = c_flt - dd.filt_cv[fdk]; if (d < 0) d = -d;
-            if (d < 60) s_flt_pick = 0;                  // knob reached it -> live
-        } else {
-            dd.filt_cv[fdk] = c_flt;
-        }
+    {   // CATCH (was s_flt_pick): held while a loop has borrowed the channel, and
+        // after a focus switch or a loop release it is inert until the knob sweeps
+        // back to the focused deck's cutoff, so it never snaps.
+        float kk;
+        if (cvmtx_abs(&dd.mtx, DDM_FILT, &kk)) dd.filt_cv[dd.focus] = (int)(kk * 4095.0f);
     }
     const float q = 0.9f;
     for (int i = 0; i < 2; i++) {                        // both decks filter their own signal
@@ -1213,12 +1256,7 @@ static cJSON *dualdeck_preset_save(void)
     cJSON_AddNumberToObject(o, "llen", dd.loop_len_beats);
     cJSON_AddNumberToObject(o, "lq", 1);      // llen units = QUARTER-beats
     cJSON_AddNumberToObject(o, "lay", dd.layout);
-    cJSON_AddNumberToObject(o, "cvf", dd.cv_filt);
-    cJSON_AddNumberToObject(o, "cvx", dd.cv_fader);
-    cJSON_AddNumberToObject(o, "cvp0", dd.cv_lpos[0]);
-    cJSON_AddNumberToObject(o, "cvp1", dd.cv_lpos[1]);
-    cJSON_AddNumberToObject(o, "cvl0", dd.cv_llen[0]);
-    cJSON_AddNumberToObject(o, "cvl1", dd.cv_llen[1]);
+    cvmtx_save(&dd.mtx, o);                 // "mxs"/"mxa"/"mxm" — was cvf/cvx/cvp*/cvl*
     cJSON_AddNumberToObject(o, "cvv", 1);      // CV-map schema version (see preset_load)
     cJSON_AddNumberToObject(o, "kmode", dd.knob_mode);
     cJSON_AddBoolToObject(o, "flock", dd.fader_lock);
@@ -1260,12 +1298,23 @@ static void dualdeck_preset_load(const cJSON *node)
     // current schema; otherwise keep the defaults set in start().
     cJSON *cvv = cJSON_GetObjectItemCaseSensitive(node, "cvv");
     if (!(cvv && cJSON_IsNumber(cvv) && cvv->valueint >= 1)) goto cv_map_done;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvf")) && cJSON_IsNumber(j)) dd.cv_filt = j->valueint & 7;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvx")) && cJSON_IsNumber(j)) dd.cv_fader = j->valueint & 7;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvp0")) && cJSON_IsNumber(j)) dd.cv_lpos[0] = j->valueint & 7;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvp1")) && cJSON_IsNumber(j)) dd.cv_lpos[1] = j->valueint & 7;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvl0")) && cJSON_IsNumber(j)) dd.cv_llen[0] = j->valueint & 7;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cvl1")) && cJSON_IsNumber(j)) dd.cv_llen[1] = j->valueint & 7;
+    cvmtx_load(&dd.mtx, node);
+    // MIGRATION: presets written before the matrix carry the six CV Map keys.
+    // cvmtx_load leaves the defaults when there is no "mxs", so read them over
+    // the top — otherwise a saved map silently reverts to the new defaults.
+    if (!cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(node, "mxs"))) {
+        static const struct { const char *k; int8_t d; } old[] = {
+            {"cvf", DDM_FILT},   {"cvx", DDM_XFADE},
+            {"cvp0", DDM_LWIN_A}, {"cvl0", DDM_LLEN_A},
+            {"cvp1", DDM_LWIN_B}, {"cvl1", DDM_LLEN_B},
+        };
+        for (unsigned k = 0; k < sizeof(old)/sizeof(old[0]); k++)
+            if ((j = cJSON_GetObjectItemCaseSensitive(node, old[k].k)) && cJSON_IsNumber(j)) {
+                dd.mtx.src[old[k].d] = (int8_t)(j->valueint & 7);
+                dd.mtx.mode[old[k].d] = CVM_ABS;
+            }
+    }
+    cvmtx_rearm(&dd.mtx);      // knobs recapture against the loaded values
 cv_map_done:;
     // track loads only when the value actually changes — preset_load also runs
     // on remote settings writes, and reloading mid-performance would mute
@@ -1282,14 +1331,10 @@ extern const machine_ui_t dualdeck_menu_ui;
 static int dd_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    MI_ADD(mi_pick("DJ filter", "cvf", dd.cv_filt & 7, 5, MI_CV));
-    MI_ADD(mi_pick("Crossfade", "cvx", dd.cv_fader & 7, 6, MI_CV));
+
     // deck suffixed, not prefixed: these are the longest EDITABLE entries and
     // the web matrix's grid view sizes its label column to them (Arlo 09-11)
-    MI_ADD(mi_pick("Loop Window A", "cvp0", dd.cv_lpos[0] & 7, 4, MI_CV));
-    MI_ADD(mi_pick("Loop Length A", "cvl0", dd.cv_llen[0] & 7, 5, MI_CV));
-    MI_ADD(mi_pick("Loop Window B", "cvp1", dd.cv_lpos[1] & 7, 4, MI_CV));
-    MI_ADD(mi_pick("Loop Length B", "cvl1", dd.cv_llen[1] & 7, 5, MI_CV));
+    // DJ filter / Crossfade / the four loop controls are CV MATRIX rows now
     MI_ADD(mi("start/stop (focused deck)", 8));
     MI_ADD(mi("loop (focused deck)", 9));
     return n;

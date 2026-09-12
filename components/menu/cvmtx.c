@@ -52,6 +52,9 @@ void cvmtx_rearm_dest(cvmtx_t *m, int d)
 void cvmtx_set_takeover(cvmtx_t *m, int d, int tk)
 { if (d >= 0 && d < CVMTX_MAX) m->tk[d] = (uint8_t)(tk == CVM_TK_CATCH ? CVM_TK_CATCH : CVM_TK_GRAB); }
 
+void cvmtx_set_catch_tol(cvmtx_t *m, int d, float t)
+{ if (d >= 0 && d < CVMTX_MAX) m->ctol[d] = (t > 0.0f && t <= 1.0f) ? t : 0.0f; }
+
 // the host's current value for this destination, 0..1 — CATCH is "the knob has
 // reached what the parameter already is", so the widget has to be told what
 // that is whenever anything OTHER than the knob changes it (UI, preset load).
@@ -112,7 +115,7 @@ void cvmtx_track(cvmtx_t *m, const int cvm[8])
         }
         if (!m->live[d])
             m->live[d] = (m->tk[d] == CVM_TK_CATCH)
-                       ? (fabsf(k - m->base01[d]) <= CVM_CATCH_TOL)
+                       ? (fabsf(k - m->base01[d]) <= (m->ctol[d] > 0.0f ? m->ctol[d] : CVM_CATCH_TOL))
                        : (fabsf(k - m->capt[d])   >  CVM_TAKEOVER);
         // a live knob IS the value, so CATCH has something true to cross next time
         if (m->live[d]) m->base01[d] = k;
