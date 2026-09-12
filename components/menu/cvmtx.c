@@ -16,9 +16,17 @@
 #define CVM_CATCH_TOL 0.022f // CATCH: how close the knob must pass to the value,
                              // = tracker's TRK_PASSTOL 90/4095
 
+// m->n is clamped at init, but the compiler cannot see that through the struct,
+// and once cvmtx_src() bounds-checks explicitly GCC starts proving d can reach
+// CVMTX_MAX in these loops. Clamping here fixes the warning AND means a host
+// that passes a silly n cannot walk off the arrays.
+static inline int cvm_n(const cvmtx_t *m)
+{ return m->n < 0 ? 0 : (m->n > CVMTX_MAX ? CVMTX_MAX : m->n); }
+
 void cvmtx_reset_defaults(cvmtx_t *m)
 {
     for (int d = 0; d < CVMTX_MAX; d++) {
+        m->ovr[d] = CVM_NO_OVR;      // 0 would mean "override to CV1"
         m->src[d] = (m->def_src && d < m->n) ? m->def_src[d] : -1;
         m->mode[d] = (m->src[d] >= 0) ? CVM_ABS : CVM_OFFSET;
         m->amt[d] = 0.0f;
@@ -50,6 +58,23 @@ void cvmtx_set_takeover(cvmtx_t *m, int d, int tk)
 void cvmtx_set_base(cvmtx_t *m, int d, float v01)
 { if (d >= 0 && d < CVMTX_MAX) m->base01[d] = v01 < 0.0f ? 0.0f : (v01 > 1.0f ? 1.0f : v01); }
 
+// the machine's routing wins while it is set; src[] is untouched underneath, so
+// clearing the override restores the user's map with no bookkeeping in the host
+void cvmtx_override(cvmtx_t *m, int d, int src)
+{
+    if (d < 0 || d >= CVMTX_MAX) return;
+    m->ovr[d] = (src == CVM_NO_OVR) ? CVM_NO_OVR
+              : (int8_t)(src < -1 ? -1 : (src > 7 ? 7 : src));
+}
+void cvmtx_override_clear(cvmtx_t *m)
+{ for (int d = 0; d < CVMTX_MAX; d++) m->ovr[d] = CVM_NO_OVR; }
+
+int cvmtx_src(const cvmtx_t *m, int d)
+{
+    if (d < 0 || d >= CVMTX_MAX) return -1;
+    return (m->ovr[d] != CVM_NO_OVR) ? m->ovr[d] : m->src[d];
+}
+
 void cvmtx_hold(cvmtx_t *m, int d, bool held)
 {
     if (d < 0 || d >= CVMTX_MAX) return;
@@ -74,13 +99,14 @@ void cvmtx_track(cvmtx_t *m, const int cvm[8])
     // a live knob tracks every block)
     uint16_t rearm = m->rearm;
     m->rearm = 0;
-    for (int d = 0; d < m->n; d++) {
-        if (m->mode[d] != CVM_ABS || m->src[d] < 0) { m->live[d] = false; continue; }
-        float k = cvmtx_cv01(m, cvm, m->src[d]);
+    for (int d = 0, dn = cvm_n(m); d < dn; d++) {
+        int sc = cvmtx_src(m, d);
+        if (m->mode[d] != CVM_ABS || sc < 0) { m->live[d] = false; continue; }
+        float k = cvmtx_cv01(m, cvm, sc);
         m->pos01[d] = k;
         // HELD behaves exactly like re-armed, every block: the capture follows
         // the knob, so releasing the hold arms it where the knob actually is
-        if (((rearm >> d) & 1u) || m->src[d] == m->skip_src || ((m->hold >> d) & 1u)) {
+        if (((rearm >> d) & 1u) || sc == m->skip_src || ((m->hold >> d) & 1u)) {
             m->capt[d] = k; m->live[d] = false; m->last01[d] = -1.0f;
             continue;
         }
@@ -100,7 +126,7 @@ void cvmtx_track(cvmtx_t *m, const int cvm[8])
 
 bool cvmtx_abs(const cvmtx_t *m, int d, float *k01)
 {
-    if (d < 0 || d >= m->n || m->mode[d] != CVM_ABS || m->src[d] < 0 || !m->live[d]) return false;
+    if (d < 0 || d >= m->n || m->mode[d] != CVM_ABS || cvmtx_src(m, d) < 0 || !m->live[d]) return false;
     *k01 = m->pos01[d];   // this block's conditioned read (cvmtx_track ran first)
     return true;
 }
@@ -120,13 +146,14 @@ float cvmtx_cv01(const cvmtx_t *m, const int cvm[8], int src)
 
 float cvmtx_val(const cvmtx_t *m, const int cvm[8], int d)
 {
-    if (d < 0 || d >= m->n || m->src[d] < 0 || m->mode[d] == CVM_ABS) return 0.0f;
-    return m->amt[d] * cvmtx_cv01(m, cvm, m->src[d]);
+    int sc = (d >= 0 && d < cvm_n(m)) ? cvmtx_src(m, d) : -1;
+    if (sc < 0 || m->mode[d] == CVM_ABS) return 0.0f;
+    return m->amt[d] * cvmtx_cv01(m, cvm, sc);
 }
 
 bool cvmtx_any(const cvmtx_t *m)
 {
-    for (int d = 0; d < m->n; d++) if (m->src[d] >= 0) return true;
+    for (int d = 0, dn = cvm_n(m); d < dn; d++) if (m->src[d] >= 0) return true;
     return false;
 }
 
@@ -147,7 +174,7 @@ static void mtx_redraw(const cvmtx_t *m, const char *title)
     if (s_pos >= vis) top = s_pos - vis + 1;
     for (int r = 0; r < vis; r++) {
         int i = top + r;
-        if (i >= m->n) break;
+        if (i >= cvm_n(m)) break;
         int y = y0 + r * row_h;
         _bg = (i == s_pos) ? (color_t){10, 18, 56} : TFT_BLACK;
         TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
@@ -156,8 +183,10 @@ static void mtx_redraw(const cvmtx_t *m, const char *title)
         snprintf(lab, sizeof(lab), "%s%s", cvmtx_is_default(m, i) ? "\xb7" : "", m->labels[i]);
         TFT_print(lab, 8, y);
         char src[8], amt[10];
-        if (m->src[i] < 0) snprintf(src, sizeof(src), "off");
-        else               snprintf(src, sizeof(src), "CV%d", m->src[i] + 1);
+        int sc = cvmtx_src(m, i);
+        bool auto_src = (m->ovr[i] != CVM_NO_OVR);
+        if (sc < 0)         snprintf(src, sizeof(src), auto_src ? "off*" : "off");
+        else                snprintf(src, sizeof(src), auto_src ? "CV%d*" : "CV%d", sc + 1);
         if (m->mode[i] == CVM_ABS) snprintf(amt, sizeof(amt), "knob");   // ABSOLUTE: takeover
         else snprintf(amt, sizeof(amt), "%+d%%", (int)(m->amt[i] * 100.0f));
         // fixed positions + brackets that hug the value -> nothing shifts on select
@@ -167,7 +196,7 @@ static void mtx_redraw(const cvmtx_t *m, const char *title)
         TFT_print(src, src_x, y);
         if (i == s_pos && s_field == 1) { TFT_print("[", src_x - cw, y); TFT_print("]", src_x + src_w, y); }
         int amt_w = TFT_getStringWidth(amt), amt_x = _width - 10 - cw - amt_w;
-        _fg = (m->src[i] < 0) ? (color_t){80, 80, 90}
+        _fg = (cvmtx_src(m, i) < 0) ? (color_t){80, 80, 90}
             : (i == s_pos && s_field == 2) ? TFT_CYAN : TFT_WHITE;
         TFT_print(amt, amt_x, y);
         if (i == s_pos && s_field == 2) { TFT_print("[", amt_x - cw, y); TFT_print("]", amt_x + amt_w, y); }
@@ -224,7 +253,7 @@ void cvmtx_save(const cvmtx_t *m, cJSON *o)
     cJSON *mm = cJSON_AddArrayToObject(o, "mxm");   // modes (0 offset / 1 knob)
     cJSON *ml = cJSON_AddArrayToObject(o, "mxl");   // destination names, so the web
     cJSON *md = cJSON_AddArrayToObject(o, "mxd");   //   matrix editor can label its rows
-    for (int d = 0; d < m->n; d++) {                //   and mark/revert the defaults
+    for (int d = 0, dn = cvm_n(m); d < dn; d++) {                //   and mark/revert the defaults
         cJSON_AddItemToArray(ms, cJSON_CreateNumber(m->src[d]));
         cJSON_AddItemToArray(mm, cJSON_CreateNumber(m->mode[d]));
         cJSON_AddItemToArray(md, cJSON_CreateNumber(m->def_src ? m->def_src[d] : -1));
@@ -249,7 +278,7 @@ void cvmtx_load(cvmtx_t *m, const cJSON *node)
     }
     cJSON *mm = cJSON_GetObjectItemCaseSensitive(node, "mxm");
     bool have_modes = cJSON_IsArray(mm);
-    for (int d = 0; d < m->n; d++) {
+    for (int d = 0, dn = cvm_n(m); d < dn; d++) {
         cJSON *si = cJSON_GetArrayItem(ms, d);
         cJSON *ai = cJSON_IsArray(ma) ? cJSON_GetArrayItem(ma, d) : NULL;
         cJSON *mi = have_modes ? cJSON_GetArrayItem(mm, d) : NULL;
@@ -271,7 +300,7 @@ void cvmtx_load(cvmtx_t *m, const cJSON *node)
         // MIGRATION: the knobs this preset relied on were hard-wired in the
         // host; re-create them as ABS entries wherever the destination is still
         // free. A destination already carrying an OFFSET keeps it, single-driven.
-        for (int d = 0; d < m->n; d++)
+        for (int d = 0, dn = cvm_n(m); d < dn; d++)
             if (m->def_src[d] >= 0 && m->src[d] < 0) {
                 m->src[d] = m->def_src[d];
                 m->mode[d] = CVM_ABS;

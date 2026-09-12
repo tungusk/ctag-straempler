@@ -56,6 +56,18 @@
 #define CVM_TK_GRAB   0
 #define CVM_TK_CATCH  1
 
+// SOURCE OVERRIDE (2026-09-12). A machine may want to decide, from its own
+// state, which channel a destination reads — DoubleDecker's "contextual" knob
+// mode routes CV6/CV7 by focus and loop status, and it has SIX jobs for FOUR
+// knobs so it can never simply demultiplex the way Deck and Tracker did.
+//
+// The widget does NOT own the idea of a mode: machines differ far too much for
+// that. It owns the primitive underneath — the machine overrides one
+// destination's source, and THE USER'S ASSIGNMENT IS PRESERVED UNDERNEATH, so
+// leaving the mode restores the map without the machine having to remember it.
+// Overrides are runtime only; nothing about persistence changes.
+#define CVM_NO_OVR  (-2)      // "no override" — src[] stands
+
 typedef struct {
     const char *const *labels;   // host's destination names (static storage)
     int n;                       // destinations, <= CVMTX_MAX
@@ -68,6 +80,9 @@ typedef struct {
     bool   live[CVMTX_MAX];      // moved past threshold -> drives the dest
     float  last01[CVMTX_MAX];    // last committed position (dirty hysteresis)
     float  pos01[CVMTX_MAX];     // this block's conditioned position (cvmtx_abs)
+    int8_t  ovr[CVMTX_MAX];      // machine's source override, CVM_NO_OVR = none.
+                                 // NOT memset-safe: 0 is a valid channel, so
+                                 // init and reset write CVM_NO_OVR explicitly.
     uint8_t tk[CVMTX_MAX];       // CVM_TK_GRAB (default) / CVM_TK_CATCH
     float  base01[CVMTX_MAX];    // host's CURRENT value 0..1 — what CATCH crosses
     uint16_t rearm;              // BIT PER DEST: next track() recaptures + un-lives
@@ -89,6 +104,9 @@ void cvmtx_rearm_dest(cvmtx_t *m, int d);            // just one destination
 void cvmtx_set_takeover(cvmtx_t *m, int d, int tk);  // CVM_TK_*, at init
 void cvmtx_set_base(cvmtx_t *m, int d, float v01);   // the host's current value (CATCH)
 void cvmtx_hold(cvmtx_t *m, int d, bool held);       // gate a dest out of takeover
+void cvmtx_override(cvmtx_t *m, int d, int src);     // machine drives this source
+void cvmtx_override_clear(cvmtx_t *m);               // back to the user's map
+int  cvmtx_src(const cvmtx_t *m, int d);             // EFFECTIVE source (ovr else src)
 bool cvmtx_is_default(const cvmtx_t *m, int d);   // entry d == its default (page marker)
 
 // once per audio block, before any cvmtx_val/cvmtx_abs read: follow the ch1/2
