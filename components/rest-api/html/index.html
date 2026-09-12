@@ -301,6 +301,33 @@ body.nosbar .sbar{display:none}
 .mxrev:hover{color:#8f8;border-color:#8f8}
 .mxc select.on{border-color:#3a7;color:#6c9}
 .mxc select.pk{border-color:#2e4e5e;color:#7fb2cc}
+/* the GRID view of the matrix (2026-09-11) */
+.gwrap{overflow-x:auto;margin:4px 0 2px}
+.gmtx{width:auto;border-collapse:collapse}
+.gmtx th.gh{color:#8aa;font-size:10px;font-weight:normal;text-align:center;padding:2px 0 4px;width:22px;min-width:22px;white-space:nowrap;letter-spacing:0}
+.gmtx th.gh.goff{color:#666;width:30px;min-width:30px}
+.gmtx tr.gcap th{color:#5a6a6a;font-size:9px;font-weight:normal;letter-spacing:2px;padding:0 0 1px;border-bottom:1px solid #242424}
+.gmtx .gsep{border-left:1px solid #2e3a38}
+.gmtx th.gh{border-right:1px solid #1e1e1e}
+.gmtx tbody tr:hover td{background:var(--fhov)}
+.gmtx tbody tr td.gdf{background:#12301e}
+.gmtx th.gdest{text-align:left;padding:2px 12px 4px 2px;color:#8aa;font-size:10px;font-weight:normal;border-right:1px solid #242424}
+.gmtx td.gc{text-align:center;width:22px;min-width:22px;padding:3px 0;border-bottom:1px solid #1a1a1a;border-right:1px solid #1e1e1e}
+.gmtx td.gc.gdf{background:#12301e}
+.gmtx td.gc.gx{border-bottom:1px solid #1a1a1a}
+.gmtx input.gcell{-webkit-appearance:none;appearance:none;width:12px;height:12px;margin:0;padding:0;
+  border:1px solid #3a3a3a;border-radius:50%;background:transparent;cursor:pointer;vertical-align:middle}
+.gmtx input.gcell:hover{border-color:#5d7a72}
+.gmtx input.gcell:checked{border-color:var(--acc);
+  background:radial-gradient(circle at center,var(--acc) 0 3px,transparent 3.5px)}
+.gmtx input.gcell:focus-visible{outline:1px solid var(--acc);outline-offset:1px}
+.gmtx td.gdest{padding:0 12px 0 2px;color:#93a8a2;white-space:nowrap;border-bottom:1px solid #1a1a1a;border-right:1px solid #242424}
+.gmtx td.gctl{padding-left:10px;white-space:nowrap;border-bottom:1px solid #1a1a1a}
+.gmtx td.gctl input[type=range]{width:90px;vertical-align:middle}
+.gmtx .gnote{color:#666;font-size:10px}
+.tabs.mxview .tab{padding:1px 8px;font-size:11px;line-height:16px}
+.gfix{margin-top:6px;color:#666;font-size:10px}
+.gfix .mxf{margin-right:4px}
 .mxf.ghost{opacity:.55;border-style:dashed;display:inline-flex;align-items:center;gap:6px}
 .mxcard .mtx{width:100%}
 .mxcard .mtx tr>td:nth-child(2){width:100%}
@@ -1661,7 +1688,7 @@ function mxModeTog(b){
 // claimed twice: the later row wins), plus the channel each editable
 // input-map job now sits on. The hidden [data-ik] inputs seed the picks so a
 // job whose source is off-jack still has a value.
-function mxCollect(){
+function mxCollectRows(){
   var mxs=[],mxa=[],mxm=[],picks={};
   for(var k=0;k<mxN;k++){mxs.push(-1);mxa.push(0);mxm.push(0);}
   document.querySelectorAll('[data-ik]').forEach(function(h){picks[h.dataset.ik]=+h.value;});
@@ -1691,12 +1718,150 @@ function mxAdd(cv){
   if(last)last.insertAdjacentHTML('afterend','<tr data-cvrow="'+cv+'"><td></td><td><div class="mxrow">'+mxCell(cv,-1,0)+'</div></td>'
     +'<td class="mxbtn"><button class="mxadd" title="remove this line" onclick="this.closest(\'tr\').remove()">&#8722;</button></td></tr>');
 }
-function rpMatrix(d){
+// ---- REVERSE CV MATRIX: a true grid. Destinations down the RIGHT column,
+// channels across the TOP, one radio per row. The firmware stores ONE SOURCE
+// PER DESTINATION (mxs[dest]=cv), so a radio row is exactly the data model —
+// an illegal state cannot be expressed. Switchable with the row view.
+var MXV_KEY = 'mtxview';
+function mxViewGet(){ try { return localStorage.getItem(MXV_KEY) === 'grid' ? 'grid' : 'rows'; } catch(e) { return 'rows'; } }
+function mxViewSet(v){
+  var a = mxCollect();                                  // carry unapplied edits across the switch
+  try { localStorage.setItem(MXV_KEY, v); } catch(e) {}
+  mxRerender(a);                                        // re-folds + rebalances on its own
+}
+function mxViewTog(){ mxViewSet(mxViewGet() === 'grid' ? 'rows' : 'grid'); }
+function mxViewTabs(){
+  var g = mxViewGet() === 'grid';
+  return '<div class="tabs mxview foldhide" style="flex:0 0 auto;margin-right:8px">'
+    + '<div class="tab' + (g ? '' : ' on') + '" title="one row per channel" onclick="mxViewSet(\'rows\')">rows</div>'
+    + '<div class="tab' + (g ? ' on' : '') + '" title="destinations x channels" onclick="mxViewSet(\'grid\')">grid</div>'
+    + '</div>';
+}
+
+// the grid's columns: off + the eight CVs + the two triggers. Off-jack clock
+// sources (AUDIO/INT) would add three columns used by one row, so they stay in
+// the row's trailing note instead.
+var GCOL = [-1,0,1,2,3,4,5,6,7,8,9];
+function gcolName(c){ return c < 0 ? 'off' : c < 8 ? String(c + 1) : 'T' + (c - 7); }
+
+// a channel is legal for a matrix destination only if it is a CV (mxs is
+// CV-only); for an input-map row the entry's own opts decide.
+function gLegal(rowKind, e, ch){
+  if (rowKind === 'dest') return ch < 0 || ch < 8;
+  if (ch < 0) return mxImOK(e, 12);      // "off" only where the job can be off
+  return mxImOK(e, ch);
+}
+
+function rpMatrixGrid(d){
+  var hasM = Array.isArray(d.mxs), im = Array.isArray(d.imap) ? d.imap : [];
+  if (!hasM && !im.length) return '';
+  mxLabs = d.mxl || []; mxN = hasM ? d.mxs.length : 0;
+  mxDef = Array.isArray(d.mxd) ? d.mxd : []; mxIm = im;
+  var mxm = Array.isArray(d.mxm) ? d.mxm : [], i, k;
+
+  var h = '<div class="card pnl mxcard"><div class="row tight" style="align-items:center;margin-top:0">'
+    + '<b class="ph" style="flex:1;padding:0;margin:0">CV MATRIX</b>'
+    + mxViewTabs()
+    + '<button class="btn foldhide" style="flex:0 0 auto;margin-right:6px" onclick="rpApply()">Apply</button>'
+    + '<button class="btn foldhide" style="flex:0 0 auto" title="picks back to their defaults, assignable matrix cleared, applied" onclick="mxReset()">Reset</button></div>';
+
+  // the picks travel as hidden inputs so rpApply keeps its one [data-ik] harvest
+  im.forEach(function(e){ if (e.k) h += '<input type="hidden" data-ik="' + esc(e.k) + '" data-idef="' + e.d + '"' + ((e.o & 8) ? ' data-ig="1"' : '') + ' value="' + e.s + '">'; });
+
+  h += '<div class="gwrap"><table class="mtx gmtx"><thead>';
+  // a caption row so the bare numbers still read as CV 1-8 / TR 1-2
+  h += '<tr class="gcap"><th></th><th></th><th colspan="8">CV</th><th colspan="2">TR</th><th></th></tr><tr>';
+  h += '<th class="gdest">destination</th>';
+  GCOL.forEach(function(c){ h += '<th class="gh' + (c < 0 ? ' goff' : '') + (c === 0 || c === 8 ? ' gsep' : '') + '">' + gcolName(c) + '</th>'; });
+  h += '<th class="gctl"></th></tr></thead><tbody>';
+
+  function row(rowId, kind, label, cur, e, amt, mode, note){
+    var s = '<tr data-grow="' + rowId + '" data-mode="' + (mode ? 1 : 0) + '">';
+    s += '<td class="gdest">' + esc(label) + (note ? ' <span class="gnote">' + esc(note) + '</span>' : '') + '</td>';
+    GCOL.forEach(function(c){
+      var ok = gLegal(kind, e, c), on = (cur === c);
+      var dflt = (kind === 'dest' && mxDef[+rowId] === c && c >= 0);
+      s += '<td class="gc' + (ok ? '' : ' gx') + (dflt ? ' gdf' : '') + (c === 0 || c === 8 ? ' gsep' : '') + '">'
+        + (ok ? '<input type="radio" class="gcell" name="g' + rowId + '" data-row="' + rowId + '" value="' + c + '"'
+              + (on ? ' checked' : '') + ' onchange="mxRerender(mxCollect())">' : '')
+        + '</td>';
+    });
+    s += '<td class="gctl">';
+    if (kind === 'dest' && cur >= 0) {
+      s += '<button class="mxmode' + (mode ? ' on' : '') + '" title="offset (± amount) or knob (absolute: takes over once moved)" onclick="gModeTog(this)">' + (mode ? 'knob' : '&#177;') + '</button>'
+        + '<input type="range" min="-100" max="100" step="1" value="' + amt + '"' + (mode ? ' hidden' : '')
+        + ' oninput="this.nextElementSibling.textContent=(this.value>0?\'+\':\'\')+this.value+\'%\'">'
+        + '<span class="amt"' + (mode ? ' hidden' : '') + '>' + (amt > 0 ? '+' : '') + amt + '%</span>';
+    }
+    s += '</td></tr>';
+    return s;
+  }
+
+  for (k = 0; k < mxN; k++) {
+    var cur = (d.mxs[k] >= 0) ? d.mxs[k] : -1;
+    var amt = (d.mxa && typeof d.mxa[k] === 'number') ? d.mxa[k] : 0;
+    h += row(String(k), 'dest', mxLabs[k] || ('dest ' + (k + 1)), cur, null, amt, mxm[k] === 1, '');
+  }
+  for (i = 0; i < im.length; i++) {
+    var e = im[i];
+    if (!e.k) continue;                                   // fixed jobs are not editable
+    var on = (e.s >= 0 && e.s < 10) ? e.s : -1;
+    var note = (e.s >= 10) ? '(' + SRC_NAMES[e.s] + ')' : ((e.o & 8) ? 'module-wide' : '');
+    h += row('p' + i, 'pick', e.l, on, e, 0, 0, note);
+  }
+  // fixed jobs listed once at the foot: they are not assignable, but leaving
+  // them off the card entirely loses information the row view showed
+  var fixed = im.filter(function(e){ return !e.k; });
+  h += '</tbody></table></div>';
+  if (fixed.length) {
+    h += '<div class="gfix">fixed in this machine: ';
+    fixed.forEach(function(e){ h += '<span class="mxf">' + esc(e.l) + ' <b>' + (SRC_NAMES[e.s] || '?') + '</b></span> '; });
+    h += '</div>';
+  }
+  return h + '</div>';
+}
+
+function gModeTog(b){
+  var tr = b.closest('tr');
+  tr.dataset.mode = tr.dataset.mode === '1' ? '0' : '1';
+  mxRerender(mxCollect());
+}
+
+// read the grid back into the same {mxs,mxa,mxm,picks} shape the row view
+// produces, so rpApply / mxRerender / mxReset need no idea which view is up
+function mxCollectGrid(){
+  var mxs = [], mxa = [], mxm = [], picks = {}, k;
+  for (k = 0; k < mxN; k++) { mxs.push(-1); mxa.push(0); mxm.push(0); }
+  document.querySelectorAll('[data-ik]').forEach(function(hh){ picks[hh.dataset.ik] = +hh.value; });
+  document.querySelectorAll('tr[data-grow]').forEach(function(tr){
+    var id = tr.dataset.grow, sel = tr.querySelector('input.gcell:checked');
+    var ch = sel ? +sel.value : -1;
+    if (id.charAt(0) === 'p') {
+      var e = mxIm[+id.slice(1)];
+      if (e && e.k && ch >= 0) picks[e.k] = ch;
+      else if (e && e.k && ch < 0 && mxImOK(e, 12)) picks[e.k] = 12;
+      return;
+    }
+    var dest = +id;
+    if (ch >= 0 && dest >= 0 && dest < mxN) {
+      var m = +tr.dataset.mode, rng = tr.querySelector('input[type=range]');
+      mxs[dest] = ch; mxm[dest] = m; mxa[dest] = m ? 0 : (rng ? parseInt(rng.value) || 0 : 0);
+    }
+  });
+  return { mxs: mxs, mxa: mxa, mxm: mxm, picks: picks };
+}
+
+// ---- one entry point each, so nothing else needs to know which view is up ---
+function rpMatrix(d){ return mxViewGet()==='grid' ? rpMatrixGrid(d) : rpMatrixRows(d); }
+function mxCollect(){ return mxViewGet()==='grid' ? mxCollectGrid() : mxCollectRows(); }
+
+function rpMatrixRows(d){
   var hasM=Array.isArray(d.mxs),im=Array.isArray(d.imap)?d.imap:[];
   if(!hasM&&!im.length)return '';
   mxLabs=d.mxl||[];mxN=hasM?d.mxs.length:0;mxDef=Array.isArray(d.mxd)?d.mxd:[];mxIm=im;
   var mxm=Array.isArray(d.mxm)?d.mxm:[];
   var h='<div class="card pnl mxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">CV MATRIX</b>'
+    +mxViewTabs()
     +'<button class="btn foldhide" style="flex:0 0 auto;margin-right:6px" onclick="rpApply()">Apply</button>'
     +'<button class="btn foldhide" style="flex:0 0 auto" title="picks back to their defaults, assignable matrix cleared, applied" onclick="mxReset()">Reset</button></div><table class="mtx">';
   // the editable picks also travel as hidden inputs so rpApply keeps its one

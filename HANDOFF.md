@@ -49,7 +49,7 @@ shows both** — never a state the firmware cannot hold.
   glyph inline. All spans now; `[id$="_arw"],.arw{font-size:1.3em}` sizes them.
 
 Also: matrix rows fill the card (`.mxc{flex:1 1 100%}`, select 152px so "Record
-punch" and Deck's "Deck A loop window" fit, range `flex:1 1 auto`), and the
+punch" and Deck's longest pick fit, range `flex:1 1 auto`), and the
 FILES readout lost its dividing dot — `SD 25985/29838MB  ~43 h rec`.
 
 Built and flashed to .85. TR swap verified through Apply and read back from the

@@ -1284,10 +1284,12 @@ static int dd_inputs(machine_input_t *o, int max)
     int n = 0;
     MI_ADD(mi_pick("DJ filter", "cvf", dd.cv_filt & 7, 5, MI_CV));
     MI_ADD(mi_pick("Crossfade", "cvx", dd.cv_fader & 7, 6, MI_CV));
-    MI_ADD(mi_pick("Deck A loop window", "cvp0", dd.cv_lpos[0] & 7, 4, MI_CV));
-    MI_ADD(mi_pick("Deck A loop length", "cvl0", dd.cv_llen[0] & 7, 5, MI_CV));
-    MI_ADD(mi_pick("Deck B loop window", "cvp1", dd.cv_lpos[1] & 7, 4, MI_CV));
-    MI_ADD(mi_pick("Deck B loop length", "cvl1", dd.cv_llen[1] & 7, 5, MI_CV));
+    // deck suffixed, not prefixed: these are the longest EDITABLE entries and
+    // the web matrix's grid view sizes its label column to them (Arlo 09-11)
+    MI_ADD(mi_pick("Loop Window A", "cvp0", dd.cv_lpos[0] & 7, 4, MI_CV));
+    MI_ADD(mi_pick("Loop Length A", "cvl0", dd.cv_llen[0] & 7, 5, MI_CV));
+    MI_ADD(mi_pick("Loop Window B", "cvp1", dd.cv_lpos[1] & 7, 4, MI_CV));
+    MI_ADD(mi_pick("Loop Length B", "cvl1", dd.cv_llen[1] & 7, 5, MI_CV));
     MI_ADD(mi("start/stop (focused deck)", 8));
     MI_ADD(mi("loop (focused deck)", 9));
     return n;
