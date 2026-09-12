@@ -127,7 +127,55 @@ for the clock, and an unassigned filter or fader is now FROZEN rather than
 reading channel 0. That is correct but it is new — a matrix row set to "off" used
 to be impossible on this machine.
 
-**Remaining in the rework: Sampler3, Drums.**
+### Sampler3 (`a8fe5f7`) and Drums (`9cce1f5`) — the rework is DONE
+
+**Sampler3** also had a hand-rolled matrix (`src_speed`/`src_start`/`src_len` per
+voice) AND a hand-rolled `cvmtx_cv01()`: `s3_mod_read()` was the median snapshot
+plus the ch1/2 idle-floor rescale, written out. Both go. `cv_hist`/`cv_hp` become
+`cvsmooth`'s ring, `cv12_floor[2]` becomes `cvmtx_t.floor12`, three per-voice
+Setup rows become one CV Matrix row.
+
+> **TAKEOVER IS NEW ON THIS MACHINE**, and it is the real change. Every source
+> was read straight through: the knob's resting position overrode the stored crop
+> and speed on the FIRST BLOCK, so a loaded preset never kept the crop it was
+> saved with, and a voice booted at whatever rate K6 sat at. As ABS destinations
+> they are inert until moved. This is also what makes the new default assignments
+> safe — the two crop STARTs take K5/K8, and crop is on by default.
+
+> **`setup_menu_t.n` was a literal 12 here too**, and three rows collapsing into
+> one renumbered everything below them. Now sizeof-derived.
+
+**Drums** was the plainest multiplexer left: CV6/CV7 hard-wired, and the same
+pair meant pad level+decay OR filter cutoff+resonance depending on whether the
+encoder sat on the filter box. Filter/resonance move to K5/K8; level and decay
+KEEP K6/K7 (they are what the machine is played with, and both are noon-neutral).
+
+**The pads stay STEPPED and that is deliberate** — same family as DoubleDecker's
+quantized loop pickup. The decay gesture writes `attack_ms`/`start_off`/`loop_ms`
+together, so tracking it every block would mean a Pads-row value could never
+stand while the knob was live. `DR_MOD_MOVE` survives as a deadband on top of the
+widget's liveness, with `knob_last = -1` meaning "nothing applied since the
+re-arm" so the block a knob goes live on applies straight away.
+
+Re-arm on pad selection is now a `sel_pad` compare in the audio block, not a call
+from the UI — it fires for the grid, the Pads page and a preset load alike. Same
+move as DoubleDecker's `ctx_sig`, and the same reason: **a re-arm driven from one
+UI path is a re-arm the other paths bypass.**
+
+### The rework, in one line each
+
+| machine | was | now |
+|---|---|---|
+| Slicer `74710cf` | every job hard-wired, K6/K7 doubled by `ui_ctx` | 6 dests |
+| Deck `2fa2c28` | 4 jobs on 2 knobs via `loop_active` | 4 dests, GRAB+CATCH |
+| Tracker `b44a2e6` | same shape | 4 dests, first CATCH user |
+| DoubleDecker `eaf16bc` | bespoke matrix + page; 6 jobs, 4 knobs | 6 dests + override |
+| Sampler3 `a8fe5f7` | bespoke matrix + hand-rolled `cvmtx_cv01` | 6 dests, takeover new |
+| Drums `9cce1f5` | 2 knobs meaning 4 things by encoder position | 4 dests |
+
+**Nothing here has been played yet.** Six machines moved their knob layouts in
+one pass; that is a lot of feel to check at once, and the useful order is
+probably Drums and Slicer first (most changed), then Deck and Tracker.
 
 ## 2026-09-12 — MACHINE-SIDE CV REWORK begins: Slicer gets a matrix (`74710cf`)
 
