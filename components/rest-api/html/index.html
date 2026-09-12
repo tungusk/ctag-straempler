@@ -31,7 +31,15 @@ h1{font-size:13px;color:#aaa;flex:1;letter-spacing:.05em}
    502 px column: wrap them instead of letting them escape the card */
 #filescard .tabs{flex-wrap:wrap;row-gap:4px}
 .tab{cursor:pointer;padding:3px 10px;border:1px solid #5a5a5a;border-radius:3px;color:#aaa;font-size:12px}
-.tab.on{background:var(--acc);color:#000;border-color:var(--acc)}
+.tab.on{background:none;color:var(--acc);border-color:var(--acc);font-weight:bold;box-shadow:inset 0 0 0 1px var(--acc)}
+/* SELECTED = bold accent text in a doubled accent border, NOT an accent fill
+   (Arlo 09-12: "the selected one is too bright... dont invert the colors").
+   A filled chip was the loudest thing on a dark card and pulled the eye off
+   the content it was labelling. The thickness is an INSET RING, not
+   border-width:2px, because the box must not change size: .tabs.mxview .tab
+   overrides the padding at higher specificity, so compensating a real 2px
+   border would need a second rule per tab variant. Bold is free here — the
+   page is monospace, so the advance width does not move. */
 .pane{display:none;padding:10px}
 .pane.on{display:block}
 table{width:100%;border-collapse:collapse}
@@ -210,10 +218,14 @@ body.nosbar .sbar{display:none}
 .pnl .msg{text-align:center;margin:4px auto 0}
 .ph{display:block;color:var(--acc);font-size:14px;letter-spacing:1.5px;margin-bottom:5px}
 [id$="_arw"],.arw{font-size:1.3em;letter-spacing:0;line-height:1;vertical-align:-1px}
-/* a second heading INSIDE a card (the icecast push, under BROADCAST): same
-   voice a step quieter, and NOT .ph — makeFold() takes the card's first .ph as
-   the fold handle, so a second one would hand it the wrong element. */
-.sub{display:block;color:#7a9;font-size:12px;letter-spacing:1.5px;margin-bottom:5px}
+/* a second heading INSIDE a card (the icecast push, under BROADCAST). NOT .ph —
+   makeFold() takes the card's first .ph as the fold handle, so a second .ph
+   would hand it the wrong element; the two must stay separate classes however
+   alike they look. SAME GREEN as a card header (Arlo 09-12): the rank is
+   carried by SIZE alone now, 12px against .ph's 14px. It used to be carried by
+   a muted #7a9 as well, which double-counted the demotion and left a sub-header
+   reading as disabled rather than as a smaller heading. */
+.sub{display:block;color:var(--acc);font-size:12px;letter-spacing:1.5px;margin-bottom:5px}
 /* the gap belongs to the BODY, so it only appears when the fold is open — a
    collapsed sub-header sits tight against whatever follows it */
 .sub+div{padding-top:3px}   /* a step under .ph, in step with it */
@@ -302,39 +314,52 @@ body.nosbar .sbar{display:none}
 .mxc select.on{border-color:#3a7;color:#6c9}
 .mxc select.pk{border-color:#2e4e5e;color:#7fb2cc}
 /* the GRID view of the matrix (2026-09-11) */
-.gwrap{overflow-x:auto;margin:4px 0 2px}
+.gwrap{overflow-x:auto;margin:6px 0 2px;
+       background:#000;border:1px solid #2c2c2c;border-radius:4px;padding:7px 9px 8px}
+/* the grid sits in a WINDOW, and it is deliberately the same window the setup
+   screens use — .tft's black, hairline, radius and padding, verbatim. A patch
+   grid flush on the card's #151515 read as a web table; in a window it reads as
+   a screen showing the module's routing, which is what it is. Grid view only
+   (the row view emits no .gwrap), so the two views keep their own footing.
+   If .tft's frame ever moves, move this with it — they are meant to match.
+   EVERY COLOUR BELOW WAS THEN LIFTED ONE STEP. They were picked against the
+   card's #151515, and on the window's black the hairlines in particular fell
+   away to nothing (#1a1a1a on #000 is invisible; on #151515 it was a subtle
+   step). Text +~20%, linework #1a1a1a/#1e1e1e -> #262626 and #242424 -> #333,
+   the unchecked cell ring #3a3a3a -> #4a4a4a. Do not restore the old values
+   without also putting the grid back on a grey ground. */
 .gmtx{width:auto;border-collapse:collapse}
 /* the row view's .mxcard .mtx{width:100%} was stretching this table and
    inflating the channel columns to 67px against 21px cells — the grid must
    keep its natural width so the cells stay square (Arlo 09-11) */
 .mxcard table.gmtx{width:100%}
-.gmtx th.gh{color:#8aa;font-size:10px;font-weight:normal;text-align:center;padding:2px 0 4px;width:21px;min-width:21px;white-space:nowrap;letter-spacing:0}
-.gmtx th.gh.goff{color:#666;width:30px;min-width:30px}
-.gmtx tr.gcap th{color:#5a6a6a;font-size:9px;font-weight:normal;letter-spacing:2px;padding:0 0 1px;border-bottom:1px solid #242424}
-.gmtx .gsep{border-left:1px solid #2e3a38}
-.gmtx th.gh{border-right:1px solid #1e1e1e}
+.gmtx th.gh{color:#a8c4c4;font-size:10px;font-weight:normal;text-align:center;padding:2px 0 4px;width:21px;min-width:21px;white-space:nowrap;letter-spacing:0}
+.gmtx th.gh.goff{color:#8a8a8a;width:30px;min-width:30px}
+.gmtx tr.gcap th{color:#7b8d8d;font-size:9px;font-weight:normal;letter-spacing:2px;padding:0 0 1px;border-bottom:1px solid #333}
+.gmtx .gsep{border-left:1px solid #3d4d4a}
+.gmtx th.gh{border-right:1px solid #262626}
 .gmtx tbody tr:hover td{background:var(--fhov)}
 .gmtx tbody tr td.gdf{background:#12301e}
-.gmtx th.gdest{text-align:left;padding:2px 8px 4px 2px;color:#8aa;font-size:9px;font-weight:normal;border-right:1px solid #242424;width:1px;white-space:nowrap}
-.gmtx td.gc{text-align:center;width:21px;min-width:21px;padding:0;border-bottom:1px solid #1a1a1a;border-right:1px solid #1e1e1e}
+.gmtx th.gdest{text-align:left;padding:2px 8px 4px 2px;color:#a8c4c4;font-size:9px;font-weight:normal;border-right:1px solid #333;width:1px;white-space:nowrap}
+.gmtx td.gc{text-align:center;width:21px;min-width:21px;padding:0;border-bottom:1px solid #262626;border-right:1px solid #262626}
 .gmtx td.gc.gdf{background:#12301e}
-.gmtx td.gc.gx{border-bottom:1px solid #1a1a1a}
+.gmtx td.gc.gx{border-bottom:1px solid #262626}
 .gmtx input.gcell{-webkit-appearance:none;appearance:none;width:12px;height:12px;margin:0;padding:0;
-  border:1px solid #3a3a3a;border-radius:50%;background:transparent;cursor:pointer;vertical-align:top}
+  border:1px solid #4a4a4a;border-radius:50%;background:transparent;cursor:pointer;vertical-align:top}
 .gmtx input.gcell:hover{border-color:#5d7a72}
 .gmtx input.gcell:checked{border-color:var(--acc);
   background:radial-gradient(circle at center,var(--acc) 0 3px,transparent 3.5px)}
 .gmtx input.gcell:focus-visible{outline:1px solid var(--acc);outline-offset:1px}
 .gmtx .goffl{position:relative;display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;cursor:pointer;vertical-align:top}
 .gmtx .goffl span{color:transparent;font-size:11px;line-height:12px;user-select:none}
-.gmtx .goffl:hover span{color:#3d3d3d}
-.gmtx .goffl input.gcell:checked + span{color:#5f5f5f}
-.gmtx .goffl:hover input.gcell:checked + span{color:#828282}
+.gmtx .goffl:hover span{color:#555}
+.gmtx .goffl input.gcell:checked + span{color:#8a8a8a}
+.gmtx .goffl:hover input.gcell:checked + span{color:#b0b0b0}
 .gmtx td.goffc input.gcell{position:absolute;inset:0;width:12px;height:12px;opacity:0;border:none;background:none;margin:0}
 .gmtx td.goffc,.gmtx th.gh.goff{width:30px;min-width:30px}
-.gmtx .gfill{width:100%;border-bottom:1px solid #1a1a1a}
-.gmtx td.gdest{padding:0 8px 0 2px;color:#93a8a2;font-size:11px;width:1px;white-space:nowrap;border-bottom:1px solid #1a1a1a;border-right:1px solid #242424}
-.gmtx td.gctl{padding-left:10px;padding-right:2px;white-space:nowrap;border-bottom:1px solid #1a1a1a;width:1px;text-align:right}
+.gmtx .gfill{width:100%;border-bottom:1px solid #262626}
+.gmtx td.gdest{padding:0 8px 0 2px;color:#b6cbc4;font-size:11px;width:1px;white-space:nowrap;border-bottom:1px solid #262626;border-right:1px solid #333}
+.gmtx td.gctl{padding-left:10px;padding-right:2px;white-space:nowrap;border-bottom:1px solid #262626;width:1px;text-align:right}
 .gmtx tbody tr{height:20px}
 .gmtx tbody td{height:20px;line-height:20px;padding-top:0;padding-bottom:0;overflow:hidden}
 /* collapse the text strut in every cell that holds only controls: a 13px
@@ -347,14 +372,14 @@ body.nosbar .sbar{display:none}
 /* no pill on the mode label: the 1px border was the last thing making the
    control rows 2px taller than the bare ones. Plain text, colour carries state. */
 .gmtx .mxmode{border:none;background:none;border-radius:0;height:14px;line-height:14px;
-  font-size:10px;padding:0;width:32px;text-align:left;color:#7d8f8a;cursor:pointer}
+  font-size:10px;padding:0;width:32px;text-align:left;color:#9bb0aa;cursor:pointer}
 .gmtx .mxmode:hover{color:#cfe3dd}
 .gmtx .mxmode.on{color:#5aa8d8}
-.gmtx .gamt{display:inline-block;width:36px;text-align:left;color:#9ab;font-size:11px;line-height:14px;
-  cursor:ew-resize;user-select:none;margin-right:8px;padding:0 1px;border-bottom:1px dotted #3a3a3a}
+.gmtx .gamt{display:inline-block;width:36px;text-align:left;color:#b6c7d4;font-size:11px;line-height:14px;
+  cursor:ew-resize;user-select:none;margin-right:8px;padding:0 1px;border-bottom:1px dotted #4a4a4a}
 .gmtx .gamt:hover{color:#cfe3dd;border-bottom-color:#5d7a72}
 .gmtx .gamt.drag{color:var(--acc);border-bottom-color:var(--acc)}
-.gmtx .gnote{color:#666;font-size:10px}
+.gmtx .gnote{color:#8a8a8a;font-size:10px}
 .tabs.mxview .tab{padding:1px 8px;font-size:11px;line-height:16px}
 .gfix{margin-top:6px;color:#666;font-size:10px}
 .gfix .mxf{margin-right:4px}
@@ -448,7 +473,19 @@ body.nosbar .sbar{display:none}
 .knob{width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 50% 38%,#2c2c2c,#151515 70%);border:1px solid #3a3a3a;box-shadow:0 2px 4px #000;position:relative;cursor:ns-resize;touch-action:none;user-select:none;margin:6px 0 4px}
 .knob:hover{border-color:#555}
 .knob i{position:absolute;left:50%;top:50%;width:3px;height:28px;margin:-28px 0 0 -1.5px;transform-origin:50% 100%;background:linear-gradient(to bottom,#0af 50%,transparent 50%);border-radius:2px;pointer-events:none}
-.btn.cur{background:var(--acc);color:#000;border-color:var(--acc)}   /* the machine selector's current machine */
+/* the machine picker's unselected pills sit DARKER than a normal .btn — near the
+   card's own ground, so they read by their outline (Arlo 09-12). Fifteen buttons
+   at the standard #2a2a2a was a block of light at the top of the column, which
+   fought the one pill that actually matters. Scoped to #rmach: the plain .btn
+   grey is right for ACTIONS (Apply, Reset, Record), which should stay legible as
+   things you press, not as a set you choose from. */
+#rmach .btn{background:#161616;border-color:#3a3a3a}
+#rmach .btn:hover{background:#242424;border-color:#4a4a4a}
+.btn.cur{background:none;color:var(--acc);border-color:var(--acc);font-weight:bold;box-shadow:inset 0 0 0 1px var(--acc)}
+#rmach .btn.cur{background:none;border-color:var(--acc)}   /* beats #rmach .btn on specificity */
+/* the machine selector's current machine — same treatment as .tab.on above,
+   same reasoning. The two other accent FILLS in this sheet stay filled: .mdot.ws
+   is a status lamp and .mkey.on is a key being held, and neither is a selection. */
 .ren{cursor:pointer;border-bottom:1px dotted #555}
 /* MIDI card: octave arrows, transport dot, view-shift buttons, full-width mode */
 /* .row.tight>* forces padding:3px 14px on every child — these need their own */
