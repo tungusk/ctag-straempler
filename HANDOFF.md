@@ -97,6 +97,26 @@ has since gained SYSTEM and the keyboard.
 > QWERTY board's '=' key was clipped by `overflow:hidden`. **Exempt any new
 > non-button child of that row.** The header also wraps now as a backstop.
 
+> **⚠ FLASH THIS FIRST NEXT SESSION: `2c3abc0` is COMMITTED BUT NOT FLASHED.**
+> `.85` is still running `2e30e14`. The rack went off the network mid-cycle
+> (Arlo was packing up), so the OTA never ran. Build is clean and converted.
+
+**Row A fills to the panel again when the keyboard is expanded** (`2c3abc0`).
+Splitting row A / row B at the keyboard's own place in the flow — my fix for
+"it spans columns but makes a mess" — left **535 px of dead space** beside the
+panel, because the keyboard is the FIRST flow card so nothing was above it to
+fill with. Row A now takes flow cards **in order** until the column beside the
+panel catches up, and the rest drops below the band. A PREFIX does both jobs at
+once: nothing overtakes anything (which is what made the panel-height rule read
+as a mess) and the column still fills. **The last card in is allowed to
+overshoot the panel** — holding it back is exactly what leaves the hole.
+
+> **Verifying layout without the module:** the balance maths is entirely
+> client-side, so the new rule was checked by replaying it against the live
+> DOM's heights in the browser console — no build, no flash. Result: right
+> column 743 vs a 723 px panel, row B 329/287. Worth reusing; it is far faster
+> than a build+OTA per idea.
+
 **OPEN:** the piano header wraps to FOUR lines at half width — children sum to
 562 px in a 480 px row and the spacer eats 161 px. Arlo: "should be one row
 across the top". Not fixed. The `flex-wrap` backstop is what lets it stack
