@@ -13,6 +13,7 @@
 #include "tft.h"
 #include "tftspi.h"
 #include "machine.h"
+#include "cvmtx.h"
 #include "audio.h"
 #include "sample_ram.h"
 #include "beatlisten.h"
@@ -375,6 +376,7 @@ static const setup_item_t dk_setup_items[] = {
     {"Loop Freeze", ST_TOGGLE},   // 9
     {"Feel",        ST_TOGGLE},   // 10
     {"Clk Scale",   ST_TOGGLE},   // 11
+    {"CV Matrix",   ST_ACTION},   // 12 -> M_DECK_MATRIX
 };
 
 static void setup_value_str(int i, char *v, size_t n){
@@ -444,11 +446,19 @@ static void setup_adj(int i, int dir){
 static int dk_setup_action(int i){
     if (i == 0){ s_load_ret = M_DECK_SETUP; return M_DECK_LOAD; }   // Track -> browser
     if (i == 7){ deck_analyze_start(); return 0; }                  // Analyze: fire, stay
+    if (i == 12) return M_DECK_MATRIX;                              // the assignable CV matrix
     return 0;
 }
 
+static int deck_matrix_handler(int it_id, int event, void *ev_data)
+{
+    (void)it_id; (void)ev_data;
+    return cvmtx_menu_event(&dk.mtx, event, "Deck CV Matrix",
+                            M_DECK_SETUP, M_DECK_LIVE);
+}
+
 static setup_menu_t dk_setup = {
-    .items = dk_setup_items, .n = 12, .title = "Deck Setup",
+    .items = dk_setup_items, .n = 13, .title = "Deck Setup",   // MUST match dk_setup_items
     .aff_label = "Machine", .aff_target = M_MORE, .live_target = M_DECK_LIVE,
     .render = setup_value_str, .adjust = setup_adj, .action = dk_setup_action,
 };
@@ -483,6 +493,7 @@ static void deck_register_pages(void *menusys){
     menusys_new_item(_ms, M_DECK_LIVE);  menusys_item_set_default_cb(_ms, M_DECK_LIVE, deck_live_handler);
     menusys_new_item(_ms, M_DECK_SETUP); menusys_item_set_default_cb(_ms, M_DECK_SETUP, deck_setup_handler);
     menusys_new_item(_ms, M_DECK_LOAD);  menusys_item_set_default_cb(_ms, M_DECK_LOAD, deck_load_handler);
+    menusys_new_item(_ms, M_DECK_MATRIX); menusys_item_set_default_cb(_ms, M_DECK_MATRIX, deck_matrix_handler);
 }
 
 static int deck_main_event(int event, void *ev_data){
@@ -510,5 +521,5 @@ const machine_ui_t deck_menu_ui = {
     .main_event = deck_main_event,
     .boot_target = M_DECK_LIVE,
     .setup = &dk_setup,
-    .caps = MC_CLOCK,
+    .caps = MC_CLOCK | MC_MATRIX,
 };

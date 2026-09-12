@@ -36,7 +36,6 @@ dk_state_t dk;
 // DOWN by ~2.5 ms to put the beat on the pulse.
 #define DK_LAG_LEAD_FR (0.0068f * 44100.0f)
 #define DK_XFADE 256          // ~5.8 ms seam fade — a click-killer, not a blur
-#define DK_PICKUP 120         // knob counts of movement that GRAB a loop knob
 // PASS-THROUGH pickup on loop EXIT (Arlo: "i want cv7 to have to pickup on loop
 // exit or else it jumps the tempo to 2x or .5"). While looping, CV6/CV7 belong
 // to the loop (window + length), so on release they sit wherever the loop left
@@ -45,7 +44,6 @@ dk_state_t dk;
 // half speed. So a released knob stays INERT until it comes back THROUGH the
 // value the engine is still using; by then it agrees with the sound, and
 // nothing can jump.
-#define DK_PASSTOL 90         // how close a knob must come to reclaim its param
 // Read-ahead while looping. This IS the latency of a length/window change, so
 // it wants to be small — but it must stay ABOVE DK_LOW_WATER, or the reader
 // parks below the level the engine treats as "buffered" and the ring starves
@@ -108,7 +106,7 @@ static void dk_tl_update(void)
 // the filter. Both stay FROZEN at their pre-loop values until the physical
 // knob moves past the deadband; then it takes over smoothly.
 //   -2 = live, -1 = armed (seize the reference next block), >=0 = reference
-static int s_pk6 = -2, s_pk7 = -2;
+
 
 static volatile bool s_run = false, s_alive = false;
 static volatile bool s_track_req = false;
@@ -464,7 +462,11 @@ static void deck_loop_toggle(void)
         dk.rm_at = 0;
         dk.loop_active = false;            // mapping written BEFORE the flag
         if (dk.wpos > valid_to) dk.wpos = valid_to;
-        s_pk6 = s_pk7 = -1;                // knobs stay put until they MOVE
+        // they have their own knobs now, but if a destination is assigned to a
+        // channel the loop pair also uses, re-arming makes it CATCH on release
+        // rather than jump — the old s_pk6/s_pk7 = -1, per destination
+        cvmtx_rearm_dest(&dk.mtx, DKM_FILT);
+        cvmtx_rearm_dest(&dk.mtx, DKM_SPEED);
         if (!dk.loop_freeze) {
             // keeps-running: jump to where playback WOULD be by now
             uint64_t ph = (uint64_t)dk.engage_ff + dk.loop_adv;
@@ -610,6 +612,16 @@ void deck_resync_now(void)
 // ---- engine -----------------------------------------------------------------
 static void dk_reset_statics(void);      // defined with the process() statics below
 
+const char *const deck_mtx_labels[DKM_N] = {
+    "Loop Window", "Filter", "Speed", "Loop Length"
+};
+// K5 = 4, K6 = 5, K7 = 6, K8 = 7. Filter and Speed keep the knobs they already
+// had and are the noon-neutral pair (bypass / 1x); the loop pair moves to the
+// outer knobs, where an absolute position is the point rather than a centre.
+static const int8_t deck_mtx_defaults[DKM_N] = {
+    /* LWIN */ 4, /* FILT */ 5, /* SPEED */ 6, /* LLEN */ 7
+};
+
 static esp_err_t deck_start(void)
 {
     memset(&dk, 0, sizeof(dk));
@@ -618,6 +630,16 @@ static esp_err_t deck_start(void)
     s_track_req = false;
     dk.ring = heap_caps_malloc((size_t)DK_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     if (!dk.ring) { ESP_LOGE(TAG, "PSRAM ring alloc failed"); return ESP_ERR_NO_MEM; }
+    cvmtx_init(&dk.mtx, deck_mtx_labels, DKM_N, deck_mtx_defaults);
+    // the two takeover styles Deck hand-rolled, now declared: the loop pair
+    // GRABs (dead until it moves), filter and speed CATCH (dead until the knob
+    // returns to the value in use, so nothing jumps)
+    cvmtx_set_takeover(&dk.mtx, DKM_LWIN,  CVM_TK_GRAB);
+    cvmtx_set_takeover(&dk.mtx, DKM_LLEN,  CVM_TK_GRAB);
+    cvmtx_set_takeover(&dk.mtx, DKM_FILT,  CVM_TK_CATCH);
+    cvmtx_set_takeover(&dk.mtx, DKM_SPEED, CVM_TK_CATCH);
+    // window moves are performance, not patch edits: keep them off the autosave
+    dk.mtx.nodirty = (uint16_t)(1u << DKM_LWIN);
     dk.sync = true;
     dk.loop = true;
     dk.auto_an = true;       // auto-analyze unanalyzed tracks on load
@@ -651,7 +673,7 @@ static int s_cv6 = 0, s_cv7 = 0;
 static cvmed_t s_m6, s_m7;                  // per-channel median-of-5
 static trig_gate_t s_tg1, s_tg2;            // TR1/TR2 gate state
 static trig_combo_t s_tc;                   // the both-trig RESYNC gesture
-static int s_cv6_ref = -1, s_cv7_ref = -1, s_mv6 = 0, s_mv7 = 0;   // loop knob grabs
+static int s_mv6 = 0, s_mv7 = 0;    // 3-block confirm (stays host-side)
 static int s_c6_last = -1;                  // knob6 position the last move was made AT
 
 // Every file-static carrying state across process() calls is reset here: they
@@ -666,11 +688,10 @@ static void dk_reset_statics(void)
     memset(&s_tg2, 0, sizeof(s_tg2));
     memset(&s_tc, 0, sizeof(s_tc));
     s_cv6 = s_cv7 = 0;
-    s_cv6_ref = s_cv7_ref = -1;
     s_mv6 = s_mv7 = 0;
     s_c6_last = -1;
-    s_pk6 = s_pk7 = -2;
     s_loop_len_idx = 4;
+    cvmtx_rearm(&dk.mtx);       // was s_cv6_ref/s_cv7_ref/s_pk6/s_pk7 = armed
 }
 
 static void deck_process(int32_t out[MACHINE_BLOCK],
@@ -689,11 +710,21 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
     // shelved 2026-07-13; the PLL + NUDGE cover the need. Kept in code as the
     // grave marker for a future binding.
     const int nfr = MACHINE_BLOCK / 2;
-    // HOLD a channel that is carrying the CLOCK (clock_src_is_cv): these feed the
-    // loop-knob grab detector, so letting a pulse train through would not just
-    // move a parameter, it would fake a knob grab every pulse.
-    if (!clock_src_is_cv(clock_core_src(), 5)) s_cv6 = cvmed_step(&s_m6, io->cv[5]);
-    if (!clock_src_is_cv(clock_core_src(), 6)) s_cv7 = cvmed_step(&s_m7, io->cv[6]);
+    // MEDIAN every channel, then hand the matrix the snapshot. skip_src does what
+    // the old per-channel clock_src_is_cv guards did — a pulse train on a matrix
+    // source must not fake a knob grab — but for all eight channels, not two.
+    int cvm[8];
+    { static cvmed_t s_med[8];
+      for (int k = 0; k < 8; k++) cvm[k] = cvmed_step(&s_med[k], io->cv[k]); }
+    s_cv6 = cvm[5]; s_cv7 = cvm[6];        // kept for the UI meters
+    { int cs = clock_core_src(); dk.mtx.skip_src = (cs >= 0 && cs <= 7) ? (int8_t)cs : -1; }
+    // the loop pair is meaningless with no loop: HOLD it, which also re-arms it
+    // where the knob sits, so engaging a loop cannot fling the window (that is
+    // what s_cv6_ref = -1 on release used to do)
+    cvmtx_hold(&dk.mtx, DKM_LWIN, !dk.loop_active);
+    cvmtx_hold(&dk.mtx, DKM_LLEN, !dk.loop_active);
+    cvmtx_track(&dk.mtx, cvm);
+    float kk;
     bool d1 = !(io->trig_level & 1), d2 = !(io->trig_level & 2);
     tg_event_t e1 = trig_gate_step_ex(&s_tg1, d1, io->trig_rising & 1, nfr);
     tg_event_t e2 = trig_gate_step_ex(&s_tg2, d2, io->trig_rising & 2, nfr);
@@ -726,8 +757,8 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // than DK_PICKUP, the knob was instantly declared "grabbed", and engaging a
         // loop flung the window/length to wherever the knob physically sat — the
         // exact thing "dead until moved" exists to prevent.
-        if (s_cv6_ref == -1) { s_cv6_ref = s_cv6; s_mv6 = 0; }
-        if (s_cv7_ref == -1) { s_cv7_ref = s_cv7; s_mv7 = 0; }
+        // (the arm-from-the-median subtlety above is now cvmtx's: it captures
+        //  from the same conditioned read the takeover test uses)
         uint32_t beat_tf_lp = (dk.track_bpm > 20.0f)
             ? (uint32_t)(60.0f * DK_RATE / dk.track_bpm) : 0;
         // CV7 = LENGTH ladder, ABSOLUTE: the knob's position IS the rung, so the
@@ -736,11 +767,8 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // Grab-then-track: the knob is dead until it MOVES past the deadband,
         // so engaging a loop can't slam the length to wherever the knob sits.
         if (beat_tf_lp) {
-            int c7 = s_cv7;
-            if (s_cv7_ref >= 0 &&
-                (c7 - s_cv7_ref > DK_PICKUP || s_cv7_ref - c7 > DK_PICKUP))
-                s_cv7_ref = -2;                  // grabbed: knob is live now
-            if (s_cv7_ref == -2) {
+            if (cvmtx_abs(&dk.mtx, DKM_LLEN, &kk)) {     // GRAB, was DK_PICKUP
+                int c7 = (int)(kk * 4095.0f);
                 int ni = c7 * DK_LOOP_STEPS / 4096;
                 if (ni < 0) ni = 0;
                 if (ni > DK_LOOP_STEPS - 1) ni = DK_LOOP_STEPS - 1;
@@ -779,13 +807,12 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // the start where it is and extend the END — which is exactly what CV7
         // does on its own, as long as CV6 stays out of it.
         {
-            int c6 = s_cv6;
-            if (s_cv6_ref >= 0 &&
-                (c6 - s_cv6_ref > DK_PICKUP || s_cv6_ref - c6 > DK_PICKUP))
-                s_cv6_ref = -2;                          // grabbed
+            int c6 = 0;
+            bool win_live = cvmtx_abs(&dk.mtx, DKM_LWIN, &kk);   // GRAB, was DK_PICKUP
+            if (win_live) c6 = (int)(kk * 4095.0f);
             uint32_t llen = dk_live_len();
             int moved = (s_c6_last < 0) || (c6 - s_c6_last > 24) || (s_c6_last - c6 > 24);
-            if (s_cv6_ref == -2 && llen && moved) {
+            if (win_live && llen && moved) {
                 uint32_t span = (dk.file_frames > dk.grid_offset)
                               ? dk.file_frames - dk.grid_offset : 0;
                 uint32_t nwin = span / llen;              // windows in the track
@@ -801,29 +828,20 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
                 }
             }
         }
-    } else { s_cv6_ref = -1; s_cv7_ref = -1; s_c6_last = -1; }   // re-arm for the next engage
+    } else { s_c6_last = -1; }   // the re-arm is cvmtx_hold() above
 
-    int mode = dk.flt_mode;                  // frozen while looping
+    int mode = dk.flt_mode;
     const float q = 0.9f;
-    if (!dk.loop_active) {
-        // PASS-THROUGH pickup: a knob the loop borrowed stays inert until it
-        // returns to the value the engine is still using — then it takes over
-        // seamlessly (see DK_PASSTOL). Nothing ever jumps.
-        int c6 = s_cv6, c7 = s_cv7;
-        if (s_pk7 != -2) {
-            int d = c7 - (int)dk.pitch_cv;
-            if (d < 0) d = -d;
-            if (d <= DK_PASSTOL) s_pk7 = -2;     // knob has caught up: it is live
-        }
-        if (s_pk6 != -2) {
-            int d = c6 - (int)dk.filt_cv;
-            if (d < 0) d = -d;
-            if (d <= DK_PASSTOL) s_pk6 = -2;
-        }
-
-        if (s_pk7 == -2) dk.pitch_cv = c7;   // knob7 = speed / free-run rate
-        if (s_pk6 != -2) goto filter_done;   // knob6 still frozen: keep the
-                                             // filter exactly where it was
+    {
+        // CATCH takeover (was DK_PASSTOL, now the widget's): a knob stays inert
+        // until it returns to the value the engine is using, then takes over
+        // seamlessly. Nothing ever jumps. The host must keep base01 current,
+        // since that is what CATCH crosses.
+        cvmtx_set_base(&dk.mtx, DKM_SPEED, (float)dk.pitch_cv / 4095.0f);
+        cvmtx_set_base(&dk.mtx, DKM_FILT,  (float)dk.filt_cv  / 4095.0f);
+        if (cvmtx_abs(&dk.mtx, DKM_SPEED, &kk)) dk.pitch_cv = (int)(kk * 4095.0f);
+        if (!cvmtx_abs(&dk.mtx, DKM_FILT, &kk)) goto filter_done;  // not caught yet:
+        int c6 = (int)(kk * 4095.0f);                              // filter stays put
 
         // DJ filter from knob6: centre dead zone = bypass; left half sweeps a
         // low-pass down (12 kHz -> 80 Hz), right half a high-pass up (30 Hz ->
@@ -1029,6 +1047,7 @@ static cJSON *deck_preset_save(void)
     cJSON_AddBoolToObject(o, "loop_freeze", dk.loop_freeze);
     cJSON_AddNumberToObject(o, "clkx", (double)dk.clk_scale);
     cJSON_AddNumberToObject(o, "llenq", dk_loop_q[s_loop_len_idx]);   // QUARTER-beats
+    cvmtx_save(&dk.mtx, o);                 // "mxs"/"mxa"/"mxm"
     return o;
 }
 
@@ -1036,6 +1055,8 @@ static void deck_preset_load(const cJSON *node)
 {
     if (!node) return;
     cJSON *j;
+    cvmtx_load(&dk.mtx, node);
+    cvmtx_rearm(&dk.mtx);      // knobs recapture against the loaded values
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync"))) dk.sync = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop"))) dk.loop = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "loop_freeze"))) dk.loop_freeze = cJSON_IsTrue(j);
@@ -1076,8 +1097,8 @@ extern const machine_ui_t deck_menu_ui;
 static int dk_inputs(machine_input_t *o, int max)
 {
     int n = 0;
-    if (!clock_src_is_cv(clock_core_src(), 5)) MI_ADD(mi("loop window", 5));
-    if (!clock_src_is_cv(clock_core_src(), 6)) MI_ADD(mi("loop length", 6));
+    // loop window/length, filter and speed are CV MATRIX destinations now; the
+    // clock_src_is_cv guards that used to hide them are mtx.skip_src
     MI_ADD(mi("play/stop (hold: restart)", 8));
     MI_ADD(mi("loop on/off", 9));
     return n;

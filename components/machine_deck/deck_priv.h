@@ -3,6 +3,17 @@
 #include <stdbool.h>
 #include "clock.h"
 #include "svf.h"
+#include "cvmtx.h"
+
+// CV matrix destinations (2026-09-12). Deck was written for the FIRST prototype,
+// where only K6 and K7 worked, so those two knobs carried FOUR jobs arbitrated
+// by dk.loop_active: looping they were the loop window and length, released they
+// were the DJ filter and the speed. The second prototype has four knobs, so the
+// jobs are demultiplexed — one per knob, all live at once — and the arbitration
+// is gone. The two TAKEOVER styles it hand-rolled are kept, now via the widget:
+// the loop pair GRABs (was DK_PICKUP), filter and speed CATCH (was DK_PASSTOL).
+enum { DKM_LWIN = 0, DKM_FILT, DKM_SPEED, DKM_LLEN, DKM_N };
+extern const char *const deck_mtx_labels[DKM_N];
 
 // Deck — a tempo-syncing track player. Streams a long usr/*.RAW from SD
 // through a PSRAM ring (an unpinned reader task keeps it ahead of the play
@@ -87,6 +98,7 @@ typedef struct {
     // clock source + pulses-per-beat are the CORE clock's (clock_core(),
     // clock.h) — module-wide settings; the Setup rows write through
     volatile int  pitch_cv;        // knob7 free-rate when sync is off
+    cvmtx_t  mtx;                  // assignable CV matrix (destinations above)
     float rate_sm;                 // smoothed rate (edge jitter -> no warble)
     volatile uint32_t dbg_starve;  // blocks muted mid-play: reader fell behind
     // the window the UI should DRAW: the pending one if a move is scheduled,
