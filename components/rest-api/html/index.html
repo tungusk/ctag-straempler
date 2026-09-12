@@ -2896,25 +2896,33 @@ function midiDraw(){
   if(!rowW)return;                               // card still hidden: updateRemote redraws when it shows
   var all=(m.n*MIDI_KEYW)<=rowW;                 // whole span fits: no nav needed
   var avail=all?rowW:rowW-40;                    // two 16 px buttons + two 4 px gaps
-  var vis=Math.max(1,Math.min(m.n,Math.floor(avail/MIDI_KEYW)));
+  // FULL width: if the whole map already fits, spend the leftover on BIGGER KEYS
+  // rather than on empty card. At 42 px fixed, a 1016 px band drew ~630 px of
+  // keys and left a dead gap before Panic — a wider card bought nothing (Arlo
+  // 2026-09-12: "the full keyboard doesnt flow right"). Capped at 64 so a very
+  // wide window gives a playable keyboard, not a novelty one.
+  var KW=MIDI_KEYW;
+  if(all&&document.getElementById('midicard').classList.contains('wide'))
+    KW=Math.max(MIDI_KEYW,Math.min(64,Math.floor(avail/m.n)));
+  var vis=Math.max(1,Math.min(m.n,Math.floor(avail/KW)));
   midiView=Math.max(0,Math.min(m.n-vis,midiView));
   var nav=all?'none':'flex';
   var pv=document.getElementById('midiprev'),nx=document.getElementById('midinext');
   if(pv)pv.style.display=nav; if(nx)nx.style.display=nav;
-  var w=vis*MIDI_KEYW, bw=MIDI_KEYW*0.62;
-  // constant key width means the keys need not fill the card — centre them
+  var w=vis*KW, bw=KW*0.62;
+  // half width keeps the fixed 42 and centres what fits; full grows to fill
   var h='<div style="position:relative;height:92px;width:'+w+'px;margin:0 auto">';
   for(var i=0;i<MT_SPAN;i++){                    // whites first, blacks over them
     if(m.idx[i]<0)continue;
-    var x=(m.idx[i]-midiView)*MIDI_KEYW;
+    var x=(m.idx[i]-midiView)*KW;
     if(x<0||x>=w)continue;
     var n=midiBase+i;
-    h+='<div data-n="'+n+'" class="mkey w'+(midiHeld[n]?' on':'')+'" style="left:'+x+'px;width:'+MIDI_KEYW+'px;height:100%">'
+    h+='<div data-n="'+n+'" class="mkey w'+(midiHeld[n]?' on':'')+'" style="left:'+x+'px;width:'+KW+'px;height:100%">'
       +'<span class="u">'+MT_LBL[i].u+'</span><span class="d">'+MT_LBL[i].d+'</span></div>';
   }
   for(var i=0;i<MT_SPAN;i++){
     if(m.idx[i]>=0)continue;
-    var cx=(m.idx[i-1]+1-midiView)*MIDI_KEYW;    // straddles the gap after the white below it
+    var cx=(m.idx[i-1]+1-midiView)*KW;           // straddles the gap after the white below it
     var x=cx-bw/2;
     if(x<0||x+bw>w)continue;                   // no half-drawn black keys at the edges
     var n=midiBase+i;
@@ -3034,7 +3042,10 @@ function machCardPoll(name,on){
 // so the two finish on roughly the same line instead of the right one stopping
 // 400 px early. Both columns are 502 px, so a card's height does not change when
 // it moves and measuring before the move is safe.
-var BAL_LEFT=['panel','midihome'];
+// Only the PANEL is pinned now. The keyboard used to be nailed here beside it;
+// it is a flow card like any other so it can be dragged where Arlo wants it
+// (2026-09-12), and full width expands from wherever that is.
+var BAL_LEFT=['panel'];
 // FILES is PINNED at the TOP of the right column, above MACHINE (Arlo
 // 2026-09-10) — not dealt with the flow cards, open or folded.
 var BAL_RIGHT=['fileshome','machcard','fscard','rdcard','edcard'];
@@ -3051,7 +3062,7 @@ var BAL_RIGHT=['fileshome','machcard','fscard','rdcard','edcard'];
 // decisions Arlo made (panel in the middle at three columns, FILES pinned
 // top-right, an open file list owning its column) that would become his to
 // maintain by hand.
-var BAL_FLOW_DEF=['rmatrix','rfx','clkcard','rsetup','rsys','rglob','rparams','rm','outcard'];
+var BAL_FLOW_DEF=['midihome','rmatrix','rfx','clkcard','rsetup','rsys','rglob','rparams','rm','outcard'];
 var BAL_FLOW=BAL_FLOW_DEF.slice();
 function flowLoad(){
   var saved=[];
@@ -3073,7 +3084,9 @@ function flowLoad(){
   // once customised: untouched, the stylesheet's own numbering stands.
   var custom=saved.length>0;
   BAL_FLOW.forEach(function(id,i){
-    var e=document.getElementById(id); if(!e)return;
+    // #midihome is display:contents, so IT is not the flex item — the card
+    // inside it is, and `order` has to land there or it does nothing.
+    var e=document.getElementById(id==='midihome'?'midicard':id); if(!e)return;
     e.style.order = custom ? String(20+i) : '';
   });
 }
@@ -3094,6 +3107,10 @@ var DRAG_SLOP=5;
 function flowDragInit(){
   BAL_FLOW.forEach(function(id){
     var e=document.getElementById(id); if(!e)return;
+    // FULL width parks the keyboard card in #midiband, leaving #midihome empty,
+    // so its handle has to be looked up on the card itself or the grip vanishes
+    // exactly when the card is biggest.
+    if(id==='midihome')e=document.getElementById('midicard')||e;
     // '.ph,.sub' because ADVANCED is a subFold and heads its slot with a .sub.
     // querySelector returns the first match in DOCUMENT order, not selector
     // order, so a card with both still hands back its own .ph.
@@ -3230,24 +3247,38 @@ function balanceCols(){
     flow.forEach(function(id){deal(use,hs,id);});
     return;
   }
-  // WIDE: the band goes under the panel, so row A can only be as deep as the
-  // panel. Fill the right of row A up to that, then everything else drops below
-  // the band into row B and balances there.
+  // WIDE: a 1016 px band cannot sit inside a 502 px column, so the page splits
+  // into row A / band / row B. THE SPLIT IS WHERE THE KEYBOARD SITS IN THE FLOW
+  // — everything ahead of it in the deal order fills row A, everything after it
+  // fills row B — so expanding grows the card rightward from its own place
+  // instead of teleporting it under the panel (Arlo 2026-09-12: "it should be
+  // movable, but when it expands it should expand to the right").
+  //
+  // The old rule split on the PANEL'S HEIGHT: fill row A's right column until it
+  // matched the panel, drop the remainder below. That ignored where the card
+  // actually was, so toggling full moved eight unrelated cards and the reading
+  // order jumped top-right -> band -> bottom-LEFT. Arlo: "it spans columns but
+  // makes a mess".
   if(bot)bot.style.display='';
-  BAL_LEFT.forEach(function(id){move(use[pcol],id);});   // midihome is empty while wide
+  BAL_LEFT.forEach(function(id){move(use[pcol],id);});
   BAL_RIGHT.forEach(function(id){move(use[pin],id);});
-  var hp=h('panel'),hr2=0,rest=[];
-  BAL_RIGHT.forEach(function(id){hr2+=h(id);});
-  BAL_FLOW.forEach(function(id){
-    var e=document.getElementById(id);if(!e)return;
-    var c=h(id);
-    if(hr2+c<=hp){move(use[pin],id);hr2+=c;}else rest.push(id);
-  });
-  var b0=0,b1=0;
-  rest.forEach(function(id){
-    var c=h(id);
-    if(b0<=b1){move(bcols[0],id);b0+=c;}else{move(bcols[1],id);b1+=c;}
-  });
+  var cut=BAL_FLOW.indexOf('midihome');
+  var above=(cut<0)?BAL_FLOW.slice():BAL_FLOW.slice(0,cut);
+  var below=(cut<0)?[]:BAL_FLOW.slice(cut+1);
+  // The keyboard's own SLOT is the split point, so it falls in neither list and
+  // would never be moved — it would just sit in whichever column it last drifted
+  // into, and reappear there when the card un-widens. It is empty and
+  // display:contents while wide (the card is in the band), so it costs nothing:
+  // park it at the end of row A, which is where the band renders anyway.
+  if(cut>=0)above=above.concat(['midihome']);
+  var hs=[],k2;
+  for(k2=0;k2<use.length;k2++)hs[k2]=0;
+  BAL_LEFT.forEach(function(id){hs[pcol]+=h(id);});
+  BAL_RIGHT.forEach(function(id){hs[pin]+=h(id);});
+  above.forEach(function(id){deal(use,hs,id);});
+  var bset=[],bh=[];
+  for(k2=0;k2<bcols.length&&k2<use.length;k2++){bset.push(bcols[k2]);bh.push(0);}
+  below.forEach(function(id){deal(bset,bh,id);});
 }
 // How many columns the window holds: 502 each + 12 gap, page gutter 24.
 function colCount(){var w=window.innerWidth;return w>=1554?3:(w>1040?2:1);}
