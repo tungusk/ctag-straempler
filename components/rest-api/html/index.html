@@ -537,6 +537,15 @@ body.nosbar .sbar{display:none}
   font-weight:normal;line-height:1.45;letter-spacing:0;text-align:left;white-space:normal;z-index:30;box-shadow:0 4px 10px #000}
 .ren:hover{color:#0af;border-bottom-color:#0af}
 .bar{background:#181818;border:1px solid #333;height:14px;position:relative;margin:4px 0}
+/* SYSTEM card meters: a .bar shrunk to sit inside a .tft row without changing
+   the row's height. The fill colour is set inline by sysBar() — green under
+   load, amber past 60%, red past 85% — so one glance says whether a number is
+   fine or not, which a bare figure never does. */
+.sysm{width:88px;height:6px;background:#141414;border:1px solid #2e2e2e;border-radius:2px;
+  display:inline-block;vertical-align:middle;margin-right:8px;overflow:hidden}
+.sysm>i{display:block;height:100%;transition:width .25s linear}
+.tft .r .v.sysv{min-width:96px}
+.sysg{color:#777}   /* the "of 4.0 MB" half of a reading: present, not competing */
 .bar>i{display:block;height:100%;background:#0af}
 /* A card is a DARK slab on the page ground AND carries a hairline edge — mocked
    the three ways side by side against the real cards (Arlo 2026-09-10): flat on
@@ -837,6 +846,7 @@ body.nosbar .sbar{display:none}
        right. -->
   <div id="rsetup"></div>
   <div id="rglob"></div>
+  <div id="rsys"></div>
   <div id="rparams"></div>
   <div class="msg" id="rm"></div>
   <!-- BOUNCE + BROADCAST in one card: both are "the output, leaving the box".
@@ -2072,6 +2082,9 @@ function foldSet(key,open){
   else if(h)h.textContent=(open?'\u25BE ':'\u25B8 ')+h.getAttribute('data-t');   // foldCard(): the whole label
   foldActions(key,open);
   try{localStorage.setItem('fold_'+key,open?'1':'0');}catch(e){}
+  // a card that only fetches while OPEN has to fetch the moment it opens, or it
+  // shows the placeholder until the next tick of its own timer
+  if(open&&key==='sys'&&typeof sysPoll==='function')sysPoll();
   balanceSoon();               // folding changes a column's height
 }
 function foldToggle(key){var b=document.getElementById(key+'_body');if(b)foldSet(key,b.style.display==='none');}
@@ -2245,6 +2258,97 @@ function globCard(){return foldCard('glob','GLOBAL','<div class="tftw" id="gscrw
   +'<span class="msg" id="sm" style="flex:1;margin:0;text-align:right"></span>'
   +'<button class="btn" style="flex:0 0 72px" onclick="saveSet()">Save</button></div>'
   +'<div id="webslot"></div><div id="setslot"></div>');}
+// ---- SYSTEM card: what the module is actually spending ---------------------
+// Every figure here already existed in /sysinfo or /status and was invisible
+// unless you curled for it. Nothing new is computed on the module.
+//
+// TRAFFIC: /status is already polled at 500 ms and carries the audio numbers,
+// so the load meter is FREE. /sysinfo is the slow half (memory, SD, draw) and
+// is fetched every 5 s, and ONLY while the card is open and the WEB card's
+// poll pause is off — a resources card that keeps talking while Arlo is
+// judging audio would be measuring its own interference.
+var SYS=null, SYSA=null, sysT=null;
+var AU_BUDGET=1450;   // us per audio block = 100% (see the FX pack notes)
+
+function sysBar(pct){
+  pct = pct<0?0:pct>100?100:pct;
+  var c = pct>85 ? '#e06060' : pct>60 ? '#d0a040' : 'var(--acc)';
+  return '<span class="sysm"><i style="width:'+pct.toFixed(0)+'%;background:'+c+'"></i></span>';
+}
+function sysB(n){   // bytes -> the largest sensible unit, 3 significant figures
+  if(n==null)return '--';
+  var u=['B','KB','MB','GB'],i=0;
+  while(n>=1024&&i<3){n/=1024;i++;}
+  return (n<10?n.toFixed(2):n<100?n.toFixed(1):n.toFixed(0))+' '+u[i];
+}
+function sysDur(sec){
+  if(sec==null)return '--';
+  var d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60),s=Math.floor(sec%60);
+  return d? d+'d '+h+'h' : h? h+'h '+m+'m' : m? m+'m '+s+'s' : s+'s';
+}
+// one row, in .tft's own grammar (.r / .l / .vv / .v) so the card reads as
+// another screen rather than a table. NOT tftRow(): that esc()s its value, and
+// these rows carry a meter element — tftRow is for text, and widening it to
+// take markup would put an XSS-shaped hole in every setup screen that uses it.
+function sysRow(label,pct,val,sub){
+  return '<div class="r"><span class="l">'+esc(label)+'</span><span class="vv">'
+    +(pct==null?'':sysBar(pct))
+    +'<span class="v" style="min-width:172px">'+esc(val)
+    +(sub?' <span class="sysg">'+esc(sub)+'</span>':'')+'</span></span></div>';
+}
+function sysCard(){
+  return foldCard('sys','SYSTEM','<div class="tftw"><div class="tft" id="sysscr">'
+    +'<div class="r"><span class="l" style="color:#777">reading…</span></div></div></div>');
+}
+function sysDraw(){
+  var el=document.getElementById('sysscr'); if(!el)return;
+  var d=SYS, a=SYSA, h='';
+  // AUDIO first: it is the only figure that can actually break the instrument.
+  if(a){
+    var load=Math.round((a.aus||0)/AU_BUDGET*100), pk=Math.round((a.auspk||0)/AU_BUDGET*100);
+    h+=sysRow('DSP load',  load, load+'%', 'of '+AU_BUDGET+' us');
+    h+=sysRow('DSP peak',  pk,   pk+'%',   (a.auspk||0)+' us');
+    if(a.ausgap!=null) h+=sysRow('block gap', null, a.ausgap+' us', '');
+  }
+  if(d){
+    if(d.psram){
+      var pu=d.psram.total?Math.round((d.psram.total-d.psram.free)/d.psram.total*100):0;
+      h+=sysRow('PSRAM',    pu, sysB(d.psram.free)+' free', 'of '+sysB(d.psram.total));
+      // largest block, not free total: PSRAM refuses a single alloc over ~2.1 MB
+      // and a fragmented heap fails an alloc it has "room" for.
+      h+=sysRow('  largest', null, sysB(d.psram.big), '');
+    }
+    if(d.iram){
+      h+=sysRow('Internal', null, sysB(d.iram.free)+' free', 'largest '+sysB(d.iram.big));
+    }
+    if(d.total){
+      var su=Math.round((d.total-d.free)/d.total*100);
+      // free space is only meaningful as TIME: 16-bit stereo 44.1k = 10.09 MB/min
+      var mins=(d.free/1048576)/10.09, hrs=mins/60;
+      h+=sysRow('SD card',  su, sysB(d.free)+' free', 'of '+sysB(d.total)+' · ~'+(hrs>=1?hrs.toFixed(0)+' h':mins.toFixed(0)+' min')+' rec');
+    }
+    if(d.tft){
+      h+=sysRow('Draw avg', null, (d.tft.avg/1000).toFixed(1)+' ms',
+                'worst '+(d.tft.tickw/1000).toFixed(0)+' ms · '+d.tft.clk+' MHz');
+    }
+    h+=sysRow('Uptime', null, sysDur(d.uptime), 'last reset '+(d.reset||'?'));
+  }
+  el.innerHTML = h || '<div class="r"><span class="l" style="color:#777">no data</span></div>';
+}
+function sysPoll(){
+  if(webPaused) return;                                  // quiet while judging audio
+  if(!foldOpen('sys')) return;                           // closed card costs nothing
+  fetch('/sysinfo').then(function(r){return r.json();}).then(function(d){
+    SYS=d; sysDraw();
+  }).catch(function(){});
+}
+function sysInit(){
+  var el=document.getElementById('rsys'); if(!el)return;
+  el.innerHTML=sysCard();
+  sysPoll();
+  if(!sysT)sysT=setInterval(sysPoll,5000);
+}
+
 // ---- WEB card: preferences that live in this BROWSER, not on the module ----
 // Everything here was hardcoded or hidden before: the auto-refresh interval was
 // a literal 3000 in scrPoll, the status poll a literal 500, the screen size only
@@ -3230,6 +3334,9 @@ function pollStatus(){
     if(ot)ot.style.display=(d.machine==='Slicer')?'inline':'none';
     updateRemote(d);
     updateBl(d);
+    // the SYSTEM card's audio half rides this poll; the slow half is sysPoll()
+    SYSA={aus:d.aus,auspk:d.auspk,ausgap:d.ausgap};
+    if(foldOpen('sys'))sysDraw();
     updateScope(d.cv);
     if(document.getElementById('p3').className.indexOf('on')>=0){bncPoll();bcastPoll();scrPoll();}   // bounce+broadcast+screen while Remote is open
   }).catch(function(){});
@@ -3237,6 +3344,7 @@ function pollStatus(){
 setInterval(pollStatus,500);
 pollImport();
 // (perform faders are built into the input-meter columns by loadRemote)
+sysInit();       // SYSTEM card: /sysinfo on a slow timer, audio off the 500 ms poll
 bcastInit();     // broadcast Listen link + player URL (:8000)
 webLoad();       // browser-side prefs before the first render
 midiAuto();      // MIDI card width follows the window
