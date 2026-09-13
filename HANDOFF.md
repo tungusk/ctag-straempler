@@ -58,9 +58,8 @@ group's LEFT edge instead of centring: `.card.pnl`'s `margin:auto` centred a
 columns, where both widths coincide — which is why it survived until the third
 column existed.
 
-**Owed by eye:** the wide keyboard at a real >=1530 px window (bench window is
-1204, so the three-column case is verified by construction only), and card
-reordering at one column.
+**CLOSED:** the three-column case was verified by eye later the same night at
+1868 px (and card reordering was reverted, so its one-column case is moot).
 
 ### Later the same evening — the keyboard
 
@@ -119,10 +118,9 @@ overshoot the panel** — holding it back is exactly what leaves the hole.
 > panel and row B 329/287; measured 775 vs 707 and 329/311. Dead space beside
 > the panel went 535 px -> filled.
 
-**OPEN:** the piano header wraps to FOUR lines at half width — children sum to
-562 px in a 480 px row and the spacer eats 161 px. Arlo: "should be one row
-across the top". Not fixed. The `flex-wrap` backstop is what lets it stack
-rather than overflow; the fix is to drop the spacer so the row fits on one line.
+**CLOSED (`71bb161`):** the piano header wrapping. It was over by THREE pixels —
+the spacer had inherited `.row.tight>*`'s button padding. Header is 20 px, one
+line, in both views at half width.
 
 ## 2026-09-12 — the rework's REAL shape: undoing a two-knob workaround
 ### cvmtx extended (`da134ce`), then Deck (`2fa2c28`) and Tracker (`b44a2e6`)
