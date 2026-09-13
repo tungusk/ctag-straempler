@@ -3335,7 +3335,25 @@ function balanceCols(){
     use=[cols[0],cols[1]]; pcol=0; pin=1; last=1;
     cols[2].style.display='none';
     BAL_RIGHT.forEach(function(id){move(sidec,id);});
-  }else{
+    BAL_LEFT.forEach(function(id){move(use[pcol],id);});
+    // #sidecol IS NOT INTERRUPTED BY THE BAND, so it is not capped by the panel
+    // the way the stack columns are — it just runs on down the page. Deal every
+    // flow card across all THREE, shortest-first, and there is no row B at all.
+    // Dealing only into the stack left the side column holding FILES + MACHINE
+    // and nothing else — 188 px of content on a 1206 px page — while SYSTEM and
+    // GLOBAL were stranded below the band (Arlo 2026-09-12: "so much white space
+    // in the third column, system machine setup and bounce could be flowing to
+    // that column").
+    var sset=[use[0],use[1],sidec];
+    var ssh=[h('panel'),0,BAL_RIGHT.reduce(function(a,id){return a+h(id);},0)];
+    BAL_FLOW.forEach(function(id){
+      if(id==='midihome'){move(use[pin],id);return;}   // empty slot, parked
+      deal(sset,ssh,id);
+    });
+    if(bot)bot.style.display='none';
+    return;
+  }
+  {
     if(sidec)while(sidec.firstChild)cols[cols.length-1].appendChild(sidec.firstChild);
     BAL_RIGHT.forEach(function(id){move(use[pin],id);});
   }
