@@ -1464,11 +1464,13 @@ function loadSysinfo(){
     if(d.total){
       var freeMB=d.free/1048576, mins=freeMB/10.09;
       var rec=mins>=120?('~'+Math.round(mins/60)+' h'):('~'+Math.round(mins)+' min');
-      // GB, not the five-digit MB pair it used to print: nobody reads "25984"
-      // as an amount. One decimal is the useful precision on a 32 GB card —
-      // enough to watch it move over a session, not so much that it is noise.
+      // FREE only, labelled. The card's total never changes, so printing it
+      // every time was a constant dressed as data; what you want to know is
+      // how much is left and how long that is. One decimal is the useful
+      // precision on a 32 GB card — enough to watch it move over a session,
+      // not so fine that it reads as noise.
       var gb=function(b){return (b/1073741824).toFixed(1);};
-      sd='SD '+gb(d.free)+'/'+gb(d.total)+' GB\u2002 '+rec+' rec';
+      sd='SD '+gb(d.free)+' GB free\u2002 '+rec+' rec';
     }
     var dk=document.getElementById('disk');   if(dk)dk.textContent=sd;
     var fdk=document.getElementById('fdisk'); if(fdk)fdk.textContent=sd;
