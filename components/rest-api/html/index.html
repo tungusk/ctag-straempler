@@ -110,6 +110,14 @@ body.nosbar .sbar{display:none}
    field however tall the matrix / FX / clock column gets */
 .remtop{align-items:flex-start}                /* columns keep their own height: the panel hugs its elements (Arlo 2026-09-10) */
 .remtop .rcol{display:flex;flex-direction:column}
+/* the stack + the lifted column. Off by default: #sidecol is display:none and
+   #bandstack is simply the page, so nothing about the old layout changes until
+   balanceCols turns .bandside on. */
+#stackrow{display:flex;flex-wrap:nowrap;justify-content:center;align-items:flex-start;gap:0 12px}
+#bandstack{flex:0 1 auto;min-width:0}
+#sidecol{display:none}
+#p3.bandside #bandstack{flex:0 0 1016px;max-width:calc(100vw - 24px)}
+#p3.bandside #sidecol{display:flex;flex-direction:column;flex:0 0 502px}
 /* the frame carries the REAL panel's proportion: 91.3 x 128.5 mm (the v2_3 Edge.Cuts
    outline, not the 91.44 HP nominal), so at the
    502 px column width the card is 705 px tall. The extra top/bottom padding is
@@ -526,6 +534,10 @@ body.nosbar .sbar{display:none}
    (Arlo 2026-09-11), so the card stays 1016 either way. */
 #midiband{display:flex;justify-content:flex-start;width:1016px;max-width:calc(100vw - 24px);margin:0 auto}
 #p3.c3 #midiband{width:1530px;max-width:calc(100vw - 24px)}
+/* ...but inside the lifted-column stack the band is only as wide as the stack.
+   Without this the c3 rule kept it at 1530 in a 1016 box and it ran straight
+   under #sidecol. */
+#p3.bandside #midiband{width:100%;max-width:100%}
 #midihome{display:contents}   /* a box here would take #midicard's place as the flex item */
 /* Wide mode: a constant key width cannot fill 1016 px, so the leftovers either
    side of the keyboard become the control gutters and the header row goes away
@@ -620,6 +632,17 @@ body.nosbar .sbar{display:none}
 <body class="nosbar">
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
+  <!-- BANDSTACK: row A / band / row B stack together, and #sidecol runs the FULL
+       HEIGHT beside them. A full-width band is a sibling BELOW every column, so
+       it can only ever clear the tallest one — with FILES open at 841 px that
+       pushed the keyboard to the bottom of the page and left 192 px of hole in
+       the short column (Arlo 2026-09-12: "its ending up at the bottom in 3
+       column mode, when there is clearly space for it higher"). Lifting one
+       column OUT of the stack means the band only has to clear the two it
+       actually spans. Only engaged at three columns + expanded; otherwise
+       #sidecol is empty and the stack is the whole page, exactly as before. -->
+  <div id="stackrow">
+  <div id="bandstack">
   <div class="remcols remtop">
   <div class="rcol">
   <div class="card pnl" id="panel">
@@ -959,6 +982,9 @@ body.nosbar .sbar{display:none}
        cards-to-the-panel's-height, then the band, then the rest continues here
        (Arlo 2026-09-10: pin MIDI under the panel). Empty and hidden otherwise. -->
   <div class="remcols" id="rembot" style="display:none"><div class="rcol"></div><div class="rcol"></div><div class="rcol"></div></div>
+  </div><!-- /#bandstack -->
+  <div class="rcol" id="sidecol"></div>
+  </div><!-- /#stackrow -->
   <!-- the old Settings tab. Kept as a STATIC node and MOVED into the GLOBAL
        card by rpSetCard(); templating it would wipe a half-typed SSID or
        password every time the params reload. -->
@@ -3227,6 +3253,11 @@ function balanceCols(){
   // where the last run left things.
   if(narrow||!wide){
     if(bot)bot.style.display='none';
+    // not banded: the lifted column goes back into the stack, or its cards are
+    // stranded in a hidden #sidecol the moment the keyboard un-widens
+    { var sc0=document.getElementById('sidecol');
+      if(sc0&&sc0.firstChild)while(sc0.firstChild)cols[cols.length-1].appendChild(sc0.firstChild);
+      if(p3)p3.classList.remove('bandside'); }
     var fsc=document.getElementById('fscroll');   // the stylesheet owns it again
     if(fsc&&fsc.style.maxHeight&&fsc.style.maxHeight!=='none')fsc.style.maxHeight='';
     BAL_LEFT.forEach(function(id){move(use[pcol],id);});
@@ -3282,8 +3313,22 @@ function balanceCols(){
   // column fills. The last card in is allowed to overshoot the panel rather than
   // being held back — stopping short is what leaves the hole.
   if(bot)bot.style.display='';
+  // BANDSIDE: at three columns the pin column is LIFTED OUT of the stack and
+  // runs full height beside it, so the band only clears the two columns it
+  // spans. Without this the band is a sibling below ALL columns and an open
+  // FILES (841 px) drags it to the bottom of the page.
+  var bandside=(ncol>=3), sidec=document.getElementById('sidecol');
+  if(p3)p3.classList.toggle('bandside',bandside);
+  if(bandside){
+    // the stack is two columns wide; the third .rcol is emptied into #sidecol
+    use=[cols[0],cols[1]]; pcol=0; pin=1; last=1;
+    cols[2].style.display='none';
+    BAL_RIGHT.forEach(function(id){move(sidec,id);});
+  }else{
+    if(sidec)while(sidec.firstChild)cols[cols.length-1].appendChild(sidec.firstChild);
+    BAL_RIGHT.forEach(function(id){move(use[pin],id);});
+  }
   BAL_LEFT.forEach(function(id){move(use[pcol],id);});
-  BAL_RIGHT.forEach(function(id){move(use[pin],id);});
   // EVERY row-A column that is not the panel's gets filled, not just the pin.
   // This used to deal only into `pin`, which at THREE columns left column 0
   // entirely EMPTY — a whole 502 px of nothing beside the panel, which is the
@@ -3295,7 +3340,7 @@ function balanceCols(){
   for(k2=0;k2<use.length;k2++){
     if(k2===pcol)continue;
     fset.push(use[k2]);
-    fh.push(k2===pin?BAL_RIGHT.reduce(function(a,id){return a+h(id);},0):0);
+    fh.push((!bandside&&k2===pin)?BAL_RIGHT.reduce(function(a,id){return a+h(id);},0):0);
   }
   BAL_FLOW.forEach(function(id){
     // the keyboard's slot is empty while wide (its card is in the band), so it
@@ -3322,6 +3367,7 @@ function balanceCols(){
   });
   var bset=[],bh=[];
   for(k2=0;k2<bcols.length&&k2<use.length;k2++){bset.push(bcols[k2]);bh.push(0);}
+  for(k2=use.length;k2<bcols.length;k2++)bcols[k2].style.display='none';
   rest.forEach(function(id){deal(bset,bh,id);});
 }
 // How many columns the window holds: 502 each + 12 gap, page gutter 24.
