@@ -3332,7 +3332,12 @@ function balanceCols(){
   if(p3)p3.classList.toggle('bandside',bandside);
   if(bandside){
     // the stack is two columns wide; the third .rcol is emptied into #sidecol
-    use=[cols[0],cols[1]]; pcol=0; pin=1; last=1;
+    // Panel in the stack's SECOND column, which with #sidecol to its right is
+    // visually the MIDDLE of the three — matching the un-expanded three-column
+    // layout, where the panel also takes the middle (Arlo 2026-09-11, restated
+    // 09-12: "keep it in the middle in 3 col, the left in 2 col"). Two columns
+    // is untouched and still puts it left.
+    use=[cols[0],cols[1]]; pcol=1; pin=0; last=1;
     cols[2].style.display='none';
     BAL_RIGHT.forEach(function(id){move(sidec,id);});
     BAL_LEFT.forEach(function(id){move(use[pcol],id);});
@@ -3345,7 +3350,8 @@ function balanceCols(){
     // in the third column, system machine setup and bounce could be flowing to
     // that column").
     var sset=[use[0],use[1],sidec];
-    var ssh=[h('panel'),0,BAL_RIGHT.reduce(function(a,id){return a+h(id);},0)];
+    var ssh=[(pcol===0?h('panel'):0),(pcol===1?h('panel'):0),
+             BAL_RIGHT.reduce(function(a,id){return a+h(id);},0)];
     BAL_FLOW.forEach(function(id){
       if(id==='midihome'){move(use[pin],id);return;}   // empty slot, parked
       deal(sset,ssh,id);
