@@ -9,6 +9,44 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-12 — BETA4 SHIPPED, and where this goes next
+
+**`v0.10-beta4` published** at `3a63adb`, GitHub pre-release, 7 assets, app sha
+`b3a54a95…`, downloaded back and `cmp`'d byte-identical. Detail +
+recipe: memory `beta4-release-20260912`.
+
+**Post-beta4 commits already on `v09-machines`** (`a5f6ed0`..`bb16df5`): page
+ground lifted `#2e2e2e` -> `#363636` (the mounting holes move WITH it — their
+fill is the page showing through the panel), the `gh release` allow-rule
+gitignore, and the FILES readout now "SD 25.4 GB free  ~43 h rec" instead of a
+five-digit MB pair. **`docs/remote-tab.jpg` therefore shows the older, darker
+ground than the firmware does. That is fine** — Arlo: *"it's ok that this is a
+post beta4 change. there will be no end to the work."* Do not re-cut a
+published release over cosmetic drift; fold it into the next one.
+
+> **`gh release create` is now allow-listed** in `.claude/settings.local.json`
+> (gitignored — the repo is public and that rule must not ship to a cloner).
+> **UNTESTED.** It may need a restart to load, and if what refuses the command
+> is the auto-mode safety classifier rather than the permission system, the
+> rule will not help. Find out at the next cut; if it still bounces, the answer
+> is a different one.
+
+### THE DIRECTION FROM HERE (Arlo, 2026-09-12)
+
+> *"next time we'll be zeroing in on specific machines and their use cases,
+> dive into development alongside the testing."*
+
+So the next stretch is **per-machine, depth-first, with the bench in the loop**
+— not another horizontal sweep across all of them. The CV rework was the last
+of those and it is done.
+
+**This changes what "testing" means here.** Twelve machines moved their knob
+layouts in one pass and none of it has been played. Do NOT open the next
+session by proposing a twelve-machine verification pass — that is the shape
+Arlo just said he is moving away from. Take ONE machine, play it, fix what the
+playing turns up, and let the testing be the development. Drums and Slicer
+changed most in the rework; Deck and Tracker next.
+
 ## 2026-09-12 (late) — BANDSTACK: the card layout, properly
 
 Bail tag **`pre-bandstack-20260912`** = `1d2ac25`. Commits `8c54001` `ffdf070`
