@@ -414,7 +414,7 @@ body.nosbar .sbar{display:none}
   #rmatrix{order:4}#rfx{order:5}#clkcard{order:6}                   /* patching */
   #filescard{order:7}#machcard{order:8}                              /* library, then the selector */
   #rsetup{order:9}#rsys{order:10}#rglob{order:11}#rparams{order:12}  /* settings */
-  #rm{order:13}#outcard{order:14}                                    /* capture / streaming */
+  #rm{order:13}#bnccard{order:14}#outcard{order:15}                  /* capture / streaming */
   .remtop .rcol>*{width:502px;max-width:calc(100vw - 24px)}
 }
 /* BOUNCE + PUSH -> ICECAST against BROADCAST: equal-height columns, the last card in the
@@ -608,7 +608,15 @@ body.nosbar .sbar{display:none}
   display:inline-block;vertical-align:middle;margin-right:8px;overflow:hidden}
 .sysm>i{display:block;height:100%;transition:width .25s linear}
 .tft .r .v.sysv{min-width:96px}
-.sysg{color:#777}   /* the "of 4.0 MB" half of a reading: present, not competing */
+.sysg{color:#777}
+/* BOUNCE has no body to fold, so the triangle's slot carries a RECORDING LAMP
+   instead — the place the eye already checks for a card's state. The glyph
+   stays in the flow (hidden, not removed) so the title sits at the same x as
+   every folding card's, and the dot is drawn over it. */
+.reclamp{visibility:hidden;position:relative}
+.reclamp.on{visibility:visible;color:transparent}
+.reclamp.on:before{content:'';position:absolute;left:1px;top:50%;transform:translateY(-50%);
+  width:9px;height:9px;border-radius:50%;background:#e05252;box-shadow:0 0 6px #e05252aa}   /* the "of 4.0 MB" half of a reading: present, not competing */
 .bar>i{display:block;height:100%;background:#0af}
 /* A card is a DARK slab on the page ground AND carries a hairline edge — mocked
    the three ways side by side against the real cards (Arlo 2026-09-10): flat on
@@ -860,7 +868,7 @@ body.nosbar .sbar{display:none}
     </div>
     <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
       <b>DROP OR TAP</b>
-      <span class="dzt">audio &#183; MP3 WAV AIFF FLAC OGG M4A RAW<br>modules &#183; MOD XM IT S3M &#183; slices &#183; OT</span>
+      <span class="dzt">MP3 WAV AIFF FLAC OGG M4A RAW<br>MOD XM IT S3M &#183; OT</span>
     </div>
     <input type="file" id="fi" multiple accept="audio/*,.raw,.RAW,.ot,.OT,.mod,.xm,.it,.s3m,.669,.mtm,.okt,.ult,.far,.med,.dbm,.amf,.ptm,.stm,.dmf,.gdm,.imf,.liq,.mdl,.pt3,.oxm,.digi,.emod,.MOD,.XM,.IT,.S3M" style="display:none" onchange="onFiles(this.files)">
     <div id="batch" style="display:none;margin-top:12px">
@@ -924,20 +932,22 @@ body.nosbar .sbar{display:none}
   <div id="rsys"></div>
   <div id="rparams"></div>
   <div class="msg" id="rm"></div>
-  <!-- BOUNCE + BROADCAST in one card: both are "the output, leaving the box".
-       TWO green headers that both stay visible (Arlo 2026-09-11) — BOUNCE is a
-       single row with nothing to fold, BROADCAST folds its body under its own
-       header. No card-level fold, or one header would hide the other. -->
-  <div class="card pnl" id="outcard">
+  <!-- BOUNCE and BROADCAST are SEPARATE CARDS (Arlo 2026-09-12). They were one
+       card with two headers because both are "the output leaving the box", but
+       they are two unrelated actions and the balancer could never place them
+       apart. -->
+  <div class="card pnl" id="bnccard">
     <div class="row tight" style="align-items:center;margin-top:0">
-      <!-- BOUNCE has nothing to fold, so no triangle — but it still gets the
-           triangle's WIDTH, hidden, so its title lines up with BROADCAST's
-           below it. Same glyph, so the two can never drift apart. -->
-      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span style="visibility:hidden">&#9656; </span><span class="hlp" data-h="Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.">BOUNCE</span></b>
+      <!-- BOUNCE has nothing to fold, so no triangle — the slot instead carries
+           the RECORDING LAMP, which is exactly where the eye already looks for a
+           card's state. Same width either way, so the title never shifts. -->
+      <b class="ph" style="flex:1;padding:0;margin:0;align-self:flex-start"><span class="reclamp" id="bnclamp">&#9656; </span><span class="hlp" data-h="Records the module OUTPUT (radio / synth / deck blend&#8230;) to a new REC take in the pool.">BOUNCE</span></b>
       <span id="bncstate" style="color:#aaa;margin-right:8px">idle</span>
       <button class="btn" id="bncbtn" style="flex:0 0 84px" onclick="bncToggle()">Record</button>
     </div>
-    <div class="row tight" style="align-items:center;margin-top:10px;border-top:1px solid #262626;padding-top:8px">
+  </div>
+  <div class="card pnl" id="outcard">
+    <div class="row tight" style="align-items:center;margin-top:0">
       <b class="ph" id="bc_hdr" style="flex:1;padding:0;margin:0;align-self:flex-start;cursor:pointer;user-select:none" onclick="foldToggle('bc')"><span id="bc_arw">&#9656; </span><span class="hlp" data-h="Live stream (port 8000, one listener): top row = module OUTPUT, second row = LINE INPUT (streaming bridge). MP3 = 96k mono icecast-style (VLC / browser / internet-friendly; not while Radio plays &#8212; encoder can't keep up); WAV = stereo uncompressed LAN. Player below uses output MP3.">BROADCAST</span></b>
       <span id="bcstate" style="color:#aaa;margin-right:8px">off</span>
       <button class="btn" id="bcenbtn" style="flex:0 0 84px" onclick="bcastToggle()">Enable</button>
@@ -2708,6 +2718,7 @@ function bncPoll(){
   fetch('/bounce/state').then(function(r){return r.json();}).then(function(d){
     bncOn=!!d.active;
     document.getElementById('bncstate').textContent=bncOn?('recording'+(d.drops?(' (drops '+d.drops+')'):'')):'idle';
+    var lamp=document.getElementById('bnclamp'); if(lamp)lamp.classList.toggle('on',bncOn);
     var b=document.getElementById('bncbtn');b.textContent=bncOn?'Stop':'Record';b.className='btn'+(bncOn?' del':'');
   }).catch(function(){});
 }
@@ -3220,7 +3231,7 @@ var BAL_RIGHT=['fileshome','machcard','fscard','rdcard','edcard'];
 // Measured across four states (3/2 columns x FILES open/closed), worst-case
 // jump: first 785, after FX 431, after CLOCK 363, AFTER SETUP 311, last 444.
 // Placed after rsetup on worst case, which is what is actually felt.
-var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','midihome','rsys','rglob','rparams','rm','outcard'];
+var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','midihome','rsys','rglob','rparams','rm','bnccard','outcard'];
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');
