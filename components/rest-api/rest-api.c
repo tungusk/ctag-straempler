@@ -1018,7 +1018,17 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON *out = cJSON_CreateObject();
     cJSON *j;
     if ((j = cJSON_GetObjectItem(settings, "ssid")))    cJSON_AddStringToObject(out, "ssid", j->valuestring);
-    if ((j = cJSON_GetObjectItem(settings, "apikey")))  cJSON_AddStringToObject(out, "apikey", j->valuestring);
+    // The freesound API key is NEVER returned. /settings is unauthenticated, so
+    // anything that can reach the module on the LAN could read the credential
+    // with one GET; the panel has always masked it (menutft.c hidden_items) and
+    // the web card only ever needs to know whether one is SET, not what it is.
+    // Writes still go through POST /settings.
+    if ((j = cJSON_GetObjectItem(settings, "apikey")))
+        cJSON_AddBoolToObject(out, "apikey_set",
+                              j->valuestring && j->valuestring[0] &&
+                              strcmp(j->valuestring, "myapikey") != 0);
+    else
+        cJSON_AddBoolToObject(out, "apikey_set", false);
     if ((j = cJSON_GetObjectItem(settings, "hostname"))) cJSON_AddStringToObject(out, "hostname", j->valuestring);
     if ((j = cJSON_GetObjectItem(settings, "tz_shift"))) cJSON_AddNumberToObject(out, "tz_shift", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "txpwr")))   cJSON_AddNumberToObject(out, "txpwr", j->valuedouble);
@@ -1080,7 +1090,10 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         if (!cur || !cur->valuestring || strcmp(cur->valuestring, j->valuestring) != 0) wifiChanged = true;
         cJSON_ReplaceItemInObject(settings, "passwd", cJSON_CreateString(j->valuestring));
     }
-    if ((j = cJSON_GetObjectItem(in, "apikey")) && j->valuestring) {
+    // empty means UNCHANGED, exactly like passwd above. Required now that the
+    // web row renders blank (it can no longer be seeded with the current value),
+    // or every Save with an untouched Api Key row would wipe the stored key.
+    if ((j = cJSON_GetObjectItem(in, "apikey")) && j->valuestring && strlen(j->valuestring) > 0) {
         cJSON_ReplaceItemInObject(settings, "apikey", cJSON_CreateString(j->valuestring));
         freesoundSetToken(j->valuestring);
     }

@@ -2301,7 +2301,7 @@ function glClkOut(){glPost('/blisten?out='+(((+rpGlob.i.blout||0)+1)%GL_CLKOUT.l
 function glBounce(){glPost(rpGlob.b.active?'/bounce/stop':'/bounce/start');}
 function glBcast(){fetch('/bcast/enable?on='+(rpGlob.c.enabled?0:1)).then(function(){setTimeout(glLoad,300);bcastPoll();}).catch(function(){});}
 function scrGlobal(g){
-  var s=g.s,i=g.i,tz=+(s.tz_shift||0),key=s.apikey||'';
+  var s=g.s,i=g.i,tz=+(s.tz_shift||0);
   // the screen's own About affordance drives the ABOUT fold below it — the
   // device's Settings screen has the same affordance, so it reads as the panel does
   var h='<div class="tft"><div class="tt"><span>Settings</span>'
@@ -2312,9 +2312,10 @@ function scrGlobal(g){
   h+=tftRow('rw','Hostname',s.hostname||'','gsHost',5,{ph:'ctag-modular',mx:32});
   h+=tftRow('rw','SSID',s.ssid||'','gsSsid',5,{});
   h+=tftRow('rw','Password','','gsPass',5,{pw:true,ph:'unchanged'});
-  // masked like the password: it was '••••'+last4 before it became editable, and
-  // making a row editable should not quietly put a credential on screen in clear
-  h+=tftRow('rw','Api Key',key,'gsKey',5,{pw:true,ph:'freesound key'});
+  // the device no longer sends the key at all (GET /settings returns apikey_set,
+  // not apikey), so this row works exactly like Password: blank, with the
+  // placeholder saying whether one is stored. Empty on save = unchanged.
+  h+=tftRow('rw','Api Key','','gsKey',5,{pw:true,ph:(s.apikey_set?'set \u2014 type to replace':'not set')});
   h+=tftRow('rng','Timezone',(tz>=0?'+':'')+tz,'glTz',2);
   h+=tftRow('tog','Remote',i.remote?'ON':'OFF','glRemote',1);
   h+=tftRow('tog','Listen',GL_LISTEN[+i.blisten||0]||'?','glListen',1);
