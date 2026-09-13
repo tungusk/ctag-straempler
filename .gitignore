@@ -6,3 +6,8 @@ sdkconfig.old
 components/.DS_Store
 components/drivers/.DS_Store
 components/rest-api/include/index.html.h-e
+
+# Claude Code per-machine settings (permission rules are personal, and this
+# repo is public — do not ship an allow-rule for `gh release` to anyone who
+# clones the fork).
+.claude/settings.local.json
