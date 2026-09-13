@@ -23,7 +23,7 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
      one at a time they stop reading as a pair. Hover must stay clearly above
      the lighter band, not between the two. */
   --fzeb:#1f1f1f; --fhov:#2d2d2d}   /* 21 -> 31 -> 45 (Arlo asked for more contrast than 26/38) */
-body{background:#2e2e2e;color:#ccc;font-family:monospace;font-size:13px;padding-bottom:36px}
+body{background:#363636;color:#ccc;font-family:monospace;font-size:13px;padding-bottom:36px}
 header{background:#1e1e1e;border-bottom:1px solid #333;padding:6px 12px;display:flex;align-items:center;gap:10px}
 h1{font-size:13px;color:#aaa;flex:1;letter-spacing:.05em}
 .tabs{display:flex;gap:4px}
@@ -154,12 +154,13 @@ body.nosbar .sbar{display:none}
    from the bottom (= 6.5 px once the 18 px height is taken off). They were first
    drawn at the slot/antenna's lighter weight; Arlo wanted them bigger and nearer
    the corners, which is exactly true scale, so scale won.
-   The fill is the PAGE background (#2e2e2e, body above — keep the two in step)
+   The fill is the PAGE background (#363636, body above — KEEP THE TWO IN STEP,
+   or the mounting holes stop reading as holes and become grey pills)
    over the near-black panel, so the slot reads as a hole you can see through
    rather than a painted-on shape; the inset shadow is the material's thickness.
    Deliberately NOT .deco: the slot and antenna hide beside a big or empty
    screen, but the holes belong to the frame and stay. */
-.mnt{position:absolute;width:47px;height:18px;border-radius:9px;background:#2e2e2e;
+.mnt{position:absolute;width:47px;height:18px;border-radius:9px;background:#363636;
   box-shadow:inset 0 1px 2px rgba(0,0,0,.8);pointer-events:none}
 .mnt.t{top:6.5px}.mnt.b{bottom:6.5px}.mnt.l{left:3.39%}.mnt.r{right:3.39%}
 /* absolutely positioned, so it costs the frame no height and cannot disturb the
