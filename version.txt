@@ -1,1 +1,1 @@
-v0.10-beta3-20260911 (third public beta: the web remote is one page, an LFO on Synth and Keys, a faster screen)
+v0.10-beta4-20260912 (fourth public beta: every machine on the CV matrix, a SYSTEM card, and a web remote that reflows)
