@@ -9,6 +9,51 @@ another agent's in-progress files into unrelated commits twice).
 ## spun down. Keep this file and commit messages complete enough that either agent
 ## can carry the whole project alone — assume your notes outlive your session.
 
+## 2026-09-12 (late) — BANDSTACK: the card layout, properly
+
+Bail tag **`pre-bandstack-20260912`** = `1d2ac25`. Commits `8c54001` `ffdf070`
+`e4a33ed` `15a2581`, all pushed and FLASHED; `.85` serves them byte-identical.
+Arlo: *"i want to make this card layout as smooth and robust as possible."*
+
+**THE STRUCTURAL FACT, which four earlier attempts kept working around:** a
+full-width band is a SIBLING BELOW the whole column row, so it can only ever
+clear the TALLEST column. With FILES open at 841 px that dragged the keyboard to
+the bottom of the page and left a 192 px hole in the short column. No fill
+tuning can fix that — only one card remained to place and it did not fit.
+
+**The fix is `#bandstack` + `#sidecol` inside `#stackrow`.** Row A / band / row B
+stack together; at three columns with the keyboard expanded the pin column is
+LIFTED OUT and runs full height beside them, so the band only clears the two
+columns it spans. Engaged solely by `p3.bandside`; everywhere else `#sidecol` is
+`display:none` and `#bandstack` is just the page, so the old layout is untouched
+by construction. That containment is what made a skeleton change safe.
+
+Three follow-ups, each a consequence of the lift and each caught by measuring:
+- **`#p3.c3 #midiband` kept the band at 1530 inside a 1016 stack**, so it ran
+  under `#sidecol`. Overridden to 100% in bandside.
+- **The lifted column only received `BAL_RIGHT`** — 188 px of content on a
+  1206 px page while SYSTEM/GLOBAL/OUT sat below the band. It is not interrupted
+  by the band, so it is not capped by the panel either: bandside deals every
+  flow card across all THREE columns and has no row B. Page 1206 -> 876.
+- **`pcol` was pinned to 0**, so expanding slid the panel from the middle column
+  to the left. In bandside the stack's SECOND column is visually the middle of
+  three. The fill seeds had to follow `pcol` too, or the panel's 707 px is
+  charged to the wrong column and the deal fills around a hole.
+
+**The keyboard's index in `BAL_FLOW` is now a TUNED CONSTANT.** It was first only
+because its index used to be the row A / row B split point; the split is by fill
+now, so its index decides just how far the collapsed card jumps when it expands.
+Measured every position across four states (3/2 columns x FILES open/closed),
+worst-case jump: first 785, after FX 431, after CLOCK 363, **after SETUP 311**,
+last 444. Chosen on WORST case, not total — that is what gets felt. **This is
+tuned to the current card set; adding or removing a card shifts the optimum.**
+
+> **The standing test:** 3col wide / 3col wide+files open / 3col half / 2col
+> wide / 2col half / 1col / 3col wide again — assert every card is visible and
+> nothing is stranded in a hidden `#sidecol`. Layout maths is client-side, so
+> this runs in the console with no build and no OTA. It caught the stranding
+> bug on the first pass.
+
 ## 2026-09-12 (evening) — web: SYSTEM card, KEYBOARD, QWERTY view
 
 All pushed and FLASHED (`bfc6325`, `e8d751f`, `251a0d7`, `48c2138`, `bc7f6e7`).
