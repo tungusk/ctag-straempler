@@ -19,6 +19,7 @@
 #include "esp_log.h"
 #include "audio.h"
 #include "menutft.h"
+#include "text_entry.h"
 #include "recording.h"
 #include "menu_types.h"
 #include "menutft_utils.h"
@@ -491,99 +492,50 @@ static int settings_def_handler(int it_id, int event, void* event_data){
     return 0; // remain in current menu
 }
 
+// Host for the shared text-entry widget (components/menu/text_entry.c). The
+// character wheel, cursor and buffer used to live here; this now only supplies
+// the title + seed value and writes the accepted string back into the settings
+// cJSON. Behaviour on the device is unchanged.
 static int settings_input_def_handler(int it_id, int event, void* event_data){
-    const char *c_list = "=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_ !?<^";
-    static int pos = 0, c = 1, menu_pos = 0;
-    static char input[48];
-    char *buf;
-    char title[32];
-    static cJSON *root = NULL, *settings = NULL, *val = NULL;
+    static cJSON *settings = NULL;
+    static int menu_pos = 0;
 
-    switch(event){
-        case EV_ENTERED_MENU:
-            bzero(input, 48);
-            bzero(title, 32);
-            pos = 0;
-            c = 41;
-            menu_pos = 0;
-            menuTFTResetTextWrap();
-            //Get settings object from _state_json & menu_pos from _state_data
-            if(_state_json != NULL){
-                root = (cJSON*) _state_json;
-                if(root != NULL)settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
-                menu_pos = *((int*) _state_data);
-                if(settings != NULL)sprintf(title, "Enter %s:", settings_menus[menu_pos]);
-                menuTFTPrintInputMenu(title);
-                val = cJSON_GetArrayItem(settings, menu_pos);
-                //print current valuestring, copy to input buffer and increase pos to stringlength
-                if(cJSON_IsString(val)){
-                    pos = menuTFTPrintAllCharSettings(val->valuestring);
-                    strcpy(input, val->valuestring);
-                }
-            }else ESP_LOGE("PRESET", "_state_json is NULL");
-        case EV_FWD:
-            c++;
-            if(c>69) c = 69;
-            menuTFTPrintChar(input, pos, c_list[c], PRINT_NORM);
-            break;
-        case EV_BWD:
-            c--;
-            if(c<0)c=0;
-            menuTFTPrintChar(input, pos, c_list[c], PRINT_NORM);
-            break;
-        case EV_SHORT_PRESS:
-            switch(c_list[c]){
-                case '^':
-                    _state_data = NULL;
-                    menuTFTFlushMenuDataRect();
-                    return M_SETTINGS;
-                    break;
-                case '<':
-                    input[pos] = '\0';
-                    pos--;
-                    if(pos<0)pos=0;
-                    menuTFTPrintChar(input, pos, c_list[c], PRINT_NORM);
-                    break;
-                case '=':
-                    if(pos == 0) break;
-                    input[pos] = '\0';
-                    buf = calloc(strlen(input) + 1, 1);
-                    strcpy(buf, input);
-                    cJSON* val = cJSON_GetArrayItem(settings, menu_pos);
-                    cJSON_ReplaceItemInObjectCaseSensitive(settings, val->string, cJSON_CreateString(buf));
-                    _state_data = NULL;
-                    pos = 0;
-                    return M_SETTINGS;
-                    break;
-                default:
-                    input[pos] = c_list[c];
-                    pos++;
-                    if(menu_pos == 2){
-                        if(pos>42)pos=42;
-                    }else{
-                        if(pos>32)pos=32;
-                    }
-                    menuTFTPrintChar(input, pos, c_list[c], PRINT_NORM);
-                    break;
-            }
-            break;
-        case EV_LONG_PRESS:
-            //print current char
-            if(c_list[c] == '^' || c_list[c] == '<') break;
-            input[pos] = toupper(c_list[c]);
-            menuTFTPrintChar(input, pos, c_list[c], PRINT_UPPER);
-            pos++;
-            if(menu_pos == 2){
-                if(pos>42)pos=42;
-            }else{
-                if(pos>32)pos=32;
-            }
-            menuTFTPrintChar(input, pos, c_list[c], PRINT_NORM);
-            break;
-        default:
-            break;
+    if(event == EV_ENTERED_MENU){
+        settings = NULL;
+        if(_state_json != NULL){
+            cJSON *root = (cJSON*) _state_json;
+            settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
+            menu_pos = *((int*) _state_data);
+            char title[32];
+            snprintf(title, sizeof(title), "Enter %s:", settings_menus[menu_pos]);
+            cJSON *val = settings ? cJSON_GetArrayItem(settings, menu_pos) : NULL;
+            // the Api Key (index 2) is longer than the other fields
+            text_entry_enter(title,
+                             (val && cJSON_IsString(val)) ? val->valuestring : NULL,
+                             menu_pos == 2 ? 42 : 32);
+        }else{
+            ESP_LOGE("PRESET", "_state_json is NULL");
+            text_entry_enter("Enter:", NULL, 32);
+        }
+        return 0;
     }
 
+    int r = text_entry_event(event);
+    if(r == 2){                                   // '^' cancel
+        _state_data = NULL;
+        menuTFTFlushMenuDataRect();
+        return M_SETTINGS;
+    }
+    if(r == 1){                                   // '=' accept
+        if(settings != NULL){
+            cJSON *val = cJSON_GetArrayItem(settings, menu_pos);
+            if(val != NULL)
+                cJSON_ReplaceItemInObjectCaseSensitive(settings, val->string,
+                        cJSON_CreateString(text_entry_result()));
+        }
+        _state_data = NULL;
+        return M_SETTINGS;
+    }
     return 0;
 }
 

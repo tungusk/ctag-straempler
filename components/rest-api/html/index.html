@@ -799,6 +799,8 @@ body.nosbar .sbar{display:none}
   <div class="row" id="edops" style="flex-wrap:wrap"></div>
   <label style="margin-top:10px">Fade length (ms, for fade in/out)</label>
   <div class="row"><input id="edparam" type="number" value="50" style="flex:0 0 100px"></div>
+  <label style="margin-top:10px">Range &#8212; set on the panel waveform</label>
+  <div class="row tight" style="align-items:center"><span id="edrange" style="color:#aaa;flex:1">whole file</span><button class="btn" style="flex:0 0 90px" onclick="edWhole()">whole file</button></div>
   <div class="card" style="margin-top:10px">
   <div class="row tight" style="align-items:center"><b style="flex:1;color:#0af" id="edstate">idle</b><span id="edout" style="color:#aaa"></span></div>
   <div class="bar" style="margin-top:6px"><i id="edbar" style="width:0%"></i></div>
@@ -3151,7 +3153,7 @@ function midiDevices(){
 }
 midiConnect();midiDraw();midiOctShow();midiDevices();
 // Editor tab — /edit/* served only while the Editor machine is active
-var edTimer=null,edLast='';
+var edTimer=null,edLast='',edIn=0,edOut=0,edFrames=0;
 function edLoad(){
   fetch('/files').then(function(r){return r.json();}).then(function(d){
     var files=Array.isArray(d)?d:(d.files||[]);
@@ -3169,6 +3171,11 @@ function edState(){
     document.getElementById('edout').textContent=d.out?('→ '+d.out):'';
     document.getElementById('edbar').style.width=(d.progress||0)+'%';
     document.getElementById('edm').textContent=d.err?d.err:(s==='done'?('created '+d.out):'');
+    // the panel owns the crop; mirror it so a web "crop" means the same range
+    edIn=d.in_pt||0;edOut=d.out_pt||0;edFrames=d.frames||0;
+    var rg=document.getElementById('edrange');
+    if(edOut>edIn&&!(edIn===0&&edOut===edFrames))rg.textContent=(edIn/44100).toFixed(2)+'s \u2192 '+(edOut/44100).toFixed(2)+'s';
+    else rg.textContent='whole file';
     var box=document.getElementById('edops');
     if(box.dataset.n!==String((d.ops||[]).length)){
       box.dataset.n=String((d.ops||[]).length);box.innerHTML='';
@@ -3181,8 +3188,13 @@ function edState(){
 function edApply(op){
   var nm=document.getElementById('edsel').value;if(!nm)return;
   var pr=document.getElementById('edparam').value||0;
-  fetch('/edit/apply?name='+encodeURIComponent(nm)+'&op='+op+'&param='+pr,{method:'POST'}).catch(function(){});
+  // send the range the device is holding, or 0/0 for the whole file. Without
+  // this a web "crop" would crop everything, which is a no-op copy.
+  var q='/edit/apply?name='+encodeURIComponent(nm)+'&op='+op+'&param='+pr;
+  if(edOut>edIn)q+='&in='+edIn+'&out='+edOut;
+  fetch(q,{method:'POST'}).catch(function(){});
 }
+function edWhole(){edIn=0;edOut=0;document.getElementById('edrange').textContent='whole file';}
 function remMach(n){
   fetch('/remote/machine?name='+encodeURIComponent(n),{method:'POST'}).then(function(r){return r.json();}).then(function(d){
     var m=document.getElementById('rmnote');

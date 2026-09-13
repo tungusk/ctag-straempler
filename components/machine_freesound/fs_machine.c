@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
@@ -19,6 +20,8 @@
 #include "sd_lock.h"
 #include "mp3.h"
 #include "fs_auth.h"
+#include "sampplay.h"
+#include "sampfile.h"
 #include "fs_priv.h"
 
 static const char *TAG = "FSND-M";
@@ -344,6 +347,258 @@ static int start_job(const char *id, const char *url, const char *name)
 int fs_get_start(const char *id, const char *name)   { return start_job(id, "", name); }
 int fs_fetch_start(const char *url, const char *name){ return start_job("", url, name); }
 
+// Library-safe take id: alnum/_/- only, <=12 chars (the pool is FatFS 8.3 with
+// room for a prefix). Shared so a sound fetched from the panel and the same
+// sound fetched from the browser land under the SAME name.
+void fs_safe_name(const char *raw, const char *id, char *out, size_t n)
+{
+    size_t w = 0;
+    if (raw)
+        for (size_t i = 0; raw[i] && w < 12 && w + 1 < n; i++)
+            if (isalnum((unsigned char)raw[i]) || raw[i] == '_' || raw[i] == '-')
+                out[w++] = raw[i];
+    out[w] = 0;
+    if (!out[0] && id && id[0]) snprintf(out, n, "FS%s", id);
+}
+
+// ---- panel search ----------------------------------------------------------
+// The web handler proxies raw JSON to the browser, which parses it there. The
+// panel cannot, so this runs the same query and parses it HERE into results[].
+// Own task, for the reason spelled out in fs_priv.h.
+#define FS_SEARCH_STACK (8192 * 4)
+
+static volatile bool s_searching = false;
+
+static void search_stack_watch(void)
+{
+    unsigned free_bytes = (unsigned)uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t);
+    if (fsm.search_stack_min == 0 || free_bytes < fsm.search_stack_min)
+        fsm.search_stack_min = free_bytes;
+}
+
+const char *fs_search_err(void) { return fsm.serr; }
+
+static void set_serr(const char *m)
+{
+    strlcpy(fsm.serr, m, sizeof(fsm.serr));
+    fsm.search_state = FS_SEARCH_ERR;
+    fsm.n_results = 0;
+    ESP_LOGW(TAG, "search: %s", m);
+}
+
+// percent-encode a panel-typed query for the query string. The web path filters
+// its already-encoded q instead; this one starts from raw text, so it has to do
+// the encoding rather than the filtering.
+static void url_escape(const char *in, char *out, size_t n)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p && o + 4 < n; p++) {
+        if (isalnum(*p) || *p == '-' || *p == '_' || *p == '.') out[o++] = (char)*p;
+        else if (*p == ' ')                                     out[o++] = '+';
+        else { out[o++] = '%'; out[o++] = hex[*p >> 4]; out[o++] = hex[*p & 15]; }
+    }
+    out[o] = 0;
+}
+
+typedef struct { char q[FS_QUERY_LEN]; int page; } fs_search_job_t;
+
+static void fs_search_task(void *pv)
+{
+    fs_search_job_t *job = (fs_search_job_t *)pv;
+    char *buf = NULL;
+    cJSON *root = NULL;
+
+    fsm.search_state = FS_SEARCH_RUNNING;
+    fsm.n_results = 0;
+    fsm.serr[0] = 0;
+    search_stack_watch();
+    wifiWaitForConnected();
+
+    if (!fs_auth_ok()) { set_serr("no API key (System > Settings)"); goto out; }
+
+    char esc[FS_QUERY_LEN * 3 + 4], auth[160], url[512];
+    url_escape(job->q, esc, sizeof(esc));
+    fs_auth_query_suffix(auth, sizeof(auth));
+    snprintf(url, sizeof(url),
+             "https://freesound.org/apiv2/search/text/?query=%s&page=%d&page_size=%d"
+             "&fields=id,name,duration,username%s",
+             esc, job->page, FS_RESULTS_MAX, auth);
+
+    int n = fs_http_get(url, &buf, 48 * 1024);
+    search_stack_watch();
+    if (n <= 0) { set_serr("freesound unreachable"); goto out; }
+
+    root = cJSON_Parse(buf);
+    if (!root) { set_serr("bad JSON from freesound"); goto out; }
+    cJSON *det = cJSON_GetObjectItem(root, "detail");
+    if (det && cJSON_IsString(det)) { set_serr(det->valuestring); goto out; }
+
+    cJSON *cnt = cJSON_GetObjectItem(root, "count");
+    fsm.total = (cnt && cJSON_IsNumber(cnt)) ? cnt->valueint : 0;
+
+    cJSON *res = cJSON_GetObjectItem(root, "results");
+    if (!cJSON_IsArray(res)) { set_serr("no results array"); goto out; }
+
+    int k = 0;
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, res) {
+        if (k >= FS_RESULTS_MAX) break;
+        fs_result_t *r = &fsm.results[k];
+        memset(r, 0, sizeof(*r));
+        cJSON *j;
+        j = cJSON_GetObjectItem(it, "id");
+        if (j && cJSON_IsNumber(j)) snprintf(r->id, sizeof(r->id), "%d", j->valueint);
+        j = cJSON_GetObjectItem(it, "name");
+        if (j && cJSON_IsString(j)) strlcpy(r->name, j->valuestring, sizeof(r->name));
+        j = cJSON_GetObjectItem(it, "username");
+        if (j && cJSON_IsString(j)) strlcpy(r->user, j->valuestring, sizeof(r->user));
+        j = cJSON_GetObjectItem(it, "duration");
+        if (j && cJSON_IsNumber(j)) {
+            double d = j->valuedouble * 10.0;
+            r->dur_ds = (uint16_t)(d > 65535.0 ? 65535 : (d < 0 ? 0 : d));
+        }
+        if (r->id[0]) k++;                      // an entry with no id cannot be fetched
+    }
+    fsm.n_results = k;
+    fsm.page = job->page;
+    strlcpy(fsm.last_query, job->q, sizeof(fsm.last_query));
+    fs_query_remember(job->q);
+    fsm.search_state = FS_SEARCH_OK;
+    ESP_LOGI(TAG, "search \"%s\" page %d -> %d/%d", job->q, job->page, k, fsm.total);
+
+out:
+    search_stack_watch();
+    if (root) cJSON_Delete(root);
+    if (buf) heap_caps_free(buf);
+    free(job);
+    s_searching = false;
+    vTaskDelete(NULL);
+}
+
+int fs_search_start(const char *q, int page)
+{
+    if (s_searching || fsm.busy || !q || !q[0]) return -1;
+    if (page < 1) page = 1;
+    fs_search_job_t *job = calloc(1, sizeof(*job));
+    if (!job) { set_serr("out of memory"); return -2; }
+    strlcpy(job->q, q, sizeof(job->q));
+    job->page = page;
+    s_searching = true;
+    fsm.search_stack_min = 0;
+    fsm.search_state = FS_SEARCH_RUNNING;
+    // unpinned, like the pipeline: this task touches the network, not audio
+    if (xTaskCreate(fs_search_task, "fs_search", FS_SEARCH_STACK, job, 5, NULL) != pdPASS) {
+        free(job);
+        s_searching = false;
+        set_serr("no RAM for the search task");
+        return -2;
+    }
+    return 0;
+}
+
+// ---- query store -----------------------------------------------------------
+void fs_query_remember(const char *q)
+{
+    if (!q || !q[0]) return;
+    // already at the top? nothing to do
+    if (fsm.n_recents > 0 && strcmp(fsm.recents[0], q) == 0) return;
+    // drop an existing copy so the list stays de-duplicated
+    for (int i = 0; i < fsm.n_recents; i++) {
+        if (strcmp(fsm.recents[i], q) == 0) {
+            for (int j = i; j < fsm.n_recents - 1; j++)
+                strlcpy(fsm.recents[j], fsm.recents[j + 1], FS_QUERY_LEN);
+            fsm.n_recents--;
+            break;
+        }
+    }
+    if (fsm.n_recents < FS_RECENTS) fsm.n_recents++;
+    for (int i = fsm.n_recents - 1; i > 0; i--)
+        strlcpy(fsm.recents[i], fsm.recents[i - 1], FS_QUERY_LEN);
+    strlcpy(fsm.recents[0], q, FS_QUERY_LEN);
+}
+
+bool fs_query_is_saved(const char *q)
+{
+    if (!q || !q[0]) return false;
+    for (int i = 0; i < fsm.n_saved; i++)
+        if (strcmp(fsm.saved[i], q) == 0) return true;
+    return false;
+}
+
+int fs_query_save(const char *q)
+{
+    if (!q || !q[0]) return -1;
+    if (fs_query_is_saved(q)) return -2;
+    if (fsm.n_saved >= FS_SAVED) return -1;
+    strlcpy(fsm.saved[fsm.n_saved], q, FS_QUERY_LEN);
+    fsm.n_saved++;
+    return 0;
+}
+
+void fs_query_unsave(const char *q)
+{
+    for (int i = 0; i < fsm.n_saved; i++) {
+        if (strcmp(fsm.saved[i], q) == 0) {
+            for (int j = i; j < fsm.n_saved - 1; j++)
+                strlcpy(fsm.saved[j], fsm.saved[j + 1], FS_QUERY_LEN);
+            fsm.n_saved--;
+            return;
+        }
+    }
+}
+
+
+// ---- audition ---------------------------------------------------------------
+// The player is created on machine start and torn down on stop, so a Freesound
+// that is not the active machine costs no PSRAM ring and no reader task.
+static sampplay_t *s_play = NULL;
+static char s_au_name[24];
+
+int fs_audition(const char *name)
+{
+    if (!s_play || !name || !name[0]) return -1;
+    if (sampplay_open(s_play, name) != 0) return -1;
+    strlcpy(s_au_name, name, sizeof(s_au_name));
+    sampplay_play(s_play, true);
+    return 0;
+}
+
+void fs_audition_stop(void)
+{
+    if (!s_play) return;
+    sampplay_play(s_play, false);
+    sampplay_close(s_play);
+    s_au_name[0] = 0;
+}
+
+bool fs_auditioning(void) { return s_play && sampplay_playing(s_play); }
+const char *fs_audition_name(void) { return s_au_name; }
+
+// Drop the take we are auditioning. The pool lists ids that have a .JSN
+// sidecar, so both have to go or the sample half-exists in the browser.
+int fs_audition_drop(void)
+{
+    if (!s_au_name[0]) return -1;
+    char name[24];
+    strlcpy(name, s_au_name, sizeof(name));
+    fs_audition_stop();
+
+    // resolve BOTH paths before deleting anything: sample_resolve_aux() finds
+    // the sidecar by locating the AUDIO file and swapping the extension, so
+    // once the audio is gone it can no longer find the .JSN to remove
+    char apath[80], jpath[80];
+    sample_resolve(name, apath, sizeof(apath));
+    bool have_jsn = (sample_resolve_aux(name, ".JSN", jpath, sizeof(jpath)) == 0);
+    sd_lock_take();
+    int r = remove(apath);
+    if (have_jsn) remove(jpath);
+    sd_lock_give();
+    if (fsm.phase == FS_DONE) { fsm.phase = FS_IDLE; fsm.cur_name[0] = 0; }
+    ESP_LOGI(TAG, "dropped %s (%d)", name, r);
+    return r == 0 ? 0 : -1;
+}
+
 // ---- machine ---------------------------------------------------------------
 static esp_err_t fsnd_start(void)
 {
@@ -352,12 +607,16 @@ static esp_err_t fsnd_start(void)
         fsm.progress = 0;
         fsm.err[0] = 0;
     }
+    s_au_name[0] = 0;
+    if (!s_play) s_play = sampplay_create(0);     // ~1 s ring
     audio_status_set_voices("freesound", "");
     return ESP_OK;
 }
 
 static void fsnd_stop(void)
 {
+    if (s_play) { sampplay_destroy(s_play); s_play = NULL; }
+    s_au_name[0] = 0;
     // nothing allocated; a running pipeline only touches static state and
     // finishes on its own
 }
@@ -367,22 +626,59 @@ static void fsnd_process(int32_t out[MACHINE_BLOCK],
                          const machine_io_t *io)
 {
     (void)in; (void)io;
-    memset(out, 0, MACHINE_BLOCK * sizeof(int32_t));   // silent utility machine
+    // Not a silent utility any more: a preview you cannot hear is not a preview.
+    sampplay_render(s_play, out, MACHINE_BLOCK / 2, 1.0f);
 }
 
 static cJSON *fsnd_preset_save(void)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "query", fsm.last_query);
+    cJSON_AddBoolToObject(o, "autoplay", fsm.autoplay);
+    // the query store is the whole point of the panel Live page — losing it on
+    // a machine switch would put you back to typing every search
+    cJSON *rc = cJSON_CreateArray();
+    for (int i = 0; i < fsm.n_recents; i++)
+        cJSON_AddItemToArray(rc, cJSON_CreateString(fsm.recents[i]));
+    cJSON_AddItemToObject(o, "recents", rc);
+    cJSON *sv = cJSON_CreateArray();
+    for (int i = 0; i < fsm.n_saved; i++)
+        cJSON_AddItemToArray(sv, cJSON_CreateString(fsm.saved[i]));
+    cJSON_AddItemToObject(o, "saved", sv);
     return o;
+}
+
+static void load_str_array(const cJSON *node, const char *key,
+                           char dst[][FS_QUERY_LEN], int max, int *n_out)
+{
+    *n_out = 0;
+    cJSON *arr = cJSON_GetObjectItemCaseSensitive(node, key);
+    if (!cJSON_IsArray(arr)) return;
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, arr) {
+        if (*n_out >= max) break;
+        if (cJSON_IsString(it) && it->valuestring[0])
+            strlcpy(dst[(*n_out)++], it->valuestring, FS_QUERY_LEN);
+    }
 }
 
 static void fsnd_preset_load(const cJSON *node)
 {
-    if (!node) return;
+    if (!node) {
+        // machine defaults: an empty store, not whatever the last machine left
+        fsm.n_recents = 0;
+        fsm.n_saved = 0;
+        fsm.last_query[0] = 0;
+        fsm.autoplay = true;
+        return;
+    }
     cJSON *j = cJSON_GetObjectItemCaseSensitive(node, "query");
     if (j && cJSON_IsString(j))
         strlcpy(fsm.last_query, j->valuestring, sizeof(fsm.last_query));
+    cJSON *ap = cJSON_GetObjectItemCaseSensitive(node, "autoplay");
+    fsm.autoplay = ap ? cJSON_IsTrue(ap) : true;
+    load_str_array(node, "recents", fsm.recents, FS_RECENTS, &fsm.n_recents);
+    load_str_array(node, "saved",   fsm.saved,   FS_SAVED,   &fsm.n_saved);
 }
 
 extern const machine_ui_t fs_menu_ui;

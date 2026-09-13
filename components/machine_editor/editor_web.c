@@ -1,5 +1,6 @@
 // Editor REST endpoints (served only while the Editor machine is active):
-//   POST /edit/apply?name=<id>&op=<0..4>[&param=<f>]   kick an op
+//   POST /edit/apply?name=<id>&op=<0..5>[&param=<f>][&in=&out=]  kick an op
+//        in/out are FRAME bounds; omitted = the whole file (the original behaviour)
 //   GET  /edit/state                                    JSON status + op list
 #include <string.h>
 #include <stdlib.h>
@@ -35,7 +36,10 @@ static esp_err_t apply_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
     float param = qparam(req, "param", ps, sizeof(ps)) ? (float)atof(ps) : 0.0f;
-    editor_apply(name, atoi(ops), param);
+    char is[16], os[16];
+    uint32_t in  = qparam(req, "in",  is, sizeof(is)) ? (uint32_t)strtoul(is, NULL, 10) : 0;
+    uint32_t out = qparam(req, "out", os, sizeof(os)) ? (uint32_t)strtoul(os, NULL, 10) : 0;
+    editor_apply(name, atoi(ops), param, in, out);
     return send_json(req, "{\"ok\":true}");
 }
 
@@ -48,6 +52,9 @@ static esp_err_t state_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "progress", ed.progress);
     cJSON_AddStringToObject(o, "src", ed.src);
     cJSON_AddStringToObject(o, "out", ed.out);
+    cJSON_AddNumberToObject(o, "in_pt",  (double)ed.in_pt);
+    cJSON_AddNumberToObject(o, "out_pt", (double)ed.out_pt);
+    cJSON_AddNumberToObject(o, "frames", (double)ed.frames);
     if (ed.op >= 0 && ed.op < OP_N) cJSON_AddStringToObject(o, "op", ed_op_names[ed.op]);
     if (ed.err[0]) cJSON_AddStringToObject(o, "err", ed.err);
     cJSON *arr = cJSON_AddArrayToObject(o, "ops");

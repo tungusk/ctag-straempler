@@ -41,6 +41,9 @@ typedef enum{
     M_DRUM_SETUP,
     M_DRUM_FX,
     M_FS_LIVE,
+    M_FS_ENTRY,        // Freesound: encoder text entry for a new query
+    M_FS_RESULTS,      // Freesound: the search result list
+    M_FS_SETUP,
     M_DECK_LIVE,
     M_DECK_SETUP,
     M_DECK_MATRIX,
@@ -79,6 +82,7 @@ typedef enum{
     M_TAPE_CV,
     M_EDITOR_LIVE,
     M_EDITOR_SETUP,
+    M_EDITOR_LOAD,     // Editor: shared sample browser
     M_STUB_HOME,
     M_SETTINGS,
     M_SETTINGS_INPUT,

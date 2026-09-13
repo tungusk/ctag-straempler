@@ -113,15 +113,9 @@ static esp_err_t fs_get_handler(httpd_req_t *req)
         if (!isdigit((unsigned char)*p))
             return send_json_status(req, "400 Bad Request", "{\"error\":\"bad id\"}");
 
-    if (!q_param(req, "name", name, sizeof(name)) || !name[0])
-        snprintf(name, sizeof(name), "FS%s", id);
-    // library-safe name: alnum/_/-, max 12 chars
-    int w = 0;
-    for (int i = 0; name[i] && w < 12; i++)
-        if (isalnum((unsigned char)name[i]) || name[i] == '_' || name[i] == '-')
-            name[w++] = name[i];
-    name[w] = 0;
-    if (!name[0]) snprintf(name, sizeof(name), "FS%s", id);
+    char raw[24];
+    if (!q_param(req, "name", raw, sizeof(raw))) raw[0] = 0;
+    fs_safe_name(raw, id, name, sizeof(name));
 
     int r = fs_get_start(id, name);
     if (r == -1)
@@ -140,14 +134,10 @@ static esp_err_t fs_fetch_handler(httpd_req_t *req)
     if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0)
         return send_json_status(req, "400 Bad Request", "{\"error\":\"http(s) URL required\"}");
 
-    if (!q_param(req, "name", name, sizeof(name)) || !name[0])
+    char raw[24];
+    if (!q_param(req, "name", raw, sizeof(raw)) || !raw[0])
         return send_json_status(req, "400 Bad Request", "{\"error\":\"missing name\"}");
-    // library-safe name: alnum/_/-, max 12 chars
-    int w = 0;
-    for (int i = 0; name[i] && w < 12; i++)
-        if (isalnum((unsigned char)name[i]) || name[i] == '_' || name[i] == '-')
-            name[w++] = name[i];
-    name[w] = 0;
+    fs_safe_name(raw, "", name, sizeof(name));
     if (!name[0])
         return send_json_status(req, "400 Bad Request", "{\"error\":\"bad name\"}");
 
