@@ -1464,7 +1464,11 @@ function loadSysinfo(){
     if(d.total){
       var freeMB=d.free/1048576, mins=freeMB/10.09;
       var rec=mins>=120?('~'+Math.round(mins/60)+' h'):('~'+Math.round(mins)+' min');
-      sd='SD '+Math.round(freeMB)+'/'+Math.round(d.total/1048576)+'MB\u2002 '+rec+' rec';
+      // GB, not the five-digit MB pair it used to print: nobody reads "25984"
+      // as an amount. One decimal is the useful precision on a 32 GB card —
+      // enough to watch it move over a session, not so much that it is noise.
+      var gb=function(b){return (b/1073741824).toFixed(1);};
+      sd='SD '+gb(d.free)+'/'+gb(d.total)+' GB\u2002 '+rec+' rec';
     }
     var dk=document.getElementById('disk');   if(dk)dk.textContent=sd;
     var fdk=document.getElementById('fdisk'); if(fdk)fdk.textContent=sd;
