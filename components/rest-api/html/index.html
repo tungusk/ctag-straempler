@@ -3207,9 +3207,20 @@ var BAL_LEFT=['panel'];
 // FILES is PINNED at the TOP of the right column, above MACHINE (Arlo
 // 2026-09-10) — not dealt with the flow cards, open or folded.
 var BAL_RIGHT=['fileshome','machcard','fscard','rdcard','edcard'];
-// The FLOW cards, in deal order: dealt into whichever column is shortest, with
-// the keyboard's own place deciding where full width splits the page.
-var BAL_FLOW=['midihome','rmatrix','rfx','clkcard','rsetup','rsys','rglob','rparams','rm','outcard'];
+// The FLOW cards, in deal order: dealt into whichever column is shortest.
+//
+// THE KEYBOARD'S PLACE IS CHOSEN TO MINIMISE TRAVEL. It was first in this list
+// only because its index used to be the row A / row B split point; the split is
+// by fill now, so its index decides just one thing — where the COLLAPSED card
+// sits, and therefore how far it jumps when it expands into the band. First put
+// it at the top of a column while the band lands near the bottom of the stack,
+// so 2x moved it up to 785 px (Arlo 2026-09-12: "it makes it travel real far
+// when expanding and collapsing").
+//
+// Measured across four states (3/2 columns x FILES open/closed), worst-case
+// jump: first 785, after FX 431, after CLOCK 363, AFTER SETUP 311, last 444.
+// Placed after rsetup on worst case, which is what is actually felt.
+var BAL_FLOW=['rmatrix','rfx','clkcard','rsetup','midihome','rsys','rglob','rparams','rm','outcard'];
 function balanceCols(){
   var top=document.querySelector('.remcols.remtop');if(!top)return;
   var bot=document.getElementById('rembot');
