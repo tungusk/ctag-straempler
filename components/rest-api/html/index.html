@@ -1535,7 +1535,7 @@ function fsRender(d){
   var m=document.getElementById('fsm');
   var tb=document.getElementById('fstb'),h='';
   (d.results||[]).forEach(function(sd){
-    var nm=String(sd.name||'').replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||('FS'+sd.id);
+    var nm=String(sd.name||'').replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'').substring(0,8)||('FS'+sd.id);
     h+='<tr><td>'+esc(sd.name)+'</td><td>'+(sd.dur!=null?sd.dur.toFixed(1)+'s':'')+'</td><td>'+esc(sd.user||'')+'</td>'
       +'<td style="white-space:nowrap"><button class="btn" onclick="fsGet(\''+esc(sd.id)+'\',\''+nm+'\')">&#11015; Get</button></td></tr>';
   });
@@ -1586,16 +1586,16 @@ function fsStarted(d){
 }
 
 function fsGet(id,defName){
-  var name=prompt('Save to library as (max 12 chars):',defName);
+  var name=prompt('Save to library as (max 8 chars \u2014 FatFS 8.3):',defName);
   if(name===null)return;
-  name=name.replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||defName;
+  name=name.replace(/[^a-zA-Z0-9_-]/g,'').substring(0,8)||defName;
   fetch('/fs/get?id='+encodeURIComponent(id)+'&name='+encodeURIComponent(name),{method:'POST'}).then(function(r){return r.json();}).then(fsStarted);
 }
 
 function fsFetch(){
   var u=document.getElementById('furl').value.trim();
   if(!/^https?:\/\//.test(u)){alert('Enter an http(s) MP3 URL');return;}
-  var def=(u.split('/').pop()||'').split('?')[0].replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||'MP3';
+  var def=(u.split('/').pop()||'').split('?')[0].replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'').substring(0,8)||'MP3';
   var name=prompt('Save to library as (max 12 chars):',def);
   if(name===null)return;
   name=name.replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||def;

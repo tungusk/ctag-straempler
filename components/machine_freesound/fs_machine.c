@@ -39,6 +39,10 @@ static const char *TAG = "FSND-M";
 // fs_state.stack_min reports the tightest free stack of the last run, so a
 // change that adds appetite here shows up as a number instead of as a crash.
 #define FS_PIPELINE_STACK (8192 * 5)
+// Largest body we will buffer in PSRAM before touching the card (see PHASE 1).
+// A 90 s preview at 128 kbps is ~1.5 MB; 2 MB also stays under the single-alloc
+// ceiling PSRAM starts refusing around.
+#define FS_MEM_MP3_MAX (2 * 1024 * 1024)
 
 fs_state_t fsm;
 
@@ -256,56 +260,99 @@ static void fs_pipeline(void *pv)
     if (esp_http_client_open(client, 0) != ESP_OK) { set_err("mp3 unreachable"); goto out; }
     int content_length = esp_http_client_fetch_headers(client);
     if (content_length > FS_MAX_MP3_BYTES) { set_err("mp3 too large"); goto out; }
-    char *chunk = malloc(4096);                    // internal RAM for the SD writes
-    if (!chunk) { set_err("out of memory"); goto out; }
-
-    // The card file is opened HERE, not before the request. It used to be held
-    // open across the ~2 s TLS handshake, and the first f_write after that
-    // handshake failed with an sdmmc timeout (0x107) every single time. Opening
-    // it only once there is something to write is better structure anyway — no
-    // empty file left behind when the fetch never starts.
-    FRESULT fr;
-    sd_lock_take();
-    fr = f_open(&fmp3, pool_path, FA_CREATE_ALWAYS | FA_WRITE);
-    sd_lock_give();
-    if (fr != FR_OK) { free(chunk); set_err("SD open failed (pool)"); goto out; }
-    fmp3_open = true;
+    // ---- PHASE 1: NETWORK ONLY -------------------------------------------
+    // The card is not touched while the TLS session is live. Every SD failure
+    // on the bench looked like this: the FIRST f_write after the handshake
+    // returned FR_DISK_ERR (fr=1) because sdmmc_read_sectors_dma timed out
+    // (0x107) on the FAT read, and once FatFS latches a disk error the retries
+    // all fail instantly — so retrying was never going to work. Interleaving
+    // 4 KB card writes with an active TLS download is the thing that breaks;
+    // buffering the body and writing it afterwards separates the two.
+    //
+    // Previews are capped at 90 s, i.e. ~1.5 MB at 128 kbps, so this fits PSRAM
+    // comfortably. A direct-URL fetch that is too big (or sends no length)
+    // falls back to the old streaming path, which now at least fails cleanly.
+    uint8_t *body = NULL;
     int total = 0, r;
-    for (;;) {
-        r = esp_http_client_read(client, chunk, 4096);
-        if (r < 0) { free(chunk); set_err("mp3 read error"); goto out; }
-        if (r == 0) break;
-        // f_write's result used to be discarded, so a failed card write was
-        // INVISIBLE: total kept counting bytes read off the network, the
-        // "empty mp3" check below passed, and the decoder was handed a 0-byte
-        // file. An SD timeout (sdmmc 0x107) on the bench then took the module
-        // down inside mp3.c's progress maths. Fail loudly instead.
-        UINT bw = 0;
-        FRESULT wr;
+    if (content_length > 0 && content_length <= FS_MEM_MP3_MAX)
+        body = heap_caps_malloc(content_length, MALLOC_CAP_SPIRAM);
+
+    if (body) {
+        while (total < content_length) {
+            r = esp_http_client_read(client, (char *)body + total, content_length - total);
+            if (r < 0) { heap_caps_free(body); set_err("mp3 read error"); goto out; }
+            if (r == 0) break;
+            total += r;
+            fsm.progress = (int)((int64_t)total * 100 / content_length);
+            stack_watch();
+        }
+        // network done — hand the radio back before going near the card
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        client = NULL;
+
+        // ---- PHASE 2: CARD ONLY ------------------------------------------
+        FRESULT fr;
         sd_lock_take();
-        wr = f_write(&fmp3, chunk, r, &bw);
+        fr = f_open(&fmp3, pool_path, FA_CREATE_ALWAYS | FA_WRITE);
         sd_lock_give();
-        if (wr != FR_OK || bw != (UINT)r) { free(chunk); set_err("SD write failed"); goto out; }
-        total += r;
-        if (total > FS_MAX_MP3_BYTES) { free(chunk); set_err("mp3 too large"); goto out; }
-        if (content_length > 0) fsm.progress = total / (content_length / 100 ? content_length / 100 : 1);
-        stack_watch();
+        if (fr != FR_OK) { heap_caps_free(body); set_err("SD open failed (pool)"); goto out; }
+        fmp3_open = true;
+        int off = 0;
+        while (off < total) {
+            UINT bw = 0;
+            int want = total - off; if (want > 4096) want = 4096;
+            sd_lock_take();
+            fr = f_write(&fmp3, body + off, (UINT)want, &bw);
+            sd_lock_give();
+            if (fr != FR_OK || bw == 0) {
+                ESP_LOGE(TAG, "SD write failed at %d/%d (fr=%d bw=%u)", off, total, fr, (unsigned)bw);
+                heap_caps_free(body);
+                set_err("SD write failed");
+                goto out;
+            }
+            off += (int)bw;
+        }
+        heap_caps_free(body);
+    } else {
+        // streaming fallback: no content-length, or too big to buffer
+        char *chunk = malloc(4096);
+        if (!chunk) { set_err("out of memory"); goto out; }
+        FRESULT fr;
+        sd_lock_take();
+        fr = f_open(&fmp3, pool_path, FA_CREATE_ALWAYS | FA_WRITE);
+        sd_lock_give();
+        if (fr != FR_OK) { free(chunk); set_err("SD open failed (pool)"); goto out; }
+        fmp3_open = true;
+        for (;;) {
+            r = esp_http_client_read(client, chunk, 4096);
+            if (r < 0) { free(chunk); set_err("mp3 read error"); goto out; }
+            if (r == 0) break;
+            UINT bw = 0;
+            sd_lock_take();
+            fr = f_write(&fmp3, chunk, (UINT)r, &bw);
+            sd_lock_give();
+            if (fr != FR_OK || bw != (UINT)r) { free(chunk); set_err("SD write failed"); goto out; }
+            total += r;
+            if (total > FS_MAX_MP3_BYTES) { free(chunk); set_err("mp3 too large"); goto out; }
+            if (content_length > 0) fsm.progress = total / (content_length / 100 ? content_length / 100 : 1);
+            stack_watch();
+        }
+        free(chunk);
     }
-    free(chunk);
     sd_lock_take();
     f_close(&fmp3);
     sd_lock_give();
-    fmp3_open = false;
     if (total == 0) { set_err("empty mp3"); goto out; }
 
-    // Release the HTTPS session NOW. It used to live until the `out:` label, so
-    // an mbedtls context sat on internal RAM through the decode AND the install
-    // — and install's two small buffers (4 KB + 8 KB for the mono->stereo
-    // expand) then failed to allocate, reported only as "install failed".
-    // Nothing below this point touches the network.
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
-    client = NULL;
+    // Release the HTTPS session if the streaming fallback still holds it: an
+    // mbedtls context must not sit on internal RAM through the decode AND the
+    // install, or install's buffers fail to allocate.
+    if (client) {
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        client = NULL;
+    }
 
     // --- decode to a temp RAW (44.1 kHz only: the decoder does not resample) ---
     fsm.phase = FS_DECODE;
@@ -386,14 +433,19 @@ static int start_job(const char *id, const char *url, const char *name)
 int fs_get_start(const char *id, const char *name)   { return start_job(id, "", name); }
 int fs_fetch_start(const char *url, const char *name){ return start_job("", url, name); }
 
-// Library-safe take id: alnum/_/- only, <=12 chars (the pool is FatFS 8.3 with
-// room for a prefix). Shared so a sound fetched from the panel and the same
-// sound fetched from the browser land under the SAME name.
+// Library-safe take id: alnum/_/- only, **<= 8 chars**.
+//
+// This card is FatFS 8.3 with LFN OFF, so 8 characters is a hard limit, not a
+// style choice — f_open on a 12-char stem returns FR_INVALID_NAME and the
+// install fails. The cap here used to be 12 (inherited from the web card's
+// prompt), which meant every fetch that used the sound's OWN title failed,
+// while hand-typed short names worked: "Tabla-Down.wav" became "Tabla-Downwa"
+// and never opened. See the same rule stated in machine_editor/editor.c.
 void fs_safe_name(const char *raw, const char *id, char *out, size_t n)
 {
     size_t w = 0;
     if (raw)
-        for (size_t i = 0; raw[i] && w < 12 && w + 1 < n; i++)
+        for (size_t i = 0; raw[i] && w < 8 && w + 1 < n; i++)
             if (isalnum((unsigned char)raw[i]) || raw[i] == '_' || raw[i] == '-')
                 out[w++] = raw[i];
     out[w] = 0;
