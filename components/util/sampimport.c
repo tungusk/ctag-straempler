@@ -205,18 +205,38 @@ static int convert_pcm(imp_src_t *src, const char *dst_vfs)
     sd_lock_give();
     if (!out) return -1;
 
-    uint8_t *raw = heap_caps_malloc(IMP_CHUNK * 8, MALLOC_CAP_DMA);   // <=8 B/frame
-    int16_t *pcm = heap_caps_malloc(IMP_CHUNK * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    // `raw` is the SD staging buffer and must be INTERNAL (SDMMC DMA cannot
+    // target PSRAM), so it competes for the scarce pool. At IMP_CHUNK it wants
+    // 16 KB contiguous — fine from the import task, but the Freesound pipeline
+    // calls this with its own 40 KB task stack already placed, leaving a
+    // largest free block of ~10 KB. It then failed with no message at all and
+    // surfaced as a bare "convert failed" (2026-09-13). Halve the burst until
+    // it fits rather than refusing to convert; smaller bursts only mean more
+    // SD round trips, and this is offline work.
+    size_t chunk = IMP_CHUNK;
+    uint8_t *raw = NULL;
+    while (chunk >= 256 && !(raw = heap_caps_malloc(chunk * 8, MALLOC_CAP_DMA)))
+        chunk /= 2;
+    if (!raw) {
+        ESP_LOGE(TAG, "no internal RAM for the read buffer (largest block %u)",
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    } else if (chunk != IMP_CHUNK) {
+        ESP_LOGW(TAG, "read buffer fell back to %u frames (largest block %u)",
+                 (unsigned)chunk,
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    }
+    int16_t *pcm = raw ? heap_caps_malloc(chunk * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM) : NULL;
     // output can exceed input frames when upsampling (worst x5.5 for 8k)
-    size_t out_cap = IMP_CHUNK * 6 + 8;
-    int16_t *res = heap_caps_malloc(out_cap * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    size_t out_cap = chunk * 6 + 8;
+    int16_t *res = raw ? heap_caps_malloc(out_cap * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM) : NULL;
     int rc = -1;
+    if (!pcm || !res) ESP_LOGE(TAG, "no PSRAM for the convert buffers");
     if (raw && pcm && res) {
         imp_rs_t rs = {0};
         rs.step = (double)src->rate / 44100.0;
         rc = 0;
         for (;;) {
-            size_t got = src_read(src, pcm, IMP_CHUNK, raw);
+            size_t got = src_read(src, pcm, chunk, raw);
             if (got == 0) break;
             size_t nout = (src->rate == 44100)
                 ? got                              // fast path: no resample

@@ -19,13 +19,13 @@
 #include "fileio.h"
 #include "sd_lock.h"
 #include "mp3.h"
+#include "sampimport.h"
 #include "fs_auth.h"
 #include "sampplay.h"
 #include "sampfile.h"
 #include "fs_priv.h"
 
 static const char *TAG = "FSND-M";
-#define FS_TMP_RAW "/raw/FSTMP.RAW"
 // THE DOWNLOAD USED TO PANIC THE WHOLE MODULE. This task was 8192*2 = 16384
 // bytes and MEASURED PEAK USAGE IS 28168 — it overflowed its stack every time,
 // took the device down with it, and the reboot made the failure invisible:
@@ -123,80 +123,17 @@ int fs_http_get(const char *url, char **out, int max_len)
     return len;
 }
 
-static void decode_progress(int pct, void *arg)
+// Write the sidecar so the take lists like any other pool sample (/files only
+// shows ids that have one). The audio itself is written by samp_import_file,
+// which replaced this function's hand-rolled RAW copy and mono->stereo expand
+// on 2026-09-13 — that copy could only handle 44.1 kHz material, which is what
+// made most of freesound unusable.
+static int fs_write_sidecar(const char *name, cJSON *meta, const char *id)
 {
-    (void)arg;
-    fsm.progress = pct;
-}
-
-// copy the decoded RAW into the usr/ library (mono → stereo expand) and write
-// the sidecar so the sample shows up like any web-uploaded one
-static int fs_install(const char *tmp_path, const char *name, int channels,
-                      cJSON *meta, const char *id)
-{
-    char usr_path[48], jsn_path[64];
-    snprintf(usr_path, sizeof(usr_path), "/usr/%s.RAW", name);
-
-    FIL in, out;
-    FRESULT fr;
-    sd_lock_take();
-    fr = f_open(&in, tmp_path, FA_READ);
-    sd_lock_give();
-    // "install failed" on its own said nothing — which step and which FatFS
-    // code is the whole diagnosis
-    if (fr != FR_OK) { ESP_LOGE(TAG, "install: open %s for read failed (fr=%d)", tmp_path, fr); return -1; }
-    sd_lock_take();
-    fr = f_open(&out, usr_path, FA_CREATE_ALWAYS | FA_WRITE);
-    sd_lock_give();
-    if (fr != FR_OK) {
-        ESP_LOGE(TAG, "install: open %s for write failed (fr=%d)", usr_path, fr);
-        sd_lock_take(); f_close(&in); sd_lock_give();
-        return -1;
-    }
-
-    uint32_t sz = f_size(&in), done = 0;
-    ESP_LOGI(TAG, "install: internal free=%u largest=%u, need 2048+%d",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-             channels == 1 ? 4096 : 0);
-    // 2 KB in / 4 KB out, not 4 KB / 8 KB. By this point the pipeline's own
-    // 40 KB task stack has carved the internal heap up: ~30 KB free but the
-    // LARGEST block is 10 KB, so taking 4 KB first left nothing that could hold
-    // 8 KB and the install died with a bare "install failed". The bigger buffer
-    // is also claimed FIRST now, so it gets the best block. Copy speed is
-    // irrelevant here — this runs once per download, off the audio path.
-    int16_t *obuf = (channels == 1) ? malloc(4096) : NULL;
-    int16_t *ibuf = malloc(2048);                              // internal RAM
-    int rc = (ibuf && (channels != 1 || obuf)) ? 0 : -1;
-    if (rc != 0) ESP_LOGE(TAG, "install: buffer alloc failed (ch=%d)", channels);
-    while (rc == 0) {
-        UINT nr = 0, bw = 0;
-        sd_lock_take();
-        f_read(&in, ibuf, 2048, &nr);
-        sd_lock_give();
-        if (nr == 0) break;
-        if (channels == 1) {
-            int n = nr / 2;
-            for (int i = 0; i < n; i++) { obuf[i * 2] = ibuf[i]; obuf[i * 2 + 1] = ibuf[i]; }
-            sd_lock_take(); f_write(&out, obuf, (UINT)n * 4, &bw); sd_lock_give();
-        } else {
-            sd_lock_take(); f_write(&out, ibuf, nr, &bw); sd_lock_give();
-        }
-        done += nr;
-        if (sz) fsm.progress = (int)((uint64_t)done * 100 / sz);
-    }
-    free(ibuf);
-    free(obuf);
-    sd_lock_take();
-    f_close(&in);
-    f_close(&out);
-    f_unlink(tmp_path);
-    sd_lock_give();
-    if (rc != 0) return rc;
-
+    char jsn_path[64];
     cJSON *sc = cJSON_CreateObject();
     char tmp[80];
-    snprintf(tmp, sizeof(tmp), "%s.raw", name);
+    snprintf(tmp, sizeof(tmp), "%s.wav", name);
     cJSON_AddStringToObject(sc, "name", tmp);
     cJSON_AddStringToObject(sc, "id", name);
     cJSON *j = cJSON_GetObjectItem(meta, "name");
@@ -273,7 +210,9 @@ static void fs_pipeline(void *pv)
     }
 
     // --- download the MP3 → /pool (kept as cache, like the classic browse) ---
-    snprintf(pool_path, sizeof(pool_path), "/pool/%s.mp3", job->id[0] ? job->id : job->name);
+    // into the POOL dir, not a side cache: samp_import_file converts in place
+    // and replaces the source, so the .WAV lands exactly where it belongs
+    snprintf(pool_path, sizeof(pool_path), "/usr/%s.mp3", job->name);
 
     esp_http_client_config_t config = { .url = mp3_url, .method = HTTP_METHOD_GET, .timeout_ms = 20000,
                                         .crt_bundle_attach = esp_crt_bundle_attach };
@@ -376,43 +315,44 @@ static void fs_pipeline(void *pv)
         client = NULL;
     }
 
-    // --- decode to a temp RAW (44.1 kHz only: the decoder does not resample) ---
+    // --- convert in place, via the SAME path the Upload tab uses ---
+    // This used to decode itself and then REJECT anything that was not already
+    // 44.1 kHz — which is most of freesound, whose previews are largely 48 kHz,
+    // so the machine refused a large share of its own library. util/sampimport
+    // has decoded-and-resampled any rate from 8 to 96 kHz since 2026-07-13;
+    // Freesound simply never called it. samp_import_file() replaces
+    // usr/<name>.mp3 with a native 16-bit 44.1 kHz stereo usr/<name>.WAV,
+    // handling the mono expand too, so fs_install's hand-rolled copy is gone.
     fsm.phase = FS_DECODE;
     fsm.progress = 0;
     stack_watch();
-    ESP_LOGI(TAG, "pre-decode: internal free=%u largest=%u",
+    ESP_LOGI(TAG, "pre-convert: internal free=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    int channels = 2, samprate = 44100;
-    if (decodeMP3FileSync(pool_path, FS_TMP_RAW, &channels, &samprate, decode_progress, NULL) != 0) {
-        set_err("decode failed");
-        goto out;
-    }
-    if (samprate != 44100) {
-        char e[48];
-        snprintf(e, sizeof(e), "mp3 is %d Hz, need 44100", samprate);
+    char vfs_mp3[96];
+    snprintf(vfs_mp3, sizeof(vfs_mp3), "/sdcard%s", pool_path);
+    if (samp_import_file(vfs_mp3) < 0) {
         sd_lock_take();
-        f_unlink(FS_TMP_RAW);
+        f_unlink(pool_path);                 // don't leave an mp3 the pool can't play
         sd_lock_give();
-        set_err(e);
+        set_err("convert failed");
         goto out;
     }
 
-    // --- install into the library ---
+    // --- sidecar, so the take lists like any other pool sample ---
     fsm.phase = FS_INSTALL;
     fsm.progress = 0;
     stack_watch();
-    if (fs_install(FS_TMP_RAW, job->name, channels, root, job->id) != 0) {
-        set_err("install failed");
+    if (fs_write_sidecar(job->name, root, job->id) != 0) {
+        set_err("sidecar write failed");
         goto out;
     }
 
     fsm.phase = FS_DONE;
     fsm.progress = 100;
     fsm.busy = false;
-    ESP_LOGI(TAG, "installed %s as usr/%s (%s)",
-             job->id[0] ? job->id : job->url, job->name,
-             channels == 1 ? "mono>stereo" : "stereo");
+    ESP_LOGI(TAG, "installed %s as usr/%s.WAV",
+             job->id[0] ? job->id : job->url, job->name);
 
 out:
     stack_watch();
