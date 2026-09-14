@@ -74,6 +74,12 @@ bool editor_auditioning(void);
 void editor_audition_window(void);      // re-arm the loop after in/out moved
 uint32_t editor_play_pos(void);
 
+// TR1 toggles the audition. The trigger arrives in the AUDIO task, but starting
+// playback creates a reader task and opens a file on the card — none of which
+// belongs in process(). So process() only raises a flag and the live page's
+// tick consumes it, the same deferral the polled knobs use to arm autosave.
+bool editor_trig_consume(void);          // read-and-clear (UI task only)
+
 // ---- clipboard (streaming, file-backed) ------------------------------------
 int  editor_copy(void);                 // [in,out) -> clipboard
 int  editor_cut(void);                  // clipboard, and a new take without the range

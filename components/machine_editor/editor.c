@@ -388,6 +388,16 @@ void editor_audition_window(void)
 
 uint32_t editor_play_pos(void) { return s_play ? sampplay_pos(s_play) : 0; }
 
+// raised by process() on a TR1 edge, consumed by the live page (see the header)
+static volatile bool s_tr_req = false;
+
+bool editor_trig_consume(void)
+{
+    bool r = s_tr_req;
+    s_tr_req = false;
+    return r;
+}
+
 // ---- clipboard + slice ------------------------------------------------------
 // All three clipboard ops are STREAMING copies through a temp file, so they
 // inherit the engine's any-length property. Tape's clipboard is a PSRAM bank
@@ -541,13 +551,24 @@ static void editor_stop(void)
 }
 static void editor_process(int32_t out[MACHINE_BLOCK], const int32_t in[MACHINE_BLOCK], const machine_io_t *io)
 {
-    (void)in; (void)io;
+    (void)in;
+    // TR1 = play/stop, the same job it has on Tape. Only the FLAG is set here;
+    // the actual start/stop runs on the UI task.
+    if (io && (io->trig_rising & 1)) s_tr_req = true;
     // Audible since 2026-09-12: the crop window loops while you drag it, which
     // is the difference between editing and guessing.
     sampplay_render(s_play, out, MACHINE_BLOCK / 2, 1.0f);
 }
 static cJSON *editor_preset_save(void) { return cJSON_CreateObject(); }
 static void editor_preset_load(const cJSON *node) { (void)node; }
+
+// what the front panel does here, for the web CV-matrix view
+static int editor_inputs(machine_input_t *o, int max)
+{
+    int n = 0;
+    MI_ADD(mi("TR1 audition play/stop", 8));    // 8 = TR1
+    return n;
+}
 
 extern const machine_ui_t editor_menu_ui;
 
@@ -559,4 +580,5 @@ const machine_t machine_editor = {
     .preset_save = editor_preset_save,
     .preset_load = editor_preset_load,
     .ui = &editor_menu_ui,
+    .inputs = editor_inputs,
 };

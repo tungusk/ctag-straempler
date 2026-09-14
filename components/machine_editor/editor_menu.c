@@ -126,7 +126,9 @@ static void readout(void)
     snprintf(s, sizeof(s), "IN %s   OUT %s", a, b);
     TFT_print(s, 6, y);
     _fg = s_wave.grabbed ? (color_t){30, 215, 90} : TFT_CYAN;
-    snprintf(s, sizeof(s), "%s%s", CN[s_wave.cursor], s_wave.grabbed ? "*" : "");
+    // the play marker gives TR1 visible feedback without costing a redraw
+    snprintf(s, sizeof(s), "%s%s%s", editor_auditioning() ? "> " : "",
+             CN[s_wave.cursor], s_wave.grabbed ? "*" : "");
     TFT_print(s, _width - 6 - TFT_getStringWidth(s), y);
     s_rd_sig = rd_sig();
 }
@@ -136,7 +138,7 @@ static void hint(void)
     _bg = TFT_BLACK; _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     CLEAR_RECT(0, _height - TFT_getfontheight() - 2, _width, TFT_getfontheight() + 2);
-    TFT_print("turn:pick  press:grab  hold:setup", 6, _height - TFT_getfontheight() - 1);
+    TFT_print("turn:pick  press:grab  hold:setup  TR1:play/stop", 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
@@ -162,6 +164,11 @@ static int editor_live_handler(int it_id, int event, void *ev_data)
             break;
 
         case EV_TIMER_REPEATING_FAST:
+            // TR1 edges land here, not in the audio task that saw them
+            if (editor_trig_consume()) {
+                editor_audition(!editor_auditioning());
+                readout();
+            }
             // the playhead is the only thing allowed to move at 300 ms — a full
             // strip repaint on this tick would starve the PSRAM audio path
             if (editor_auditioning()) { wave_sync(); wave_edit_playhead(&s_wave); }
