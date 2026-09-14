@@ -124,23 +124,37 @@ static int fs_install(const char *tmp_path, const char *name, int channels,
     sd_lock_take();
     fr = f_open(&in, tmp_path, FA_READ);
     sd_lock_give();
-    if (fr != FR_OK) return -1;
+    // "install failed" on its own said nothing — which step and which FatFS
+    // code is the whole diagnosis
+    if (fr != FR_OK) { ESP_LOGE(TAG, "install: open %s for read failed (fr=%d)", tmp_path, fr); return -1; }
     sd_lock_take();
     fr = f_open(&out, usr_path, FA_CREATE_ALWAYS | FA_WRITE);
     sd_lock_give();
     if (fr != FR_OK) {
+        ESP_LOGE(TAG, "install: open %s for write failed (fr=%d)", usr_path, fr);
         sd_lock_take(); f_close(&in); sd_lock_give();
         return -1;
     }
 
     uint32_t sz = f_size(&in), done = 0;
-    int16_t *ibuf = malloc(4096);                              // internal RAM
-    int16_t *obuf = (channels == 1) ? malloc(8192) : NULL;
+    ESP_LOGI(TAG, "install: internal free=%u largest=%u, need 2048+%d",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             channels == 1 ? 4096 : 0);
+    // 2 KB in / 4 KB out, not 4 KB / 8 KB. By this point the pipeline's own
+    // 40 KB task stack has carved the internal heap up: ~30 KB free but the
+    // LARGEST block is 10 KB, so taking 4 KB first left nothing that could hold
+    // 8 KB and the install died with a bare "install failed". The bigger buffer
+    // is also claimed FIRST now, so it gets the best block. Copy speed is
+    // irrelevant here — this runs once per download, off the audio path.
+    int16_t *obuf = (channels == 1) ? malloc(4096) : NULL;
+    int16_t *ibuf = malloc(2048);                              // internal RAM
     int rc = (ibuf && (channels != 1 || obuf)) ? 0 : -1;
+    if (rc != 0) ESP_LOGE(TAG, "install: buffer alloc failed (ch=%d)", channels);
     while (rc == 0) {
         UINT nr = 0, bw = 0;
         sd_lock_take();
-        f_read(&in, ibuf, 4096, &nr);
+        f_read(&in, ibuf, 2048, &nr);
         sd_lock_give();
         if (nr == 0) break;
         if (channels == 1) {
@@ -234,12 +248,6 @@ static void fs_pipeline(void *pv)
 
     // --- download the MP3 → /pool (kept as cache, like the classic browse) ---
     snprintf(pool_path, sizeof(pool_path), "/pool/%s.mp3", job->id[0] ? job->id : job->name);
-    FRESULT fr;
-    sd_lock_take();
-    fr = f_open(&fmp3, pool_path, FA_CREATE_ALWAYS | FA_WRITE);
-    sd_lock_give();
-    if (fr != FR_OK) { set_err("SD open failed (pool)"); goto out; }
-    fmp3_open = true;
 
     esp_http_client_config_t config = { .url = mp3_url, .method = HTTP_METHOD_GET, .timeout_ms = 20000,
                                         .crt_bundle_attach = esp_crt_bundle_attach };
@@ -250,15 +258,34 @@ static void fs_pipeline(void *pv)
     if (content_length > FS_MAX_MP3_BYTES) { set_err("mp3 too large"); goto out; }
     char *chunk = malloc(4096);                    // internal RAM for the SD writes
     if (!chunk) { set_err("out of memory"); goto out; }
+
+    // The card file is opened HERE, not before the request. It used to be held
+    // open across the ~2 s TLS handshake, and the first f_write after that
+    // handshake failed with an sdmmc timeout (0x107) every single time. Opening
+    // it only once there is something to write is better structure anyway — no
+    // empty file left behind when the fetch never starts.
+    FRESULT fr;
+    sd_lock_take();
+    fr = f_open(&fmp3, pool_path, FA_CREATE_ALWAYS | FA_WRITE);
+    sd_lock_give();
+    if (fr != FR_OK) { free(chunk); set_err("SD open failed (pool)"); goto out; }
+    fmp3_open = true;
     int total = 0, r;
     for (;;) {
         r = esp_http_client_read(client, chunk, 4096);
         if (r < 0) { free(chunk); set_err("mp3 read error"); goto out; }
         if (r == 0) break;
-        UINT bw;
+        // f_write's result used to be discarded, so a failed card write was
+        // INVISIBLE: total kept counting bytes read off the network, the
+        // "empty mp3" check below passed, and the decoder was handed a 0-byte
+        // file. An SD timeout (sdmmc 0x107) on the bench then took the module
+        // down inside mp3.c's progress maths. Fail loudly instead.
+        UINT bw = 0;
+        FRESULT wr;
         sd_lock_take();
-        f_write(&fmp3, chunk, r, &bw);
+        wr = f_write(&fmp3, chunk, r, &bw);
         sd_lock_give();
+        if (wr != FR_OK || bw != (UINT)r) { free(chunk); set_err("SD write failed"); goto out; }
         total += r;
         if (total > FS_MAX_MP3_BYTES) { free(chunk); set_err("mp3 too large"); goto out; }
         if (content_length > 0) fsm.progress = total / (content_length / 100 ? content_length / 100 : 1);
@@ -271,10 +298,22 @@ static void fs_pipeline(void *pv)
     fmp3_open = false;
     if (total == 0) { set_err("empty mp3"); goto out; }
 
+    // Release the HTTPS session NOW. It used to live until the `out:` label, so
+    // an mbedtls context sat on internal RAM through the decode AND the install
+    // — and install's two small buffers (4 KB + 8 KB for the mono->stereo
+    // expand) then failed to allocate, reported only as "install failed".
+    // Nothing below this point touches the network.
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    client = NULL;
+
     // --- decode to a temp RAW (44.1 kHz only: the decoder does not resample) ---
     fsm.phase = FS_DECODE;
     fsm.progress = 0;
     stack_watch();
+    ESP_LOGI(TAG, "pre-decode: internal free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     int channels = 2, samprate = 44100;
     if (decodeMP3FileSync(pool_path, FS_TMP_RAW, &channels, &samprate, decode_progress, NULL) != 0) {
         set_err("decode failed");

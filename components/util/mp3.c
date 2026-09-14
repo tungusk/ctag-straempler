@@ -36,6 +36,19 @@ void initMP3Engine(xQueueHandle queueui){
 static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *out_samprate,
                    void (*pcb)(int pct, void *arg), void *pcb_arg){
     uint32_t toRead = sz, progress = 0;
+
+    // A ZERO-LENGTH INPUT PANICS THE MODULE. Both progress calculations below
+    // divide by sz, so a 0-byte mp3 took the whole device down with
+    // "Guru Meditation Error: IntegerDivideByZero" (caught on serial
+    // 2026-09-13: an SD write had silently failed during a Freesound download,
+    // leaving /pool/<id>.mp3 empty, and the decoder then divided by its size).
+    // Every caller already treats "no output" as failure, so returning here
+    // turns a crash into an ordinary error.
+    if(sz == 0){
+        ESP_LOGE("MP3", "zero-length mp3 — nothing to decode");
+        return;
+    }
+
     HMP3Decoder decoder = MP3InitDecoder();
 
     if(decoder == NULL){
@@ -54,8 +67,7 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *ou
         f_read(mp3File, input, MAX_FRAME_SIZE, &nRead);
         sd_lock_give();
         toRead -= nRead;
-        progress = (sz - toRead) * 100;
-        progress /= sz;
+        progress = sz ? (sz - toRead) * 100 / sz : 0;
         if(pcb) pcb((int)progress, pcb_arg);
 
         if(nRead == 0)
@@ -130,8 +142,7 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *ou
         f_read(mp3File, input + bytesLeft, MAX_FRAME_SIZE - bytesLeft, &nRead);
         sd_lock_give();
         toRead -= nRead;
-        progress = (sz - toRead) * 100;
-        progress /= sz;
+        progress = sz ? (sz - toRead) * 100 / sz : 0;
         if(pcb && progress != oldProgress){
             pcb((int)progress, pcb_arg);
         }
