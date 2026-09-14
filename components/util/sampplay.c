@@ -13,13 +13,18 @@
 static const char *TAG = "SAMPPLAY";
 
 #define SP_DEF_RING   44100          // ~1 s stereo = 176 KB PSRAM
-#define SP_CHUNK      2048           // frames per SD burst (8 KB int16 stereo)
+#define SP_CHUNK      1024           // frames per SD burst (4 KB int16 stereo, ~23 ms)
 #define SP_MIN_WIN    64             // a window shorter than this is not a sound
 
 struct sampplay_s {
     int16_t  *ring;                  // PSRAM, ring_frames * 2 int16
     uint32_t  ring_frames;
-    int16_t  *stage;                 // internal RAM: SDMMC DMA CANNOT target PSRAM
+    int16_t  *stage;                 // internal RAM (SDMMC DMA CANNOT target PSRAM),
+                                     // allocated only while a file is OPEN — see
+                                     // sampplay_open(). Internal RAM is the scarce
+                                     // pool on this part: holding it idle is what
+                                     // starved the Freesound search task of the
+                                     // 32 KB block it needs for a TLS session.
     FILE     *f;
     sampfile_t sf;
 
@@ -44,6 +49,7 @@ static void fill_once(sampplay_t *p)
     if (want == 0) return;
 
     // never read past the loop end — wrap to in_pt instead
+    if (!p->stage) return;                      // closed underneath us
     uint32_t left = (p->src < p->out_pt) ? (p->out_pt - p->src) : 0;
     if (left == 0) { p->src = p->in_pt; left = p->out_pt - p->in_pt; }
     if (want > left) want = left;
@@ -101,16 +107,15 @@ sampplay_t *sampplay_create(uint32_t ring_frames)
     if (!p) return NULL;
     p->ring_frames = ring_frames ? ring_frames : SP_DEF_RING;
     p->ring  = heap_caps_malloc(p->ring_frames * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    p->stage = heap_caps_malloc(SP_CHUNK * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
-    if (!p->ring || !p->stage) {
-        ESP_LOGE(TAG, "ring/stage alloc failed");
+    if (!p->ring) {
+        ESP_LOGE(TAG, "ring alloc failed");
         sampplay_destroy(p);
         return NULL;
     }
     p->run = true;
     // unpinned and modest priority: it touches SD, and pinning file tasks to
     // core 0 is what made WiFi downloads click (see fs_machine.c)
-    if (xTaskCreate(reader_task, "sampplay", 4096, p, 4, &p->task) != pdPASS) {
+    if (xTaskCreate(reader_task, "sampplay", 3072, p, 4, &p->task) != pdPASS) {
         ESP_LOGE(TAG, "reader task create failed");
         p->run = false;
         sampplay_destroy(p);
@@ -126,7 +131,7 @@ void sampplay_destroy(sampplay_t *p)
     p->gate = false;
     p->run = false;
     for (int i = 0; i < 100 && p->alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
-    sampplay_close(p);
+    sampplay_close(p);                  // frees stage
     if (p->ring)  heap_caps_free(p->ring);
     if (p->stage) heap_caps_free(p->stage);
     free(p);
@@ -146,6 +151,13 @@ int sampplay_open(sampplay_t *p, const char *name)
     sd_lock_give();
     if (!f || sf.frames == 0) {
         if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
+        return -1;
+    }
+    // the DMA staging buffer lives only as long as the open file
+    p->stage = heap_caps_malloc(SP_CHUNK * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    if (!p->stage) {
+        sd_lock_take(); fclose(f); sd_lock_give();
+        ESP_LOGE(TAG, "stage alloc failed (internal RAM)");
         return -1;
     }
     p->sf = sf;
@@ -169,6 +181,7 @@ void sampplay_close(sampplay_t *p)
     sd_lock_take();
     fclose(f);
     sd_lock_give();
+    if (p->stage) { heap_caps_free(p->stage); p->stage = NULL; }
     memset(&p->sf, 0, sizeof(p->sf));
 }
 

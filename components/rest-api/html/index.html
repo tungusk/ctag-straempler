@@ -759,6 +759,7 @@ body.nosbar .sbar{display:none}
   <input id="fq" placeholder="kick drum" onkeydown="if(event.key==='Enter')fsSearch(1)">
   <button class="btn" style="flex:0 0 80px" onclick="fsSearch(1)">Search</button>
   </div>
+  <div class="row" id="fschips" style="flex-wrap:wrap;gap:4px"></div>
   <div class="row" id="fspg" style="display:none">
   <button class="btn" onclick="fsSearch(fsPage-1)" id="fsprev">&#8592; Prev</button>
   <span style="text-align:center;color:#666" id="fsinfo"></span>
@@ -1504,31 +1505,75 @@ function saveSet(){
   });
 }
 
-var fsPage=1,fsCount=0,fsPoll=null;
+var fsPage=1,fsCount=0,fsPoll=null,fsResPoll=null;
 
+// The search runs ON THE DEVICE (POST /fs/query), not in this page. The panel
+// and this card then render the same list from GET /fs/results, so a query
+// typed here shows up on the module's screen and lands in its recents — which
+// is the whole point: the web drives the machine, it does not shadow it.
 function fsSearch(page){
   var q=document.getElementById('fq').value.trim();
   if(!q)return;
   if(page<1)page=1;
   var m=document.getElementById('fsm');
-  m.className='msg';m.textContent='Searching…';
-  fetch('/fs/search?q='+encodeURIComponent(q)+'&page='+page).then(function(r){return r.json();}).then(function(d){
-    if(d.error){m.className='msg er';m.textContent=d.error;return;}
-    fsPage=page;fsCount=d.count||0;
-    var tb=document.getElementById('fstb'),h='';
-    (d.results||[]).forEach(function(s){
-      var nm=String(s.name||'').replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||('FS'+s.id);
-      h+='<tr><td>'+esc(s.name)+'</td><td>'+(s.duration!=null?s.duration.toFixed(1)+'s':'')+'</td><td>'+esc(s.username||'')+'</td>'
-        +'<td style="white-space:nowrap"><button class="btn" onclick="fsGet('+s.id+',\''+nm+'\')">&#11015; Get</button></td></tr>';
-    });
-    tb.innerHTML=h||'<tr><td colspan="4" style="color:#555;padding:12px">No results</td></tr>';
-    m.textContent=fsCount?fsCount+' results':'';
-    var pg=document.getElementById('fspg');
-    pg.style.display=fsCount>16?'flex':'none';
-    document.getElementById('fsinfo').textContent='page '+fsPage+' / '+Math.ceil(fsCount/16);
-    document.getElementById('fsprev').disabled=fsPage<=1;
-    document.getElementById('fsnext').disabled=fsPage>=Math.ceil(fsCount/16);
-  }).catch(function(){m.className='msg er';m.textContent='Search failed (is the Freesound machine active?)';});
+  m.className='msg';m.textContent='Searching\u2026';
+  fetch('/fs/query?q='+encodeURIComponent(q)+'&page='+page,{method:'POST'})
+    .then(function(r){return r.json();}).then(function(d){
+      if(d.error){m.className='msg er';m.textContent=d.error;return;}
+      fsResultsPoll();
+    }).catch(function(){m.className='msg er';m.textContent='Search failed (is the Freesound machine active?)';});
+}
+
+function fsChip(q,saved){
+  return '<button class="btn" style="flex:0 0 auto;padding:2px 8px;font-size:11px'
+    +(saved?';color:#4c9':'')+'" onclick="fsChipGo(\''+esc(q).replace(/'/g,"\\'")+'\')">'
+    +(saved?'\u2605 ':'')+esc(q)+'</button>';
+}
+function fsChipGo(q){document.getElementById('fq').value=q;fsSearch(1);}
+
+function fsRender(d){
+  var m=document.getElementById('fsm');
+  var tb=document.getElementById('fstb'),h='';
+  (d.results||[]).forEach(function(sd){
+    var nm=String(sd.name||'').replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||('FS'+sd.id);
+    h+='<tr><td>'+esc(sd.name)+'</td><td>'+(sd.dur!=null?sd.dur.toFixed(1)+'s':'')+'</td><td>'+esc(sd.user||'')+'</td>'
+      +'<td style="white-space:nowrap"><button class="btn" onclick="fsGet(\''+esc(sd.id)+'\',\''+nm+'\')">&#11015; Get</button></td></tr>';
+  });
+  if(d.state==='searching')tb.innerHTML='<tr><td colspan="4" style="color:#555;padding:12px">Searching\u2026</td></tr>';
+  else tb.innerHTML=h||'<tr><td colspan="4" style="color:#555;padding:12px">No results</td></tr>';
+
+  fsPage=d.page||1;fsCount=d.total||0;
+  var per=d.per_page||16,pages=Math.max(1,Math.ceil(fsCount/per));
+  var pg=document.getElementById('fspg');
+  pg.style.display=fsCount>per?'flex':'none';
+  document.getElementById('fsinfo').textContent='page '+fsPage+' / '+pages;
+  document.getElementById('fsprev').disabled=fsPage<=1;
+  document.getElementById('fsnext').disabled=fsPage>=pages;
+
+  // recents + saved, exactly the store the panel's Live page lists
+  var c='',seen={};
+  (d.saved||[]).forEach(function(q){if(!seen[q]){seen[q]=1;c+=fsChip(q,true);}});
+  (d.recents||[]).forEach(function(q){if(!seen[q]){seen[q]=1;c+=fsChip(q,false);}});
+  document.getElementById('fschips').innerHTML=c;
+
+  if(d.state==='error'){m.className='msg er';m.textContent=d.err||'search failed';}
+  else if(d.state==='ok'&&m.textContent.indexOf('Searching')===0){
+    m.className='msg';m.textContent=fsCount+' results for "'+d.query+'"';
+  }
+}
+
+function fsResultsPoll(){
+  fetch('/fs/results').then(function(r){return r.json();}).then(function(d){
+    fsRender(d);
+    if(fsResPoll)clearInterval(fsResPoll);
+    // keep polling only while the device is still working on it
+    if(d.state==='searching')fsResPoll=setInterval(function(){
+      fetch('/fs/results').then(function(r){return r.json();}).then(function(d2){
+        fsRender(d2);
+        if(d2.state!=='searching'&&fsResPoll){clearInterval(fsResPoll);fsResPoll=null;}
+      }).catch(function(){});
+    },600);
+  }).catch(function(){});
 }
 
 function fsStarted(d){
@@ -1544,7 +1589,7 @@ function fsGet(id,defName){
   var name=prompt('Save to library as (max 12 chars):',defName);
   if(name===null)return;
   name=name.replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||defName;
-  fetch('/fs/get?id='+id+'&name='+encodeURIComponent(name),{method:'POST'}).then(function(r){return r.json();}).then(fsStarted);
+  fetch('/fs/get?id='+encodeURIComponent(id)+'&name='+encodeURIComponent(name),{method:'POST'}).then(function(r){return r.json();}).then(fsStarted);
 }
 
 function fsFetch(){
@@ -3222,7 +3267,12 @@ var MACHCARD=[['fscard','Freesound'],['rdcard','Radio'],['edcard','Editor']];
 // — and, unlike before, they stop when you switch away rather than when you
 // happen to click another tab.
 function machCardPoll(name,on){
-  if(name==='Radio'){
+  if(name==='Freesound'){
+    // load whatever the DEVICE is already holding, so opening the card shows the
+    // panel's current result list and query store rather than an empty table
+    if(on)fsResultsPoll();
+    else if(fsResPoll){clearInterval(fsResPoll);fsResPoll=null;}
+  }else if(name==='Radio'){
     if(on){rdState();rdTimer=rdTimer||setInterval(rdState,1000);}
     else if(rdTimer){clearInterval(rdTimer);rdTimer=null;}
   }else if(name==='Editor'){

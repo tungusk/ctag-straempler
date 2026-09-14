@@ -4,6 +4,13 @@
 //   POST /fs/get?id=&name=    start the download/decode/install pipeline
 //   POST /fs/fetch?url=&name= same pipeline from a direct http(s) MP3 URL
 //   GET  /fs/state            pipeline phase/progress for polling
+//   POST /fs/query?q=&page=   run the DEVICE-side search (same one the panel runs)
+//   GET  /fs/results          the device's parsed results + query store
+//
+// /fs/search (the raw proxy) and /fs/query (the device search) are different on
+// purpose: the proxy hands freesound's JSON straight to a browser that wants to
+// parse it itself, while /fs/query drives the machine, so a query typed in the
+// browser lands in the SAME result list and recents the panel is showing.
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -11,6 +18,7 @@
 #include <esp_http_server.h>
 #include "esp_log.h"
 #include "fs_auth.h"
+#include "cJSON.h"
 #include "fs_priv.h"
 
 static bool q_param(httpd_req_t *req, const char *key, char *buf, size_t buflen)
@@ -149,10 +157,77 @@ static esp_err_t fs_fetch_handler(httpd_req_t *req)
     return send_json_status(req, "200 OK", "{\"ok\":true}");
 }
 
+static esp_err_t fs_query_handler(httpd_req_t *req)
+{
+    char q[FS_QUERY_LEN];
+    if (!q_param(req, "q", q, sizeof(q)) || !q[0])
+        return send_json_status(req, "400 Bad Request", "{\"error\":\"missing q\"}");
+    urldecode(q);
+    if (!fs_auth_ok())
+        return send_json_status(req, "403 Forbidden", "{\"error\":\"no freesound API key set\"}");
+
+    char ps[8];
+    int page = q_param(req, "page", ps, sizeof(ps)) ? atoi(ps) : 1;
+    if (page < 1) page = 1;
+
+    int r = fs_search_start(q, page);
+    if (r == -1) return send_json_status(req, "409 Conflict", "{\"error\":\"busy\"}");
+    if (r != 0)  return send_json_status(req, "503 Service Unavailable", "{\"error\":\"cannot start\"}");
+    return send_json_status(req, "200 OK", "{\"ok\":true}");
+}
+
+// The device's own view: what the panel is showing, so the web card renders the
+// same list instead of a second one that can disagree with it.
+static esp_err_t fs_results_handler(httpd_req_t *req)
+{
+    static const char *const ST[] = { "idle", "searching", "ok", "error" };
+    cJSON *o = cJSON_CreateObject();
+    int st = fsm.search_state;
+    if (st < 0 || st > 3) st = 0;
+    cJSON_AddStringToObject(o, "state", ST[st]);
+    cJSON_AddStringToObject(o, "query", fsm.last_query);
+    cJSON_AddNumberToObject(o, "page", fsm.page);
+    cJSON_AddNumberToObject(o, "total", fsm.total);
+    cJSON_AddNumberToObject(o, "per_page", FS_RESULTS_MAX);
+    if (fsm.serr[0]) cJSON_AddStringToObject(o, "err", fsm.serr);
+    // free-stack low-water mark for the search task, in bytes: the instrument
+    // that turns "it panicked" into a number (see fs_machine.c)
+    cJSON_AddNumberToObject(o, "stack_min", (double)fsm.search_stack_min);
+
+    cJSON *arr = cJSON_AddArrayToObject(o, "results");
+    int n = fsm.n_results;
+    if (n > FS_RESULTS_MAX) n = FS_RESULTS_MAX;
+    for (int i = 0; i < n; i++) {
+        const fs_result_t *r = &fsm.results[i];
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "id", r->id);
+        cJSON_AddStringToObject(e, "name", r->name);
+        cJSON_AddStringToObject(e, "user", r->user);
+        cJSON_AddNumberToObject(e, "dur", r->dur_ds / 10.0);
+        cJSON_AddItemToArray(arr, e);
+    }
+
+    cJSON *rc = cJSON_AddArrayToObject(o, "recents");
+    for (int i = 0; i < fsm.n_recents; i++) cJSON_AddItemToArray(rc, cJSON_CreateString(fsm.recents[i]));
+    cJSON *sv = cJSON_AddArrayToObject(o, "saved");
+    for (int i = 0; i < fsm.n_saved; i++) cJSON_AddItemToArray(sv, cJSON_CreateString(fsm.saved[i]));
+
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    esp_err_t rc2 = send_json_status(req, "200 OK", js ? js : "{}");
+    free(js);
+    return rc2;
+}
+
 const httpd_uri_t fs_web_uris[] = {
     { .uri = "/fs/search", .method = HTTP_GET,  .handler = fs_search_handler },
     { .uri = "/fs/state",  .method = HTTP_GET,  .handler = fs_state_handler },
     { .uri = "/fs/get",    .method = HTTP_POST, .handler = fs_get_handler },
     { .uri = "/fs/fetch",  .method = HTTP_POST, .handler = fs_fetch_handler },
+    { .uri = "/fs/query",  .method = HTTP_POST, .handler = fs_query_handler },
+    { .uri = "/fs/results",.method = HTTP_GET,  .handler = fs_results_handler },
 };
+_Static_assert(sizeof(fs_web_uris) / sizeof(fs_web_uris[0]) == FS_WEB_URIS_N,
+               "fs_web_uris[] and FS_WEB_URIS_N disagree — machine_ui_t.n_web_uris "
+               "is a hand-written count and a stale one silently drops endpoints");
 const int fs_web_n_uris = sizeof(fs_web_uris) / sizeof(fs_web_uris[0]);

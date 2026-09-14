@@ -21,6 +21,7 @@ enum { FS_SEARCH_IDLE = 0, FS_SEARCH_RUNNING, FS_SEARCH_OK, FS_SEARCH_ERR };
 #define FS_QUERY_LEN    48      // == TEXT_ENTRY_MAX + 1
 #define FS_RECENTS      6
 #define FS_SAVED        8
+#define FS_WEB_URIS_N   6      // keep in step with fs_web_uris[] (asserted there)
 
 typedef struct {
     char     id[12];

@@ -500,7 +500,7 @@ const machine_ui_t fs_menu_ui = {
     .register_pages = fs_register_pages,
     .main_event = fs_main_event,
     .web_uris = fs_web_uris,
-    .n_web_uris = 4,
+    .n_web_uris = FS_WEB_URIS_N,
     .boot_target = M_FS_LIVE,
     .setup = &fs_setup,
 };

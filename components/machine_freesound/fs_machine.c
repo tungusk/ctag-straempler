@@ -365,7 +365,14 @@ void fs_safe_name(const char *raw, const char *id, char *out, size_t n)
 // The web handler proxies raw JSON to the browser, which parses it there. The
 // panel cannot, so this runs the same query and parses it HERE into results[].
 // Own task, for the reason spelled out in fs_priv.h.
-#define FS_SEARCH_STACK (8192 * 4)
+// MEASURED on .85: a real search left 19080 of 24576 free, i.e. a ~5.5 KB peak.
+// TLS keeps its big buffers on the heap and the 40 KB body lives in PSRAM, so
+// this is nothing like the download task's 28 KB. 12288 is 2.2x the measured
+// peak — a wider margin than the pipeline's own 1.46x — and hands 12 KB of
+// INTERNAL RAM back, which is the pool that decides whether a download can
+// start at all. fsm.search_stack_min (in /fs/results) is the instrument; check
+// it before trimming further.
+#define FS_SEARCH_STACK 12288
 
 static volatile bool s_searching = false;
 
@@ -550,14 +557,20 @@ void fs_query_unsave(const char *q)
 
 
 // ---- audition ---------------------------------------------------------------
-// The player is created on machine start and torn down on stop, so a Freesound
-// that is not the active machine costs no PSRAM ring and no reader task.
+// The player is created ON FIRST AUDITION, not on machine start. Creating it
+// eagerly cost a reader task out of INTERNAL RAM for the whole session, and
+// internal RAM is the scarce pool here: it left the largest free block at
+// 38912 against the download task's 40960, so every fetch failed with "no RAM
+// for the download task" before a single sound could be heard. Searching and
+// downloading now pay nothing for a player that is not playing.
 static sampplay_t *s_play = NULL;
 static char s_au_name[24];
 
 int fs_audition(const char *name)
 {
-    if (!s_play || !name || !name[0]) return -1;
+    if (!name || !name[0]) return -1;
+    if (!s_play) s_play = sampplay_create(0);
+    if (!s_play) return -1;
     if (sampplay_open(s_play, name) != 0) return -1;
     strlcpy(s_au_name, name, sizeof(s_au_name));
     sampplay_play(s_play, true);
@@ -568,7 +581,10 @@ void fs_audition_stop(void)
 {
     if (!s_play) return;
     sampplay_play(s_play, false);
-    sampplay_close(s_play);
+    // tear the whole player down, not just the file: holding the reader task is
+    // what starves the next download (see the note above)
+    sampplay_destroy(s_play);
+    s_play = NULL;
     s_au_name[0] = 0;
 }
 
@@ -608,7 +624,6 @@ static esp_err_t fsnd_start(void)
         fsm.err[0] = 0;
     }
     s_au_name[0] = 0;
-    if (!s_play) s_play = sampplay_create(0);     // ~1 s ring
     audio_status_set_voices("freesound", "");
     return ESP_OK;
 }

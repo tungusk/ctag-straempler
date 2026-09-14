@@ -362,6 +362,9 @@ static sampplay_t *s_play = NULL;
 
 void editor_audition(bool on)
 {
+    // created on first use, destroyed when you stop: the reader task comes out
+    // of INTERNAL RAM, which is what the offline job tasks also need
+    if (on && !s_play) s_play = sampplay_create(0);
     if (!s_play) return;
     if (on) {
         if (!ed.src[0]) return;
@@ -370,7 +373,8 @@ void editor_audition(bool on)
         sampplay_play(s_play, true);
     } else {
         sampplay_play(s_play, false);
-        sampplay_close(s_play);
+        sampplay_destroy(s_play);
+        s_play = NULL;
     }
 }
 
@@ -526,7 +530,7 @@ static esp_err_t editor_start(void)
 {
     memset(&ed, 0, sizeof(ed));
     ed.state = ED_IDLE;
-    s_play = sampplay_create(0);          // ~1 s ring; NULL just means no audition
+    s_play = NULL;                        // created on first audition
     return ESP_OK;
 }
 static void editor_stop(void)
