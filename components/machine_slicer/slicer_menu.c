@@ -101,7 +101,12 @@ static void draw_file_box(void){
     _bg = TFT_BLACK; TFT_fillRect(EB_X + 1, FB_Y + 1, EB_W - 2, FB_H - 2, _bg);
     Font f = cfont; TFT_setFont(DEJAVU24_FONT, NULL);
     _fg = sl.sample[0] ? TFT_WHITE : TFT_LIGHTGREY;
-    char nm[28]; snprintf(nm, sizeof(nm), "%s", sl.sample[0] ? sl.sample : "(none)");
+    char nm[SAMPLE_ID_LEN + 8];
+    snprintf(nm, sizeof(nm), "%s", sl.sample[0] ? sl.sample : "(none)");
+    // a 32-char id does not fit this box in DEJAVU24 — drop a size first, then
+    // trim, so the common short name still gets the big type
+    if (TFT_getStringWidth(nm) > EB_W - 20) TFT_setFont(DEFAULT_FONT, NULL);
+    menuTFTEllipsize(nm, EB_W - 20);
     TFT_print(nm, EB_X + 10, FB_Y + FB_H/2 - TFT_getfontheight()/2);
     cfont = f;
     draw_slice_count();

@@ -118,7 +118,7 @@ static esp_err_t granular_start(void)
     cvmtx_init(&gr.mtx, gr_mtx_labels, GRM_N, gr_mtx_defaults);
     for (int i = 0; i <= 256; i++) s_hann[i] = 0.5f * (1.0f - cosf((float)M_PI * 2.0f * i / 256.0f));
 
-    char first[1][24];
+    char first[1][SAMPLE_ID_LEN];
     if (granular_list_samples(first, 1) > 0) granular_load(first[0]);
     audio_status_set_voices("granular", "");
     return ESP_OK;
@@ -228,7 +228,7 @@ int granular_load(const char *name)
     return 0;
 }
 
-int granular_list_samples(char out[][24], int max)
+int granular_list_samples(char out[][SAMPLE_ID_LEN], int max)
 {
     return sample_list(out, max);
 }

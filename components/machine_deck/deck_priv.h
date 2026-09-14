@@ -4,6 +4,7 @@
 #include "clock.h"
 #include "svf.h"
 #include "cvmtx.h"
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // CV matrix destinations (2026-09-12). Deck was written for the FIRST prototype,
 // where only K6 and K7 worked, so those two knobs carried FOUR jobs arbitrated
@@ -32,7 +33,7 @@ extern const char *const deck_mtx_labels[DKM_N];
 #define DK_LOW_WATER   (DK_RATE / 3)          // unmute once ~0.33 s is buffered
                                               // (ring keeps filling to 8 s) —
                                               // low so seeks/scrubs feel instant
-#define DK_NAME_LEN    24
+#define DK_NAME_LEN    SAMPLE_ID_LEN  // was 24; see SAMPLE_ID_LEN (sample_ram.h) — one definition for pool ids
 #define DK_WF_W        144            // waveform thumbnail columns
 
 // analysis envelope: 256-frame hops (~172 Hz) — resolves ~±1 BPM at 120

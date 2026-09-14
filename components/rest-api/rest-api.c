@@ -15,6 +15,7 @@
 #include "string_tools.h"
 #include "fileio.h"
 #include "sampfile.h"
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 #include "sampimport.h"
 #include "sd_lock.h"
 #include "disp_lock.h"
@@ -191,7 +192,7 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     // opens left are sidecar READS on bpm-cache misses. mtime is now the
     // FAT-packed date<<16|time — a sort key, which is all the web uses.
     typedef struct {
-        char     id[24];
+        char     id[SAMPLE_ID_LEN];
         uint32_t asize;          // audio container size (0 = none seen)
         uint32_t amt;            // audio FAT date<<16|time
         uint32_t jmt, jsz;       // sidecar stamp+size (bpm cache key)

@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // Freesound machine. The download → decode → install pipeline lands a preview
 // MP3 in the usr/ sample library (mono previews expanded to stereo); one
@@ -38,7 +39,7 @@ typedef struct {
     volatile int  progress;      // 0..100 within the current phase
     volatile bool busy;          // pipeline task alive
     char cur_id[16];
-    char cur_name[24];
+    char cur_name[SAMPLE_ID_LEN];
     char err[64];
     char last_query[FS_QUERY_LEN];   // persisted in the preset
 

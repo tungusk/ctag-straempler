@@ -203,7 +203,7 @@ static int fs_install(const char *tmp_path, const char *name, int channels,
     return 0;
 }
 
-typedef struct { char id[16]; char name[24]; char url[320]; } fs_job_t;
+typedef struct { char id[16]; char name[SAMPLE_ID_LEN]; char url[320]; } fs_job_t;
 
 static void fs_pipeline(void *pv)
 {
@@ -433,19 +433,18 @@ static int start_job(const char *id, const char *url, const char *name)
 int fs_get_start(const char *id, const char *name)   { return start_job(id, "", name); }
 int fs_fetch_start(const char *url, const char *name){ return start_job("", url, name); }
 
-// Library-safe take id: alnum/_/- only, **<= 8 chars**.
+// Library-safe take id: alnum/_/- only, up to SAMPLE_ID_LEN-1.
 //
-// This card is FatFS 8.3 with LFN OFF, so 8 characters is a hard limit, not a
-// style choice — f_open on a 12-char stem returns FR_INVALID_NAME and the
-// install fails. The cap here used to be 12 (inherited from the web card's
-// prompt), which meant every fetch that used the sound's OWN title failed,
-// while hand-typed short names worked: "Tabla-Down.wav" became "Tabla-Downwa"
-// and never opened. See the same rule stated in machine_editor/editor.c.
+// This was 8 while the card was FatFS 8.3 with LFN off, where a 12-char stem
+// made f_open return FR_INVALID_NAME and the install fail. LFN is on now
+// (CONFIG_FATFS_LFN_HEAP), so a sound keeps a recognisable slice of its own
+// title. The character filter stays strict on purpose: LFN permits more, but
+// * ? < > | : " / \\ have no business in a pool id.
 void fs_safe_name(const char *raw, const char *id, char *out, size_t n)
 {
     size_t w = 0;
     if (raw)
-        for (size_t i = 0; raw[i] && w < 8 && w + 1 < n; i++)
+        for (size_t i = 0; raw[i] && w < SAMPLE_ID_LEN - 1 && w + 1 < n; i++)
             if (isalnum((unsigned char)raw[i]) || raw[i] == '_' || raw[i] == '-')
                 out[w++] = raw[i];
     out[w] = 0;
@@ -655,7 +654,7 @@ void fs_query_unsave(const char *q)
 // for the download task" before a single sound could be heard. Searching and
 // downloading now pay nothing for a player that is not playing.
 static sampplay_t *s_play = NULL;
-static char s_au_name[24];
+static char s_au_name[SAMPLE_ID_LEN];
 
 int fs_audition(const char *name)
 {
@@ -687,7 +686,7 @@ const char *fs_audition_name(void) { return s_au_name; }
 int fs_audition_drop(void)
 {
     if (!s_au_name[0]) return -1;
-    char name[24];
+    char name[SAMPLE_ID_LEN];
     strlcpy(name, s_au_name, sizeof(name));
     fs_audition_stop();
 

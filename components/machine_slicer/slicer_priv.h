@@ -4,6 +4,7 @@
 #include "svf.h"
 #include "reverb.h"
 #include "cvmtx.h"
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // M3 slicer — STREAMING edition (2026-07-13, "the real fix, deck-sized").
 // The whole-sample PSRAM buffer is gone and with it the length ceiling: any
@@ -50,7 +51,7 @@ typedef struct {
 
     volatile uint32_t len;        // file frames (sampfile probe)
     volatile bool loading;        // load/reslice in progress — engine silent
-    char sample[24];              // loaded sample id (no extension)
+    char sample[SAMPLE_ID_LEN];              // loaded sample id (no extension)
 
     // reader request protocol (UI/audio set flags; READER acts)
     volatile bool load_req;

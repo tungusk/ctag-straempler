@@ -182,11 +182,18 @@ static void draw_header_name(void)
     // rows, and anything drawn below the cleared band becomes a STALE line that
     // nothing erases — which is exactly how the thick box left an "underline"
     _bg = TFT_BLACK; CLEAR_RECT(0, HDR_A_H, _width, w_y() - HDR_A_H);
-    char nb[24];
+    char nb[SAMPLE_ID_LEN + 8];
     const char *nm = header_name(nb, sizeof(nb));
+    if (nm != nb) strlcpy(nb, nm, sizeof(nb));     // header_name may return a literal
     bool sel = (s_btn == TB_NAME) && tp.rec_dest == TPD_TAPE;
     bool saved = tp.restore_id[0] != 0 && tp.rec_dest == TPD_TAPE;
     TFT_setFont(DEJAVU24_FONT, NULL);
+    // pool ids run to SAMPLE_ID_LEN now: drop a size before trimming, and leave
+    // room for the saved-check and the selection outline the width feeds
+    int avail = _width - 16 - (saved ? 26 : 12);
+    if (TFT_getStringWidth(nb) > avail) TFT_setFont(DEFAULT_FONT, NULL);
+    menuTFTEllipsize(nb, avail);
+    nm = nb;
     int bh = TFT_getfontheight(), nw = TFT_getStringWidth((char *)nm);
     int nx = 8, ny = 16;                           // +1px pad above the title
     // the name is ALWAYS bright white (Arlo 2026-07-25) — the box carries the
@@ -211,7 +218,7 @@ static void draw_header_name(void)
 // changes exactly when row B's pixels would change
 static unsigned name_sig(void)
 {
-    char nb[24];
+    char nb[SAMPLE_ID_LEN + 8];
     const char *nm = header_name(nb, sizeof(nb));
     unsigned h = 2166136261u;
     for (const char *p = nm; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;

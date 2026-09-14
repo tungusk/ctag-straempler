@@ -2,6 +2,7 @@
 #include "cvmtx.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // M4 granular — a grain cloud over a MONO PSRAM sample. A fixed pool of grains,
 // each a raised-cosine-windowed, linear-interpolated read from a position in
@@ -27,7 +28,7 @@ typedef struct {
     int16_t *buf;                 // MONO PSRAM, GR_MAX_FRAMES samples
     volatile uint32_t len;        // samples loaded
     volatile bool loading;
-    char sample[24];
+    char sample[SAMPLE_ID_LEN];
 
     // params (UI writes, engine reads)
     volatile int  position;       // 0..4095 cloud position (CV6)
@@ -64,4 +65,4 @@ enum { GRM_POS = 0, GRM_PITCH, GRM_GRAIN, GRM_DENSITY, GRM_LEVEL, GRM_N };
 extern const char *const gr_mtx_labels[GRM_N];
 
 int  granular_load(const char *name);
-int  granular_list_samples(char out[][24], int max);
+int  granular_list_samples(char out[][SAMPLE_ID_LEN], int max);

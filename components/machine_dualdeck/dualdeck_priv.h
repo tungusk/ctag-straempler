@@ -6,6 +6,7 @@
 #include "svf.h"
 #include "sampfile.h"
 #include "cvmtx.h"
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // Dual-deck — a clock-locked track BLENDER, not a DJ rig (the design reframe:
 // manual beatmatching is what eats controls; here both decks phase-lock to the
@@ -35,7 +36,7 @@
 #define DD_RATE        44100
 #define DD_RING_FRAMES (DD_RATE * 6)          // 6 s stereo PSRAM ring x2 (~2.1 MB)
 #define DD_LOW_WATER   (DD_RATE / 3)
-#define DD_NAME_LEN    24
+#define DD_NAME_LEN    SAMPLE_ID_LEN  // was 24; see SAMPLE_ID_LEN (sample_ram.h) — one definition for pool ids
 #define DD_WF_W        120                    // waveform columns per deck
 enum { DD_LAY_V = 0, DD_LAY_H = 1 };   // stacked single-decks / side-by-side panels
 enum { DD_KNOB_CTX = 0, DD_KNOB_FIXED = 1 };   // contextual knobs / the explicit matrix

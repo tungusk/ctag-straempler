@@ -24,6 +24,7 @@
 #include "fxfilter.h"
 #include "fxrack.h"
 #include "cvmtx.h"
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 #define TP_RATE      44100
 #define TP_PEAKS     300              // overview columns
@@ -172,7 +173,7 @@ typedef struct {
     // session continuity: the id of what's in the buffer (last saved take id or
     // loaded sample name); persisted to CONFIG "tapelast" on leave and reloaded
     // on return so work-in-progress survives a machine switch.
-    char     restore_id[24];
+    char     restore_id[SAMPLE_ID_LEN];
     bool     restore_pending;        // reload the persisted take on first Tape-screen entry
     int      take_num;               // session take counter -> "REC-###" title until saved
     // load progress ("" = idle) for the menu

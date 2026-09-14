@@ -114,14 +114,14 @@ static esp_err_t fs_state_handler(httpd_req_t *req)
 
 static esp_err_t fs_get_handler(httpd_req_t *req)
 {
-    char id[16], name[24];
+    char id[16], name[SAMPLE_ID_LEN];
     if (!q_param(req, "id", id, sizeof(id)) || !id[0])
         return send_json_status(req, "400 Bad Request", "{\"error\":\"missing id\"}");
     for (char *p = id; *p; p++)
         if (!isdigit((unsigned char)*p))
             return send_json_status(req, "400 Bad Request", "{\"error\":\"bad id\"}");
 
-    char raw[24];
+    char raw[SAMPLE_ID_LEN];
     if (!q_param(req, "name", raw, sizeof(raw))) raw[0] = 0;
     fs_safe_name(raw, id, name, sizeof(name));
 
@@ -135,14 +135,14 @@ static esp_err_t fs_get_handler(httpd_req_t *req)
 
 static esp_err_t fs_fetch_handler(httpd_req_t *req)
 {
-    char url[320], name[24];
+    char url[320], name[SAMPLE_ID_LEN];
     if (!q_param(req, "url", url, sizeof(url)) || !url[0])
         return send_json_status(req, "400 Bad Request", "{\"error\":\"missing url\"}");
     urldecode(url);
     if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0)
         return send_json_status(req, "400 Bad Request", "{\"error\":\"http(s) URL required\"}");
 
-    char raw[24];
+    char raw[SAMPLE_ID_LEN];
     if (!q_param(req, "name", raw, sizeof(raw)) || !raw[0])
         return send_json_status(req, "400 Bad Request", "{\"error\":\"missing name\"}");
     fs_safe_name(raw, "", name, sizeof(name));

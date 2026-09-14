@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // Audio editor — offline, NON-DESTRUCTIVE file->file ops on pool samples: each
 // op streams the source (sampfile) through a transform and writes a NEW derived
@@ -10,7 +11,7 @@
 
 #define ED_RATE  44100
 #define ED_CHUNK 2048          // frames per read/write burst (8 KB int16 stereo)
-#define ED_NAME_LEN 24
+#define ED_NAME_LEN SAMPLE_ID_LEN  // was 24; see SAMPLE_ID_LEN (sample_ram.h) — one definition for pool ids
 #define ED_PEAKS 300           // waveform columns, same budget as Tape/Slicer
 
 enum { ED_IDLE = 0, ED_RUNNING, ED_DONE, ED_ERR };

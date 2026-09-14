@@ -82,3 +82,4 @@ void menuTFTPrintRecordIndicator(void);
 void menuTFTPrintInputError(char*);
 void menuTFTClearListItem(int* activeSlot);
 void menuTFTResetTextWrap();
+void menuTFTEllipsize(char *s, int w);   // trim to fit w px in the current font

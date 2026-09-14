@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "esp_heap_caps.h"
 #include <strings.h>
 #include <dirent.h>
 #include "esp_log.h"
@@ -30,7 +31,7 @@ void sample_folder_counts(int out[SAMPLE_DIR_N])
     // display counts for the folder screen: one name-only pass per folder,
     // NO cross-folder dedup (a base living in two folders counts in both —
     // that is what the browser will show when you enter each one)
-    char id[24];
+    char id[SAMPLE_ID_LEN];
     for (int di = 0; di < SAMPLE_DIR_N; di++) {
         out[di] = 0;
         sd_lock_take();
@@ -44,10 +45,10 @@ void sample_folder_counts(int out[SAMPLE_DIR_N])
     }
 }
 
-static int sample_list_dir(int only, char out[][24], int max)
+static int sample_list_dir(int only, char out[][SAMPLE_ID_LEN], int max)
 {
     int n = 0;
-    char id[24];
+    char id[SAMPLE_ID_LEN];
     for (int di = 0; di < SAMPLE_DIR_N && n < max; di++) {
         if (only >= 0 && di != only) continue;
         sd_lock_take();   // brief name-only walk; hold the bus for its duration
@@ -71,27 +72,36 @@ static int sample_list_dir(int only, char out[][24], int max)
     return n;
 }
 
-int sample_list(char out[][24], int max)
+int sample_list(char out[][SAMPLE_ID_LEN], int max)
 {
     return sample_list_dir(SAMPLE_DIR_ALL, out, max);
 }
 
-static char s_shared_list[SAMPLE_LIST_MAX][24];
+// PSRAM, lazily, like its newest-first sibling in sample_list_recent.c. This
+// was a plain static: 224 x 24 = 5.4 KB of INTERNAL ram, which became 7.2 KB
+// when SAMPLE_ID_LEN went to 32 and dropped the largest free internal block
+// under the 40960 the Freesound download task needs in one piece — every fetch
+// then failed with "no RAM for the download task". Browse lists have no reason
+// to sit in the scarce pool.
+static char (*s_shared_list)[SAMPLE_ID_LEN] = NULL;
 
 static int cmp_name24(const void *a, const void *b)
 {
     return strcasecmp((const char *)a, (const char *)b);
 }
 
-int sample_list_shared_dir(int di, char (**out)[24])
+int sample_list_shared_dir(int di, char (**out)[SAMPLE_ID_LEN])
 {
+    if (!s_shared_list)
+        s_shared_list = heap_caps_malloc((size_t)SAMPLE_LIST_MAX * SAMPLE_ID_LEN, MALLOC_CAP_SPIRAM);
+    if (!s_shared_list) { *out = NULL; return 0; }
     int n = sample_list_dir(di, s_shared_list, SAMPLE_LIST_MAX);
     qsort(s_shared_list, n, sizeof(s_shared_list[0]), cmp_name24);
     *out = s_shared_list;
     return n;
 }
 
-int sample_list_shared(char (**out)[24])
+int sample_list_shared(char (**out)[SAMPLE_ID_LEN])
 {
     return sample_list_shared_dir(SAMPLE_DIR_ALL, out);
 }

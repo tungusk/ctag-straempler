@@ -31,7 +31,9 @@ extern const char *const trk_mtx_labels[TRKM_N];
 // is the bare FatFS path for f_open/f_mkdir (no /sdcard prefix — see CLAUDE.md).
 #define TRK_DIR_VFS      "/sdcard/usr/TRACKER"
 #define TRK_DIR_FAT      "/usr/TRACKER"
-#define TRK_NAME_LEN     24                   // 8.3 filename incl. extension
+#define TRK_NAME_LEN     40                   // filename INCL. extension — not a pool
+                                              // id, so not SAMPLE_ID_LEN: 32 of name
+                                              // plus room for ".XM"/".MOD" and the NUL
 #define TRK_TITLE_LEN    40
 #define TRK_MAX_NAMES    48                   // captured sample/instrument names
 #define TRK_NM_LEN       24                   // per name (libxmp gives up to 31)

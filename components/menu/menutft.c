@@ -575,3 +575,23 @@ void menuTFTResetTextWrap(){
     wrap_pos = 0;
 }
 //-------------------------------------------------------------------------------------------------------
+
+// Trim `s` in place until it fits `w` pixels in the CURRENT font, marking the
+// cut with "..". Pool ids are up to SAMPLE_ID_LEN (32) since the card went to
+// long filenames, and at the sizes these pages draw at a long name simply runs
+// off the edge — which reads as a bug rather than as a long name.
+//
+// Truncation is the default; a page that wants the WHOLE name should pick a
+// smaller font BEFORE calling this, and should pick it from the longest name in
+// view rather than per-name, or the text changes size as you scroll.
+void menuTFTEllipsize(char *s, int w)
+{
+    if (!s || !s[0] || w <= 0) return;
+    if (TFT_getStringWidth(s) <= w) return;
+    size_t n = strlen(s);
+    while (n > 1) {
+        s[--n] = 0;
+        if (n >= 2) { s[n - 1] = '.'; s[n - 2] = '.'; }
+        if (TFT_getStringWidth(s) <= w) return;
+    }
+}

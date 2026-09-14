@@ -73,9 +73,10 @@ static void gran_draw_info(void){
     int fh = TFT_getfontheight();
     _bg = TFT_BLACK; TFT_fillRect(0, INFO_Y, _width, fh + 4, _bg);
     _fg = TFT_WHITE;
-    char s[56];
+    char s[96];                       // SAMPLE_ID_LEN name + the numbers
     snprintf(s, sizeof(s), "%s  gr %dms  dns %d  grains %d",
              gr.sample[0] ? gr.sample : "(none)", gr.grain_ms, gr.density, gr.active_count);
+    menuTFTEllipsize(s, _width - 12);
     TFT_print(s, 6, INFO_Y + 2);
 }
 
@@ -185,8 +186,9 @@ static int gran_main_event(int event, void *ev_data){
         int fh = TFT_getfontheight();
         _bg = BG; TFT_fillRect(0, fh + 12, _width, 24, _bg);
         _fg = TFT_WHITE;
-        char s[48];
+        char s[80];
         snprintf(s, sizeof(s), "Granular: %s  grains %d", gr.sample[0] ? gr.sample : "(none)", gr.active_count);
+        menuTFTEllipsize(s, _width - 12);
         TFT_print(s, 6, fh + 16);
     }
     return 0;

@@ -446,7 +446,7 @@ void s3_toggle_arm(int vid)
 
 // the dated 512-entry browser walk now lives in util/sample_ram
 // (sample_list_recent) — the deck browses the same library the same way
-_Static_assert(S3_NAME_LEN == 24, "sample_list_recent hands back char[24] ids");
+_Static_assert(S3_NAME_LEN == SAMPLE_ID_LEN, "sample_list_recent hands back char[SAMPLE_ID_LEN] ids");
 
 int s3_list_samples(char (**names)[S3_NAME_LEN])
 {

@@ -18,6 +18,7 @@
 #include "sample_ram.h"
 #include "ui_events.h"
 #include "sample_browser.h"
+#include "menutft.h"
 
 #define BR_NFOLD (SAMPLE_DIR_N + 1)   // "ALL" + one row per real folder
 
@@ -33,7 +34,7 @@ static struct {
     int  fold_idx[BR_NFOLD];
     int  nfold;
     char title[28];
-    char (*list)[24];
+    char (*list)[SAMPLE_ID_LEN];
     int  n;              // files in the current folder
 } b;
 
@@ -77,29 +78,46 @@ static void draw(void){
     TFT_print(h, _width / 2 - TFT_getStringWidth(h) / 2, 4);
 
     int cy = _height / 2;
-    char buf[28];
-    // the selection, big and centered
+    char buf[SAMPLE_ID_LEN + 8];
+    // The selection, big and centered. Pool ids run to SAMPLE_ID_LEN (32) since
+    // the card went to long filenames, and those do not fit across the panel in
+    // DEJAVU24 — so drop a size when the name is long, then trim what still
+    // does not fit. The size is chosen from THIS name only for the big line;
+    // the neighbours below stay in the small font regardless, so nothing
+    // reflows around it as you scroll.
     Font f = cfont; TFT_setFont(DEJAVU24_FONT, NULL);
+    // entry_name() fills `buf` for FOLDER rows but returns the list entry
+    // itself for files — so copy before trimming, or we would be editing
+    // uninitialised stack (and, for files, corrupting the shared list in place)
+    const char *src = entry_name(b.sel, buf, sizeof(buf));
+    if (src != buf) strlcpy(buf, src, sizeof(buf));
+    if (TFT_getStringWidth(buf) > _width - 16) TFT_setFont(DEFAULT_FONT, NULL);
     int bigfh = TFT_getfontheight();
     _fg = is_fold(b.sel) ? FOLD_FG : TFT_WHITE;
-    const char *snm = entry_name(b.sel, buf, sizeof(buf));
-    TFT_print((char *)snm, _width / 2 - TFT_getStringWidth((char *)snm) / 2, cy - bigfh / 2);
-    cfont = f;
+    menuTFTEllipsize(buf, _width - 16);
+    TFT_print(buf, _width / 2 - TFT_getStringWidth(buf) / 2, cy - bigfh / 2);
+    TFT_setFont(DEJAVU24_FONT, NULL);
+    bigfh = TFT_getfontheight();          // neighbour spacing stays on the BIG
+    cfont = f;                            // metric so the rows do not jump
     // four neighbors above and below, dimmed (folders keep their green tint)
     for (int k = 1; k <= 4; k++){
         int up = b.sel - k, dn = b.sel + k;
         int yup = cy - bigfh / 2 - k * (fh + 4) - 4;
         int ydn = cy + bigfh / 2 + (k - 1) * (fh + 4) + 6;
-        char nb[28];
+        char nb[SAMPLE_ID_LEN + 8];
         if (up >= 0){
             const char *nm = entry_name(up, nb, sizeof(nb));
+            if (nm != nb) strlcpy(nb, nm, sizeof(nb));
+            menuTFTEllipsize(nb, _width - 16);
             _fg = is_fold(up) ? FOLD_DIM : (color_t){110, 110, 110};
-            TFT_print((char *)nm, _width / 2 - TFT_getStringWidth((char *)nm) / 2, yup);
+            TFT_print(nb, _width / 2 - TFT_getStringWidth(nb) / 2, yup);
         }
         if (dn < tot){
             const char *nm = entry_name(dn, nb, sizeof(nb));
+            if (nm != nb) strlcpy(nb, nm, sizeof(nb));
+            menuTFTEllipsize(nb, _width - 16);
             _fg = is_fold(dn) ? FOLD_DIM : (color_t){110, 110, 110};
-            TFT_print((char *)nm, _width / 2 - TFT_getStringWidth((char *)nm) / 2, ydn);
+            TFT_print(nb, _width / 2 - TFT_getStringWidth(nb) / 2, ydn);
         }
     }
     _fg = (color_t){90, 90, 90}; TFT_setFont(DEF_SMALL_FONT, NULL);

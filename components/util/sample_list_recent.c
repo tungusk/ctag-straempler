@@ -10,9 +10,9 @@
 #include "sample_ram.h"
 #include "sampfile.h"
 
-int sample_list_recent_dir(int only, char (**out)[24])
+int sample_list_recent_dir(int only, char (**out)[SAMPLE_ID_LEN])
 {
-    static char (*list)[24] = NULL;
+    static char (*list)[SAMPLE_ID_LEN] = NULL;
     static uint32_t when[SAMPLE_LIST_RECENT_MAX];   // FatFS date<<16|time
     if (!list) {
         list = heap_caps_malloc(SAMPLE_LIST_RECENT_MAX * 24, MALLOC_CAP_SPIRAM);
@@ -39,7 +39,7 @@ int sample_list_recent_dir(int only, char (**out)[24])
     if (f_opendir(&d, dirs[di]) == FR_OK) {         // FatFS path: no /sdcard
         FILINFO fi;
         while (f_readdir(&d, &fi) == FR_OK && fi.fname[0]) {
-            char id[24];
+            char id[SAMPLE_ID_LEN];
             if (!sample_name_id(fi.fname, id, sizeof(id))) continue;
             // one id per base across containers: the resolver (.RAW first)
             // decides which file a loader gets
@@ -71,7 +71,7 @@ int sample_list_recent_dir(int only, char (**out)[24])
     // insertion sort, NEWEST FIRST — fresh takes land at the top of the browser
     // (Arlo); name breaks ties so equal-dated files keep a stable order
     for (int i = 1; i < n; i++) {
-        char tmp[24];
+        char tmp[SAMPLE_ID_LEN];
         uint32_t tw = when[i];
         memcpy(tmp, list[i], 24);
         int j = i - 1;
@@ -88,7 +88,7 @@ int sample_list_recent_dir(int only, char (**out)[24])
     return n;
 }
 
-int sample_list_recent(char (**out)[24])
+int sample_list_recent(char (**out)[SAMPLE_ID_LEN])
 {
     return sample_list_recent_dir(SAMPLE_DIR_ALL, out);
 }

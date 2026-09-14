@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include "clock.h"
 #include "cvmtx.h"
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // Sampler3 — the two-voice sampler rebuilt on the deck/tracker architecture:
 // one unpinned READER task owns ALL file I/O and fills per-voice PSRAM
@@ -27,7 +28,7 @@
 #define S3_HEAD_FRAMES (S3_RATE * 1)      // 1 s stereo head (~176 KB PSRAM)
 #define S3_RING_FRAMES (S3_RATE * 4)      // 4 s stereo ring (~706 KB PSRAM)
 #define S3_LSC_FRAMES  (S3_RATE / 2)      // 0.5 s loop-start cache (~88 KB)
-#define S3_NAME_LEN    24
+#define S3_NAME_LEN    SAMPLE_ID_LEN  // was 24; see SAMPLE_ID_LEN (sample_ram.h) — one definition for pool ids
 #define S3_NVOICES     2
 
 // CV matrix destinations (2026-09-12). Sampler3 already had a hand-rolled matrix

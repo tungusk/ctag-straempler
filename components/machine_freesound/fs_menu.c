@@ -363,7 +363,7 @@ static int fs_results_handler(int it_id, int event, void *ev_data)
         case EV_SHORT_PRESS: {
             if (n == 0 || s_res_sel >= n) break;
             fs_result_t *r = &fsm.results[s_res_sel];
-            char name[24];
+            char name[SAMPLE_ID_LEN];
             fs_safe_name(r->name, r->id, name, sizeof(name));
             // Radio's grammar: press on what is already sounding stops it,
             // press on anything else starts it

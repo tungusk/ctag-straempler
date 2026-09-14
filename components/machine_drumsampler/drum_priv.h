@@ -4,6 +4,7 @@
 #include "svf.h"
 #include "cvmtx.h"
 #include "fxrack.h"     // brings reverb/fxdelay/overdrive/flanger/tremolo/fxfilter
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // Drum sampler — four one-shot pads, each a mono PSRAM buffer, triggered from the
 // CV inputs. (A pad can carry a second, choking layer, which is what the old
@@ -61,7 +62,7 @@ typedef struct {
                                   // any dip instantly, so a lone ADC outlier collapsed it
                                   // and the next block FIRED THE PAD. A dip must persist
                                   // two blocks to be believed (drum.c).
-    char sample[24];              // loaded library sample id ("" = empty)
+    char sample[SAMPLE_ID_LEN];              // loaded library sample id ("" = empty)
     // waveform thumbnail for the pad cell, built from the RAM buffer at load
     // (no SD pass needed — the whole sample is already in PSRAM). Peak per
     // column, 0..255, same scale the sampler uses.
