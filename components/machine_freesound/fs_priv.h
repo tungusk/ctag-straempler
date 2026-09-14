@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "esp_err.h"
 #include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // Freesound machine. The download → decode → install pipeline lands a preview
@@ -69,6 +70,8 @@ extern fs_state_t fsm;
 
 const char *fs_phase_name(int phase);
 int  fs_http_get(const char *url, char **out, int max_len);  // PSRAM buffer, caller frees
+int  fs_http_status(void);   // HTTP status of the last fs_http_get, 0 = no reply
+esp_err_t fs_http_err(void); // and the esp_err from opening it
 int  fs_get_start(const char *id, const char *name);         // spawn pipeline; -1 if busy/failed
 int  fs_fetch_start(const char *url, const char *name);      // same, from a direct http(s) MP3 URL
 void fs_safe_name(const char *raw, const char *id, char *out, size_t n);  // pool-safe take id

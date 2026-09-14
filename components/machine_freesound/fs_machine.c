@@ -77,19 +77,33 @@ static void set_err(const char *msg)
 
 // GET url into a fresh PSRAM buffer (NUL-terminated). Returns body length,
 // -1 on error. Caller frees *out.
+// why the last fs_http_get failed, so callers can say something better than
+// "unreachable" — which used to cover DNS, TLS, timeout, rate limiting and any
+// non-200 alike, and is exactly the kind of catch-all that wastes an afternoon
+static int  s_http_status = 0;      // HTTP status, 0 = never got a response
+static esp_err_t s_http_err = ESP_OK;
+
+int fs_http_status(void)   { return s_http_status; }
+esp_err_t fs_http_err(void){ return s_http_err; }
+
 int fs_http_get(const char *url, char **out, int max_len)
 {
     *out = NULL;
+    s_http_status = 0;
+    s_http_err = ESP_OK;
     // IDF 4.3 esp-tls refuses https without a verification option — use the
     // built-in cert bundle (CONFIG_MBEDTLS_CERTIFICATE_BUNDLE)
     esp_http_client_config_t config = { .url = url, .method = HTTP_METHOD_GET, .timeout_ms = 20000,
                                         .crt_bundle_attach = esp_crt_bundle_attach };
     esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) return -1;
+    if (!client) { s_http_err = ESP_ERR_NO_MEM; return -1; }
     int len = -1;
-    if (esp_http_client_open(client, 0) == ESP_OK) {
+    esp_err_t oerr = esp_http_client_open(client, 0);
+    s_http_err = oerr;
+    if (oerr == ESP_OK) {
         stack_watch();
     int content_length = esp_http_client_fetch_headers(client);
+        s_http_status = esp_http_client_get_status_code(client);
         int cap = (content_length > 0 && content_length < max_len) ? content_length : max_len;
         char *buf = heap_caps_malloc(cap + 1, MALLOC_CAP_SPIRAM);
         if (buf) {
@@ -234,7 +248,15 @@ static void fs_pipeline(void *pv)
                  "https://freesound.org/apiv2/sounds/%s/?fields=id,name,username,license,url,duration,previews%s",
                  job->id, auth);
         int n = fs_http_get(url, &buf, 32768);
-        if (n <= 0) { set_err("freesound unreachable"); goto out; }
+        if (n <= 0) {
+            char e[64];
+            int st = fs_http_status();
+            if (st > 0) snprintf(e, sizeof(e), "freesound HTTP %d", st);
+            else        snprintf(e, sizeof(e), "no reply from freesound (%s)",
+                                 esp_err_to_name(fs_http_err()));
+            set_err(e);
+            goto out;
+        }
         root = cJSON_Parse(buf);
         if (!root) { set_err("bad JSON from freesound"); goto out; }
         cJSON *det = cJSON_GetObjectItem(root, "detail");
@@ -524,7 +546,17 @@ static void fs_search_task(void *pv)
 
     int n = fs_http_get(url, &buf, 48 * 1024);
     search_stack_watch();
-    if (n <= 0) { set_serr("freesound unreachable"); goto out; }
+    if (n <= 0) {
+        char e[48];
+        int st = fs_http_status();
+        if (st == 429)      snprintf(e, sizeof(e), "rate limited by freesound (429)");
+        else if (st == 401 || st == 403) snprintf(e, sizeof(e), "API key rejected (%d)", st);
+        else if (st > 0)    snprintf(e, sizeof(e), "freesound HTTP %d", st);
+        else                snprintf(e, sizeof(e), "no reply from freesound (%s)",
+                                     esp_err_to_name(fs_http_err()));
+        set_serr(e);
+        goto out;
+    }
 
     root = cJSON_Parse(buf);
     if (!root) { set_serr("bad JSON from freesound"); goto out; }
