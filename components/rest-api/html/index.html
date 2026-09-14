@@ -759,6 +759,13 @@ body.nosbar .sbar{display:none}
   <input id="fq" placeholder="kick drum" onkeydown="if(event.key==='Enter')fsSearch(1)">
   <button class="btn" style="flex:0 0 80px" onclick="fsSearch(1)">Search</button>
   </div>
+  <div class="row" id="fsname" style="display:none;align-items:center">
+  <span style="flex:0 0 auto;color:#888;font-size:12px">Save as</span>
+  <input id="fsnm" maxlength="31" placeholder="pool id" style="flex:1"
+         onkeydown="if(event.key==='Enter')fsNameOk();if(event.key==='Escape')fsNameCancel()">
+  <button class="btn" style="flex:0 0 64px" onclick="fsNameOk()">Save</button>
+  <button class="btn" style="flex:0 0 64px" onclick="fsNameCancel()">Cancel</button>
+  </div>
   <div class="row" id="fschips" style="flex-wrap:wrap;gap:4px"></div>
   <div class="row" id="fspg" style="display:none">
   <button class="btn" onclick="fsSearch(fsPage-1)" id="fsprev">&#8592; Prev</button>
@@ -1585,22 +1592,41 @@ function fsStarted(d){
   fsPoll=setInterval(fsState,700);
 }
 
-function fsGet(id,defName){
-  var name=prompt('Save to library as (max 31 chars):',defName);
-  if(name===null)return;
-  name=name.replace(/[^a-zA-Z0-9_-]/g,'').substring(0,31)||defName;
-  fetch('/fs/get?id='+encodeURIComponent(id)+'&name='+encodeURIComponent(name),{method:'POST'}).then(function(r){return r.json();}).then(fsStarted);
+// The name used to come from a native prompt(), which is a SYSTEM modal: it
+// ignores the page's dark styling completely and flashes white over it. Same
+// question, asked inline in the card with the page's own input and buttons.
+var fsPend=null;                         // {kind:'get'|'fetch', ref:<id or url>}
+function fsAskName(kind,ref,def){
+  fsPend={kind:kind,ref:ref};
+  var b=document.getElementById('fsname'),i=document.getElementById('fsnm');
+  b.style.display='flex';
+  i.value=def||'';
+  i.focus();i.select();
 }
+function fsNameCancel(){fsPend=null;document.getElementById('fsname').style.display='none';}
+function fsNameOk(){
+  if(!fsPend)return;
+  var m=document.getElementById('fsm');
+  var nm=document.getElementById('fsnm').value.replace(/[^a-zA-Z0-9_-]/g,'').substring(0,31);
+  if(!nm){m.className='msg er';m.textContent='Name needs a letter, digit, _ or -';return;}
+  var p=fsPend;fsNameCancel();
+  var u=(p.kind==='get')?('/fs/get?id='+encodeURIComponent(p.ref))
+                        :('/fs/fetch?url='+encodeURIComponent(p.ref));
+  fetch(u+'&name='+encodeURIComponent(nm),{method:'POST'})
+    .then(function(r){return r.json();}).then(fsStarted)
+    .catch(function(){m.className='msg er';m.textContent='Failed (is the Freesound machine active?)';});
+}
+
+function fsGet(id,defName){ fsAskName('get',id,defName); }
 
 function fsFetch(){
   var u=document.getElementById('furl').value.trim();
-  if(!/^https?:\/\//.test(u)){alert('Enter an http(s) MP3 URL');return;}
+  var m=document.getElementById('fsm');
+  // alert() is a system modal too — say it in the card's own message line
+  if(!/^https?:\/\//.test(u)){m.className='msg er';m.textContent='Enter an http(s) MP3 URL';return;}
+  m.className='msg';m.textContent='';
   var def=(u.split('/').pop()||'').split('?')[0].replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'').substring(0,31)||'MP3';
-  var name=prompt('Save to library as (max 12 chars):',def);
-  if(name===null)return;
-  name=name.replace(/[^a-zA-Z0-9_-]/g,'').substring(0,12)||def;
-  fetch('/fs/fetch?url='+encodeURIComponent(u)+'&name='+encodeURIComponent(name),{method:'POST'}).then(function(r){return r.json();}).then(fsStarted)
-    .catch(function(){var m=document.getElementById('fsm');m.className='msg er';m.textContent='Fetch failed (is the Freesound machine active?)';});
+  fsAskName('fetch',u,def);
 }
 
 function fsState(){
