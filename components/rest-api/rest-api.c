@@ -2599,6 +2599,15 @@ static httpd_handle_t start_webserver(void)
     // ("REST died" while the firmware ran fine). Purge the LRU session
     // instead of refusing the connection.
     config.lru_purge_enable = true;
+    // RESERVE SOCKETS FOR OUTBOUND CONNECTIONS. LWIP has a FIXED total
+    // (CONFIG_LWIP_MAX_SOCKETS), and the httpd default of 7 clients plus its
+    // listener and control sockets took 9 of the 10 we used to have — leaving
+    // ONE for everything the firmware dials out to. With the web page open its
+    // six pollers keep those slots warm, so a Freesound search could not get a
+    // socket for its TLS session and failed with ESP_ERR_HTTP_CONNECT, which
+    // read as "freesound unreachable" (2026-09-13). The total is 16 now; this
+    // caps the server so the rest of the system keeps room to dial out.
+    config.max_open_sockets = 8;
 
     ESP_LOGI(TAG, "Starting server on port %d", config.server_port);
     if (httpd_start(&server, &config) != ESP_OK) {
