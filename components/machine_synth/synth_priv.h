@@ -11,6 +11,7 @@
 #include "fxrack.h"       // shared FX slot rack (pulls fxfilter.h)
 #include "cvmtx.h"        // shared CV matrix widget
 #include "lfo.h"          // shared LFO: shapes, divisions, per-block tick
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // Synth voice — a no-sample sound source. v1 is a monophonic subtractive voice:
 // polyBLEP saw<->square oscillator, 1V/oct pitch on CV1, TR1 gate -> linear ADSR
@@ -52,7 +53,7 @@ typedef struct {
 
     int16_t *wave;               // wavetable buffer (PSRAM, lazy-alloc)
     int      wave_len;           // samples in the wavetable (0 = none loaded)
-    char     wave_name[24];      // loaded wave id (for the preset + UI)
+    char     wave_name[SAMPLE_ID_LEN];   // loaded wave id (for the preset + UI)
 
     reverb_t rv;                 // output reverb (lazy PSRAM slab; RV_OFF = bypass)
     fxdelay_t dly;               // output delay (lazy PSRAM slab; runs delay->reverb)

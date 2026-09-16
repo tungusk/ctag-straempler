@@ -100,7 +100,7 @@ static esp_err_t landing_handler(httpd_req_t *req)
 // Linear probe over a modest table; collisions just overwrite (it's a cache).
 #define SCC_N 512
 typedef struct {
-    char     id[24];
+    char     id[SAMPLE_ID_LEN];
     uint8_t  di;
     uint32_t mtime, size;
     float    bpm;
@@ -1324,8 +1324,8 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     UINT bw;
     ui_ev_ts_t ev;
     int file_len_d100 = req->content_len / 100;
-    char file_name[32] = "";
-    char file_name_jsn[32] = "";
+    char file_name[64] = "";      // "/usr/<id>.RAW", id < SAMPLE_ID_LEN
+    char file_name_jsn[64] = "";  // "/sdcard/usr/<id>.JSN"
     cJSON *val;
     cJSON *root = cJSON_CreateObject();
 
@@ -1334,14 +1334,20 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
         buf = malloc(buf_len);
         if (httpd_req_get_hdr_value_str(req, "Name", buf, buf_len) == ESP_OK) {
             cleanStringSpace(buf);
-            sprintf(file_name, "%s.raw", buf);
+            if (strlen(buf) >= SAMPLE_ID_LEN) {   // the page caps names at 31; refuse, never truncate
+                free(buf);
+                cJSON_Delete(root);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Name too long");
+                return ESP_FAIL;
+            }
+            snprintf(file_name, sizeof(file_name), "%s.raw", buf);
             val = cJSON_CreateString(file_name);
             cJSON_AddItemToObject(root, "name", val);
-            sprintf(file_name, "%s", buf);
+            snprintf(file_name, sizeof(file_name), "%s", buf);
             val = cJSON_CreateString(file_name);
             cJSON_AddItemToObject(root, "id", val);
-            sprintf(file_name, "/usr/%s.RAW", buf);
-            sprintf(file_name_jsn, "/sdcard/usr/%s.JSN", buf);
+            snprintf(file_name, sizeof(file_name), "/usr/%s.RAW", buf);
+            snprintf(file_name_jsn, sizeof(file_name_jsn), "/sdcard/usr/%s.JSN", buf);
         }
         free(buf);
     } else {
@@ -2047,12 +2053,14 @@ static esp_err_t mod_upload_handler(httpd_req_t *req)
 #define OT_TMP "/usr/OT_UP.TMP"
 static esp_err_t drop_ot_put_handler(httpd_req_t *req)
 {
-    char name[24] = "";   // matches sample-id length (usr/<name>.RAW pairing)
+    char name[SAMPLE_ID_LEN] = "";   // matches sample-id length (usr/<name>.RAW pairing)
     size_t nl = httpd_req_get_hdr_value_len(req, "Name") + 1;
     if (nl > 1) {
         char *b = malloc(nl);
-        if (httpd_req_get_hdr_value_str(req, "Name", b, nl) == ESP_OK) {
-            cleanStringSpace(b); strlcpy(name, b, sizeof(name));   // strlcpy truncates
+        if (b && httpd_req_get_hdr_value_str(req, "Name", b, nl) == ESP_OK) {
+            cleanStringSpace(b);
+            // a truncated name would never pair with its sample: refuse it
+            if (strlen(b) < sizeof(name)) strlcpy(name, b, sizeof(name));
         }
         free(b);
     }

@@ -55,7 +55,7 @@ typedef struct {
 
     // reader request protocol (UI/audio set flags; READER acts)
     volatile bool load_req;
-    char pending[24];
+    char pending[SAMPLE_ID_LEN];
     volatile bool resl_req;       // recompute boundaries + rebuild heads
 
     // stream generations: engine bumps gen on every fire; the reader fills
@@ -125,7 +125,7 @@ extern sl_state_t sl;
 int slicer_load(const char *name);
 // request boundary recompute + head rebuild (ASYNC; brief mute while it runs)
 void slicer_reslice(void);
-int slicer_list_samples(char out[][24], int max);
+int slicer_list_samples(char out[][SAMPLE_ID_LEN], int max);
 
 // Octatrack .ot sidecar I/O (slicer_ot.c)
 int slicer_parse_ot(const char *name, uint32_t sample_len, uint32_t *out_pt, int max_pts);

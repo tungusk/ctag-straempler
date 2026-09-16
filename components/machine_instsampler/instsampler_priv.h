@@ -11,6 +11,7 @@
 #include "fxrack.h"       // shared FX slot rack (FXK_*, FX_NSLOT_GEN, fxfilter)
 #include "cvmtx.h"        // shared CV matrix widget
 #include "lfo.h"          // shared LFO: shapes, divisions, per-block tick
+#include "sample_ram.h"   // SAMPLE_ID_LEN
 
 // Keys — tonal instrument sampler (see machine_instsampler.h). v1: one mono
 // PSRAM-resident sample, varispeed-pitched across the keyboard from CV1
@@ -55,7 +56,7 @@ extern const int8_t keys_mtx_defaults[ISM_N];      // default knob wiring (ABS e
 
 // one mapped sample region (v1 uses zone[0] only)
 typedef struct {
-    char     sample[24];      // pool id (<=8 chars on disk; 24 for safety)
+    char     sample[SAMPLE_ID_LEN];   // pool id (no extension)
     int16_t *buf;             // PSRAM-resident audio (mono int16), lazy alloc
     uint32_t cap;             // frames buf can actually hold — NOT always
                               // IS_MAX_FRAMES: the alloc walks a ladder down when

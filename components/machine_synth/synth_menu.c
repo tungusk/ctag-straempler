@@ -95,7 +95,7 @@ static void draw_header(void)
     TFT_setFont(DEF_SMALL_FONT, NULL);
     // show the wavetable name (WT) next to the engine tag, else just the engine
     char htag[28];
-    if (sy.wave_name[0]) snprintf(htag, sizeof(htag), "%s %s", eng, sy.wave_name);
+    if (sy.wave_name[0]) snprintf(htag, sizeof(htag), "%s %.24s", eng, sy.wave_name);   // header width: same cap as before
     else                 snprintf(htag, sizeof(htag), "%s", eng);
     TFT_print(htag, 62, 6);
     TFT_setFont(DEFAULT_FONT, NULL);

@@ -15,7 +15,7 @@ int sample_list_recent_dir(int only, char (**out)[SAMPLE_ID_LEN])
     static char (*list)[SAMPLE_ID_LEN] = NULL;
     static uint32_t when[SAMPLE_LIST_RECENT_MAX];   // FatFS date<<16|time
     if (!list) {
-        list = heap_caps_malloc(SAMPLE_LIST_RECENT_MAX * 24, MALLOC_CAP_SPIRAM);
+        list = heap_caps_malloc(SAMPLE_LIST_RECENT_MAX * SAMPLE_ID_LEN, MALLOC_CAP_SPIRAM);
         if (!list) { *out = NULL; return 0; }
     }
     int n = 0;
@@ -73,15 +73,15 @@ int sample_list_recent_dir(int only, char (**out)[SAMPLE_ID_LEN])
     for (int i = 1; i < n; i++) {
         char tmp[SAMPLE_ID_LEN];
         uint32_t tw = when[i];
-        memcpy(tmp, list[i], 24);
+        memcpy(tmp, list[i], SAMPLE_ID_LEN);
         int j = i - 1;
         while (j >= 0 && (when[j] < tw ||
                           (when[j] == tw && strcasecmp(list[j], tmp) > 0))) {
-            memcpy(list[j + 1], list[j], 24);
+            memcpy(list[j + 1], list[j], SAMPLE_ID_LEN);
             when[j + 1] = when[j];
             j--;
         }
-        memcpy(list[j + 1], tmp, 24);
+        memcpy(list[j + 1], tmp, SAMPLE_ID_LEN);
         when[j + 1] = tw;
     }
     *out = list;

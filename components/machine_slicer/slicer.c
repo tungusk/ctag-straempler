@@ -413,7 +413,7 @@ static esp_err_t slicer_start(void)
     // unpinned: file readers pinned to core 0 cause WiFi audio clicks
     xTaskCreate(reader_task, "sl_reader", 4096, NULL, 6, NULL);
 
-    char first[1][24];
+    char first[1][SAMPLE_ID_LEN];
     if (slicer_list_samples(first, 1) > 0) slicer_load(first[0]);
     audio_status_set_voices("slicer", "");
     return ESP_OK;
@@ -643,7 +643,7 @@ void slicer_reslice(void)
     sl.resl_req = true;            // reader recomputes + rebuilds heads
 }
 
-int slicer_list_samples(char out[][24], int max)
+int slicer_list_samples(char out[][SAMPLE_ID_LEN], int max)
 {
     return sample_list(out, max);
 }

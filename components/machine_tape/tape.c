@@ -886,7 +886,7 @@ void tape_autosave_kick(void)
 // is gone (e.g. the take was deleted from the card).
 void tape_restore_last(void)
 {
-    char id[24];
+    char id[SAMPLE_ID_LEN];
     if (configGetStringSetting("tapelast", id, sizeof(id)) != 1 || !id[0]) return;
     char path[64];
     if (sample_resolve(id, path, sizeof(path)) != 0) return;   // file no longer on card
