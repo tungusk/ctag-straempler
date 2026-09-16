@@ -18,6 +18,7 @@
 #include "cvsmooth.h"
 #include "bpm_analysis.h"
 #include "dualdeck_priv.h"
+#include "worker.h"
 
 static const char *TAG = "DDECK";
 
@@ -53,7 +54,7 @@ void dd_fmt_beats(int q, char *out, int n)
     else             snprintf(out, n, "%d", q / 4);
 }
 
-static volatile bool s_run = false, s_alive = false;
+static worker_t s_rd;   // reader task lifecycle (worker.h)
 
 // playback counter -> FILE frame. The reader owns this mapping; everyone else
 // (engine, UI) goes through it. A loop is a mapping, not a cursor wrap.
@@ -238,8 +239,7 @@ static void reader_task(void *pv)
     uint32_t cur_ff[2] = {(uint32_t)-1, (uint32_t)-1};   // file frame each handle sits at
     int16_t *chunk = heap_caps_malloc(4096 * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
     int16_t *tail  = heap_caps_malloc(DD_XFADE * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
-    s_alive = true;
-    while (s_run) {
+    while (s_rd.run) {
         reader_serve(&dd.d[0], &f[0], cur[0], &cur_ff[0], chunk, tail);
         reader_serve(&dd.d[1], &f[1], cur[1], &cur_ff[1], chunk, tail);
         vTaskDelay(1);   // >=1 tick (100 Hz): shorter is a busy-spin
@@ -248,8 +248,7 @@ static void reader_task(void *pv)
         if (f[i]) { sd_lock_take(); fclose(f[i]); sd_lock_give(); }
     free(chunk);
     free(tail);
-    s_alive = false;
-    vTaskDelete(NULL);
+    worker_exit(&s_rd);
 }
 
 // ---- auto-BPM analysis (shared engine) --------------------------------------
@@ -768,6 +767,8 @@ static void dd_reset_statics(void);
 
 static esp_err_t dualdeck_start(void)
 {
+    // a reader that outlived the last stop() still reads dd: never memset under it
+    if (!worker_idle(&s_rd, 3000)) { ESP_LOGE(TAG, "old reader still running"); return ESP_ERR_INVALID_STATE; }
     memset(&dd, 0, sizeof(dd));
     dd_reset_statics();
     for (int i = 0; i < 2; i++) {
@@ -813,8 +814,12 @@ static esp_err_t dualdeck_start(void)
     dd.filt_cv[0] = dd.filt_cv[1] = 2048;   // both filters start CENTRE (off), not a heavy LP at 0
     dd.manual = true;
     dd.an_deck = -1; dd.an_pending = -1;    // memset zeroed these to 0, a valid deck idx
-    s_run = true;
-    xTaskCreate(reader_task, "dd_reader", 4096, NULL, 6, NULL);
+    if (!worker_spawn(&s_rd, reader_task, "dd_reader", 4096, NULL, 6, NULL)) {
+        ESP_LOGE(TAG, "reader task create failed");
+        free(dd.d[0].ring); dd.d[0].ring = NULL;
+        free(dd.d[1].ring); dd.d[1].ring = NULL;
+        return ESP_ERR_NO_MEM;
+    }
     audio_status_set_voices("doubledecker", "");
     return ESP_OK;
 }
@@ -823,8 +828,8 @@ static void dualdeck_stop(void)
 {
     bpm_analyze_abort();           // bail any running analysis before we tear down
     dd.d[0].playing = dd.d[1].playing = false;
-    s_run = false;
-    for (int i = 0; i < 100 && s_alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    // a reader parked on sd_lock can outlive any wait: leak rather than free under it
+    if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking rings"); return; }
     // let the analysis task see the abort and exit before the next start()'s
     // memset(&dd) lands under it (statics-survive-switch hazard)
     for (int i = 0; i < 100 && dd.an_running; i++) vTaskDelay(pdMS_TO_TICKS(10));

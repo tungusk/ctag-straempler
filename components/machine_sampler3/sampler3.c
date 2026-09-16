@@ -20,12 +20,13 @@
 #include "fileio.h"
 #include "sampfile.h"
 #include "sampler3_priv.h"
+#include "worker.h"
 
 static const char *TAG = "S3";
 
 s3_state_t s3;
 
-static volatile bool s_run = false, s_alive = false;
+static worker_t s_rd;   // reader task lifecycle (worker.h)
 // audio task -> reader for the gate workflow's SLOW actions (arm = SD prepare,
 // abort = stop+log). The fast actions — recording_trigger/finish on a clock
 // pulse — are bare atomics and run directly in the audio task.
@@ -139,9 +140,8 @@ static void reader_task(void *pv)
 {
     s3_reader_voice_t rv[S3_NVOICES] = {0};
     int16_t *stage = heap_caps_malloc(S3_CHUNK_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
-    s_alive = true;
 
-    while (s_run) {
+    while (s_rd.run) {
         bool worked = false;
 
         // ~1s gate hold while idle = arm that voice for recording
@@ -398,8 +398,7 @@ static void reader_task(void *pv)
     for (int i = 0; i < S3_NVOICES; i++)
         if (rv[i].f) { sd_lock_take(); fclose(rv[i].f); sd_lock_give(); }
     free(stage);
-    s_alive = false;
-    vTaskDelete(NULL);
+    worker_exit(&s_rd);
 }
 
 // ---- UI-side controls ---------------------------------------------------------
@@ -470,6 +469,8 @@ static const int8_t s3_mtx_defaults[S3M_N] = { 5, 4, -1, 6, 7, -1 };
 
 static esp_err_t s3_start(void)
 {
+    // a reader that outlived the last stop() still reads s3: never memset under it
+    if (!worker_idle(&s_rd, 3000)) { ESP_LOGE(TAG, "old reader still running"); return ESP_ERR_INVALID_STATE; }
     memset(&s3, 0, sizeof(s3));
     s3.monitor = true;
     s3.arm_mutes = true;     // sampler2 inheritance: arm = mute track, cue input
@@ -502,17 +503,23 @@ static esp_err_t s3_start(void)
     }
     cvmtx_init(&s3.mtx, s3_mtx_labels, S3M_N, s3_mtx_defaults);
     s3.rec_wait_vid = -1;
-    s_run = true;
-    // unpinned: file-reading tasks pinned to core 0 cause WiFi audio clicks
-    xTaskCreate(reader_task, "s3_reader", 4096, NULL, 6, NULL);
+    if (!worker_spawn(&s_rd, reader_task, "s3_reader", 4096, NULL, 6, NULL)) {
+        ESP_LOGE(TAG, "reader task create failed");
+        for (int k = 0; k < S3_NVOICES; k++) {
+            free(s3.v[k].head); s3.v[k].head = NULL;
+            free(s3.v[k].ring); s3.v[k].ring = NULL;
+            free(s3.v[k].lsc);  s3.v[k].lsc = NULL;
+        }
+        return ESP_ERR_NO_MEM;
+    }
     audio_status_set_voices("s3", "");
     return ESP_OK;
 }
 
 static void s3_stop(void)
 {
-    s_run = false;
-    for (int i = 0; i < 100 && s_alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    // freeing under a live head/loop-cache rebuild corrupts the heap: leak instead
+    if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking buffers"); return; }
     for (int i = 0; i < S3_NVOICES; i++) {
         free(s3.v[i].head); s3.v[i].head = NULL;
         free(s3.v[i].ring); s3.v[i].ring = NULL;

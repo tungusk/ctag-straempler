@@ -20,12 +20,13 @@
 #include "clock.h"
 #include "audio.h"
 #include "slicer_priv.h"
+#include "worker.h"
 
 static const char *TAG = "SLICER";
 
 sl_state_t sl;
 
-static volatile bool s_run = false, s_alive = false;
+static worker_t s_rd;   // reader task lifecycle (worker.h)
 #define SL_CHUNK 4096                    // reader chunk (frames); first is small
 
 // ---- slicing (reader-task context: env lives in PSRAM) ---------------------
@@ -153,7 +154,7 @@ static void scan_file(FILE *f, const sampfile_t *sf, int16_t *stage)
     fseek(f, sf_seek_pos(sf, 0), SEEK_SET);
     sd_lock_give();
     while (frames_done < sl.len) {
-        if (!s_run || sl.load_req) break;   // machine stopping / superseded load:
+        if (!s_rd.run || sl.load_req) break;   // machine stopping / superseded load:
                                             // bail NOW (a 100s scan outlives the
                                             // 1s stop-wait and used to keep
                                             // writing into freed slabs)
@@ -191,7 +192,7 @@ static void build_heads(FILE *f, const sampfile_t *sf, int16_t *stage)
 {
     sl.heads_valid = false;
     for (int i = 0; i < sl.n_slices && i < SL_MAX_SLICES; i++) {
-        if (!s_run || sl.load_req) return;  // stopping / superseded: bail
+        if (!s_rd.run || sl.load_req) return;  // stopping / superseded: bail
         uint32_t slen = sl.slice_pt[i + 1] - sl.slice_pt[i];
         uint32_t hl = slen < SL_HEAD_FRAMES ? slen : SL_HEAD_FRAMES;
         int16_t *dst = sl.heads + (size_t)i * SL_HEAD_FRAMES * 2;
@@ -219,9 +220,8 @@ static void reader_task(void *pv)
     uint32_t fill_gen = 0;             // generation the ring fill belongs to
     uint32_t wfill = 0;                // playback-order frames delivered
     uint32_t fill_slice_len = 0;
-    s_alive = true;
 
-    while (s_run) {
+    while (s_rd.run) {
         if (sl.load_req) {
             sl.load_req = false;
             sl.loading = true;
@@ -313,8 +313,7 @@ static void reader_task(void *pv)
     }
     if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
     free(stage);
-    s_alive = false;
-    vTaskDelete(NULL);
+    worker_exit(&s_rd);
 }
 
 // ---- playback (audio task) --------------------------------------------------
@@ -380,6 +379,8 @@ static const int8_t slicer_mtx_defaults[SLM_N] = {
 
 static esp_err_t slicer_start(void)
 {
+    // a reader that outlived the last stop() still reads sl: never memset under it
+    if (!worker_idle(&s_rd, 3000)) { ESP_LOGE(TAG, "old reader still running"); return ESP_ERR_INVALID_STATE; }
     memset(&sl, 0, sizeof(sl));
     sl.heads = heap_caps_malloc((size_t)SL_MAX_SLICES * SL_HEAD_FRAMES * 2 * sizeof(int16_t),
                                 MALLOC_CAP_SPIRAM);
@@ -409,9 +410,14 @@ static esp_err_t slicer_start(void)
     }
     sl.pitch_src = 0;                       // CV1 = the module's 1V/oct jack
     cvmtx_init(&sl.mtx, slicer_mtx_labels, SLM_N, slicer_mtx_defaults);
-    s_run = true;
-    // unpinned: file readers pinned to core 0 cause WiFi audio clicks
-    xTaskCreate(reader_task, "sl_reader", 4096, NULL, 6, NULL);
+    if (!worker_spawn(&s_rd, reader_task, "sl_reader", 4096, NULL, 6, NULL)) {
+        ESP_LOGE(TAG, "reader task create failed");
+        free(sl.heads); sl.heads = NULL;
+        free(sl.ring);  sl.ring = NULL;
+        free(sl.env);   sl.env = NULL;
+        reverb_free(&sl.fx_rv);
+        return ESP_ERR_NO_MEM;
+    }
 
     char first[1][SAMPLE_ID_LEN];
     if (slicer_list_samples(first, 1) > 0) slicer_load(first[0]);
@@ -422,11 +428,9 @@ static esp_err_t slicer_start(void)
 static void slicer_stop(void)
 {
     sl.playing = false;
-    s_run = false;
-    // the reader aborts scans within one chunk (~10 ms) once s_run drops;
+    // the reader aborts scans within one chunk (~10 ms) once run drops;
     // wait generously anyway — freeing under a live scan corrupts the heap
-    for (int i = 0; i < 300 && s_alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
-    if (s_alive) { ESP_LOGE(TAG, "reader did not stop; leaking slabs"); return; }
+    if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking slabs"); return; }
     free(sl.heads); sl.heads = NULL;
     free(sl.ring);  sl.ring = NULL;
     free(sl.env);   sl.env = NULL;

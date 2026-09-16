@@ -17,6 +17,7 @@
 #include "cvsmooth.h"
 #include "sampfile.h"
 #include "deck_priv.h"
+#include "worker.h"
 
 static const char *TAG = "DECK";
 
@@ -108,7 +109,7 @@ static void dk_tl_update(void)
 //   -2 = live, -1 = armed (seize the reference next block), >=0 = reference
 
 
-static volatile bool s_run = false, s_alive = false;
+static worker_t s_rd;   // reader task lifecycle (worker.h)
 static volatile bool s_track_req = false;
 static char s_pending[DK_NAME_LEN];
 
@@ -123,9 +124,8 @@ static void reader_task(void *pv)
     int16_t *chunk = heap_caps_malloc(4096 * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
     int16_t *tail  = heap_caps_malloc(DK_XFADE * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
     uint32_t cur_ff = (uint32_t)-1;    // file frame the handle is parked at
-    s_alive = true;
 
-    while (s_run) {
+    while (s_rd.run) {
         if (s_track_req) {
             s_track_req = false;
             if (f) { sd_lock_take(); fclose(f); sd_lock_give(); f = NULL; }
@@ -262,8 +262,7 @@ static void reader_task(void *pv)
     if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
     free(chunk);
     free(tail);
-    s_alive = false;
-    vTaskDelete(NULL);
+    worker_exit(&s_rd);
 }
 
 // ---- UI-side controls -------------------------------------------------------
@@ -624,6 +623,8 @@ static const int8_t deck_mtx_defaults[DKM_N] = {
 
 static esp_err_t deck_start(void)
 {
+    // a reader that outlived the last stop() still reads dk: never memset under it
+    if (!worker_idle(&s_rd, 3000)) { ESP_LOGE(TAG, "old reader still running"); return ESP_ERR_INVALID_STATE; }
     memset(&dk, 0, sizeof(dk));
     dk_reset_statics();
     s_pending[0] = 0;
@@ -647,9 +648,11 @@ static esp_err_t deck_start(void)
     dk.rate_sm = 1.0f;
     dk.feel = 1.0f;
     dk.clk_scale = 1.0f;
-    s_run = true;
-    // unpinned: file-reading tasks pinned to core 0 cause WiFi audio clicks
-    xTaskCreate(reader_task, "deck_reader", 4096, NULL, 6, NULL);
+    if (!worker_spawn(&s_rd, reader_task, "deck_reader", 4096, NULL, 6, NULL)) {
+        ESP_LOGE(TAG, "reader task create failed");
+        free(dk.ring); dk.ring = NULL;
+        return ESP_ERR_NO_MEM;
+    }
     audio_status_set_voices("deck", "");
     return ESP_OK;
 }
@@ -657,8 +660,8 @@ static esp_err_t deck_start(void)
 static void deck_stop(void)
 {
     dk.playing = false;
-    s_run = false;
-    for (int i = 0; i < 100 && s_alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    // a reader parked on sd_lock can outlive any wait: leak rather than free under it
+    if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking ring"); return; }
     free(dk.ring);
     dk.ring = NULL;
 }

@@ -20,12 +20,13 @@
 #include "xmp.h"
 #include "trig_gate.h"
 #include "tracker_priv.h"
+#include "worker.h"
 
 static const char *TAG = "TRACKER";
 
 trk_state_t trk;
 
-static volatile bool s_run = false, s_alive = false;
+static worker_t s_rd;   // render task lifecycle (worker.h)
 static bool s_logged_play = false;   // one-shot stack-watermark log per load
 static uint32_t s_render_stack = 0;  // stack the render task actually got (see load gate)
 static char s_cur_file[TRK_NAME_LEN] = "";   // module currently loaded/requested
@@ -165,6 +166,9 @@ static void *load_file_psram(const char *name, long *out_size)
         size_t got = fread(stage, 1, want, f);
         sd_lock_give();
         if (got == 0) break;
+        // a 2 MB module is ~5 s of 4 KB bursts: stop() must not have to outwait it
+        if (!s_rd.run) { heap_caps_free(stage); sd_lock_take(); fclose(f); sd_lock_give();
+                         heap_caps_free(buf); strlcpy(trk.fail_why, "stopped", sizeof(trk.fail_why)); return NULL; }
         memcpy(buf + off, stage, got);
         off += got;
         vTaskDelay(1);                          // load-bearing SD-courtesy gap
@@ -295,7 +299,6 @@ static void render_task(void *pv)
 {
     s_ctx = xmp_create_context();
     s_have_module = false;
-    s_alive = true;
 
     bool     cv6_grabbed = false;   // CV6 has MOVED since engage: it owns the window
     int      cv6_applied = -1;      // knob value the current start was computed AT
@@ -310,7 +313,7 @@ static void render_task(void *pv)
     uint32_t loop_anchor_abs = 0;   // absolute step where the loop engaged
     int      cv6_engage = 0;        // CV6 at engage — position is relative to it
 
-    while (s_run) {
+    while (s_rd.run) {
         if (trk.load_req) { trk.load_req = false; do_load(); continue; }
 
         // a scrub (encoder) request exits loop mode; the reposition itself is
@@ -599,8 +602,7 @@ static void render_task(void *pv)
 
     if (s_have_module) { xmp_end_player(s_ctx); xmp_release_module(s_ctx); }
     xmp_free_context(s_ctx);
-    s_alive = false;
-    vTaskDelete(NULL);
+    worker_exit(&s_rd);
 }
 
 // ---- lifecycle --------------------------------------------------------------
@@ -616,6 +618,9 @@ static const int8_t trk_mtx_defaults[TRKM_N] = {
 
 static esp_err_t tracker_start(void)
 {
+    // a render task that outlived the last stop() owns the ONE static libxmp
+    // context: a second task on it frees it under the first (a panic)
+    if (!worker_idle(&s_rd, 3000)) { ESP_LOGE(TAG, "old render task still running"); return ESP_ERR_INVALID_STATE; }
     char keep_file[TRK_NAME_LEN];
     bool keep_loop = trk.loop, keep_sync = trk.sync, keep_amiga = trk.amiga;
     strlcpy(keep_file, trk.file, sizeof(keep_file));   // survive the memset
@@ -643,7 +648,6 @@ static esp_err_t tracker_start(void)
     trk.loop_len = 4;               // sane until process() reads CV7
     trk.state = TRK_EMPTY;
 
-    s_run = true;
     // 32 KB stack: libxmp's loaders overrun the old 8 KB (FreeRTOS
     // stack-overflow / TCB-clobber crashes). Measured peak ~18.7 KB on a plain
     // 4ch MOD (load is the deep path); 32 KB leaves headroom for heavier IT/XM.
@@ -654,7 +658,7 @@ static esp_err_t tracker_start(void)
     static const uint32_t trk_stacks[] = { 32768, 26624, 22528 };
     bool task_ok = false;
     for (int i = 0; i < 3 && !task_ok; i++) {
-        task_ok = xTaskCreate(render_task, "trk_render", trk_stacks[i], NULL, 5, NULL) == pdPASS;
+        task_ok = worker_spawn(&s_rd, render_task, "trk_render", trk_stacks[i], NULL, 5, NULL);
         if (task_ok) {
             s_render_stack = trk_stacks[i];   // gate module size on this (see load_file_psram)
             if (i > 0)
@@ -676,8 +680,7 @@ static esp_err_t tracker_start(void)
 static void tracker_stop(void)
 {
     trk.playing = false;
-    s_run = false;
-    for (int i = 0; i < 200 && s_alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "render task did not stop; leaking ring"); return; }
     free(trk.ring);
     trk.ring = NULL;
 }
@@ -931,9 +934,9 @@ static void tracker_preset_load(const cJSON *node)
         strlcpy(trk.file, j->valuestring, sizeof(trk.file));
         // live change via teleremote (render task already running): hot-reload
         // if the picked module differs from what's loaded. At machine-start
-        // restore the render task isn't up yet (s_run false), so start() does
+        // restore the render task isn't up yet (s_rd.run false), so start() does
         // the initial load and this stays quiet — avoiding a double load.
-        if (s_run && strcmp(trk.file, s_cur_file) != 0)
+        if (s_rd.run && strcmp(trk.file, s_cur_file) != 0)
             tracker_request_load(trk.file);
     }
 }
