@@ -50,11 +50,16 @@ static void tp_persist_last(void)
 static void tape_stash_and_save(void);                          // request async save of the current take
 
 // ---- bank alloc (1 MiB blocks, fail-soft) ---------------------------------------
+// The audio task gates on nblk (have_tape): unpublish it and let the block in
+// flight finish BEFORE freeing — a TR edge during a length change used to start
+// a take on blocks being freed underneath it.
 static void bank_free(tp_bank_t *b)
 {
-    for (int i = 0; i < b->nblk; i++)
-        if (b->blk[i]) { heap_caps_free(b->blk[i]); b->blk[i] = NULL; }
+    int n = b->nblk;
     b->nblk = 0; b->cap = 0;
+    if (n > 0) machine_block_wait();
+    for (int i = 0; i < n; i++)
+        if (b->blk[i]) { heap_caps_free(b->blk[i]); b->blk[i] = NULL; }
 }
 
 // allocate banks to cover `frames`; trims to what the heap gives (fail-soft).
@@ -63,14 +68,16 @@ static int bank_alloc(tp_bank_t *b, uint32_t frames)
     bank_free(b);
     int want = (int)((frames + TP_BLK_FRAMES - 1) / TP_BLK_FRAMES);
     if (want > TP_MAX_BLK) want = TP_MAX_BLK;
+    int n = 0;
     for (int i = 0; i < want; i++) {
         b->blk[i] = heap_caps_malloc(TP_BLK_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
         if (!b->blk[i]) break;
-        b->nblk = i + 1;
+        n = i + 1;
     }
-    if (b->nblk == 0) return -1;
-    uint32_t got = (uint32_t)b->nblk * TP_BLK_FRAMES;
+    if (n == 0) return -1;
+    uint32_t got = (uint32_t)n * TP_BLK_FRAMES;
     b->cap = got < frames ? got : frames;
+    b->nblk = n;                          // publish last: the audio task gates on it
     return b->cap == frames ? 0 : 1;      // 1 = trimmed
 }
 
@@ -560,6 +567,7 @@ int tape_set_len_sel(int sel)
     if (!tp_stopped()) return -1;
     sel = tp_clampi(sel, 0, TP_LEN_OPTS - 1);
     uint32_t want = TP_LEN_SECS[sel] * TP_RATE;
+    tp.cap = 0; tp.len = 0;                     // nothing to play or record into meanwhile
     if (bank_alloc(&tp.tape, want) < 0) { tp.cap = 0; return -2; }
     tp.cap = tp.tape.cap;                       // may be trimmed (fail-soft)
     tp.len_sel = sel;

@@ -86,7 +86,12 @@ static bool arena_ensure(void)
 
 void keys_clear_zones(void)
 {
+    // keys_process re-reads frames/buf per sample: zero the length (and raise
+    // loading) first, let the block in flight finish, THEN drop the pointers —
+    // the drum_clear_layer order. buf = NULL first read through NULL mid-block.
     inst.loading = true;
+    for (int i = 0; i < IS_MAX_ZONES; i++) inst.zone[i].frames = 0;
+    machine_block_wait();
     for (int i = 0; i < IS_MAX_ZONES; i++) {
         inst.zone[i].buf = NULL;
         inst.zone[i].frames = 0;
@@ -137,7 +142,9 @@ int keys_load_zone_at(int zi, const char *name)
     inst.loading = true;
     uint32_t n = sample_load(name, z->buf, z->cap, true);   // mono, DMA-staged, sd_lock
     if (n < 2) {
-        z->frames = 0; z->sample[0] = 0; z->buf = NULL; inst.loading = false;
+        z->frames = 0; z->sample[0] = 0;
+        machine_block_wait();                  // see keys_clear_zones
+        z->buf = NULL; inst.loading = false;
         snprintf(inst.load_err, sizeof(inst.load_err), "load failed");
         return -1;
     }
@@ -191,6 +198,10 @@ int keys_load_zone_at(int zi, const char *name)
 void keys_keep_first_zone(void)
 {
     if (inst.nzones <= 1) return;
+    // a voice may be mid-note in a zone about to go: stop the audio task reading
+    // zones 1+ (length first), let the block in flight finish, then clear
+    for (int i = 1; i < IS_MAX_ZONES; i++) inst.zone[i].frames = 0;
+    machine_block_wait();
     for (int i = 1; i < IS_MAX_ZONES; i++) {
         inst.zone[i].frames = 0;
         inst.zone[i].buf = NULL;

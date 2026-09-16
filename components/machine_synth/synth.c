@@ -43,6 +43,10 @@ int synth_load_wave(const char *name)
         sy.wave = heap_caps_malloc((size_t)SY_WT_MAX * sizeof(int16_t), MALLOC_CAP_SPIRAM);
         if (!sy.wave) return -1;
     }
+    // the load overwrites the table in place: stop the oscillator reading it
+    // first, or a held note plays the half-written table as noise
+    sy.wave_len = 0;
+    machine_block_wait();
     uint32_t n = sample_load(name, sy.wave, SY_WT_MAX, true);   // mono
     if (n < 2) { sy.wave_len = 0; sy.wave_name[0] = 0; return -1; }
     sy.wave_len = (int)n;
@@ -240,11 +244,13 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
         } else if (sy.engine == ENG_WT && sy.wave && sy.wave_len > 1) {
             // wavetable: one phase traversal = one pass of the loaded wave, at the
             // note pitch (linear interpolation; no band-limiting -> some alias high up)
-            float fpos = sy.phase * (float)sy.wave_len;
+            int wl = sy.wave_len;                     // ONE read: a load zeroes it mid-block
+            if (wl < 2) wl = 2;
+            float fpos = sy.phase * (float)wl;
             int i0 = (int)fpos;
             float fr = fpos - (float)i0;
-            if (i0 >= sy.wave_len) i0 = sy.wave_len - 1;
-            int i1 = i0 + 1; if (i1 >= sy.wave_len) i1 = 0;
+            if (i0 >= wl) i0 = wl - 1;
+            int i1 = i0 + 1; if (i1 >= wl) i1 = 0;
             osc = ((float)sy.wave[i0] + ((float)sy.wave[i1] - (float)sy.wave[i0]) * fr) / 32768.0f;
             if (fold_eff > 0.001f) {                  // knob7 wavefold: drive + reflect for a WT timbre sweep
                 osc *= 1.0f + fold_eff * 4.0f;

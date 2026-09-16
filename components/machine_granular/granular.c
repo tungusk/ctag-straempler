@@ -216,6 +216,7 @@ int granular_load(const char *name)
 {
     if (!gr.buf) return -1;
     gr.loading = true;
+    machine_block_wait();   // a block in flight can still spawn grains on the old length
     for (int i = 0; i < GR_GRAINS; i++) gr.grains[i].active = false;
     uint32_t n = sample_load(name, gr.buf, GR_MAX_FRAMES, true);   // mono
     if (n == 0) { gr.loading = false; return -1; }
