@@ -282,7 +282,10 @@ static void autosave_now(void);
 static void menuSwitchMachine(const machine_t *m){
     autosave_now();
     if(machine_activate(m) != ESP_OK){
+        // machine_activate fell back to Stub: rebind so the old machine's pages
+        // (whose state stop() just freed) are gone, but don't persist the choice
         ESP_LOGE("UI", "machine %s failed to start", m->name);
+        menuBindMachineUI();
         return;
     }
     configSetStringSetting("machine", m->name);

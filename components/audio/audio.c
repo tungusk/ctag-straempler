@@ -675,6 +675,7 @@ static void audio_task(void *pvParams)
             if (pus > s_proc_pk) s_proc_pk = pus;                       // peak-hold (see above)
         } else
             memset(out, 0, sizeof(out));
+        machine_block_done();   // the block handshake (machine_block_wait)
 
         // BOUNCE tap: capture the machine's output HERE (before clock-out
         // overwrites a channel), so a bounce is the pure musical signal

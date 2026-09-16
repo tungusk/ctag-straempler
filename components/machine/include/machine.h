@@ -147,6 +147,17 @@ const machine_t *machine_active(void);
 esp_err_t machine_activate(const machine_t *m);   // stop old, start new
 const machine_t *machine_by_name(const char *name);
 
+// AUDIO BLOCK HANDSHAKE. To take something away from the audio task (free a
+// buffer, clear a zone, swap a pointer): first make process() stop reading it
+// (zero the length / NULL the pointer the block gates on), then call
+// machine_block_wait(), THEN free. It returns once the audio task has finished a
+// block that started after the call, so nothing is left reading. This replaces
+// the house rule vTaskDelay(1): a tick can arrive 0.1 ms later, well inside a
+// 1.45 ms block still running on the other core. false = the audio task did not
+// finish a block within ~1 s (stalled or not running); the caller carries on.
+void machine_block_done(void);   // audio task only, once per block after process()
+bool machine_block_wait(void);   // any other task
+
 // Autosave dirty flag for edits that never enter the UI event queue — the
 // polled performance knobs (CV6/CV7 take-over, filter sweeps). The engine
 // flags a committed change (plain volatile store, any task); the menu's

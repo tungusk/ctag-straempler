@@ -16,6 +16,22 @@ void machine_set_web_cb(void (*cb)(const machine_t *m))
 
 const machine_t *machine_active(void) { return s_active; }
 
+// see machine.h — the audio-block handshake
+static volatile uint32_t s_block_seq = 0;
+
+void machine_block_done(void) { s_block_seq++; }
+
+bool machine_block_wait(void)
+{
+    uint32_t s = s_block_seq;
+    for (int i = 0; i < 100; i++) {          // 100 ticks = 1 s at 100 Hz
+        vTaskDelay(1);
+        if (s_block_seq != s) return true;
+    }
+    ESP_LOGW(TAG, "audio task finished no block in 1 s");
+    return false;
+}
+
 // see machine.h — knob edits flag here, the menu's autosave poll drains it
 static volatile bool s_state_dirty = false;
 
@@ -47,7 +63,7 @@ esp_err_t machine_activate(const machine_t *m)
         // block drain so stop() never frees memory under a running process()
         s_active = NULL;
         if (s_web_cb) s_web_cb(NULL);   // drop web URIs before stop() frees state
-        vTaskDelay(1);   // >=1 tick: pdMS_TO_TICKS(5)==0 at 100Hz = busy-spin
+        machine_block_wait();           // the block in flight finishes before stop()
         if (old->stop) old->stop();
     }
     if (m) {
@@ -55,6 +71,16 @@ esp_err_t machine_activate(const machine_t *m)
         esp_err_t err = m->start ? m->start() : ESP_OK;
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "%s failed to start (%d)", m->name, err);
+            // never leave NOTHING active: the old machine is already stopped, and
+            // its menu pages would keep acting on freed state. Stub is the safe
+            // fallback (it cannot fail) and tells the user what happened. The
+            // error still returns so the caller does not persist the choice.
+            const machine_t *stub = machine_by_name("Stub");
+            if (stub && stub != m) {
+                if (stub->start) stub->start();
+                s_active = stub;
+                if (s_web_cb) s_web_cb(stub);
+            }
             return err;
         }
         s_active = m;
