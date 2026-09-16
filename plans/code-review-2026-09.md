@@ -226,6 +226,14 @@ Most findings are a few mistakes repeated. Fixing by theme is cheaper than findi
 8. **3.6**: a corrupt WAV hangs the SD bus under `sd_lock`.
 9. **6.5, 6.7, 6.10, 6.11, 2.4, 12.3/12.4**: plausible, but they need unusual input or low RAM.
 
+> **Themes B + C (1.1/1.2): FIXED in commits 09-16, NOT flashed.** `25f646a` `575092a` `f0d3de47` `7c04ccdb`. Covers 1.1, 1.2, 3.7, 3.8, 8.5, 9.2, 10.2, 10.3, 11.3, 11.7, 11.9, 12.1, 12.3, 12.4, 13.5, 13.6.
+> - **`util/include/worker.h`**: the shared run/alive lifecycle. alive is raised before `xTaskCreate`; spawn refuses while an old task lives; `worker_stop` returns false on timeout, and then the caller **leaks, never frees**. Used by Sampler3, Slicer, Deck, DoubleDecker, Tracker and sampplay.
+> - **`machine_block_wait()`** (machine.h): returns after the audio task finishes a block that started after the call. It replaces the `vTaskDelay(1)` house rule, which can return 0.1 ms later, inside a 1.45 ms block running on the other core. Used by `machine_activate`, Keys, Tape, Granular, Synth, and the Editor/Freesound audition stop.
+> - **Stub fallback**: a failed `start()` activates Stub. `start()` of a reader machine now *fails* while an old task is alive, so this fallback is what keeps that safe.
+> - **sampplay**: a per-player mutex around each fill replaces the 30 ms wait. **Radio**: counts tasks at creation, no longer forces the count to 0, leaks on timeout. **Looper**: stop waits for a web save.
+> - **Not in these commits:** 10.1/10.4 (Deck/DoubleDecker BPM analysis lifecycle, theme D) — the analysis task still isn't worker-managed.
+> - **Bench checks:** switch machines repeatedly while each one loads (Sampler3 with voices loaded, Deck/DoubleDecker playing, Tracker mid-load of a large module, Radio mid-connect, Looper during a web save); Keys Clear Zones / Load Sample with a held note; Tape length change then TR1/TR2; Synth wave load with a held note; Editor/Freesound audition start/stop. After each, check `/sysinfo` `reset`/`uptime` and the serial log for "leaking" or "still running". **Also listen for any new clicks on machine switch**: the block wait is up to ~10 ms longer than before.
+
 ### Fix — tier 2: silent data loss or wrong saved state
 **3.3** (import deletes the source) · **5.2** (routing carried between presets) · **4.2** (Settings rolls back web changes) · **4.4** (autosave writes defaults on a slow switch) · **2.2/2.3** (FX settings lost, `dlyt:0`) · **11.4, 11.5** (Tape discards a take / duplicate CUT files) · **13.3, 13.7, 6.8, 13.8** (truncated files reported as success) · **10.1, 10.4** · **1.4, 1.7** (recording refused until reboot).
 
