@@ -68,6 +68,8 @@ static const int8_t lp_mtx_defaults[LPM_N] = { 5, 6, 0, 1 };
 
 static esp_err_t looper_start(void)
 {
+    // a web save that outlived the last stop() still reads lp.tr[].buf
+    if (!looper_web_save_idle(0)) { ESP_LOGE("LOOPER", "web save still running"); return ESP_ERR_INVALID_STATE; }
     memset(&lp, 0, sizeof(lp));
     lp.sync_on = true;
     lp.bars = 4;
@@ -77,6 +79,9 @@ static esp_err_t looper_start(void)
         lp.tr[i].buf = heap_caps_malloc(LP_BUF_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
         if (!lp.tr[i].buf) {
             ESP_LOGE("LOOPER", "PSRAM alloc failed for track %d", i);
+            // free the tracks that did allocate: activate() won't call stop() on a
+            // failed start, and the next start's memset would drop the pointers
+            for (int k = 0; k < i; k++) { free(lp.tr[k].buf); lp.tr[k].buf = NULL; }
             return ESP_ERR_NO_MEM;
         }
         lp.tr[i].state = LP_EMPTY;
@@ -92,6 +97,8 @@ static esp_err_t looper_start(void)
 
 static void looper_stop(void)
 {
+    // a long /looper/save copies from these buffers: never free under it
+    if (!looper_web_save_idle(10000)) { ESP_LOGE("LOOPER", "web save did not finish; leaking tracks"); return; }
     for (int i = 0; i < LP_TRACKS; i++) {
         free(lp.tr[i].buf);
         lp.tr[i].buf = NULL;

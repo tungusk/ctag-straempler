@@ -642,11 +642,14 @@ int fs_audition(const char *name)
 void fs_audition_stop(void)
 {
     if (!s_play) return;
-    sampplay_play(s_play, false);
+    // process() renders s_play: take it away from the audio task first
+    sampplay_t *p = s_play;
+    s_play = NULL;
+    machine_block_wait();
+    sampplay_play(p, false);
     // tear the whole player down, not just the file: holding the reader task is
     // what starves the next download (see the note above)
-    sampplay_destroy(s_play);
-    s_play = NULL;
+    sampplay_destroy(p);
     s_au_name[0] = 0;
 }
 

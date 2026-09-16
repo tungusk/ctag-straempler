@@ -26,6 +26,14 @@ static void save_worker(void *pv)
     vTaskDelete(NULL);
 }
 
+// looper_stop() frees the track buffers this worker copies from; the machine
+// switch has already dropped the URI, so no new save can start
+bool looper_web_save_idle(int timeout_ms)
+{
+    for (int t = 0; t < timeout_ms && !s_sv_done; t += 50) vTaskDelay(pdMS_TO_TICKS(50));
+    return s_sv_done;
+}
+
 static esp_err_t looper_save_post_handler(httpd_req_t *req)
 {
     int trk = lp.sel;

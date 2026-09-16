@@ -94,6 +94,10 @@ int radio_station_del(int idx)
 }
 
 static volatile int  s_ntasks = 0;           // # live stream tasks (0/1 normally; briefly >1 on a fast restart)
+// counted by the CREATOR before xTaskCreate (a stop racing an unscheduled task
+// still waits) and by the task on exit — UI/httpd and the task both write it
+static portMUX_TYPE  s_nt_mux = portMUX_INITIALIZER_UNLOCKED;
+static void ntasks_add(int d) { portENTER_CRITICAL(&s_nt_mux); s_ntasks += d; portEXIT_CRITICAL(&s_nt_mux); }
 static volatile bool s_stop = false;         // request the stream task(s) to exit
 static volatile int  s_gen = 0;              // play generation: a task whose gen != s_gen retires WITHOUT
                                              // touching the ring or rd.state (prevents the two-task race that
@@ -266,7 +270,6 @@ static int icy_read(esp_http_client_handle_t cl, uint8_t *dst, int want, int met
 static void stream_task(void *pv)
 {
     int gen = (int)(intptr_t)pv;   // this task's generation; retire when superseded
-    s_ntasks++;
     HMP3Decoder dec = MP3InitDecoder();
     uint8_t *inbuf = malloc(RADIO_IN_SIZE);
     short *pcm = malloc(2 * 1152 * sizeof(short));
@@ -351,7 +354,7 @@ done:
     free(pcm);
     // don't stomp a newer task's state — only the current generation owns rd.state
     if (gen == s_gen && rd.state != RADIO_ERROR) rd.state = RADIO_STOPPED;
-    s_ntasks--;
+    ntasks_add(-1);
     vTaskDelete(NULL);
 }
 
@@ -390,8 +393,11 @@ void radio_play_url(const char *url, const char *name)
     rd.err[0] = 0;
     rd.state = RADIO_BUFFERING;
     int gen = ++s_gen;                 // this play's generation (bump again after the drain wait)
-    if (xTaskCreate(stream_task, "radio_dl", 20480, (void *)(intptr_t)gen, 5, NULL) != pdPASS)
+    ntasks_add(1);
+    if (xTaskCreate(stream_task, "radio_dl", 20480, (void *)(intptr_t)gen, 5, NULL) != pdPASS) {
+        ntasks_add(-1);
         set_err("stream task create failed");
+    }
 }
 
 void radio_play_station(int idx)
@@ -404,6 +410,11 @@ void radio_play_station(int idx)
 // ---- machine lifecycle ------------------------------------------------------
 static esp_err_t radio_start(void)
 {
+    // a stream task that outlived the last stop() still writes rd.ring: never
+    // memset under it. (This used to force s_ntasks = 0, and the late task then
+    // drove it to -1, so the NEXT stop did not wait at all.)
+    for (int i = 0; i < 300 && s_ntasks > 0; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    if (s_ntasks > 0) { ESP_LOGE(TAG, "old stream task still running"); return ESP_ERR_INVALID_STATE; }
     memset(&rd, 0, sizeof(rd));
     radio_stations_load();       // defaults + SD-saved favourites
     rd.ring = heap_caps_malloc((size_t)RADIO_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
@@ -413,13 +424,14 @@ static esp_err_t radio_start(void)
     rs_reset();
     rd.state = RADIO_STOPPED;
     s_stop = false;
-    s_ntasks = 0;
     return ESP_OK;
 }
 
 static void radio_stop(void)
 {
     radio_stop_stream();
+    // a task stuck in a slow DNS/TLS connect can outlive the 7 s wait: leak
+    if (s_ntasks > 0) { ESP_LOGE(TAG, "stream task did not stop; leaking ring"); return; }
     free(rd.ring);
     rd.ring = NULL;
     free(s_rs.ext);

@@ -4,11 +4,13 @@
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "sampfile.h"
 #include "sd_lock.h"
 #include "sampplay.h"
+#include "worker.h"
 
 static const char *TAG = "SAMPPLAY";
 
@@ -34,8 +36,11 @@ struct sampplay_s {
     volatile bool     playing;
     volatile bool     gate;          // reader says the ring is safe to drain
     volatile bool     flush;         // caller asked for a rewind
-    volatile bool     run;           // reader task keep-alive
-    volatile bool     alive;
+    worker_t          w;             // reader task lifecycle (worker.h)
+    SemaphoreHandle_t mx;            // held by the reader for a whole fill; close()
+                                     // and open() take it, so a fill in flight
+                                     // never sees the file or stage vanish (the old
+                                     // "wait 30 ms" lost to a reader parked on sd_lock)
     TaskHandle_t      task;
 };
 
@@ -49,7 +54,7 @@ static void fill_once(sampplay_t *p)
     if (want == 0) return;
 
     // never read past the loop end — wrap to in_pt instead
-    if (!p->stage) return;                      // closed underneath us
+    if (!p->stage || !p->f) return;             // closed (caller holds mx)
     uint32_t left = (p->src < p->out_pt) ? (p->out_pt - p->src) : 0;
     if (left == 0) { p->src = p->in_pt; left = p->out_pt - p->in_pt; }
     if (want > left) want = left;
@@ -77,8 +82,7 @@ static void fill_once(sampplay_t *p)
 static void reader_task(void *pv)
 {
     sampplay_t *p = (sampplay_t *)pv;
-    p->alive = true;
-    while (p->run) {
+    while (p->w.run) {
         if (!p->f || !p->playing) { p->gate = false; vTaskDelay(pdMS_TO_TICKS(20)); continue; }
         if (p->flush) {
             p->gate  = false;
@@ -88,7 +92,9 @@ static void reader_task(void *pv)
             p->src   = p->in_pt;
             p->flush = false;
         }
+        xSemaphoreTake(p->mx, portMAX_DELAY);
         fill_once(p);
+        xSemaphoreGive(p->mx);
         // open the gate once there is a cushion, so the first block does not
         // start on an almost-empty ring
         if (!p->gate && (p->wpos - p->rpos) >= p->ring_frames / 2) p->gate = true;
@@ -96,8 +102,7 @@ static void reader_task(void *pv)
         if ((p->wpos - p->rpos) >= p->ring_frames - SP_CHUNK) vTaskDelay(pdMS_TO_TICKS(5));
         else vTaskDelay(1);
     }
-    p->alive = false;
-    vTaskDelete(NULL);
+    worker_exit(&p->w);
 }
 
 // ---- lifecycle --------------------------------------------------------------
@@ -107,17 +112,16 @@ sampplay_t *sampplay_create(uint32_t ring_frames)
     if (!p) return NULL;
     p->ring_frames = ring_frames ? ring_frames : SP_DEF_RING;
     p->ring  = heap_caps_malloc(p->ring_frames * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    if (!p->ring) {
-        ESP_LOGE(TAG, "ring alloc failed");
+    p->mx    = xSemaphoreCreateMutex();
+    if (!p->ring || !p->mx) {
+        ESP_LOGE(TAG, "ring/mutex alloc failed");
         sampplay_destroy(p);
         return NULL;
     }
-    p->run = true;
     // unpinned and modest priority: it touches SD, and pinning file tasks to
     // core 0 is what made WiFi downloads click (see fs_machine.c)
-    if (xTaskCreate(reader_task, "sampplay", 3072, p, 4, &p->task) != pdPASS) {
+    if (!worker_spawn(&p->w, reader_task, "sampplay", 3072, p, 4, &p->task)) {
         ESP_LOGE(TAG, "reader task create failed");
-        p->run = false;
         sampplay_destroy(p);
         return NULL;
     }
@@ -129,11 +133,13 @@ void sampplay_destroy(sampplay_t *p)
     if (!p) return;
     p->playing = false;
     p->gate = false;
-    p->run = false;
-    for (int i = 0; i < 100 && p->alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    // a reader parked on sd_lock can outlive any wait: leak the whole player
+    // rather than free it under the task (it still holds p)
+    if (!worker_stop(&p->w, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking player"); return; }
     sampplay_close(p);                  // frees stage
     if (p->ring)  heap_caps_free(p->ring);
     if (p->stage) heap_caps_free(p->stage);
+    if (p->mx)    vSemaphoreDelete(p->mx);
     free(p);
 }
 
@@ -160,6 +166,7 @@ int sampplay_open(sampplay_t *p, const char *name)
         ESP_LOGE(TAG, "stage alloc failed (internal RAM)");
         return -1;
     }
+    xSemaphoreTake(p->mx, portMAX_DELAY);   // publish as one step to the reader
     p->sf = sf;
     p->in_pt = 0;
     p->out_pt = sf.frames;
@@ -167,6 +174,7 @@ int sampplay_open(sampplay_t *p, const char *name)
     p->rpos = p->wpos = 0;
     p->flush = true;
     p->f = f;                       // last: the reader task tests this
+    xSemaphoreGive(p->mx);
     return 0;
 }
 
@@ -175,14 +183,19 @@ void sampplay_close(sampplay_t *p)
     if (!p || !p->f) return;
     p->playing = false;
     p->gate = false;
+    // take the file and stage away under mx: a fill in flight (however long it
+    // waited on sd_lock) finishes first, and the next one sees them gone
+    xSemaphoreTake(p->mx, portMAX_DELAY);
     FILE *f = p->f;
-    p->f = NULL;                    // first: stops the reader touching it
-    vTaskDelay(pdMS_TO_TICKS(30));  // let an in-flight fill_once finish
+    int16_t *stage = p->stage;
+    p->f = NULL;
+    p->stage = NULL;
+    memset(&p->sf, 0, sizeof(p->sf));
+    xSemaphoreGive(p->mx);
     sd_lock_take();
     fclose(f);
     sd_lock_give();
-    if (p->stage) { heap_caps_free(p->stage); p->stage = NULL; }
-    memset(&p->sf, 0, sizeof(p->sf));
+    if (stage) heap_caps_free(stage);
 }
 
 bool     sampplay_is_open(const sampplay_t *p) { return p && p->f != NULL; }

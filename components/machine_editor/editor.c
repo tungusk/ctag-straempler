@@ -372,9 +372,12 @@ void editor_audition(bool on)
         sampplay_window(s_play, ed.in_pt, ed.out_pt);
         sampplay_play(s_play, true);
     } else {
-        sampplay_play(s_play, false);
-        sampplay_destroy(s_play);
+        // process() renders s_play: take it away from the audio task first
+        sampplay_t *p = s_play;
         s_play = NULL;
+        machine_block_wait();
+        sampplay_play(p, false);
+        sampplay_destroy(p);
     }
 }
 

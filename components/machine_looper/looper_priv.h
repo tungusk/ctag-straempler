@@ -73,6 +73,8 @@ extern const char *const lp_mtx_labels[LPM_N];
 // save track i's RAM loop to the SD library (LOOP_NNNN.RAW + .JSN). Returns 0
 // on success, -1 if the track is empty or the write failed. Call from UI task.
 int looper_save_track(int i);
+// wait for a /looper/save worker to finish (looper_web.c); false = still running
+bool looper_web_save_idle(int timeout_ms);
 int looper_get_ppq(void);
 
 // bounce (resample) all playing tracks down into track 1, baking in each
