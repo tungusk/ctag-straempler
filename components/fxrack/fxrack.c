@@ -349,9 +349,12 @@ void fxrack_menu_adj(const fxrack_t *rk, int slot, int param, int dir)
             if (m != RV_OFF && !rk->rv->slab && reverb_init(rk->rv) != ESP_OK) m = RV_OFF;
             reverb_set_mode(rk->rv, m);
         } else {
-            int k = rk->slot[slot] + dir;
-            if (k < 0) k = FXK_NGEN - 1;
-            if (k >= FXK_NGEN) k = FXK_OFF;
+            int k = rk->slot[slot];
+            do {
+                k += dir;
+                if (k < 0) k = FXK_NGEN - 1;
+                if (k >= FXK_NGEN) k = FXK_OFF;
+            } while (rk->no_filter && (k == FXK_FILT || k == FXK_BAND));
             slot_set(rk, slot, k);
         }
         return;
@@ -363,6 +366,7 @@ void fxrack_menu_adj(const fxrack_t *rk, int slot, int param, int dir)
 // ---- autosave (owns the whole FX serialization) -------------------------------
 void fxrack_save(const fxrack_t *rk, cJSON *o)
 {
+    if (rk->no_filter) cJSON_AddBoolToObject(o, "fxnf", true);   // web: hide Filter/Band
     cJSON *sl = cJSON_AddArrayToObject(o, "fxsl");
     for (int s = 0; s < FX_NSLOT_GEN; s++) cJSON_AddItemToArray(sl, cJSON_CreateNumber(rk->slot[s]));
     cJSON_AddNumberToObject(o, "rv", rk->rv->mode);
@@ -414,6 +418,7 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
             cJSON *si = cJSON_GetArrayItem(sl, s);
             int v = cJSON_IsNumber(si) ? si->valueint : FXK_OFF;
             rk->slot[s] = (v < 0 || v >= FXK_NGEN) ? FXK_OFF : (int8_t)v;
+            if (rk->no_filter && (v == FXK_FILT || v == FXK_BAND)) rk->slot[s] = FXK_OFF;
         }
     } else {
         int s = 0;

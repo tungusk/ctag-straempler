@@ -1778,9 +1778,9 @@ function fxFmt(k,v){
   return v+(k==='odbs'||k==='flgfb'?'':'%');
 }
 function fxv(inp){var sp=inp.nextElementSibling;if(sp)sp.textContent=fxFmt(inp.getAttribute('data-rp'),inp.value);}
-function fxSel(name,cur,list,attr){
+function fxSel(name,cur,list,attr,skip){
   var h='<select '+attr+'>';
-  list.forEach(function(n,i){h+='<option value="'+i+'"'+(i===cur?' selected':'')+'>'+n+'</option>';});
+  list.forEach(function(n,i){if(skip&&skip.indexOf(i)>=0&&i!==cur)return;h+='<option value="'+i+'"'+(i===cur?' selected':'')+'>'+n+'</option>';});
   return h+'</select>';
 }
 function fxGroup(kind,d){
@@ -1817,7 +1817,8 @@ function fxCard(d){
   if(!Array.isArray(d.fxsl))return '';
   var h='<div class="card pnl" id="fxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">FX</b>'
        +'<button class="btn foldhide" style="flex:0 0 auto" onclick="rpApply()">Apply</button></div><div class="fxslots">';
-  d.fxsl.forEach(function(k,i){h+='<label>FX'+(i+1)+' '+fxSel('fxsl.'+i,+k,FXK,'data-rp="fxsl.'+i+'" onchange="fxSlotPick()"')+'</label>';});
+  // fxnf: the machine has its own voice filter, so its FX slots don't offer Filter/Band (one filter at a time)
+  d.fxsl.forEach(function(k,i){h+='<label>FX'+(i+1)+' '+fxSel('fxsl.'+i,+k,FXK,'data-rp="fxsl.'+i+'" onchange="fxSlotPick()"',d.fxnf?[5,6]:null)+'</label>';});
   if(d.rv!==undefined)h+='<label>FX3 '+fxSel('rv',+d.rv,FXRV,'data-rp="rv"')+'</label>';
   if(d.rvmx!==undefined)h+='<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:150px">mix <input type="range" data-rp="rvmx" min="0" max="100" value="'+d.rvmx+'" oninput="fxv(this)" style="flex:1"><span class="fxv">'+fxFmt('rvmx',d.rvmx)+'</span></label>';
   h+='</div><div class="fxgs" id="fxgroups">'+fxGroups(d)+'</div></div>';

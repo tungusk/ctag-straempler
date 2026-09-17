@@ -407,7 +407,7 @@ static esp_err_t keys_start(void)
     fxfilter_init(&inst.band);
     inst.fx_slot[0] = inst.fx_slot[1] = FXK_OFF;   // rack empty until assigned
     inst_rk = (fxrack_t){ .od = &inst.od, .flg = &inst.flg, .trem = &inst.trem, .dly = &inst.dly,
-                          .filt = &inst.filt, .band = &inst.band, .rv = &inst.rv, .slot = inst.fx_slot };
+                          .filt = &inst.filt, .band = &inst.band, .rv = &inst.rv, .slot = inst.fx_slot, .no_filter = true };
     return ESP_OK;
 }
 

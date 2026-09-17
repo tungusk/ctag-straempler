@@ -1014,7 +1014,7 @@ static esp_err_t tape_start(void)
     tp.dly.sync = tp.flg.sync = tp.trem.sync = true;
     tp.dly.div = 2; tp.trem.div = 2; tp.flg.div = 4;
     tp_rk = (fxrack_t){ .od = &tp.od, .flg = &tp.flg, .trem = &tp.trem, .dly = &tp.dly,
-                        .filt = &tp.filt, .band = &tp.band, .rv = &tp.rv, .slot = tp.fx_slot };
+                        .filt = &tp.filt, .band = &tp.band, .rv = &tp.rv, .slot = tp.fx_slot, .no_filter = true };
     cvmtx_init(&tp.mtx, (const char *const *)tape_mtx_labels, TPM_N, tape_mtx_defaults);
     tp.mtx.nodirty = 1u << TPM_WIN;            // K5 window move is performance-only, never autosaved
     if (bank_alloc(&tp.tape, TP_LEN_SECS[tp.len_sel] * TP_RATE) < 0) {

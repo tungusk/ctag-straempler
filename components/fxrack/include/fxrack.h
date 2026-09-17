@@ -41,6 +41,10 @@ typedef struct {
     reverb_t    *rv;
     int8_t      *slot;          // [FX_NSLOT_GEN] = FXK_* per generic slot
     float        bpm;           // grid tempo for synced effects (0 = free-running)
+    // ONE FILTER AT A TIME (Arlo 2026-09-16): a host with its own voice filter
+    // (Synth, Keys, Tape) does not offer Filter/Band in its FX slots, and a preset
+    // that had one loads as Off. Drums, with no voice filter, keeps them.
+    bool         no_filter;
     // CV MODULATION (2026-07-20): per-slot bipolar offsets (-1..+1, 0 = none),
     // written by the host once per block (its CV matrix), applied INSIDE the
     // process call as a push around the stage and restored after — so the
