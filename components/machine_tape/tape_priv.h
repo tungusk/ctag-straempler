@@ -148,6 +148,9 @@ typedef struct {
     char     save_id[12];             // last minted take id ("" = none)
     uint32_t save_a, save_b;          // frames [a,b) the writer will emit
     bool     save_crop;              // true = an actively-cropped take (marked TCR_)
+    bool     save_adopt;             // this save makes the file the take (see tape_spawn_save)
+    volatile uint32_t dirty_gen;     // bumped per punch-in (audio task)
+    uint32_t save_gen;               // dirty_gen when the running save began
     // The writer reads the bank in the background while the audio task may still
     // be recording INTO it (an overdub punch during a drop, or a fresh take
     // rolling over a deferred auto-save). The audio task sets this when it writes

@@ -175,6 +175,7 @@ static void tape_rec_start(void)
     if (tp.fx_route == TPFX_POST) tp.fx_route = TPFX_PRE;
     tp.recording = true;
     tp.take_dirty = true;                // unsaved recorded audio now in the buffer
+    tp.dirty_gen++;                      // a save that started before this can't mark it clean
 }
 
 // punch OUT. Finalize a fresh take (crop = whole take, loop from the start) and
@@ -364,6 +365,18 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     #undef TP_MX
 
     if (tp.rec_dest == TPD_CARD) { tape_card_process(out, in, io); return; }
+
+    // A load streams into the SAME bank for seconds and only checked "stopped"
+    // when it began: a TR2 take mid-load recorded into it, then the load set len
+    // and take_dirty=false over the take (code review 11.4). The transport holds
+    // still while a load (incl. Crop's load-back) is in flight: gates read idle.
+    machine_io_t io_held;
+    if (tp.loading) {
+        io_held = *io;
+        io_held.trig_rising = 0;
+        io_held.trig_level |= 0x03;       // active low: both TRs idle
+        io = &io_held;
+    }
 
     // transport edges: TR1 play/stop, TR2 record punch
     if (io->trig_rising & TP_PLAYBIT) {
@@ -774,11 +787,12 @@ static void save_task(void *pv)
         vTaskDelete(NULL); return;
     }
 
+    bool ok = true;
     for (uint32_t i = a; i < b; ) {
         int n = 0;
         while (n < 512 && i < b) { int16_t v = tp_rd(i); chunk[n*2] = v; chunk[n*2+1] = v; n++; i++; }
         sd_lock_take();
-        fwrite(chunk, sizeof(int16_t) * 2, n, f);
+        if (fwrite(chunk, sizeof(int16_t) * 2, n, f) != (size_t)n) ok = false;   // card full
         sd_lock_give();
         if ((i & 0xFFFF) < 1024) vTaskDelay(1);   // yield ~every 64k frames, not every chunk
     }
@@ -793,10 +807,18 @@ static void save_task(void *pv)
                                  : "{\"src\":\"tape\",\"crop\":false}", jf); fclose(jf); }
     sd_lock_give();
     heap_caps_free(chunk);
-    if (tp.drop_spoiled)
+    if (!ok)
+        ESP_LOGE(TAG, "take %s: SHORT WRITE (card full?) — file is truncated", tp.save_id);
+    else if (tp.drop_spoiled)
         ESP_LOGW(TAG, "take %s was recorded over WHILE saving — content is a blend", tp.save_id);
     else
         ESP_LOGI(TAG, "saved take -> %s", tp.save_id);
+    // The take is now on the card: mark it clean, or every later trigger (the
+    // next load, leaving Tape) saved it AGAIN as a new CUT_ file and repointed
+    // tapelast (code review 11.5). Only for an ADOPTING save of intact content
+    // that nothing has recorded into since the save began.
+    if (ok && tp.save_adopt && !tp.drop_spoiled && tp.dirty_gen == tp.save_gen)
+        tp.take_dirty = false;
     tp.save_busy = false;
     vTaskDelete(NULL);
 }
@@ -821,6 +843,7 @@ static int tape_spawn_save(uint32_t a, uint32_t b, bool crop, bool adopt)
     snprintf(tp.save_id, sizeof(tp.save_id), "%s%04d", pfx, idx % 10000);
     if (adopt) { snprintf(tp.restore_id, sizeof(tp.restore_id), "%s", tp.save_id); tp_persist_last(); }
     tp.save_a = a; tp.save_b = b; tp.save_crop = crop;
+    tp.save_adopt = adopt; tp.save_gen = tp.dirty_gen;
     tp.drop_spoiled = false;          // arm the overwrite detector for THIS write
     tp.save_busy = true;
     if (xTaskCreate(save_task, "tape_sv", 8192, NULL, 4, NULL) != pdPASS) {
