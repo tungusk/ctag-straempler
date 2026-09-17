@@ -436,6 +436,39 @@ void fs_safe_name(const char *raw, const char *id, char *out, size_t n)
     if (!out[0] && id && id[0]) snprintf(out, n, "FS%s", id);
 }
 
+// The pool id a download of freesound `id` lives under. Normally the title
+// alone ("kick"). If that id is already taken by a DIFFERENT sound (another
+// result with the same title, or a sample of yours with that name), pressing the
+// result used to play the other file and never download this one (code review
+// 13.4, Arlo 2026-09-16: suffix the id only on a collision) — so it becomes
+// "kick_123456", shortened to fit. A pool sample whose sidecar says it IS this
+// freesound id keeps the plain name: that is the same sound, already here.
+void fs_pool_name(const char *raw, const char *id, char *out, size_t n)
+{
+    fs_safe_name(raw, id, out, n);
+    if (!id || !id[0] || !out[0]) return;
+    char path[80];
+    if (sample_resolve(out, path, sizeof(path)) != 0) return;         // free: use the title
+    bool same = false;
+    if (sample_resolve_aux(out, ".JSN", path, sizeof(path)) == 0) {
+        cJSON *sc = readJSONFileAsCJSON(path);
+        cJSON *t = sc ? cJSON_GetObjectItemCaseSensitive(sc, "tags_s") : NULL;
+        char want[32];
+        snprintf(want, sizeof(want), "freesound %s", id);
+        same = cJSON_IsString(t) && strcmp(t->valuestring, want) == 0;
+        if (sc) cJSON_Delete(sc);
+    }
+    if (same) return;
+    size_t idl = strlen(id);
+    size_t cap = (n < SAMPLE_ID_LEN ? n : SAMPLE_ID_LEN) - 1;           // chars available
+    if (idl + 2 > cap) return;                                          // cannot fit: keep the title
+    size_t keep = strlen(out);
+    if (keep > cap - idl - 1) keep = cap - idl - 1;
+    char base[SAMPLE_ID_LEN];
+    strlcpy(base, out, keep + 1);
+    snprintf(out, n, "%s_%s", base, id);
+}
+
 // ---- panel search ----------------------------------------------------------
 // The web handler proxies raw JSON to the browser, which parses it there. The
 // panel cannot, so this runs the same query and parses it HERE into results[].

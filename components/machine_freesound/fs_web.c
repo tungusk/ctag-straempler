@@ -123,7 +123,7 @@ static esp_err_t fs_get_handler(httpd_req_t *req)
 
     char raw[SAMPLE_ID_LEN];
     if (!q_param(req, "name", raw, sizeof(raw))) raw[0] = 0;
-    fs_safe_name(raw, id, name, sizeof(name));
+    fs_pool_name(raw, id, name, sizeof(name));
 
     int r = fs_get_start(id, name);
     if (r == -1)

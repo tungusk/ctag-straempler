@@ -75,6 +75,7 @@ esp_err_t fs_http_err(void); // and the esp_err from opening it
 int  fs_get_start(const char *id, const char *name);         // spawn pipeline; -1 if busy/failed
 int  fs_fetch_start(const char *url, const char *name);      // same, from a direct http(s) MP3 URL
 void fs_safe_name(const char *raw, const char *id, char *out, size_t n);  // pool-safe take id
+void fs_pool_name(const char *raw, const char *id, char *out, size_t n);  // ...unless it names ANOTHER sound: then <name>_<id>
 
 // ---- panel search ----------------------------------------------------------
 // Runs in its own task: a TLS session is ~20 KB of stack and must not go on the

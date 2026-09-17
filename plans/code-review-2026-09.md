@@ -250,7 +250,8 @@ Most findings are a few mistakes repeated. Fixing by theme is cheaper than findi
 **2.1** (filter blows up; high if real, worth an ear test first) · **11.2** (Tape punch ignores the TR setting) · **8.3** (Slicer Sensitivity inert in OT mode) · **8.4** (preset REV plays forward) · **13.1, 13.4** (Freesound first press / same-name results) · **13.2** · **3.5, 3.9, 3.10** (MP3 with ID3, 8-bit AIFF, WAVE_EXTENSIBLE rejected) · **1.3, 1.6** · **5.1** · **2.5, 1.10** · **10.5**.
 
 > **FIXED 09-16 evening except 13.4** (11.2, 8.3, 8.4, 5.1, 1.3, 1.6 `f2e2095` · 3.5, 3.9, 3.10 `38239db` · 13.2, 13.1 `adf07ae` · 2.1, 2.5, 1.10 `8f999ef`). Bench: an mp3 behind a 16 KB ID3v2 tag imports (2 s); a WAVE_FORMAT_EXTENSIBLE 24-bit 48 kHz WAV converts.
-> - **13.4 left open — a naming decision:** two results with the same title share one pool id; fixing it changes how downloads are named (e.g. always suffix the freesound id). Arlo's call.
+> - **13.4 FIXED after Arlo's call (09-16): suffix the freesound id ONLY on a collision.** `fs_pool_name()`: the title as before, unless that pool id holds a DIFFERENT sound (sidecar `tags_s` is not `freesound <id>`), then `<title>_<id>`, shortened to fit. Panel press and web `/fs/get` both use it.
+> - **WiFi bad-password AP fallback (6.4): Arlo 09-16 — skip the hand test for now**; check it if it ever happens for real.
 > - **Ear tests owed:** 2.1 (FX Filter/Band at the top of the cutoff range: the coefficient is now clamped to 95% of the Chamberlin bound `sqrt(q*q+4)-q`, so the very top of the sweep may sit lower than before), 2.5 (synced rnd LFO steps every division), 1.10 (a jack clock under 30 BPM at PPQ 1 locks with clk_auto on).
 > - **Hand tests owed:** Editor/Freesound audition start/stop (panel only), 13.2 double apply, 11.2 with play on TR2 and record on TR1, 8.3 Sensitivity on a sample with an .OT, 8.4 a preset with REV on an already-loaded sample.
 
