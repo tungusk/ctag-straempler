@@ -247,6 +247,14 @@ static void fs_pipeline(void *pv)
             fsm.progress = (int)((int64_t)total * 100 / content_length);
             stack_watch();
         }
+        if (total < content_length) {
+            // r == 0 early is a dropped connection or a timeout, not the end: this
+            // used to convert the partial body and report it "installed" (review 13.3)
+            ESP_LOGE(TAG, "mp3 incomplete: %d of %d bytes", total, content_length);
+            heap_caps_free(body);
+            set_err("download incomplete");
+            goto out;
+        }
         // network done — hand the radio back before going near the card
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
@@ -300,6 +308,17 @@ static void fs_pipeline(void *pv)
             stack_watch();
         }
         free(chunk);
+        // the fallback had no length check at all (review 13.3). With a length,
+        // it must match; chunked must have seen its last chunk; a close-delimited
+        // body has nothing to check against.
+        bool complete = content_length > 0 ? total == content_length
+                      : esp_http_client_is_chunked_response(client) ? esp_http_client_is_complete_data_received(client)
+                      : true;
+        if (!complete) {
+            ESP_LOGE(TAG, "mp3 incomplete: %d bytes (length %d)", total, content_length);
+            set_err("download incomplete");
+            goto out;
+        }
     }
     sd_lock_take();
     f_close(&fmp3);
@@ -357,6 +376,10 @@ static void fs_pipeline(void *pv)
 out:
     stack_watch();
     if (fmp3_open) { sd_lock_take(); f_close(&fmp3); sd_lock_give(); }
+    // a failed job must not leave its partial usr/<name>.mp3 behind: the next
+    // POST /import scan would convert the fragment into the pool (review 13.7)
+    // (fmp3_open stays set after the close: it means THIS job created the file)
+    if (fsm.phase != FS_DONE && fmp3_open) { sd_lock_take(); f_unlink(pool_path); sd_lock_give(); }
     if (root) cJSON_Delete(root);
     if (buf) heap_caps_free(buf);
     if (client) esp_http_client_cleanup(client);

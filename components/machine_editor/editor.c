@@ -73,10 +73,27 @@ static size_t rd(FILE *f, sampfile_t *sf, int16_t *buf, size_t n)
     sd_lock_give();
     return got;
 }
+// Set by a short read or a short write anywhere in a job. Both used to be
+// silent: a full card ended ED_DONE "wrote XX_NNNN" with a truncated take
+// (code review 13.8). One job runs at a time.
+static bool s_io_err = false;
+
 static void wr(FILE *f, const int16_t *buf, size_t n)
 {
     sd_lock_take();
-    fwrite(buf, sizeof(int16_t) * 2, n, f);
+    if (fwrite(buf, sizeof(int16_t) * 2, n, f) != n) s_io_err = true;
+    sd_lock_give();
+}
+
+// fail the job and delete its half-written output
+static void fail_output(const char *id)
+{
+    set_err("read/write failed (card full?)");
+    if (!id || !id[0]) return;
+    char path[64];
+    snprintf(path, sizeof(path), "/sdcard/usr/%s.WAV", id);
+    sd_lock_take();
+    remove(path);
     sd_lock_give();
 }
 static void seek_frame(FILE *f, const sampfile_t *sf, uint32_t frame)
@@ -126,7 +143,7 @@ static int span_fwd(FILE *src, sampfile_t *sf, FILE *out, int16_t *buf,
         uint32_t want = span - p;
         if (want > ED_CHUNK) want = ED_CHUNK;
         size_t n = rd(src, sf, buf, want);
-        if (n == 0) break;
+        if (n == 0) { s_io_err = true; break; }   // short read before the span ended
         for (size_t i = 0; i < n; i++) {
             float g = frame_gain(x, a + p + (uint32_t)i);
             if (g != 1.0f) {
@@ -153,7 +170,7 @@ static int span_rev(FILE *src, sampfile_t *sf, FILE *out, int16_t *buf,
         uint32_t start = pos - n;
         seek_frame(src, sf, start);
         size_t got = rd(src, sf, buf, n);
-        if (got == 0) break;
+        if (got == 0) { s_io_err = true; break; }
         for (uint32_t i = 0, j = (uint32_t)got - 1; i < j; i++, j--) {
             int16_t l = buf[i * 2], r = buf[i * 2 + 1];
             buf[i * 2] = buf[j * 2]; buf[i * 2 + 1] = buf[j * 2 + 1];
@@ -170,6 +187,7 @@ static int span_rev(FILE *src, sampfile_t *sf, FILE *out, int16_t *buf,
 static void job_task(void *pv)
 {
     s_running = true;
+    s_io_err = false;
     ed.progress = 0;
     ed.out[0] = 0;
     int16_t *buf = malloc((size_t)ED_CHUNK * 2 * sizeof(int16_t));
@@ -198,7 +216,7 @@ static void job_task(void *pv)
         for (uint32_t p = 0; p < span; ) {
             uint32_t want = span - p; if (want > ED_CHUNK) want = ED_CHUNK;
             size_t n = rd(src, &sf, buf, want);
-            if (n == 0) break;
+            if (n == 0) { s_io_err = true; break; }   // short read before the span ended
             for (size_t i = 0; i < n * 2; i++) { int a = buf[i]; if (a < 0) a = -a; if (a > peak) peak = a; }
             p += n; ed.progress = (int)((uint64_t)p * 45 / span);
             vTaskDelay(1);
@@ -232,7 +250,7 @@ static void job_task(void *pv)
         for (uint32_t p = 0; p < span; ) {
             uint32_t want = span - p; if (want > ED_CHUNK) want = ED_CHUNK;
             size_t n = rd(src, &sf, buf, want);
-            if (n == 0) break;
+            if (n == 0) { s_io_err = true; break; }   // short read before the span ended
             for (size_t i = 0; i < n; i++, idx++) {
                 int a = buf[i * 2]; if (a < 0) a = -a;
                 int b = buf[i * 2 + 1]; if (b < 0) b = -b;
@@ -248,8 +266,9 @@ static void job_task(void *pv)
 
     sd_lock_take();
     sampwav_finish(out);
-    fclose(out);
+    if (fclose(out) != 0) s_io_err = true;
     sd_lock_give();
+    if (s_io_err) { fail_output(ed.out); goto close_src; }
     ed.progress = 100;
     ed.state = ED_DONE;
     ESP_LOGI(TAG, "%s: %s [%u,%u) -> %s", ed_op_names[ed.op], ed.src,
@@ -430,7 +449,7 @@ static void raw_span(FILE *src, sampfile_t *sf, FILE *out, int16_t *buf,
     for (uint32_t p = 0; p < span; ) {
         uint32_t want = span - p; if (want > ED_CHUNK) want = ED_CHUNK;
         size_t n = rd(src, sf, buf, want);
-        if (n == 0) break;
+        if (n == 0) { s_io_err = true; break; }   // short read before the span ended
         wr(out, buf, n);
         p += n;
         ed.progress = plo + (int)((uint64_t)p * (phi - plo) / span);
@@ -442,6 +461,7 @@ static void clip_task(void *pv)
 {
     (void)pv;
     s_running = true;
+    s_io_err = false;
     ed.progress = 0;
     ed.out[0] = 0;
 
@@ -503,6 +523,11 @@ static void clip_task(void *pv)
         }
     }
 
+    if (s_io_err) {
+        // CUT/PASTE wrote one take (ed.out); slices keep whatever landed whole
+        fail_output((s_cjob == CJ_CUT || s_cjob == CJ_PASTE) ? ed.out : NULL);
+        goto close_src;
+    }
     ed.progress = 100;
     ed.state = ED_DONE;
 

@@ -1421,12 +1421,27 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
         total += ret; remaining -= ret;
         if (ret > 0) {
             sd_lock_take();
-            f_write(&raw_file, buf, ret, &bw);
+            FRESULT wr = f_write(&raw_file, buf, ret, &bw);
             sd_lock_give();
+            if (wr != FR_OK || bw != (UINT)ret) {
+                // card full / write error: this used to return 200 and start the
+                // importer on a truncated take (code review 6.8)
+                ESP_LOGE(TAG, "drop_sample: write failed (%d, %u/%d)", wr, (unsigned)bw, ret);
+                sd_lock_take();
+                f_close(&raw_file); f_unlink(file_name);
+                sd_lock_give();
+                free(buf); cJSON_Delete(root);
+                ev.event = EV_DECODING_DONE;
+                xQueueSend(ui_ev_queue, &ev, pdMS_TO_TICKS(100));
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD write failed");
+                return ESP_FAIL;
+            }
         }
+        // progress is best-effort: never block the httpd worker on the UI queue
+        // (the UI task can itself be waiting on httpd during a machine switch)
         ev.event = EV_DECODING_PROGRESS;
         ev.event_data = (void *)(total / (file_len_d100 ? file_len_d100 : 1));
-        xQueueSend(ui_ev_queue, &ev, portMAX_DELAY);
+        xQueueSend(ui_ev_queue, &ev, 0);
     }
 
     // frame-align by padding at the END — the old leading pad shifted every
@@ -1444,7 +1459,10 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "username", "myself");
     cJSON_AddStringToObject(root, "url", "local");
     cJSON_AddStringToObject(root, "license", "own license");
-    writeJSONFile(file_name_jsn, cJSON_Print(root));
+    {
+        char *js = cJSON_Print(root);        // was leaked on every upload
+        if (js) { writeJSONFile(file_name_jsn, js); free(js); }
+    }
 
     sd_lock_take();
     f_close(&raw_file);
@@ -1461,7 +1479,7 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
 
     httpd_resp_send(req, NULL, 0);
     ev.event = EV_DECODING_DONE;
-    xQueueSend(ui_ev_queue, &ev, portMAX_DELAY);
+    xQueueSend(ui_ev_queue, &ev, pdMS_TO_TICKS(500));
     return ESP_OK;
 }
 

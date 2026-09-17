@@ -144,6 +144,10 @@ static void rec_writer_task(void *pvParams)
         remove(fname);
         sd_lock_give();
         ESP_LOGI(TAG, "Prepared recording cancelled: %s", fname);
+        // the audio task's trigger can land between cancel_prepared's check and
+        // its store: the file is gone, so rec_active must not survive it, or
+        // every later prepare() refuses until a recording_stop() (review 1.7)
+        atomic_store(&rec_active, false);
         atomic_store(&rec_prepared, false);
         rec_task_handle = NULL;
         vTaskDelete(NULL);
@@ -251,7 +255,15 @@ void recording_prepare(int vid)
     // priority 10, not 18: the 6s capture queue absorbs scheduling slack,
     // and 18 let the prepare-phase directory scan starve the sampler reader
     // (prio 6) and httpd (prio 5) for seconds
-    xTaskCreate(rec_writer_task, "rec_writer", 4096, NULL, 10, &rec_task_handle);
+    if (xTaskCreate(rec_writer_task, "rec_writer", 4096, NULL, 10, &rec_task_handle) != pdPASS) {
+        // low internal RAM (e.g. a bounce while Radio plays): rec_prepared used
+        // to stick with no writer, and nothing could record until a reboot (1.4)
+        ESP_LOGE(TAG, "rec_writer task create failed");
+        rec_task_handle = NULL;
+        atomic_store(&rec_prepared, false);
+        atomic_store(&rec_active, false);   // a trigger may already have landed
+        return;
+    }
     ESP_LOGI(TAG, "Recording prepared for vid=%d", vid);
 }
 

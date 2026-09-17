@@ -261,6 +261,42 @@ static int convert_pcm(imp_src_t *src, const char *dst_vfs)
     return rc;
 }
 
+// Publish the converted temp as `dst` and retire the source. Caller holds
+// sd_lock. It used to be `remove(src); rename(tmp, dst)` unchecked: when dst
+// already existed (the same Freesound name twice, X.AIF beside X.WAV) the rename
+// failed with the source already gone, the call still returned 0, and the audio
+// sat in IMPNEW.TMP until something deleted it (code review 3.3). Now the source
+// is removed only once the converted file is in place.
+static int imp_publish(const char *src, const char *tmp, const char *dst)
+{
+    struct stat st;
+    if (strcasecmp(src, dst) != 0) {
+        if (stat(dst, &st) == 0) {
+            ESP_LOGE(TAG, "%s exists — keeping %s unconverted", dst, src);
+            remove(tmp);
+            return -1;
+        }
+        if (rename(tmp, dst) != 0) { ESP_LOGE(TAG, "rename -> %s failed", dst); remove(tmp); return -1; }
+        remove(src);
+        return 0;
+    }
+    // converting X.WAV in place: FAT can't rename over a file, so park the
+    // source under a backup name and put it back if the rename fails
+    char bak[96];
+    const char *sl = strrchr(dst, '/');
+    snprintf(bak, sizeof(bak), "%.*s/IMPBAK.TMP", sl ? (int)(sl - dst) : 0, dst);
+    remove(bak);
+    if (rename(src, bak) != 0) { ESP_LOGE(TAG, "backup of %s failed", src); remove(tmp); return -1; }
+    if (rename(tmp, dst) != 0) {
+        ESP_LOGE(TAG, "rename -> %s failed, source restored", dst);
+        rename(bak, src);
+        remove(tmp);
+        return -1;
+    }
+    remove(bak);
+    return 0;
+}
+
 int samp_import_file(const char *vfs_path)
 {
     strlcpy(samp_import_cur, strrchr(vfs_path, '/') ? strrchr(vfs_path, '/') + 1
@@ -304,7 +340,7 @@ int samp_import_file(const char *vfs_path)
         sd_lock_take();
         fclose(src.f);
         remove(vtmp);
-        if (rc == 0) { remove(vfs_path); rename(tmp, dst); }
+        if (rc == 0) rc = imp_publish(vfs_path, tmp, dst);
         sd_lock_give();
         if (rc == 0) ESP_LOGI(TAG, "%s -> %s (mp3 %d ch @%d)", vfs_path, dst, ch, rate);
         return rc;
@@ -343,7 +379,7 @@ int samp_import_file(const char *vfs_path)
     int rc = convert_pcm(&src, tmp);
     sd_lock_take();
     fclose(f);
-    if (rc == 0) { remove(vfs_path); rename(tmp, dst); }
+    if (rc == 0) rc = imp_publish(vfs_path, tmp, dst);
     sd_lock_give();
     if (rc == 0) ESP_LOGI(TAG, "%s -> %s (%u-bit%s @%lu)", vfs_path, dst,
                           sf.src_bits, sf.src_code == 3 ? " float" : "",
