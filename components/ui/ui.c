@@ -27,6 +27,8 @@
 #include "timer_utils.h"
 #include "audio.h"
 #include "rest-api.h"
+#include "cJSON.h"
+#include "esp_heap_caps.h"
 
 #define SPI_BUS TFT_HSPI_HOST
 
@@ -304,7 +306,22 @@ static void otaValidateTask(void *arg){
     vTaskDelete(NULL);
 }
 
+// cJSON allocates EVERY node with malloc, and with CONFIG_SPIRAM_USE_CAPS_ALLOC
+// malloc never reaches PSRAM: parsing the ~5 KB AUTOSAVE.JSN took tens of KB of
+// the scarce internal heap, and during a machine switch it ran out partway
+// ("parse failed ... error at <varies>"), so autosave skipped the save — the
+// 09-16 bench logged it on most switches. PSRAM first, internal as the fallback.
+// Nothing parses JSON from an ISR or with the flash cache off. free() releases
+// either region, so callers freeing cJSON_Print output with free() stay correct.
+static void *cjson_malloc(size_t n)
+{
+    void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : heap_caps_malloc(n, MALLOC_CAP_8BIT);
+}
+
 void initUI(){
+    cJSON_Hooks hooks = { .malloc_fn = cjson_malloc, .free_fn = free };
+    cJSON_InitHooks(&hooks);    // before anything parses (config reads start just below)
     ui_ev_queue = xQueueCreate(64, sizeof(ui_ev_ts_t));
     ui_handler_param_t *params = calloc(1, sizeof(ui_handler_param_t));
     params->ui_evt_queue = ui_ev_queue;
