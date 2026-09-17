@@ -242,7 +242,7 @@ int pitch_detect_buf(const int16_t *buf, uint32_t frames, float rate, pitch_resu
         while (i < frames) { int32_t v = buf[i]; if (v < 0) v = -v; if ((float)v >= floor_amp) break; i += 3; }
         a_first = (i < frames) ? i : 0;
         uint32_t j = frames;
-        while (j > a_first + 1) { int32_t v = buf[j - 1]; if (v < 0) v = -v; if ((float)v >= floor_amp) break; j -= 3; }
+        while (j > a_first + 1) { int32_t v = buf[j - 1]; if (v < 0) v = -v; if ((float)v >= floor_amp) break; j = (j >= a_first + 3) ? j - 3 : a_first; }   // unsigned: never step below a_first (review 2.4)
         a_last = (j > a_first) ? j : frames;
     }
     // skip the attack transient — the one part of a note reliably inharmonic —

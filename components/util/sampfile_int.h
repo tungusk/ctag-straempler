@@ -66,7 +66,13 @@ static inline int sf_wav_parse(sampfile_t *sf, long fsize, sf_read_at_fn rd, voi
             sf->frames = dsz / (ch * 2);
             return 0;
         }
-        pos += 8 + csz + (csz & 1);          // chunks pad to even
+        // chunks pad to even. 64-bit on purpose: `8 + csz` in 32 bits wraps to 0
+        // for a corrupt size like 0xFFFFFFF8, pos never moved, and the probe
+        // spun forever holding sd_lock — every stream on the card with it
+        // (code review 3.6)
+        int64_t next = (int64_t)pos + 8 + (int64_t)csz + (csz & 1);
+        if (next <= pos || next > fsize) break;
+        pos = (long)next;
     }
     sf->why = "WAV: no data chunk";
     return -1;
@@ -111,7 +117,9 @@ static inline int sf_aiff_parse(sampfile_t *sf, long fsize, sf_read_at_fn rd, vo
             sf->frames = (nframes && nframes <= avail) ? nframes : avail;
             return 0;
         }
-        pos += 8 + csz + (csz & 1);
+        int64_t next = (int64_t)pos + 8 + (int64_t)csz + (csz & 1);   // see sf_wav_parse
+        if (next <= pos || next > fsize) break;
+        pos = (long)next;
     }
     sf->why = "AIFF: no SSND chunk";
     return -1;
