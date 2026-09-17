@@ -161,10 +161,14 @@ int audio_midi_note(void) { return s_midi_cur; }
 // active, the audio task feeds the recorder `out` (post-process, pre clock-out)
 // instead of the line input, so "sample the radio" etc. lands a REC_ take.
 static volatile bool s_bounce = false;
+static volatile bool s_bounce_live = false;   // the bounce's take has started (audio task)
 void audio_bounce_start(void) {
-    if (s_bounce || recording_is_active()) return;
+    // an ARMED take counts as busy too: starting here would fire the Sampler's
+    // parked writer, recording the output bus under REC_ into a voice (1.3)
+    if (s_bounce || recording_is_active() || recording_is_prepared()) return;
     recording_set_enabled(true);
     recording_set_prefix("BNC");                     // bounces are BNC_, not REC_
+    s_bounce_live = false;
     s_bounce = true;
     recording_start(-1);                             // vid -1 = no auto-load into a voice
     if (!recording_is_active()) { s_bounce = false; recording_set_prefix("REC"); }
@@ -681,6 +685,13 @@ static void audio_task(void *pvParams)
         // overwrites a channel), so a bounce is the pure musical signal
         if (recording_is_active() && s_bounce)
             recording_push(out);
+        // a bounce that ended ON ITS OWN (card full, write error) left s_bounce
+        // set: later Sampler takes then recorded the output tap as BNC_ and a
+        // new bounce was refused until a stop (1.6). Drop it once its take ends.
+        if (s_bounce) {
+            if (recording_is_active()) s_bounce_live = true;
+            else if (s_bounce_live && !recording_is_prepared()) { s_bounce = false; s_bounce_live = false; }
+        }
 
         // optional clock OUT: overwrite one channel with beat pulses
         beatlisten_out_render(out);

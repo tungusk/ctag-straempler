@@ -1268,7 +1268,9 @@ static void s3_preset_load(const cJSON *node)
         s3_voice_t *v = &s3.v[i];
         if ((j = cJSON_GetObjectItemCaseSensitive(vo, "mode")) && cJSON_IsNumber(j))
             v->playmode = j->valueint == S3_MODE_LOOP ? S3_MODE_LOOP : S3_MODE_ONESHOT;
-        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "rev"))) v->reverse = cJSON_IsTrue(j);
+        // through the setter: a bare flag write never asked the reader to rebuild
+        // the head, so with the same sample loaded it showed REV and played forward (8.4)
+        if ((j = cJSON_GetObjectItemCaseSensitive(vo, "rev"))) s3_set_reverse(i, cJSON_IsTrue(j));
         if ((j = cJSON_GetObjectItemCaseSensitive(vo, "cs")) && cJSON_IsNumber(j)) {
             float s = (float)j->valuedouble;
             v->crop_start = (s < 0 || s > 0.98f) ? 0 : s;

@@ -305,7 +305,8 @@ void cvmtx_load(cvmtx_t *m, const cJSON *node)
                              : (float)ai->valueint / 100.0f;
             m->amt[d] = a < -1.0f ? -1.0f : a > 1.0f ? 1.0f : a;
         }
-        if (have_modes) m->mode[d] = (cJSON_IsNumber(mi) && mi->valueint == CVM_ABS) ? CVM_ABS : CVM_OFFSET;
+        // an entry past a SHORTER stored modes array keeps its default mode (review 5.1)
+        if (have_modes) { if (cJSON_IsNumber(mi)) m->mode[d] = (mi->valueint == CVM_ABS) ? CVM_ABS : CVM_OFFSET; }
         else if (cJSON_IsNumber(si)) m->mode[d] = CVM_OFFSET;   // pre-stage-3 preset: a STORED entry was an offset
         // (an entry beyond the stored arrays — a destination added since, e.g.
         // Tape's Reso — keeps the init default)

@@ -277,7 +277,7 @@ static void tape_card_process(int32_t out[MACHINE_BLOCK],
         if (gate && !rec && recording_is_prepared()) { recording_trigger(); tp.pos = 0.0; }
         else if (!gate && rec) recording_finish();
     } else {
-        if (io->trig_rising & 2) {
+        if (io->trig_rising & TP_RECBIT) {   // the rtr pick, not a hard-wired TR2 (review 11.2)
             if (rec) recording_finish();
             else if (recording_is_prepared()) { recording_trigger(); tp.pos = 0.0; }
         }
@@ -403,7 +403,7 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
         }
         else if (!gate && tp.recording) tape_rec_stop_request();   // quantize to beat if enabled
     } else {
-        if (io->trig_rising & 2) {
+        if (io->trig_rising & TP_RECBIT) {   // the rtr pick, not a hard-wired TR2 (review 11.2)
             tp.tr2_hold = 0; tp.tr2_armed = false;
             if (tp.recording)    { tape_rec_stop_request(); tp.tr2_recgest = false; }  // punch out (quantized)
             else if (tp.playing) { tape_rec_start();   tp.tr2_recgest = true;  }  // overdub (erasable by holding)

@@ -459,6 +459,7 @@ static int slicer_sens_handler(int it_id, int event, void *ev_data){
             // so force transient + Auto here
             sl.transient_mode = true;
             sl.slice_target = 0;
+            sl.ot_active = false;      // as the count row does: an .OT map outranks transient (review 8.3)
             slicer_reslice();
             sens_full_redraw();
             break;

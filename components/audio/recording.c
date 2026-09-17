@@ -215,6 +215,9 @@ static void rec_writer_task(void *pvParams)
     }
 
     atomic_store(&rec_prepared, false);
+    // the prefix is read once, when this writer opened its file: put the default
+    // back so a bounce that ended by itself can't name the next Sampler take BNC_
+    recording_set_prefix("REC");
     rec_task_handle = NULL;
     vTaskDelete(NULL);
 }
