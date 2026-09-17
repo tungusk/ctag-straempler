@@ -40,6 +40,13 @@ static inline int sf_wav_parse(sampfile_t *sf, long fsize, sf_read_at_fn rd, voi
             ch    = sf_le16(h + 2);
             rate  = sf_le32(h + 4);
             bits  = sf_le16(h + 14);
+            // WAVE_FORMAT_EXTENSIBLE (what most DAWs write for 24-bit and float):
+            // the real code is the first two bytes of the SubFormat GUID, at
+            // offset 24 of the fmt chunk. It was rejected outright (review 3.10).
+            if (acode == 0xFFFE && csz >= 26) {
+                uint8_t sub[2];
+                if (rd(ctx, pos + 8 + 24, sub, 2) == 2) acode = sf_le16(sub);
+            }
             have_fmt = true;
         } else if (memcmp(h, "data", 4) == 0) {
             if (!have_fmt)          { sf->why = "WAV: data before fmt"; return -1; }

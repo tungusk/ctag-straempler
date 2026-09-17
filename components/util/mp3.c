@@ -60,6 +60,25 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *ou
 
     UINT nRead = 0; 
     int offset, foundStartOfFrame = 0, oldProgress = 0;
+    // Skip an ID3v2 tag by its declared size before looking for a sync word:
+    // cover art is JPEG, and its FF Ex markers read as MP3 sync (review 3.5).
+    {
+        unsigned char id3[10];
+        UINT n10 = 0;
+        sd_lock_take();
+        f_read(mp3File, id3, sizeof(id3), &n10);
+        uint32_t skip = 0;
+        if (n10 == 10 && id3[0] == 'I' && id3[1] == 'D' && id3[2] == '3') {
+            skip = 10 + (((uint32_t)id3[6] & 0x7F) << 21 | ((uint32_t)id3[7] & 0x7F) << 14 |
+                         ((uint32_t)id3[8] & 0x7F) << 7  | ((uint32_t)id3[9] & 0x7F));
+            if (id3[5] & 0x10) skip += 10;           // footer present
+            if (skip > (uint32_t)sz) skip = 0;       // nonsense size: decode from the top
+        }
+        f_lseek(mp3File, skip);
+        sd_lock_give();
+        if (skip) { ESP_LOGI("MP3", "skipping ID3v2 tag: %u bytes", (unsigned)skip); toRead -= skip; }
+    }
+    UINT valid = 0;                                  // bytes of real data in input[]
     do
     {
         // Read the input file
@@ -88,8 +107,20 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *ou
         else
         {
         // We found a start of frame. offset contains location of the start of frame
-        // within input buffer.
+        // within input buffer. Decoding used to start at input[0] regardless, so
+        // anything ahead of the first frame failed the whole file (review 3.5):
+        // slide the frame to the front and top the buffer back up.
         foundStartOfFrame = 1;
+        valid = nRead;
+        if (offset > 0) {
+            memmove(input, input + offset, nRead - offset);
+            UINT more = 0;
+            sd_lock_take();
+            f_read(mp3File, input + (nRead - offset), offset, &more);
+            sd_lock_give();
+            toRead -= more;
+            valid = nRead - offset + more;
+        }
         break;
         }
         }
@@ -127,7 +158,7 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *ou
     // to find a start of frame.
     short output[2 * 1152]; // stereo
     int err;
-    int bytesLeft = MAX_FRAME_SIZE;
+    int bytesLeft = valid ? (int)valid : MAX_FRAME_SIZE;
     readPtr = input;
     do{
         err = MP3Decode(decoder, &readPtr, &bytesLeft, output, 0);

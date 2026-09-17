@@ -59,8 +59,8 @@ static size_t src_read(imp_src_t *s, int16_t *dst, size_t n, uint8_t *raw)
                 v[c] = s->be ? (int32_t)((p[0] << 24) | (p[1] << 16) | (p[2] << 8)) >> 8
                              : (int32_t)((p[2] << 24) | (p[1] << 16) | (p[0] << 8)) >> 8;
                 v[c] >>= 8;                            // 24 -> 16
-            } else if (s->bits == 8) {                 // WAV 8-bit is unsigned
-                v[c] = ((int32_t)p[0] - 128) << 8;
+            } else if (s->bits == 8) {                 // WAV 8-bit is unsigned, AIFF 8-bit signed (3.9)
+                v[c] = s->be ? (int32_t)(int8_t)p[0] << 8 : ((int32_t)p[0] - 128) << 8;
             } else {                                   // 16-bit
                 v[c] = s->be ? (int16_t)((p[0] << 8) | p[1])
                              : (int16_t)(p[0] | (p[1] << 8));
