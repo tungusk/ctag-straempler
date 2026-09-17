@@ -1942,10 +1942,12 @@ static const httpd_uri_t *machine_uris[MAX_MACHINE_URIS];
 static int n_machine_uris = 0;
 static const machine_t *web_machine = NULL;
 
-static void machine_web_apply(const machine_t *m)
+// Swap the URI set for `web_machine`. MUST run on the httpd task, or before the
+// server serves anything: IDF 4.3's httpd frees an entry on unregister with no
+// lock against its own task matching a request against the same table.
+static void machine_web_apply_now(void)
 {
-    web_machine = m;
-    if (!server) return;
+    const machine_t *m = web_machine;
     for (int i = 0; i < n_machine_uris; i++)
         httpd_unregister_uri_handler(server, machine_uris[i]->uri, machine_uris[i]->method);
     n_machine_uris = 0;
@@ -1956,6 +1958,37 @@ static void machine_web_apply(const machine_t *m)
             machine_uris[n_machine_uris++] = &u[i];
     if (n_machine_uris)
         ESP_LOGI(TAG, "%s: %d machine URIs registered", m->name, n_machine_uris);
+}
+
+// Generations, not a semaphore: a swap that timed out still runs later, and its
+// completion must not be mistaken for the next one's. The work always applies
+// the LATEST web_machine, so a late run is harmless.
+static volatile uint32_t s_web_req = 0, s_web_done = 0;
+
+static void machine_web_apply_work(void *arg)
+{
+    uint32_t g = s_web_req;
+    machine_web_apply_now();
+    s_web_done = g;
+}
+
+// machine_activate's callback (UI task). Called with NULL before the old
+// machine's stop() and with the new machine after its start(). Queued onto the
+// httpd task and WAITED for, which also lets a machine handler already in
+// flight finish before stop() frees the state it reads (code review 6.11).
+static void machine_web_apply(const machine_t *m)
+{
+    web_machine = m;
+    if (!server) return;
+    uint32_t g = ++s_web_req;
+    if (httpd_queue_work(server, machine_web_apply_work, NULL) != ESP_OK) {
+        ESP_LOGE(TAG, "URI swap: httpd_queue_work failed");
+        return;
+    }
+    for (int t = 0; s_web_done < g; t += 10) {
+        if (t >= 10000) { ESP_LOGE(TAG, "URI swap: httpd busy for 10 s, not waiting"); return; }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 }
 
 // ─── tracker module files (usr/TRACKER) ─────────────────────────────────────────
@@ -2659,7 +2692,7 @@ static httpd_handle_t start_webserver(void)
     for (int i = 0; i < (int)N_URIS; i++)
         httpd_register_uri_handler(server, &uris[i]);
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_404_error_handler);
-    machine_web_apply(web_machine);   // machine activated before the server? apply now
+    machine_web_apply_now();          // machine activated before the server? apply now (nothing served yet)
     return server;
 }
 
