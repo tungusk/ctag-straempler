@@ -25,6 +25,21 @@ const char *const ed_op_names[OP_N] = { "normalize", "reverse", "fade in", "fade
 static const char *const ED_PFX[OP_N] = { "NM_", "RV_", "FI_", "FO_", "TR_", "CR_" };
 
 static volatile bool s_running = false;
+static volatile bool s_scanning = false;
+// Claimed by the CALLER, before the task exists. The flags used to be raised by
+// the task's first line, and the task runs at prio 4 under httpd's 5: a double
+// POST /edit/apply (or web + panel) both passed the check and two jobs wrote
+// the same XX_NNNN.WAV (code review 13.2).
+static portMUX_TYPE s_ed_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool ed_claim(bool scan)
+{
+    bool ok;
+    taskENTER_CRITICAL(&s_ed_mux);
+    ok = !s_running && !s_scanning;
+    if (ok) { if (scan) s_scanning = true; else s_running = true; }
+    taskEXIT_CRITICAL(&s_ed_mux);
+    return ok;
+}
 
 static inline int16_t clip16(float v)
 {
@@ -186,7 +201,6 @@ static int span_rev(FILE *src, sampfile_t *sf, FILE *out, int16_t *buf,
 
 static void job_task(void *pv)
 {
-    s_running = true;
     s_io_err = false;
     ed.progress = 0;
     ed.out[0] = 0;
@@ -286,7 +300,7 @@ done:
 
 void editor_apply(const char *src, int op, float param, uint32_t in, uint32_t out)
 {
-    if (s_running || !src || !src[0] || op < 0 || op >= OP_N) return;
+    if (!src || !src[0] || op < 0 || op >= OP_N || !ed_claim(false)) return;
     strlcpy(ed.src, src, sizeof(ed.src));
     ed.op = op;
     ed.param = param;
@@ -297,8 +311,10 @@ void editor_apply(const char *src, int op, float param, uint32_t in, uint32_t ou
     ed.progress = 0;
     ed.state = ED_RUNNING;
     // helix-free, but sampfile + a 8 KB buffer on a modest stack; 8 KB is plenty
-    if (xTaskCreate(job_task, "editor_job", 8192, NULL, 4, NULL) != pdPASS)
+    if (xTaskCreate(job_task, "editor_job", 8192, NULL, 4, NULL) != pdPASS) {
         set_err("job task create failed");
+        s_running = false;
+    }
 }
 
 uint32_t editor_probe(const char *name)
@@ -316,12 +332,9 @@ uint32_t editor_probe(const char *name)
 }
 
 // ---- source load + peak scan -----------------------------------------------
-static volatile bool s_scanning = false;
-
 static void scan_task(void *pv)
 {
     (void)pv;
-    s_scanning = true;
     ed.scanning = true;
     ed.scan_pct = 0;
     memset((void *)ed.peaks, 0, sizeof(ed.peaks));
@@ -362,9 +375,9 @@ out:
 
 int editor_load(const char *name)
 {
-    if (s_running || s_scanning || !name || !name[0]) return -1;
+    if (!name || !name[0] || !ed_claim(true)) return -1;
     uint32_t F = editor_probe(name);
-    if (F == 0) return -1;
+    if (F == 0) { s_scanning = false; return -1; }
     strlcpy(ed.src, name, sizeof(ed.src));
     ed.frames = F;
     ed.in_pt = 0;
@@ -372,7 +385,7 @@ int editor_load(const char *name)
     ed.state = ED_IDLE;
     ed.err[0] = 0;
     ed.out[0] = 0;
-    if (xTaskCreate(scan_task, "editor_scan", 8192, NULL, 4, NULL) != pdPASS) return -1;
+    if (xTaskCreate(scan_task, "editor_scan", 8192, NULL, 4, NULL) != pdPASS) { s_scanning = false; return -1; }
     return 0;
 }
 
@@ -460,7 +473,6 @@ static void raw_span(FILE *src, sampfile_t *sf, FILE *out, int16_t *buf,
 static void clip_task(void *pv)
 {
     (void)pv;
-    s_running = true;
     s_io_err = false;
     ed.progress = 0;
     ed.out[0] = 0;
@@ -537,14 +549,14 @@ close_src:
     sd_lock_give();
 done:
     free(buf);
+    s_cjob = -1;              // BEFORE releasing the claim, or it wipes the next job's
     s_running = false;
-    s_cjob = -1;
     vTaskDelete(NULL);
 }
 
 static int start_clip(int job, int n)
 {
-    if (s_running || s_scanning || !ed.src[0]) return -1;
+    if (!ed.src[0] || !ed_claim(false)) return -1;
     s_cjob = job;
     s_cjob_n = n;
     ed.err[0] = 0;
@@ -552,6 +564,7 @@ static int start_clip(int job, int n)
     ed.state = ED_RUNNING;
     if (xTaskCreate(clip_task, "editor_clip", 8192, NULL, 4, NULL) != pdPASS) {
         s_cjob = -1;
+        s_running = false;
         set_err("job task create failed");
         return -1;
     }

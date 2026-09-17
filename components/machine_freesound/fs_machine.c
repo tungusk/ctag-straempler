@@ -656,7 +656,13 @@ int fs_audition(const char *name)
     if (!name || !name[0]) return -1;
     if (!s_play) s_play = sampplay_create(0);
     if (!s_play) return -1;
-    if (sampplay_open(s_play, name) != 0) return -1;
+    if (sampplay_open(s_play, name) != 0) {
+        // not in the pool (the result-press path TRIES this first) or missing:
+        // tear the player down, or its reader task keeps the internal RAM the
+        // download about to start needs (code review 13.1)
+        fs_audition_stop();
+        return -1;
+    }
     strlcpy(s_au_name, name, sizeof(s_au_name));
     sampplay_play(s_play, true);
     return 0;
