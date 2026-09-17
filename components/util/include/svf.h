@@ -35,17 +35,6 @@ static inline void svf_step(svf_t *s, float x, float f, float q,
     if (hp) *hp = hi;
 }
 
-// Largest STABLE coefficient for damping q. The Chamberlin loop's matrix has
-// det 1 - f*q and trace 2 - f*f - f*q; Jury's test gives f < sqrt(q*q + 4) - q
-// (q = 2: 0.83, q = 0.3: 1.72). A fixed fmax like 1.3 is past it at low
-// resonance, where a high cutoff diverged to inf within ~70 samples (code review
-// 2.1). 5% margin; below the bound this changes nothing.
-static inline float svf_coef_stable(float f, float q)
-{
-    float lim = 0.95f * (sqrtf(q * q + 4.0f) - q);
-    return f > lim ? lim : f;
-}
-
 // Bypass without a thump: park the state ON the signal, so when the filter is
 // re-engaged its memory already agrees with what the ear is hearing (the deck's
 // trick — a filter whose state is stale by a whole waveform lets out a click).
