@@ -427,8 +427,13 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
         if (rk->slot[s] == FXK_DLY && !rk->dly->bufL && fxdelay_init(rk->dly) != ESP_OK) rk->slot[s] = FXK_OFF;
         if (rk->slot[s] == FXK_FLG && !rk->flg->bufL && flanger_init(rk->flg) != ESP_OK) rk->slot[s] = FXK_OFF;
     }
-    if (rk->dly->bufL) {
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyt"))  && cJSON_IsNumber(j)) fxdelay_set_time_ms(rk->dly, (float)j->valueint);
+    // Not gated on the slab either (see the flanger note below): the delay's
+    // settings round-trip whether or not it sits in a slot. dlyt <= 0 was written
+    // by the old time readback while the slab was freed — ignore it (review 2.3).
+    if (cJSON_GetObjectItemCaseSensitive(node, "dlyfb")) rk->dly->params = true;
+    if (cJSON_GetObjectItemCaseSensitive(node, "flgrt")) rk->flg->params = true;
+    {
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyt"))  && cJSON_IsNumber(j) && j->valueint > 0) fxdelay_set_time_ms(rk->dly, (float)j->valueint);
         if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlyfb")) && cJSON_IsNumber(j)) fxdelay_set_feedback(rk->dly, (float)j->valueint / 100.0f);
         if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlymx")) && cJSON_IsNumber(j)) fxdelay_set_mix(rk->dly, (float)j->valueint / 100.0f);
         if ((j = cJSON_GetObjectItemCaseSensitive(node, "dlytn")) && cJSON_IsNumber(j)) fxdelay_set_damp(rk->dly, (float)j->valueint / 100.0f);

@@ -281,6 +281,17 @@ void cvmtx_load(cvmtx_t *m, const cJSON *node)
     }
     cJSON *mm = cJSON_GetObjectItemCaseSensitive(node, "mxm");
     bool have_modes = cJSON_IsArray(mm);
+    // A stored matrix REPLACES the routing: start every destination from its
+    // default, or one past the end of a shorter stored array (a destination
+    // added since) kept the PREVIOUS preset's routing, and autosave then wrote
+    // it into this one (code review 5.2). A node with no matrix at all is a
+    // partial update (POST /remote/params) and keeps the routing, above. The
+    // machine's own overrides (ovr) are not preset state and stay.
+    for (int d = 0; d < CVMTX_MAX; d++) {
+        m->src[d] = (m->def_src && d < m->n) ? m->def_src[d] : -1;
+        m->mode[d] = (m->src[d] >= 0) ? CVM_ABS : CVM_OFFSET;
+        m->amt[d] = 0.0f;
+    }
     for (int d = 0, dn = cvm_n(m); d < dn; d++) {
         cJSON *si = cJSON_GetArrayItem(ms, d);
         cJSON *ai = cJSON_IsArray(ma) ? cJSON_GetArrayItem(ma, d) : NULL;

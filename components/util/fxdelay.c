@@ -21,21 +21,34 @@ static const char *TAG = "FXDELAY";
 
 esp_err_t fxdelay_init(fxdelay_t *d)
 {
+    // The fxrack frees the slab whenever the delay leaves every slot and calls
+    // this again when it comes back — so this must NOT reset what the user or a
+    // preset set (code review 2.3). Defaults only on a fresh struct.
+    fxdelay_t keep = *d;
     memset(d, 0, sizeof(*d));
     // one slab, two lines back to back (calloc = silence, no click on first read)
     d->bufL = heap_caps_calloc((size_t)FXD_MAX_FR * 2, sizeof(float), MALLOC_CAP_SPIRAM);
     if (!d->bufL) {
         ESP_LOGE(TAG, "PSRAM slab alloc failed (%u KB)",
                  (unsigned)((size_t)FXD_MAX_FR * 2 * sizeof(float) / 1024));
+        *d = keep;
+        d->bufL = d->bufR = NULL; d->cap = 0;
         return ESP_ERR_NO_MEM;
     }
     d->cap  = FXD_MAX_FR;
     d->bufR = d->bufL + d->cap;
     d->w    = 0;
-    d->len  = FXD_RATE * 3 / 8;      // 375 ms default (a musical starting point)
-    d->fb   = 0.35f;
-    d->wet  = 0.0f;                  // silent until a host opens the mix
-    d->damp = 0.25f;
+    if (keep.params) {
+        d->len = (keep.len >= 1 && keep.len < d->cap) ? keep.len : FXD_RATE * 3 / 8;
+        d->fb = keep.fb; d->wet = keep.wet; d->damp = keep.damp;
+        d->pingpong = keep.pingpong; d->sync = keep.sync; d->div = keep.div;
+    } else {
+        d->len  = FXD_RATE * 3 / 8;  // 375 ms default (a musical starting point)
+        d->fb   = 0.35f;
+        d->wet  = 0.0f;              // silent until a host opens the mix
+        d->damp = 0.25f;
+    }
+    d->params = true;
     ESP_LOGI(TAG, "slab %u KB PSRAM",
              (unsigned)((size_t)FXD_MAX_FR * 2 * sizeof(float) / 1024));
     return ESP_OK;
@@ -56,10 +69,10 @@ void fxdelay_clear(fxdelay_t *d)
 
 void fxdelay_set_time_ms(fxdelay_t *d, float ms)
 {
-    if (!d->cap) return;
+    // valid with the slab freed too: capacity is always FXD_MAX_FR once allocated
     int len = (int)(ms * (float)FXD_RATE / 1000.0f + 0.5f);
     if (len < 1) len = 1;
-    if (len > d->cap - 1) len = d->cap - 1;
+    if (len > FXD_MAX_FR - 1) len = FXD_MAX_FR - 1;
     d->len = len;
 }
 

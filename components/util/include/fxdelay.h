@@ -38,6 +38,7 @@ typedef struct {
     volatile float damp;        // feedback damping, 0 = bright .. 1 = dark
     volatile bool  sync;        // clock-sync the time to `div` (fxrack sets it per block)
     volatile int8_t div;        // division index into fxrack_div_beats[] when synced
+    bool   params;              // settings are set (defaults or a preset): init keeps them
     float  lpL, lpR;            // feedback one-pole states
     volatile int cost_us;       // EMA process cost, us per block (1450 = 100%)
 } fxdelay_t;
@@ -64,5 +65,7 @@ void fxdelay_block_f(fxdelay_t *d, float *buf, int frames);
 
 static inline float fxdelay_time_ms(const fxdelay_t *d)
 {
-    return d->cap ? (float)d->len * 1000.0f / (float)FXD_RATE : 0.0f;
+    // from len alone: it is kept while the slab is freed, and a 0 here used to be
+    // autosaved as "dlyt":0 whenever the delay sat in no slot (code review 2.3)
+    return d->len > 0 ? (float)d->len * 1000.0f / (float)FXD_RATE : 0.0f;
 }
