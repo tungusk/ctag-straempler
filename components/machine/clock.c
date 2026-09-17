@@ -276,6 +276,7 @@ typedef struct {
     int      ext_base;
     bool     ext_high;
     uint32_t ext_idle;     // frames since the external line last fired
+    uint32_t ext_period;   // frames between its last two firings (0 = unknown)
     bool     inited;
 } clock_core_t;
 
@@ -326,7 +327,7 @@ void clock_core_set_src(int src)
     if (src == s_cc.src) return;
     s_cc.src = src;
     s_cc.fallback = false;
-    s_cc.ext_base = 4095; s_cc.ext_high = false; s_cc.ext_idle = 1u << 30;
+    s_cc.ext_base = 4095; s_cc.ext_high = false; s_cc.ext_idle = 1u << 30; s_cc.ext_period = 0;
     cc_relock();
 }
 
@@ -384,12 +385,24 @@ void clock_core_block(const machine_io_t *io, int frames)
             s_cc.ext_high = false;
         }
         if (s_cc.ext_idle < (1u << 30)) s_cc.ext_idle += (uint32_t)frames;
-        if (fired) s_cc.ext_idle = 0;
+        if (fired) {
+            s_cc.ext_period = (s_cc.ext_idle < (1u << 30)) ? s_cc.ext_idle : 0;
+            s_cc.ext_idle = 0;
+        }
+        // A jack pulsing slower than the 2 s fallback (PPQ 1 under 30 BPM) never
+        // locked: each pulse ended the stand-in and relocked, and the stand-in
+        // came back before the second pulse could confirm it (code review 1.10).
+        // Wait out twice the jack's own measured interval, up to 10 s.
+        uint32_t fb_after = CC_FALLBACK_FR;
+        if (s_cc.ext_period > CC_FALLBACK_FR / 2) {
+            uint64_t two = (uint64_t)s_cc.ext_period * 2;
+            fb_after = two > (uint64_t)CLK_RATE * 10 ? (uint32_t)CLK_RATE * 10 : (uint32_t)two;
+        }
 
         if (s_cc.auto_fb) {
             if (s_cc.fallback) {
                 if (fired) { s_cc.fallback = false; cc_relock(); }   // the jack is back
-            } else if (!s_cc.ci.clk.locked && s_cc.ext_idle >= CC_FALLBACK_FR) {
+            } else if (!s_cc.ci.clk.locked && s_cc.ext_idle >= fb_after) {
                 s_cc.fallback = true; cc_relock();                    // stand in
             }
         } else if (s_cc.fallback) {

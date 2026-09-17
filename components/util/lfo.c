@@ -47,17 +47,22 @@ float lfo_tick(lfo_t *l, int shape, float rate_hz, bool sync, int div,
     // correct, so that correction is tiny and it keeps the LFO on the beat
     // instead of drifting to an arbitrary offset.
     float rate = rate_hz;
+    bool resync_wrap = false;
     if (sync && bpm > 0.0f) {
         float beats = lfo_beats[clampi(div, LFO_DIV_N)];
         rate = bpm / 60.0f / beats;
         if (ppb < 1.0f) ppb = 1.0f;
         uint32_t per = (uint32_t)(beats * ppb + 0.5f); if (!per) per = 1;
         uint32_t cyc = pulses / per;
-        if (cyc != l->cyc) { l->cyc = cyc; l->phase = 0.0f; }
+        // The reset zeroes the phase BEFORE the advance, so when the pulse beat
+        // phase 1.0 the wrap below was never seen and the S&H "rnd" shape held
+        // for 2+ divisions (code review 2.5). Count the reset as the wrap, unless
+        // the phase already wrapped on its own just before it (> 0.5 = not yet).
+        if (cyc != l->cyc) { resync_wrap = (l->phase > 0.5f); l->cyc = cyc; l->phase = 0.0f; }
     }
     float ph_prev = l->phase;
     l->phase += rate * blockdur;
-    bool wrapped = (l->phase >= 1.0f) || (l->phase < ph_prev);
+    bool wrapped = resync_wrap || (l->phase >= 1.0f) || (l->phase < ph_prev);
     l->phase -= (float)(int)l->phase;
     return lfo_val(shape, l->phase, wrapped, &l->rnd);
 }

@@ -15,6 +15,12 @@ void fxfilter_block_f(fxfilter_t *fl, float *buf, int frames)
     // q is DAMPING (higher = cleaner). reso 0 -> 2.0 (clean), 1 -> 0.3 (resonant);
     // floor at 0.3 keeps the filter stable (no NaN self-osc runaway).
     float q  = 2.0f - reso * 1.7f;
+    cf = svf_coef_stable(cf, q);
+    // a state that already ran away stays inf/NaN until reset (flanger/delay do this too)
+    if (!(fabsf(fl->l.lp) < 1e9f) || !(fabsf(fl->l.bp) < 1e9f) ||
+        !(fabsf(fl->r.lp) < 1e9f) || !(fabsf(fl->r.bp) < 1e9f) || !(fabsf(fl->cf_slew) < 4.0f)) {
+        svf_reset(&fl->l); svf_reset(&fl->r); fl->cf_slew = cf;
+    }
 
     for (int f = 0; f < frames; f++) {
         fl->cf_slew += 0.05f * (cf - fl->cf_slew);  // de-zipper the sweep
@@ -34,6 +40,11 @@ void fxfilter_band_block_f(fxfilter_t *fl, float *buf, int frames)
     float fc = 30.0f * powf(400.0f, base);            // center: 30 Hz .. ~12 kHz
     float cf = svf_coef(fc, FLT_RATE, 1.3f);
     float q  = 0.3f + width * 3.7f;                   // narrow/resonant .. wide/gentle
+    cf = svf_coef_stable(cf, q);                      // wide + high base diverged (2.1)
+    if (!(fabsf(fl->l.lp) < 1e9f) || !(fabsf(fl->l.bp) < 1e9f) ||
+        !(fabsf(fl->r.lp) < 1e9f) || !(fabsf(fl->r.bp) < 1e9f) || !(fabsf(fl->cf_slew) < 4.0f)) {
+        svf_reset(&fl->l); svf_reset(&fl->r); fl->cf_slew = cf;
+    }
     for (int f = 0; f < frames; f++) {
         fl->cf_slew += 0.05f * (cf - fl->cf_slew);
         float xl = buf[f * 2], xr = buf[f * 2 + 1];
