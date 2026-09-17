@@ -200,16 +200,21 @@ static void start_mdns_service()
 static wifi_config_t buildWifiConfig(){
     cJSON* root = NULL;
     root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+    // zeroed up front: a missing file or key used to hand esp_wifi_set_config
+    // stack garbage inside ESP_ERROR_CHECK (code review 6.5). An empty ssid just
+    // fails to connect and falls back to the AP.
     wifi_config_t wifi_config;
+    memset(&wifi_config, 0, sizeof(wifi_config));
     if(root != NULL){
         cJSON *settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
         if(settings != NULL){
             cJSON *val;
-            memset(&wifi_config, 0, sizeof(wifi_config));
             val = cJSON_GetObjectItemCaseSensitive(settings, "ssid");
-            strcpy((char*) wifi_config.sta.ssid, val->valuestring);
+            if(cJSON_IsString(val))
+                strlcpy((char*) wifi_config.sta.ssid, val->valuestring, sizeof(wifi_config.sta.ssid));
             val = cJSON_GetObjectItemCaseSensitive(settings, "passwd");
-            strcpy((char*) wifi_config.sta.password, val->valuestring);
+            if(cJSON_IsString(val))
+                strlcpy((char*) wifi_config.sta.password, val->valuestring, sizeof(wifi_config.sta.password));
             val = cJSON_GetObjectItemCaseSensitive(settings, "txpwr");
             if(cJSON_IsNumber(val) && val->valueint >= 8 && val->valueint <= 84)
                 s_txpwr = val->valueint;
@@ -222,6 +227,9 @@ static wifi_config_t buildWifiConfig(){
 static void start_ap_mode(void)
 {
     wifi_ap_mode = 1;
+    // the STA disconnect below is ignored in AP mode, so clear the bit here or a
+    // later STA retry reads the stale bit as "reconnected"
+    xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
     esp_wifi_disconnect();
     esp_wifi_stop();
 
@@ -243,9 +251,25 @@ static void start_ap_mode(void)
 
 static void ap_sta_retry_task(void *arg)
 {
+    int sta_down = 0;   // consecutive checks in STA mode without a connection
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(60000));
-        if (!wifi_ap_mode) continue;
+        if (!wifi_ap_mode) {
+            // A restart from the web or the Settings page leaves AP mode, and the
+            // STA path retries a wrong password forever — the unit was unreachable
+            // until a power cycle (code review 6.4). Two minutes without a
+            // connection brings the AP back, as the boot timeout does; this loop
+            // then keeps retrying STA while nobody is on the AP.
+            if (xEventGroupGetBits(wifi_event_group) & CONNECTED_BIT) { sta_down = 0; continue; }
+            if (++sta_down < 2) continue;
+            sta_down = 0;
+            ESP_LOGW(TAG, "STA not connected for 2 min — falling back to AP mode");
+            xSemaphoreTake(s_wifi_mutex, portMAX_DELAY);
+            start_ap_mode();
+            xSemaphoreGive(s_wifi_mutex);
+            continue;
+        }
+        sta_down = 0;
         wifi_sta_list_t stas;
         if (esp_wifi_ap_get_sta_list(&stas) == ESP_OK && stas.num > 0)
             continue;   // someone is on the AP — don't yank it away

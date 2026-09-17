@@ -360,6 +360,7 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             menuTFTSelectMenuItem(&menu_pos, 0, settings_menus, &n_settings_menus);
             if(_state_json != NULL)cfgData = (cJSON*) _state_json;
             else cfgData = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+            settings = NULL;   // never carry a pointer into the config freed on the last exit
             if(cfgData != NULL){
                 settings = cJSON_GetObjectItemCaseSensitive(cfgData, "settings");
                 if(settings != NULL)menuTFTPrintSettings(settings);
@@ -447,6 +448,23 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             }
             break;
         case EV_LONG_PRESS: ;
+            if(cfgData == NULL || settings == NULL){
+                // the config didn't load on entry (code review 4.1: this path used
+                // to cJSON_Print(NULL) and write through a stale `settings`).
+                // Apply the live toggles, persist nothing.
+                ESP_LOGE("UI", "settings exit without a loaded config: not saving");
+                rest_remote_enable(remote_on);
+                audio_broadcast_set_enabled(broadcast_on);
+                beatlisten_set_mode(listen_mode);
+                beatlisten_set_out(clkout_ch);
+                if(cfgData != NULL) cJSON_Delete(cfgData);
+                cfgData = NULL; settings = NULL;
+                menuTFTFlushMenuDataRect();
+                _state_data = NULL;
+                _state_json = NULL;
+                menu_pos = 0;
+                return M_MORE;
+            }
             int wifiChanged = wifiSettingsChanged(settings);
             //replace tz_shift value
             cJSON_ReplaceItemInObjectCaseSensitive(settings, "tz_shift", cJSON_CreateNumber(tz_shift));
@@ -466,19 +484,22 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             beatlisten_set_mode(listen_mode);
             beatlisten_set_out(clkout_ch);
             //save current settings on menu exit
-            writeJSONFile("/sdcard/CONFIG.jsn", cJSON_Print(cfgData));
+            {
+                char *js = cJSON_Print(cfgData);   // the printed string was leaked on every exit
+                if(js){ writeJSONFile("/sdcard/CONFIG.jsn", js); free(js); }
+            }
             //set token 
-            char* token = cJSON_GetObjectItem(settings, "apikey")->valuestring;
-            freesoundSetToken(token);
+            cJSON *tok = cJSON_GetObjectItem(settings, "apikey");
+            if(cJSON_IsString(tok)) freesoundSetToken(tok->valuestring);
             //if wifi settings changed reconnect wifi with new config
-            if(wifiChanged){
+            cJSON *jssid = cJSON_GetObjectItem(settings, "ssid");
+            cJSON *jpass = cJSON_GetObjectItem(settings, "passwd");
+            if(wifiChanged && cJSON_IsString(jssid) && cJSON_IsString(jpass)){
                 ESP_LOGI("UI", "Wifi settings have changed. Reconnecting...");
-                char *ssid = cJSON_GetObjectItem(settings, "ssid")->valuestring;
-                char *passwd = cJSON_GetObjectItem(settings, "passwd")->valuestring;
                 wifi_config_t wifi_config;
                 memset(&wifi_config, 0, sizeof(wifi_config));
-                strcpy((char*) wifi_config.sta.ssid, ssid);
-                strcpy((char*) wifi_config.sta.password, passwd);
+                strlcpy((char*) wifi_config.sta.ssid, jssid->valuestring, sizeof(wifi_config.sta.ssid));
+                strlcpy((char*) wifi_config.sta.password, jpass->valuestring, sizeof(wifi_config.sta.password));
                 restartWifi(&wifi_config);
             }
             menuTFTFlushMenuDataRect();
@@ -486,6 +507,7 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             _state_json = NULL;
             menu_pos = 0;
             cJSON_Delete(cfgData);
+            cfgData = NULL; settings = NULL;
             return M_MORE;
             break;
         default:
