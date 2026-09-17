@@ -240,7 +240,9 @@ cJSON* readJSONFileAsCJSON(const char *fileName){
     // Read into INTERNAL DMA-capable RAM, not PSRAM: SDMMC's DMA can't target
     // PSRAM and falls back to a per-read internal bounce buffer that fails with
     // ESP_ERR_NO_MEM under memory pressure. JSON files are small, so this is cheap.
-    buf = (char*) heap_caps_malloc(sz, MALLOC_CAP_DMA);
+    // +1: cJSON_Parse wants a NUL-terminated string, and fread gives none — the
+    // parser used to run off the end of the buffer into whatever followed it
+    buf = (char*) heap_caps_malloc(sz + 1, MALLOC_CAP_DMA);
 
     if(buf == NULL){
         fclose(fin);
@@ -258,9 +260,20 @@ cJSON* readJSONFileAsCJSON(const char *fileName){
         return NULL;
     }
 
+    buf[sz] = 0;
     fclose(fin);
     sd_lock_give();                       // parsing needs no SD — release early
     data = cJSON_Parse(buf);
+    if (!data) {
+        // say WHY: a bad file and an out-of-memory parse (cJSON allocates every
+        // node from the internal heap) look identical to the caller — AUTOSAVE's
+        // "read failed on existing file" was unexplained on the 09-16 bench
+        const char *e = cJSON_GetErrorPtr();
+        ESP_LOGE("FILEIO", "parse failed: %s (%d B, error at %d, internal free %u largest %u)",
+                 fileName, sz, e ? (int)(e - buf) : -1,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    }
     heap_caps_free(buf);
 
     return data;
