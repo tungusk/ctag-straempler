@@ -279,8 +279,12 @@ static void autosave_now(void);
 // (machine_core mutes audio around the stop/start), persist the choice, and
 // queue the UI rebind — menuMachineBindNow rebuilds menusys with the new
 // machine's pages and re-enters M_MAIN on the next event-loop pass
+static bool s_bind_pending = false;   // activated, but its AUTOSAVE entry not loaded yet
+static void autosave_disarm(void);
+
 static void menuSwitchMachine(const machine_t *m){
     autosave_now();
+    autosave_disarm();   // the save above covers the outgoing machine
     if(machine_activate(m) != ESP_OK){
         // machine_activate fell back to Stub: rebind so the old machine's pages
         // (whose state stop() just freed) are gone, but don't persist the choice
@@ -485,8 +489,30 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             beatlisten_set_out(clkout_ch);
             //save current settings on menu exit
             {
-                char *js = cJSON_Print(cfgData);   // the printed string was leaked on every exit
-                if(js){ writeJSONFile("/sdcard/CONFIG.jsn", js); free(js); }
+                // Save ONLY the keys this page owns, onto a FRESH read. Writing back
+                // the snapshot taken on entry rolled back everything changed while
+                // the page was open — web POST /settings, the tftclk/clock
+                // setters, the machine choice (code review 4.2). Replace in place:
+                // the text-entry page finds ssid/passwd/apikey by POSITION.
+                static const char *const own[] = {"ssid", "passwd", "apikey", "tz_shift",
+                                                  "remote", "broadcast", "blisten", "blisten_out"};
+                cJSON *fresh = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+                cJSON *fs = fresh ? cJSON_GetObjectItemCaseSensitive(fresh, "settings") : NULL;
+                if(fs){
+                    for(int k = 0; k < (int)(sizeof(own)/sizeof(own[0])); k++){
+                        cJSON *v = cJSON_GetObjectItemCaseSensitive(settings, own[k]);
+                        if(!v) continue;
+                        cJSON *dup = cJSON_Duplicate(v, 1);
+                        if(!dup) continue;
+                        if(cJSON_GetObjectItemCaseSensitive(fs, own[k]))
+                            cJSON_ReplaceItemInObjectCaseSensitive(fs, own[k], dup);
+                        else
+                            cJSON_AddItemToObject(fs, own[k], dup);
+                    }
+                    char *js = cJSON_Print(fresh);   // the printed string was leaked on every exit
+                    if(js){ writeJSONFile("/sdcard/CONFIG.JSN", js); free(js); }
+                }else ESP_LOGE("UI", "settings exit: CONFIG.JSN re-read failed, not saving (won't roll back)");
+                if(fresh) cJSON_Delete(fresh);
             }
             //set token 
             cJSON *tok = cJSON_GetObjectItem(settings, "apikey");
@@ -652,6 +678,11 @@ static void dirty_poll_cb(void *arg) {
 // machine remembers its settings independently across switches:
 //   { "Sampler": {...}, "Looper": {...}, "Slicer": {...} }
 static void autosave_now(void) {
+    // Between machine_activate() and EV_MACHINE_BIND the new machine runs on its
+    // start() defaults; the bind is what loads its AUTOSAVE.JSN entry. A save in
+    // that gap (a 2 s debounce armed by the picker press, a slow SD start) wrote
+    // the defaults over the saved state (code review 4.4).
+    if (s_bind_pending) { ESP_LOGW("AUTOSAVE", "skipped: machine bind pending"); return; }
     int64_t t_save0 = esp_timer_get_time();
     s_autosave_last_us = t_save0;                // the backstop paces off this
     clock_ui_flush();                            // core-clock Setup-row edits ride the same debounce
@@ -687,6 +718,10 @@ static void autosave_now(void) {
     ESP_LOGI("AUTOSAVE", "State saved (%s)", m->name);
 }
 
+static void autosave_disarm(void) {
+    if (s_autosave_timer) esp_timer_stop(s_autosave_timer);
+}
+
 static void autosave_kick(void) {
     if (!s_autosave_timer) return;
     esp_timer_stop(s_autosave_timer);
@@ -698,6 +733,7 @@ static void autosave_kick(void) {
 // UI event task — app_main's 4KB stack is too small for the cJSON + TFT work
 // (suspected cause of the intermittent boot loop seen on 2026-07-03).
 void menuBindMachineUI(void){
+    s_bind_pending = true;
     ui_ev_ts_t ev = { .event = EV_MACHINE_BIND, .event_data = NULL };
     xQueueSend(s_ev_queue, &ev, portMAX_DELAY);
 }
@@ -845,6 +881,7 @@ static void register_core_pages(void){
 }
 
 static void menuMachineBindNow(void){
+    s_bind_pending = false;
     if(_ms) menusys_free(_ms);
     register_core_pages();
     s_main_menu_pos = 0;   // entry count differs per machine; stale index is invalid
