@@ -4,14 +4,9 @@
 
 // Filter brick for the FX rack — a standalone multimode filter (LP/HP/BP) as an
 // INSERT effect (distinct from the env-modulated VOICE filter in Synth/Keys).
-// A trapezoidal ("zero-delay feedback") SVF, NOT the shared Chamberlin svf: the
-// Chamberlin goes unstable toward the top of this effect's 12 kHz range, and
-// just below the bound it grows a +8..13 dB peak at Nyquist that the rack's
-// soft limiter turned into a blow-up (code review 2.1; Arlo heard it 09-16 even
-// with the coefficient clamped). The trapezoidal form is stable at any cutoff
-// and keeps the same response shape across the whole sweep. Stereo, float-scratch
-// worker matching the fxchain.h convention (see fxrack). A base/width band
-// filter is a planned second flavor (plans/fx-rack-20260717.md).
+// Wraps the shared svf (components/util/svf, trapezoidal). Stereo, float-scratch
+// worker matching the fxchain.h convention (see fxrack). Offered only by racks
+// without a voice filter of their own (fxrack_t.no_filter: one filter at a time).
 
 enum { FILT_LP = 0, FILT_HP, FILT_BP, FILT_NMODE };
 
@@ -19,14 +14,14 @@ typedef struct {
     volatile int   mode;     // FILT_LP / FILT_HP / FILT_BP
     volatile float cutoff;   // 0..1 -> ~30 Hz .. 12 kHz (log)
     volatile float reso;     // 0..1 -> resonance (0 clean .. 1 near self-osc)
-    float  ic1[2], ic2[2];   // per-channel integrator states (L, R)
-    float  cf_slew;          // slewed g = tan(pi*fc/sr) (no zipper on a fast sweep)
+    svf_t  l, r;             // per-channel filter state
+    float  cf_slew;          // slewed coefficient (no zipper on a fast sweep)
 } fxfilter_t;
 
 static inline void fxfilter_init(fxfilter_t *fl)
 {
     fl->mode = FILT_LP; fl->cutoff = 0.6f; fl->reso = 0.2f;
-    fl->ic1[0] = fl->ic1[1] = fl->ic2[0] = fl->ic2[1] = 0.0f; fl->cf_slew = 0.0f;
+    svf_reset(&fl->l); svf_reset(&fl->r); fl->cf_slew = 0.0f;
 }
 
 // float-scratch worker (no clamp; the rack soft-limits at the end)

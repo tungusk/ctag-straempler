@@ -103,9 +103,9 @@ static double  m_now_fr;                // frame of the newest hop in the last p
 
 void beatlisten_init(void)
 {
-    s_coef_lo  = 2.0f * sinf((float)M_PI * 150.0f  / BL_RATE);
-    s_coef_mid = 2.0f * sinf((float)M_PI * 2000.0f / BL_RATE);
-    s_coef_kick = 2.0f * sinf((float)M_PI * 120.0f / BL_RATE);
+    s_coef_lo   = svf_coef(150.0f,  BL_RATE, 2.0f);   // svf's coefficient (tan form since 09-16)
+    s_coef_mid  = svf_coef(2000.0f, BL_RATE, 2.0f);
+    s_coef_kick = svf_coef(120.0f,  BL_RATE, 2.0f);
     svf_reset(&s_flo);
     svf_reset(&s_fmid);
 }

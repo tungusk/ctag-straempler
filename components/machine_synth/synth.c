@@ -84,7 +84,7 @@ static esp_err_t synth_start(void)
     fxfilter_init(&sy.band);
     sy.fx_slot[0] = sy.fx_slot[1] = FXK_OFF;
     sy_rk = (fxrack_t){ .od = &sy.od, .flg = &sy.flg, .trem = &sy.trem, .dly = &sy.dly,
-                        .filt = &sy.filt, .band = &sy.band, .rv = &sy.rv, .slot = sy.fx_slot };
+                        .filt = &sy.filt, .band = &sy.band, .rv = &sy.rv, .slot = sy.fx_slot, .no_filter = true };
     return ESP_OK;
 }
 
@@ -215,8 +215,8 @@ static void synth_process(int32_t out[MACHINE_BLOCK],
 
     // a NaN/Inf latched in the SVF is PERMANENT silence (NaN fails the output
     // clamp below, so every sample reads 0) — it looked like "FM killed the
-    // audio". Recover the filter if a prior block blew it up. The real
-    // prevention is the lower coefficient ceiling in svf_coef() below.
+    // audio". Recover the filter if a prior block blew it up. The shared svf is
+    // trapezoidal since 2026-09-16 and stable at any cutoff; this stays as a guard.
     if (!(fabsf(sy.flt_l.lp) < 1e9f) || !(fabsf(sy.flt_l.bp) < 1e9f))
         svf_reset(&sy.flt_l);
 
