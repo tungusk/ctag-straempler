@@ -655,11 +655,13 @@ static esp_err_t deck_start(void)
         return ESP_ERR_NO_MEM;
     }
     audio_status_set_voices("deck", "");
+    deck_analysis_set_live(true);
     return ESP_OK;
 }
 
 static void deck_stop(void)
 {
+    deck_analysis_set_live(false);   // before anything else: see deck_analysis.c
     dk.playing = false;
     // the analysis reads dk and writes a sidecar, but never the ring: stop it
     // first, and a run that won't stop only blocks the next start()

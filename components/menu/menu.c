@@ -632,6 +632,7 @@ void menuProcessEvent(int ev, void * ev_data){
     // web Setup-page mirror: one row stepped like a knob turn, on this task
     if(ev == EV_REMOTE_SETUP){
         int *a = (int*) ev_data;
+        if(a != NULL && s_bind_pending){ free(a); return; }   // rows of the machine just stopped
         if(a != NULL){
             setup_menu_remote_adjust(a[0], a[1], a[2]);
             free(a);
@@ -647,6 +648,13 @@ void menuProcessEvent(int ev, void * ev_data){
     // so edits are captured even if power is cut while still inside a submenu
     if(ev == EV_FWD || ev == EV_BWD || ev == EV_SHORT_PRESS || ev == EV_LONG_PRESS)
         autosave_kick();
+    // Between machine_activate() and EV_MACHINE_BIND the registered pages still
+    // belong to the machine that was just STOPPED. An event already queued (a
+    // page's slow timer tick, an encoder turn) ran its handler on freed state:
+    // Deck's tick started an analysis on a stopped Deck (bench 2026-09-16), and
+    // Tape's tick would spawn a save from freed banks. Drop them; the bind is
+    // already queued and re-enters the new machine's main page.
+    if(s_bind_pending) return;
     menusys_process_ev(_ms, ev, ev_data);
 }
 

@@ -290,6 +290,9 @@ static worker_t s_an;
 // together under this lock, so a load can't queue a deck in the instant the task
 // decides the queue is empty and leaves.
 static portMUX_TYPE s_an_mux = portMUX_INITIALIZER_UNLOCKED;
+// DoubleDecker is running: no analysis may start on a stopped machine (see
+// deck_analysis.c for how a menu tick between stop and rebind did exactly that)
+static volatile bool s_dd_live = false;
 
 // next queued deck still worth analysing, or -1 (lock held)
 static int dd_an_take_pending(void)
@@ -341,6 +344,7 @@ static void dd_maybe_analyze(int deck)
     dd_deck_t *v = &dd.d[deck];
     if (!v->track[0] || v->track_bpm > 20.0f) return;   // empty or already stamped
     if (v->playing) return;                              // Arlo: only analyse a STOPPED track
+    if (!s_dd_live) return;
     taskENTER_CRITICAL(&s_an_mux);
     bool queued = dd.an_running;
     // one at a time (SD bus + envelope). Queue THIS deck even when it is the one
@@ -845,11 +849,13 @@ static esp_err_t dualdeck_start(void)
         return ESP_ERR_NO_MEM;
     }
     audio_status_set_voices("doubledecker", "");
+    s_dd_live = true;
     return ESP_OK;
 }
 
 static void dualdeck_stop(void)
 {
+    s_dd_live = false;
     // the analysis never touches the rings: abort it first, and a run that won't
     // stop only blocks the next start() (which would memset dd under it)
     if (!worker_stop(&s_an, 3000)) ESP_LOGE(TAG, "analysis still running after stop");

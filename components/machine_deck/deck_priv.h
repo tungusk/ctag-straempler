@@ -196,4 +196,5 @@ void deck_set_feel(float f);              // x0.5/1/2; reapplies bpm + writes si
 int  deck_analyze_start(void);            // spawn BPM/grid analysis of the track
 bool deck_analysis_stop(int timeout_ms);  // abort + wait; false = still running (never memset dk)
 bool deck_analysis_idle(int timeout_ms);  // wait for a previous run to be gone
+void deck_analysis_set_live(bool live);   // start() sets, stop() clears FIRST: no analysis starts on a stopped Deck
 void deck_analysis_commit(void);          // adopt an_bpm/an_grid + write sidecar

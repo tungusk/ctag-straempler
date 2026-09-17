@@ -32,6 +32,13 @@ static char s_an_track[DK_NAME_LEN];
 // Y, and the old run finished, applied its tempo to Y and wrote Y's sidecar as
 // current (code review 10.1).
 static worker_t s_an;
+// Deck is running. The menu's tick (an_auto_poll) can still fire between
+// deck_stop() and the UI rebinding to the next machine, and it used to start
+// the QUEUED analysis on a stopped Deck: a minutes-long run nothing would ever
+// abort, holding ~22 KB of internal RAM until the next Deck start fell back to
+// Stub (bench 2026-09-16, found by review_bench.py).
+static volatile bool s_live = false;
+void deck_analysis_set_live(bool live) { s_live = live; if (!live) dk.an_auto_req = false; }
 
 void deck_analysis_commit(void)
 {
@@ -88,7 +95,7 @@ bool deck_analysis_idle(int timeout_ms) { return worker_idle(&s_an, timeout_ms);
 
 int deck_analyze_start(void)
 {
-    if (!dk.track[0]) return -1;
+    if (!s_live || !dk.track[0]) return -1;
     // the TASK, not an_state, says whether one runs: an_state is reset by start()
     if (s_an.alive) {
         ESP_LOGW(TAG, "analyze_start: already running (%s)", s_an_track);
