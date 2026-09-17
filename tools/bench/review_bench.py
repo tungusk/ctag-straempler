@@ -750,6 +750,33 @@ def t_lfn(mat, reboot):
     HEALTH.check("lfn-reboot")
 
 
+# The tests load their own material into these machines (Keys zones, Synth wave,
+# Tape length, Deck/DoubleDecker tracks) and autosave keeps it: on 2026-09-16
+# Arlo found Keys holding the long-filename test sine. Put the patches back.
+RESTORE_KEYS = {"Keys": ["zones", "lvl"], "Synth": ["wave", "eng"], "Tape": ["lsel"],
+                "Deck": ["track", "auto_an"], "DoubleDecker": ["ta", "tb"],
+                "Sampler": ["voices"], "Granular": ["sample"], "Tracker": ["file"]}
+
+
+def snapshot_patches():
+    snap = {}
+    for m, keys in RESTORE_KEYS.items():
+        if switch(m, "snapshot") != m:
+            continue
+        p = params()
+        snap[m] = {k: p[k] for k in keys if k in p and p[k] not in ("", None)}
+    LOG.say("snapshot: %s" % {m: list(v) for m, v in snap.items()})
+    return snap
+
+
+def restore_patches(snap):
+    for m, patch in snap.items():
+        if not patch or switch(m, "restore") != m:
+            continue
+        set_params(patch, settle=2.5)                # past the autosave debounce
+    LOG.say("restored patches: %s" % list(snap))
+
+
 # ---- main --------------------------------------------------------------------
 TESTS = ["switch", "decks", "keys", "tape", "synth", "autosave", "uri", "stall", "import", "lfn"]
 
@@ -793,6 +820,7 @@ def main():
     HEALTH = Health()
     start_machine = machine_now()
     mat = pick_material()
+    snap = snapshot_patches()
 
     only = a.only.split(",") if a.only else TESTS
     for name in only:
@@ -830,6 +858,12 @@ def main():
                 pass
         HEALTH.check(name)
 
+    restore_patches(snap)
+    for n in ("REVIEWID3", "REVIEWEXT", "REVIEWBAD", LFN):
+        try:
+            _req("DELETE", "/files?name=%s" % n)
+        except Exception:                             # noqa: BLE001
+            pass
     try:
         if machine_now() != start_machine and start_machine not in ("", "Stub"):
             switch(start_machine, "restore")
