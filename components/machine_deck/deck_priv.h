@@ -194,4 +194,6 @@ void deck_sync_now(void);                 // hard-snap grid phase to the clock n
 void deck_resync_now(void);               // BOTH-TRIG gesture: the beat lands NOW
 void deck_set_feel(float f);              // x0.5/1/2; reapplies bpm + writes sidecar
 int  deck_analyze_start(void);            // spawn BPM/grid analysis of the track
+bool deck_analysis_stop(int timeout_ms);  // abort + wait; false = still running (never memset dk)
+bool deck_analysis_idle(int timeout_ms);  // wait for a previous run to be gone
 void deck_analysis_commit(void);          // adopt an_bpm/an_grid + write sidecar

@@ -625,6 +625,7 @@ static esp_err_t deck_start(void)
 {
     // a reader that outlived the last stop() still reads dk: never memset under it
     if (!worker_idle(&s_rd, 3000)) { ESP_LOGE(TAG, "old reader still running"); return ESP_ERR_INVALID_STATE; }
+    if (!deck_analysis_idle(3000)) { ESP_LOGE(TAG, "old analysis still running"); return ESP_ERR_INVALID_STATE; }
     memset(&dk, 0, sizeof(dk));
     dk_reset_statics();
     s_pending[0] = 0;
@@ -660,6 +661,9 @@ static esp_err_t deck_start(void)
 static void deck_stop(void)
 {
     dk.playing = false;
+    // the analysis reads dk and writes a sidecar, but never the ring: stop it
+    // first, and a run that won't stop only blocks the next start()
+    if (!deck_analysis_stop(3000)) ESP_LOGE(TAG, "analysis still running after stop");
     // a reader parked on sd_lock can outlive any wait: leak rather than free under it
     if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking ring"); return; }
     free(dk.ring);

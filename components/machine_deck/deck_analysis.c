@@ -15,6 +15,7 @@
 #include "fileio.h"
 #include "sampfile_f.h"
 #include "bpm_analysis.h"
+#include "worker.h"
 #include "deck_priv.h"
 
 static const char *TAG = "DECK-AN";
@@ -23,6 +24,14 @@ static const char *TAG = "DECK-AN";
 // running analysis, and resolving dk.track at commit time stamped the OLD
 // track's bpm into the NEW track's sidecar
 static char s_an_track[DK_NAME_LEN];
+
+// The analysis task's lifecycle (worker.h). Its run flag is also the engine's
+// abort, so deck_stop() -> deck_analysis_stop() bails a run within one
+// checkpoint. It used to be a bare xTaskCreate that stop() never aborted, and
+// start()'s memset marked it idle while it still ran: switch away and back, load
+// Y, and the old run finished, applied its tempo to Y and wrote Y's sidecar as
+// current (code review 10.1).
+static worker_t s_an;
 
 void deck_analysis_commit(void)
 {
@@ -59,34 +68,37 @@ static bool deck_busy(void) { return dk.playing || dk.loading; }
 static void analysis_task(void *pv)
 {
     bpm_result_t res;
-    int rc = bpm_analyze(s_an_track, deck_busy, &dk.an_progress, &res);
-    if (rc != 0) {
-        ESP_LOGW(TAG, "analysis failed (%d): %s", rc, s_an_track);
+    int rc = bpm_analyze(s_an_track, deck_busy, &s_an.run, &dk.an_progress, &res);
+    if (rc != 0 || !s_an.run) {      // failed, or the machine is stopping: touch nothing
+        ESP_LOGW(TAG, "analysis %s (%d): %s", rc == -2 || !s_an.run ? "aborted" : "failed", rc, s_an_track);
         dk.an_state = DK_AN_FAIL;
-        vTaskDelete(NULL);
-        return;
+    } else {
+        dk.an_bpm = res.bpm;
+        dk.an_grid = res.grid;
+        dk.an_conf = res.conf;
+        dk.an_progress = 100;
+        dk.an_state = DK_AN_DONE;
+        deck_analysis_commit();      // adopt + cache in the sidecar
     }
-    dk.an_bpm = res.bpm;
-    dk.an_grid = res.grid;
-    dk.an_conf = res.conf;
-    dk.an_progress = 100;
-    dk.an_state = DK_AN_DONE;
-    deck_analysis_commit();          // adopt + cache in the sidecar
-    vTaskDelete(NULL);
+    worker_exit(&s_an);
 }
+
+bool deck_analysis_stop(int timeout_ms) { return worker_stop(&s_an, timeout_ms); }
+bool deck_analysis_idle(int timeout_ms) { return worker_idle(&s_an, timeout_ms); }
 
 int deck_analyze_start(void)
 {
     if (!dk.track[0]) return -1;
-    if (dk.an_state == DK_AN_RUNNING) {
+    // the TASK, not an_state, says whether one runs: an_state is reset by start()
+    if (s_an.alive) {
         ESP_LOGW(TAG, "analyze_start: already running (%s)", s_an_track);
         return -1;
     }
     strlcpy(s_an_track, dk.track, sizeof(s_an_track));
     dk.an_state = DK_AN_RUNNING;
     dk.an_progress = 0;
-    // unpinned (reads files); modest priority so audio + reader stay smooth
-    if (xTaskCreate(analysis_task, "deck_an", 6144, NULL, 4, NULL) != pdPASS) {
+    // modest priority so audio + reader stay smooth
+    if (!worker_spawn(&s_an, analysis_task, "deck_an", 6144, NULL, 4, NULL)) {
         ESP_LOGE(TAG, "analyze_start: xTaskCreate FAILED (heap %u, largest %u)",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));

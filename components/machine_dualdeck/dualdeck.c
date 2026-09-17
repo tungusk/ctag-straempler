@@ -281,51 +281,57 @@ static void dd_write_sidecar(const char *id, const bpm_result_t *r)
     if (s) { writeJSONFile(jp, s); free(s); }
 }
 
-static void dd_analyze_start(int deck);   // fwd
+// The analysis task's lifecycle (worker.h); its run flag is also the engine's
+// abort. One task works through the queue itself — it used to re-spawn itself
+// for the queued deck, and that handoff could lose an abort and outlive the
+// machine, writing a sidecar under a zeroed name (code review 10.4).
+static worker_t s_an;
+// an_pending is a BITMASK of decks waiting (bit 0 = A). It and an_running change
+// together under this lock, so a load can't queue a deck in the instant the task
+// decides the queue is empty and leaves.
+static portMUX_TYPE s_an_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// next queued deck still worth analysing, or -1 (lock held)
+static int dd_an_take_pending(void)
+{
+    for (int d = 0; d < 2; d++) {
+        if (!(dd.an_pending & (1 << d))) continue;
+        dd.an_pending &= ~(1 << d);
+        if (dd.d[d].track[0] && dd.d[d].track_bpm <= 20.0f) return d;
+    }
+    return -1;
+}
 
 static void dd_analysis_task(void *pv)
 {
-    bpm_result_t res;
-    int rc = bpm_analyze(dd.an_track, dd_busy, &dd.an_progress, &res);
-    if (rc == 0) {
-        dd_write_sidecar(dd.an_track, &res);
-        // adopt live ONLY if still the loaded track on that deck AND it is
-        // STOPPED — never move a playing deck's grid out from under the PLL
-        int d = dd.an_deck;
-        if (d >= 0 && d < 2 && strcmp(dd.d[d].track, dd.an_track) == 0 && !dd.d[d].playing) {
-            dd.d[d].grid_offset = res.grid;   // grid FIRST: track_bpm>20 is the loop-engage gate
-            dd.d[d].track_bpm  = res.bpm;     // DoubleDecker has no per-track "feel"
-            dd_tl_update(&dd.d[d]);
+    for (;;) {
+        bpm_result_t res;
+        int rc = bpm_analyze(dd.an_track, dd_busy, &s_an.run, &dd.an_progress, &res);
+        if (!s_an.run) break;                // stopping: touch neither the card nor dd
+        if (rc == 0) {
+            dd_write_sidecar(dd.an_track, &res);
+            // adopt live ONLY if still the loaded track on that deck AND it is
+            // STOPPED — never move a playing deck's grid out from under the PLL
+            int d = dd.an_deck;
+            if (d >= 0 && d < 2 && strcmp(dd.d[d].track, dd.an_track) == 0 && !dd.d[d].playing) {
+                dd.d[d].grid_offset = res.grid;   // grid FIRST: track_bpm>20 is the loop-engage gate
+                dd.d[d].track_bpm  = res.bpm;     // DoubleDecker has no per-track "feel"
+                dd_tl_update(&dd.d[d]);
+            }
         }
+        taskENTER_CRITICAL(&s_an_mux);
+        int p = dd_an_take_pending();
+        if (p < 0) { dd.an_running = false; dd.an_deck = -1; }
+        else {
+            dd.an_deck = p;
+            strlcpy(dd.an_track, dd.d[p].track, sizeof(dd.an_track));
+        }
+        dd.an_progress = 0;
+        taskEXIT_CRITICAL(&s_an_mux);
+        if (p < 0) break;
     }
-    // hand off to a queued deck if one is waiting, keeping an_running set across
-    // the gap so a concurrent load can't spawn a second analyser
-    int p = dd.an_pending;
-    dd.an_pending = -1;
-    dd.an_progress = 0;
-    if (rc != -2 && p >= 0 && p < 2 && dd.d[p].track[0] && dd.d[p].track_bpm <= 20.0f) {
-        dd_analyze_start(p);
-    } else {
-        dd.an_running = false;
-        dd.an_deck = -1;
-    }
-    vTaskDelete(NULL);
-}
-
-static void dd_analyze_start(int deck)
-{
-    deck &= 1;
-    dd.an_deck = deck;
-    strlcpy(dd.an_track, dd.d[deck].track, sizeof(dd.an_track));
-    dd.an_progress = 0;
-    if (xTaskCreate(dd_analysis_task, "dd_an", 6144, NULL, 4, NULL) == pdPASS) {
-        dd.an_running = true;
-    } else {
-        ESP_LOGE(TAG, "analyze xTaskCreate failed (heap %u)",
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-        dd.an_running = false;
-        dd.an_deck = -1;
-    }
+    dd.an_running = false;
+    worker_exit(&s_an);
 }
 
 // kick analysis for a freshly loaded UNSTAMPED track — stopped decks only
@@ -335,11 +341,28 @@ static void dd_maybe_analyze(int deck)
     dd_deck_t *v = &dd.d[deck];
     if (!v->track[0] || v->track_bpm > 20.0f) return;   // empty or already stamped
     if (v->playing) return;                              // Arlo: only analyse a STOPPED track
-    if (dd.an_running) {                                 // one at a time (SD bus + envelope)
-        if (dd.an_deck != deck) dd.an_pending = deck;
-        return;
+    taskENTER_CRITICAL(&s_an_mux);
+    bool queued = dd.an_running;
+    // one at a time (SD bus + envelope). Queue THIS deck even when it is the one
+    // being analysed: that run is for the track it just replaced, and its result
+    // is dropped by the track-name check (code review 10.5)
+    if (queued) dd.an_pending |= 1 << deck;
+    else {
+        dd.an_running = true;
+        dd.an_deck = deck;
+        strlcpy(dd.an_track, v->track, sizeof(dd.an_track));
+        dd.an_progress = 0;
     }
-    dd_analyze_start(deck);
+    taskEXIT_CRITICAL(&s_an_mux);
+    if (queued) return;
+    // a task that just emptied the queue is one line from exiting: let it go
+    worker_idle(&s_an, 500);
+    if (!worker_spawn(&s_an, dd_analysis_task, "dd_an", 6144, NULL, 4, NULL)) {
+        ESP_LOGE(TAG, "analyze task start failed (heap %u)",
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        dd.an_running = false;
+        dd.an_deck = -1;
+    }
 }
 
 // ---- UI-side controls -------------------------------------------------------
@@ -769,6 +792,7 @@ static esp_err_t dualdeck_start(void)
 {
     // a reader that outlived the last stop() still reads dd: never memset under it
     if (!worker_idle(&s_rd, 3000)) { ESP_LOGE(TAG, "old reader still running"); return ESP_ERR_INVALID_STATE; }
+    if (!worker_idle(&s_an, 3000)) { ESP_LOGE(TAG, "old analysis still running"); return ESP_ERR_INVALID_STATE; }
     memset(&dd, 0, sizeof(dd));
     dd_reset_statics();
     for (int i = 0; i < 2; i++) {
@@ -813,7 +837,7 @@ static esp_err_t dualdeck_start(void)
     dd.xf = 0.0f;
     dd.filt_cv[0] = dd.filt_cv[1] = 2048;   // both filters start CENTRE (off), not a heavy LP at 0
     dd.manual = true;
-    dd.an_deck = -1; dd.an_pending = -1;    // memset zeroed these to 0, a valid deck idx
+    dd.an_deck = -1;                        // memset zeroed it to 0, a valid deck idx
     if (!worker_spawn(&s_rd, reader_task, "dd_reader", 4096, NULL, 6, NULL)) {
         ESP_LOGE(TAG, "reader task create failed");
         free(dd.d[0].ring); dd.d[0].ring = NULL;
@@ -826,13 +850,12 @@ static esp_err_t dualdeck_start(void)
 
 static void dualdeck_stop(void)
 {
-    bpm_analyze_abort();           // bail any running analysis before we tear down
+    // the analysis never touches the rings: abort it first, and a run that won't
+    // stop only blocks the next start() (which would memset dd under it)
+    if (!worker_stop(&s_an, 3000)) ESP_LOGE(TAG, "analysis still running after stop");
     dd.d[0].playing = dd.d[1].playing = false;
     // a reader parked on sd_lock can outlive any wait: leak rather than free under it
     if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking rings"); return; }
-    // let the analysis task see the abort and exit before the next start()'s
-    // memset(&dd) lands under it (statics-survive-switch hazard)
-    for (int i = 0; i < 100 && dd.an_running; i++) vTaskDelay(pdMS_TO_TICKS(10));
     free(dd.d[0].ring); dd.d[0].ring = NULL;
     free(dd.d[1].ring); dd.d[1].ring = NULL;
 }

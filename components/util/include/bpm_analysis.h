@@ -29,13 +29,11 @@ typedef struct {
 //    decks so one deck's playback isn't starved while the other analyses.
 //  progress: 0..100 written into *progress if non-NULL.
 //
+//  run: keep-going flag, normally the caller's worker_t.run (worker.h). The
+//    analysis bails with -2 at its next checkpoint once *run goes false, so
+//    worker_stop() IS the abort. NULL = never abort.
+//
 // Returns 0 and fills *out on success; <0 on failure (open/probe/OOM, a track
-// shorter than ~10 s, or an abort). Aborts promptly if bpm_analyze_abort() is
-// called from another task (e.g. the caller's stop()).
-int  bpm_analyze(const char *id, bool (*busy)(void), volatile int *progress, bpm_result_t *out);
-
-// Ask a running bpm_analyze() to bail out at its next checkpoint (returns <0).
-// Cleared automatically at the start of the next bpm_analyze(). Safe to call
-// when nothing is running. Only one analysis runs at a time (one active
-// machine), so this needs no handle.
-void bpm_analyze_abort(void);
+// shorter than ~10 s), -2 on an abort.
+int  bpm_analyze(const char *id, bool (*busy)(void), const volatile bool *run,
+                 volatile int *progress, bpm_result_t *out);

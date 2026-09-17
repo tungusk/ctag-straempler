@@ -1,8 +1,8 @@
 // Offline BPM + beat-grid analysis (see bpm_analysis.h). Lifted from the deck's
 // deck_analysis.c — the DSP is unchanged; the only edits decouple it from the
 // deck singleton: the playback backpressure gate is now a busy() callback, the
-// progress/result are out-params, and an abort flag lets a caller's stop() bail
-// a run out. Onset envelope (256-frame hops, ~172 Hz) -> half-wave-rectified
+// progress/result are out-params, and the caller's worker run flag lets its
+// stop() bail a run out. Onset envelope (256-frame hops, ~172 Hz) -> half-wave-rectified
 // flux -> autocorrelation over 60..190 BPM (80..165 preferred) with harmonic
 // disambiguation, parabolic + long-lag ladder refinement -> grid phase by
 // folding onsets into one beat with sub-bin interpolation.
@@ -22,27 +22,33 @@
 static const char *TAG = "BPM-AN";
 #define ENV_RATE (44100.0f / BPM_HOP)
 
-// only ONE analysis runs at a time (one active machine, and each caller guards
-// re-entry), so the busy hook + abort flag can be file-static.
-static bool (*s_busy)(void) = NULL;
-static volatile bool s_abort = false;
+// Per-run, not file-static. The busy hook and a global abort flag used to be
+// statics on the claim that only one analysis runs at a time — but an analysis
+// that outlives its machine (it can: the wait in stop() is bounded) then shares
+// them with the next machine's run, and bpm_analyze() CLEARED the abort on entry,
+// so an abort landing just before a queued run started was lost (code review
+// 10.1/10.4). The stop signal is now the caller's own flag.
+typedef struct {
+    bool (*busy)(void);
+    const volatile bool *run;
+} an_ctx_t;
 
-void bpm_analyze_abort(void) { s_abort = true; }
+#define AN_ABORTED(c) ((c)->run && !*(c)->run)
 
 // pause while the caller owns the SD bus; return false if we were aborted mid-wait
-static bool wait_idle(void)
+static bool wait_idle(const an_ctx_t *c)
 {
-    while (s_busy && s_busy()) {
-        if (s_abort) return false;
+    while (c->busy && c->busy()) {
+        if (AN_ABORTED(c)) return false;
         vTaskDelay(pdMS_TO_TICKS(30));
     }
-    return !s_abort;
+    return !AN_ABORTED(c);
 }
 
 // one ACF evaluation at an arbitrary lag (pauses while the caller plays)
-static float acf_at(const float *env, uint32_t n, uint32_t lag)
+static float acf_at(const an_ctx_t *c, const float *env, uint32_t n, uint32_t lag)
 {
-    if (!wait_idle()) return 0;
+    if (!wait_idle(c)) return 0;
     if (lag == 0 || lag >= n) return 0;
     float acc = 0;
     for (uint32_t i = 0; i + lag < n; i++) acc += env[i] * env[i + lag];
@@ -55,10 +61,10 @@ static int cmp_float(const void *a, const void *b)
     return d > 0 ? 1 : (d < 0 ? -1 : 0);
 }
 
-int bpm_analyze(const char *id, bool (*busy)(void), volatile int *progress, bpm_result_t *out)
+int bpm_analyze(const char *id, bool (*busy)(void), const volatile bool *run,
+                volatile int *progress, bpm_result_t *out)
 {
-    s_busy = busy;
-    s_abort = false;
+    const an_ctx_t ctx = { .busy = busy, .run = run };
     if (progress) *progress = 0;
 
     char path[64];
@@ -107,7 +113,7 @@ int bpm_analyze(const char *id, bool (*busy)(void), volatile int *progress, bpm_
         // ANALYSE ONLY WHILE STOPPED: pause entirely during playback so we never
         // touch the SD bus while a ring reader needs it — that contention was
         // what hurt the audio.
-        if (!wait_idle()) { aborted = true; break; }
+        if (!wait_idle(&ctx)) { aborted = true; break; }
         uint32_t hops = total_hops - n;
         if (hops > AN_CHUNK_HOPS) hops = AN_CHUNK_HOPS;
         sd_lock_take();
@@ -155,7 +161,7 @@ int bpm_analyze(const char *id, bool (*busy)(void), volatile int *progress, bpm_
     float *rr = malloc((lag_max + 2) * sizeof(float));
     if (!rr) { heap_caps_free(env); return -1; }
     for (int lag = lag_min; lag <= lag_max; lag++) {
-        if (!wait_idle()) { free(rr); heap_caps_free(env); return -2; }
+        if (!wait_idle(&ctx)) { free(rr); heap_caps_free(env); return -2; }
         float acc = 0;
         for (uint32_t i = 0; i + lag < n; i++) acc += env[i] * env[i + lag];
         acc /= (float)(n - lag);
@@ -183,7 +189,7 @@ int bpm_analyze(const char *id, bool (*busy)(void), volatile int *progress, bpm_
             // snap onto the local rr peak — integer halving can land 1 off
             while (c > lag_min && rr[c - 1] > rr[c]) c--;
             while (c < lag_max && rr[c + 1] > rr[c]) c++;
-            float a2 = (2 * c <= lag_max) ? rr[2 * c] : acf_at(env, n, 2 * c);
+            float a2 = (2 * c <= lag_max) ? rr[2 * c] : acf_at(&ctx, env, n, 2 * c);
             float bpmc = ENV_RATE * 60.0f / c;
             float w = (bpmc >= 80 && bpmc <= 165) ? 1.0f : 0.7f;
             float sc = w * (rr[c] + 0.5f * a2);
@@ -233,11 +239,11 @@ int bpm_analyze(const char *id, bool (*busy)(void), volatile int *progress, bpm_
         float rb = -1;
         int lb = center;
         for (int d = -8; d <= 8; d++) {
-            rv[d + 8] = acf_at(env, n, (uint32_t)(center + d));
+            rv[d + 8] = acf_at(&ctx, env, n, (uint32_t)(center + d));
             if (rv[d + 8] > rb) { rb = rv[d + 8]; lb = center + d; }
             if ((d & 7) == 0) vTaskDelay(1);
         }
-        if (s_abort) { heap_caps_free(env); return -2; }
+        if (AN_ABORTED(&ctx)) { heap_caps_free(env); return -2; }
         int bi = lb - center + 8;
         float rp = bi > 0 ? rv[bi - 1] : rb;
         float rn = bi < 16 ? rv[bi + 1] : rb;

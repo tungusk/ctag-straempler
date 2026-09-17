@@ -206,9 +206,9 @@ typedef struct {
     // auto-BPM analysis (shared engine, util/bpm_analysis) so an UNSTAMPED track
     // can be looped. One run at a time (shared SD bus + the ~208 KB envelope);
     // kicked when a track loads STOPPED + unstamped, paused whenever EITHER deck
-    // touches the SD bus. an_pending queues the other deck behind a running one.
+    // touches the SD bus. an_pending queues decks behind a running one.
     volatile int  an_deck;         // deck being analysed, -1 = none
-    volatile int  an_pending;      // deck queued next, -1 = none
+    volatile int  an_pending;      // BITMASK of decks queued (bit 0 = A), 0 = none
     volatile int  an_progress;     // 0..100
     volatile bool an_running;
     char          an_track[DD_NAME_LEN];   // snapshot of the analysed track id
