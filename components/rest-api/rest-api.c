@@ -69,6 +69,20 @@ static esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err)
 }
 
 // Extract query parameter value into buf[buflen].  Returns true on success.
+// httpd_req_recv with a BOUNDED timeout retry. A bare `continue` on
+// HTTPD_SOCK_ERR_TIMEOUT spun forever once a client vanished mid-body — the one
+// httpd worker hung, and for OTA the audio stayed muted with the OTA handle open,
+// until a power cycle (code review 6.6). drop_sample's 4-try cap, shared.
+// Returns bytes received (>0), or <=0 = give up.
+#define RECV_TIMEOUT_TRIES 4
+static int recv_bounded(httpd_req_t *req, char *buf, size_t len)
+{
+    for (int t = 1; ; t++) {
+        int r = httpd_req_recv(req, buf, len);
+        if (r != HTTPD_SOCK_ERR_TIMEOUT || t >= RECV_TIMEOUT_TRIES) return r;
+    }
+}
+
 static bool get_query_param(httpd_req_t *req, const char *key, char *buf, size_t buflen)
 {
     size_t qlen = httpd_req_get_url_query_len(req) + 1;
@@ -1063,8 +1077,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if (!body) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
     int received = 0;
     while (received < total) {
-        int r = httpd_req_recv(req, body + received, total - received);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        int r = recv_bounded(req, body + received, total - received);
         if (r <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Recv failed"); return ESP_FAIL; }
         received += r;
     }
@@ -1332,7 +1345,7 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     buf_len = httpd_req_get_hdr_value_len(req, "Name") + 1;
     if (buf_len > 1) {
         buf = malloc(buf_len);
-        if (httpd_req_get_hdr_value_str(req, "Name", buf, buf_len) == ESP_OK) {
+        if (buf && httpd_req_get_hdr_value_str(req, "Name", buf, buf_len) == ESP_OK) {
             cleanStringSpace(buf);
             if (strlen(buf) >= SAMPLE_ID_LEN) {   // the page caps names at 31; refuse, never truncate
                 free(buf);
@@ -1359,14 +1372,14 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     buf_len = httpd_req_get_hdr_value_len(req, "Description") + 1;
     if (buf_len > 1) {
         buf = malloc(buf_len);
-        if (httpd_req_get_hdr_value_str(req, "Description", buf, buf_len) == ESP_OK) { cleanString(buf); val = cJSON_CreateString(buf); cJSON_AddItemToObject(root, "description", val); }
+        if (buf && httpd_req_get_hdr_value_str(req, "Description", buf, buf_len) == ESP_OK) { cleanString(buf); val = cJSON_CreateString(buf); cJSON_AddItemToObject(root, "description", val); }
         free(buf);
     } else { cJSON_AddStringToObject(root, "description", ""); }
 
     buf_len = httpd_req_get_hdr_value_len(req, "Tags") + 1;
     if (buf_len > 1) {
         buf = malloc(buf_len);
-        if (httpd_req_get_hdr_value_str(req, "Tags", buf, buf_len) == ESP_OK) { cleanString(buf); val = cJSON_CreateString(buf); cJSON_AddItemToObject(root, "tags_s", val); }
+        if (buf && httpd_req_get_hdr_value_str(req, "Tags", buf, buf_len) == ESP_OK) { cleanString(buf); val = cJSON_CreateString(buf); cJSON_AddItemToObject(root, "tags_s", val); }
         free(buf);
     } else { cJSON_AddStringToObject(root, "tags_s", ""); }
 
@@ -1384,6 +1397,12 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     }
 
     buf = malloc(4096);
+    if (!buf) {                              // internal RAM is thin while Radio plays (6.10)
+        sd_lock_take(); f_close(&raw_file); f_unlink(file_name); sd_lock_give();
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
     remaining = req->content_len;
 
     int timeouts = 0;
@@ -1574,8 +1593,7 @@ static esp_err_t bootlogo_put_handler(httpd_req_t *req)
     int remaining = req->content_len, total = 0;
     bool ok = true;
     while (remaining > 0) {
-        int r = httpd_req_recv(req, buf, remaining > 4096 ? 4096 : remaining);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        int r = recv_bounded(req, buf, remaining > 4096 ? 4096 : remaining);
         if (r <= 0) { ok = false; break; }
         if (total == 0) {
             // header sanity: 'BM', pixel offset 54, 320x240, 24 bpp, uncompressed
@@ -1839,8 +1857,7 @@ static esp_err_t remote_params_post_handler(httpd_req_t *req)
     if (!body) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
     int received = 0;
     while (received < total) {
-        int r = httpd_req_recv(req, body + received, total - received);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        int r = recv_bounded(req, body + received, total - received);
         if (r <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Recv failed"); return ESP_FAIL; }
         received += r;
     }
@@ -1978,7 +1995,7 @@ static esp_err_t mod_upload_handler(httpd_req_t *req)
     size_t nl = httpd_req_get_hdr_value_len(req, "Name") + 1;
     if (nl > 1) {
         char *b = malloc(nl);
-        if (httpd_req_get_hdr_value_str(req, "Name", b, nl) == ESP_OK) {
+        if (b && httpd_req_get_hdr_value_str(req, "Name", b, nl) == ESP_OK) {
             cleanStringSpace(b);
             if (nl > 9) b[8] = 0;                    // 8.3 clamp (b may be shorter)
             strlcpy(name, b, sizeof(name));
@@ -1988,7 +2005,7 @@ static esp_err_t mod_upload_handler(httpd_req_t *req)
     size_t el = httpd_req_get_hdr_value_len(req, "Ext") + 1;
     if (el > 1) {
         char *b = malloc(el);
-        if (httpd_req_get_hdr_value_str(req, "Ext", b, el) == ESP_OK) strlcpy(ext, b, sizeof(ext));
+        if (b && httpd_req_get_hdr_value_str(req, "Ext", b, el) == ESP_OK) strlcpy(ext, b, sizeof(ext));
         free(b);
     }
     if (!name[0] || !mod_ext_ok(ext)) {
@@ -2019,15 +2036,26 @@ static esp_err_t mod_upload_handler(httpd_req_t *req)
     }
 
     char *buf = malloc(4096);
+    if (!buf) {                              // internal RAM is thin while Radio plays (6.10)
+        sd_lock_take(); f_close(&f); f_unlink(MOD_TMP); sd_lock_give();
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL;
+    }
     int remaining = req->content_len, ret; UINT bw;
     while (remaining > 0) {
-        if ((ret = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0) {
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if ((ret = recv_bounded(req, buf, MIN(remaining, 4096))) <= 0) {
             sd_lock_take(); f_close(&f); f_unlink(MOD_TMP); sd_lock_give();
             free(buf); return ESP_FAIL;      // drop the partial temp
         }
         remaining -= ret;
-        sd_lock_take(); f_write(&f, buf, ret, &bw); sd_lock_give();
+        sd_lock_take();
+        FRESULT wr = f_write(&f, buf, ret, &bw);
+        sd_lock_give();
+        if (wr != FR_OK || bw != (UINT)ret) {   // card full / write error: never publish a short module
+            ESP_LOGE(TAG, "module write failed (%d, %u/%d)", wr, (unsigned)bw, ret);
+            sd_lock_take(); f_close(&f); f_unlink(MOD_TMP); sd_lock_give();
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD write failed"); return ESP_FAIL;
+        }
     }
     sd_lock_take();
     f_close(&f);
@@ -2123,10 +2151,17 @@ static esp_err_t mod_list_handler(httpd_req_t *req)
         while ((e = readdir(d)) != NULL && len < 4096 - 160) {
             if (e->d_name[0] == '.') continue;
             if (strcasecmp(e->d_name, "UPLOAD.TMP") == 0) continue;   // hide upload scratch
+            // With long filenames on, a name can run to 255 chars, and the old
+            // `len +=` of an untruncated snprintf walked past the 4096 buffer
+            // (code review 6.7). List only what /trk/get can fetch (name[32]),
+            // and nothing that would break the JSON string.
+            if (strlen(e->d_name) >= 32 || strpbrk(e->d_name, "\"\\") || !mod_name_safe(e->d_name)) continue;
             snprintf(p, sizeof(p), MOD_DIR_VFS "/%s", e->d_name);
             long sz = (stat(p, &st) == 0) ? (long)st.st_size : 0;
-            len += snprintf(out + len, 4096 - len, "%s{\"name\":\"%s\",\"size\":%ld}",
-                            first ? "" : ",", e->d_name, sz);
+            int n = snprintf(out + len, 4096 - len, "%s{\"name\":\"%s\",\"size\":%ld}",
+                             first ? "" : ",", e->d_name, sz);
+            if (n < 0 || n >= 4096 - len - 3) break;   // keep room for the closing "]}"
+            len += n;
             first = false;
         }
         closedir(d);
@@ -2398,9 +2433,8 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     if (!buf) { esp_ota_abort(h); audio_output_mute(false); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
     int remaining = req->content_len, total = 0;
     while (remaining > 0) {
-        int r = httpd_req_recv(req, buf, remaining > 4096 ? 4096 : remaining);
+        int r = recv_bounded(req, buf, remaining > 4096 ? 4096 : remaining);
         if (r <= 0) {
-            if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
             free(buf); esp_ota_abort(h); audio_output_mute(false);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"); return ESP_FAIL;
         }
