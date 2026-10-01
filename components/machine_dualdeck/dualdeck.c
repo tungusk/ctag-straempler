@@ -248,6 +248,7 @@ static void reader_serve(dd_deck_t *v, FILE **fp, char *cur, uint32_t *cur_ff,
                 if (sv < 0) sv = -sv;
                 if (sv > peak) peak = sv;
             }
+            if (peak > 32767) peak = 32767;   // -(-32768) >> 7 is 256: wrapped to an empty column (#62 #88)
             v->wf[v->wf_col] = (uint8_t)(peak >> 7);
             if (++v->wf_col >= DD_WF_W) v->wf_state = 2;
         }

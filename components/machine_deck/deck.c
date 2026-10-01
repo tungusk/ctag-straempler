@@ -283,6 +283,7 @@ static void reader_task(void *pv)
                     if (sv < 0) sv = -sv;
                     if (sv > peak) peak = sv;
                 }
+                if (peak > 32767) peak = 32767;   // -(-32768) >> 7 is 256: wrapped to an empty column (#62 #88)
                 dk.wf[dk.wf_col] = (uint8_t)(peak >> 7);
                 if (++dk.wf_col >= DK_WF_W) dk.wf_state = 2;
             }

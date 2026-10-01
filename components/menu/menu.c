@@ -364,7 +364,12 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             menuTFTPrintMenu(settings_menus, &n_settings_menus);
             menuTFTSelectMenuItem(&menu_pos, 0, settings_menus, &n_settings_menus);
             if(_state_json != NULL)cfgData = (cJSON*) _state_json;
-            else cfgData = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+            else {
+                // a re-entry from About/Tuner (no exit in between) used to drop
+                // the tree it still held (09-16 4.3, #26)
+                if(cfgData != NULL) cJSON_Delete(cfgData);
+                cfgData = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+            }
             settings = NULL;   // never carry a pointer into the config freed on the last exit
             if(cfgData != NULL){
                 settings = cJSON_GetObjectItemCaseSensitive(cfgData, "settings");
@@ -562,7 +567,11 @@ static int settings_input_def_handler(int it_id, int event, void* event_data){
             menu_pos = *((int*) _state_data);
             char title[32];
             snprintf(title, sizeof(title), "Enter %s:", settings_menus[menu_pos]);
-            cJSON *val = settings ? cJSON_GetArrayItem(settings, menu_pos) : NULL;
+            // BY KEY: a hand-edited CONFIG.JSN reordered the keys and the
+            // position lookup edited the wrong one (#32)
+            static const char *const te_keys[] = { "ssid", "passwd", "apikey" };
+            cJSON *val = (settings && menu_pos >= 0 && menu_pos < 3)
+                         ? cJSON_GetObjectItemCaseSensitive(settings, te_keys[menu_pos]) : NULL;
             // the Api Key (index 2) is longer than the other fields
             text_entry_enter(title,
                              (val && cJSON_IsString(val)) ? val->valuestring : NULL,
@@ -581,11 +590,13 @@ static int settings_input_def_handler(int it_id, int event, void* event_data){
         return M_SETTINGS;
     }
     if(r == 1){                                   // '=' accept
-        if(settings != NULL){
-            cJSON *val = cJSON_GetArrayItem(settings, menu_pos);
-            if(val != NULL)
-                cJSON_ReplaceItemInObjectCaseSensitive(settings, val->string,
-                        cJSON_CreateString(text_entry_result()));
+        static const char *const te_keys[] = { "ssid", "passwd", "apikey" };
+        if(settings != NULL && menu_pos >= 0 && menu_pos < 3){
+            const char *k = te_keys[menu_pos];     // by key, replace or add (#32)
+            if(cJSON_GetObjectItemCaseSensitive(settings, k))
+                cJSON_ReplaceItemInObjectCaseSensitive(settings, k, cJSON_CreateString(text_entry_result()));
+            else
+                cJSON_AddStringToObject(settings, k, text_entry_result());
         }
         _state_data = NULL;
         return M_SETTINGS;

@@ -141,6 +141,7 @@ static void rebuild_head(s3_voice_t *v, s3_reader_voice_t *rv, int16_t *stage)
             if (s < 0) s = -s;
             if (s > peak) peak = s;
         }
+        if (peak > 32767) peak = 32767;   // -(-32768) >> 7 is 256: wrapped to an empty column (#62 #88)
         v->wf[c] = (uint8_t)(peak >> 7);
         if ((c & 15) == 15) vTaskDelay(1);   // SD courtesy gap
     }

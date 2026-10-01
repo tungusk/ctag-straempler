@@ -152,13 +152,15 @@ void menuTFTPrintSettings(const cJSON *data){
     if(data != NULL){
         _cur_row = 0;
         val = cJSON_GetObjectItemCaseSensitive(data, "ssid");
-        TFT_print(val->valuestring, x + _width/2, 3 + (TFT_getfontheight() + 3) *_cur_row);
+        TFT_print(cJSON_IsString(val) ? val->valuestring : "", x + _width/2, 3 + (TFT_getfontheight() + 3) *_cur_row);
         _cur_row++;
         for(int i = 0; i < n_hidden_items; i++)
         {
             val = cJSON_GetObjectItemCaseSensitive(data, hidden_items[i]);
-            strncpy(buf, val->valuestring, 32);
-            hideString(buf, 32, 22);
+            // terminated copy: a 40-char API key left strncpy's 32 bytes
+            // unterminated before hideString's strlen (#30)
+            strlcpy(buf, cJSON_IsString(val) ? val->valuestring : "", sizeof(buf));
+            hideString(buf, sizeof(buf), 22);
             TFT_print(buf, x + _width/2, 3 + (TFT_getfontheight() + 3) *_cur_row);
             _cur_row++;
         }
