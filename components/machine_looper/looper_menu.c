@@ -384,7 +384,7 @@ static void setup_adj(int i, int dir){
 static int looper_setup_action(int i){
     if(i == SETUP_SAVE_ROW){
         int r = looper_save_track(lp.sel);
-        s_save_msg = (r == 0) ? "SAVED" : "EMPTY";
+        s_save_msg = (r == 0) ? "SAVED" : (r == -3) ? "FAILED" : "EMPTY";
     } else if(i == SETUP_BOUNCE_ROW){
         int r = looper_bounce();
         s_bounce_msg = (r == 0) ? "BOUNCED" : (r == -2) ? "STOP REC" : "EMPTY";

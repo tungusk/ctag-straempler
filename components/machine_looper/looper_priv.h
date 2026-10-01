@@ -54,6 +54,7 @@ typedef struct {
     // one-shot commands from UI (engine consumes)
     volatile uint8_t cmd_action[LP_TRACKS];  // context cycle: arm/cancel/punch/stop/play
     volatile uint8_t cmd_clear[LP_TRACKS];
+    volatile uint8_t busy_mask;      // bit i: track i is being saved/bounced — apply_cmd ignores it
 } lp_state_t;
 
 extern lp_state_t lp;

@@ -16,6 +16,7 @@
 #include "cvsmooth.h"
 #include "clock.h"
 #include "audio.h"
+#include "sd_lock.h"
 #include "looper_priv.h"
 
 lp_state_t lp;
@@ -109,6 +110,10 @@ static void looper_stop(void)
 static void apply_cmd(int i)
 {
     lp_track_t *t = &lp.tr[i];
+    // a save or bounce is reading this track's buffer on the UI task: a TR1
+    // re-arm here zeroed len under it (divide by zero) or recorded over what
+    // was being written (review #105 #106). Drop the action.
+    if (lp.busy_mask & (1u << i)) { lp.cmd_action[i] = 0; lp.cmd_clear[i] = 0; return; }
     if (lp.cmd_clear[i]) {
         lp.cmd_clear[i] = 0;
         t->state = LP_EMPTY;
@@ -302,40 +307,72 @@ int looper_save_track(int i)
     if (i < 0 || i >= LP_TRACKS) return -1;
     lp_track_t *t = &lp.tr[i];
     if (t->len == 0 || !t->buf) return -1;
+    // hold the track still for the write: apply_cmd ignores it while busy, and
+    // the block wait means a command already in flight has landed (#105)
+    lp.busy_mask |= (uint8_t)(1u << i);
+    machine_block_wait();
+    if (t->len == 0 || !(t->state == LP_PLAY || t->state == LP_STOP)) {
+        lp.busy_mask &= (uint8_t)~(1u << i);
+        return -1;                            // re-armed before we got it
+    }
 
     char name[16], path[48];
     // saves land SORTED in usr/LOOPS (folder org); numbering = one readdir
     // MAX pass across every pool folder so legacy flat LOOP_ files count
-    mkdir("/sdcard/usr/LOOPS", 0777);        // idempotent
     // 8 chars, not 9: this build is FATFS_LFN_NONE (8.3 only), so the
     // original "LOOP_%04d" stem could never be created — fopen failed on
     // every save and the path shipped unexercised. LOOP%04d matches the
     // REC_%04d width convention.
     snprintf(name, sizeof(name), "LOOP%04d", sample_next_index("LOOP"));
     snprintf(path, sizeof(path), "/sdcard/usr/LOOPS/%s.WAV", name);
-    FILE *f = fopen(path, "wb");
-    if (!f) { ESP_LOGE("LOOPER", "save: cannot open %s", path); return -1; }
-    sampwav_start(f);             // saves are WAV: drag them straight into a DAW
 
     // MALLOC_CAP_DMA (not bare _INTERNAL): _INTERNAL alone can return the
     // 32-bit-only IRAM heap under memory pressure, and fwrite()'s memmove
     // byte-copies the buffer -> LoadStoreError on IRAM. DMA memory is
     // byte-accessible internal DRAM, matching deck.c/dualdeck.c's WAV chunk.
     int32_t *chunk = heap_caps_malloc(512 * sizeof(int32_t), MALLOC_CAP_DMA);
-    if (!chunk) { fclose(f); return -1; }
-    uint32_t pos = 0, left = t->len;
+    if (!chunk) { lp.busy_mask &= (uint8_t)~(1u << i); return -1; }
+
+    // every SD burst under sd_lock, as Tape's save_task does (#104); every
+    // write checked, so a full card reports FAILED and leaves no truncated
+    // take behind instead of saying SAVED (#110)
+    bool io_err = false;
+    sd_lock_take();
+    mkdir("/sdcard/usr/LOOPS", 0777);        // idempotent
+    FILE *f = fopen(path, "wb");
+    if (f && sampwav_start(f) != 0) io_err = true;
+    sd_lock_give();
+    if (!f) {
+        ESP_LOGE("LOOPER", "save: cannot open %s", path);
+        free(chunk);
+        lp.busy_mask &= (uint8_t)~(1u << i);
+        return -1;
+    }
+    uint32_t len = t->len;                    // stable: the track is held
+    uint32_t pos = 0, left = io_err ? 0 : len;
     while (left) {
         int nfr = left > 512 ? 512 : (int)left;
         for (int k = 0; k < nfr; k++) {
             uint16_t s = (uint16_t)t->buf[pos + k];
             chunk[k] = ((uint32_t)s << 16) | s;   // mono -> L=R
         }
-        fwrite(chunk, sizeof(int32_t), nfr, f);
+        sd_lock_take();
+        size_t w = fwrite(chunk, sizeof(int32_t), nfr, f);
+        sd_lock_give();
+        if (w != (size_t)nfr) { io_err = true; break; }
         pos += nfr; left -= nfr;
     }
     free(chunk);
-    sampwav_finish(f);
-    fclose(f);
+    lp.busy_mask &= (uint8_t)~(1u << i);      // the buffer is no longer read
+    sd_lock_take();
+    if (sampwav_finish(f) != 0) io_err = true;
+    if (fclose(f) != 0) io_err = true;
+    if (io_err) remove(path);
+    sd_lock_give();
+    if (io_err) {
+        ESP_LOGE("LOOPER", "save: write failed (card full?) — %s removed", path);
+        return -3;
+    }
 
     char jsn[48], field[24];
     snprintf(jsn, sizeof(jsn), "/sdcard/usr/LOOPS/%s.JSN", name);
@@ -356,7 +393,7 @@ int looper_save_track(int i)
     char *s = cJSON_Print(root);
     cJSON_Delete(root);
     if (s) { writeJSONFile(jsn, s); free(s); }
-    ESP_LOGI("LOOPER", "saved track %d -> %s (%lu frames)", i, name, (unsigned long)t->len);
+    ESP_LOGI("LOOPER", "saved track %d -> %s (%lu frames)", i, name, (unsigned long)len);
     return 0;
 }
 
@@ -374,20 +411,28 @@ int looper_bounce(void)
     for (int i = 0; i < LP_TRACKS; i++)
         if (lp.tr[i].state == LP_REC || lp.tr[i].state == LP_ARMED) return -2;
 
-    // gather contributing tracks (playing/stopped with content) + the span
+    // hold every track still for the mix (apply_cmd ignores busy tracks), let
+    // a command already in flight land, then SNAPSHOT each source's length:
+    // len is volatile, and a re-arm between the zero test and the modulo was a
+    // divide by zero (review #106)
+    lp.busy_mask = (uint8_t)((1u << LP_TRACKS) - 1);
+    machine_block_wait();
+    uint32_t slen[LP_TRACKS] = {0};          // 0 = not a source
     uint32_t bounce_len = 0;
     int n_src = 0;
     for (int i = 0; i < LP_TRACKS; i++) {
         lp_track_t *t = &lp.tr[i];
-        if (t->len > 0 && (t->state == LP_PLAY || t->state == LP_STOP)) {
-            if (t->len > bounce_len) bounce_len = t->len;
+        uint32_t l = t->len;
+        if (l > 0 && (t->state == LP_PLAY || t->state == LP_STOP)) {
+            slen[i] = l;
+            if (l > bounce_len) bounce_len = l;
             n_src++;
         }
     }
-    if (n_src == 0 || bounce_len == 0) return -1;
+    if (n_src == 0 || bounce_len == 0) { lp.busy_mask = 0; return -1; }
 
     int16_t *scratch = heap_caps_malloc(bounce_len * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    if (!scratch) return -1;
+    if (!scratch) { lp.busy_mask = 0; return -1; }
 
     // per-track running bandpass state, advanced in playback (wrap) order so
     // the baked filter tracks what the engine renders at looper.c's play path
@@ -397,8 +442,8 @@ int looper_bounce(void)
         int32_t acc = 0;
         for (int i = 0; i < LP_TRACKS; i++) {
             lp_track_t *t = &lp.tr[i];
-            if (t->len == 0 || !(t->state == LP_PLAY || t->state == LP_STOP)) continue;
-            int32_t raw = t->buf[j % t->len];
+            if (!slen[i]) continue;
+            int32_t raw = t->buf[j % slen[i]];
             if (lp.filter_on) {                                    // bandpass SVF
                 float bp;                                          // same kernel + same
                 svf_step(&bsv[i], (float)raw, t->f, t->q, NULL, &bp, NULL);
@@ -428,6 +473,7 @@ int looper_bounce(void)
     d->pan = 2048;                // center
     svf_reset(&d->svf);
     d->state = LP_PLAY;
+    lp.busy_mask = 0;             // tracks take commands again
 
     ESP_LOGI("LOOPER", "bounced %d track(s) -> track 1 (%lu frames)",
              n_src, (unsigned long)bounce_len);
