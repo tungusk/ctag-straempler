@@ -83,15 +83,25 @@ static int recv_bounded(httpd_req_t *req, char *buf, size_t len)
     }
 }
 
+static void urldecode_inplace(char *s);
+
+// The value comes back DECODED: httpd_query_key_value copies it verbatim, and
+// the page sends every name through encodeURIComponent, so 'PNOF#3' arrived as
+// 'PNOF%233' in delete/move/rename/raw/peaks (review #181). Read at the
+// encoded length, decode, and refuse what does not fit buflen.
 static bool get_query_param(httpd_req_t *req, const char *key, char *buf, size_t buflen)
 {
     size_t qlen = httpd_req_get_url_query_len(req) + 1;
     if (qlen < 2) return false;
-    char *qs = malloc(qlen);
+    char *qs = malloc(qlen * 2);
     if (!qs) return false;
+    char *val = qs + qlen;
     bool ok = false;
-    if (httpd_req_get_url_query_str(req, qs, qlen) == ESP_OK)
-        ok = (httpd_query_key_value(qs, key, buf, buflen) == ESP_OK);
+    if (httpd_req_get_url_query_str(req, qs, qlen) == ESP_OK &&
+        httpd_query_key_value(qs, key, val, qlen) == ESP_OK) {
+        urldecode_inplace(val);
+        if (strlen(val) < buflen) { strcpy(buf, val); ok = true; }
+    }
     free(qs);
     return ok;
 }
@@ -342,15 +352,20 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
                                            "/sdcard/usr/LOOPS", "/sdcard/usr/SLICES",
                                            "/sdcard/usr/DRUMS", "/sdcard/usr/KEYS",
                                            "/sdcard/usr/TAPE"};
+    int removed = 0;
     sd_lock_take();
     for (int d = 0; d < (int)(sizeof(del_dirs)/sizeof(del_dirs[0])); d++)
         for (int i = 0; i < 6; i++) {
             snprintf(path, sizeof(path), "%s/%s%s", del_dirs[d], name, del_exts[i]);
-            remove(path);
+            if (remove(path) == 0) removed++;
         }
     sd_lock_give();
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    if (!removed) {                       // the page dropped the row on a 200 (#181)
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+        return ESP_FAIL;
+    }
     httpd_resp_sendstr(req, "{}");
     return ESP_OK;
 }
@@ -423,22 +438,23 @@ static esp_err_t files_move_handler(httpd_req_t *req)
 // ("no grid"), which is exactly the class of bug we spent today chasing.
 static esp_err_t files_rename_handler(httpd_req_t *req)
 {
-    char name[32], to[32];
+    char name[SAMPLE_ID_LEN], to[SAMPLE_ID_LEN];
     if (!get_query_param(req, "name", name, sizeof(name)) ||
         !get_query_param(req, "to", to, sizeof(to))) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name/to");
         return ESP_FAIL;
     }
-    // ids are bare, uppercase and 8.3-friendly — keep the pool's shape enforceable
+    // ids are bare and up to 31 chars, the same shape the upload accepts —
+    // long filenames are on; the old 1-8 A-Z rule truncated long names (#39)
     int tl = strlen(to);
-    if (tl < 1 || tl > 8) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Name must be 1-8 chars");
+    if (tl < 1 || tl >= SAMPLE_ID_LEN) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Name must be 1-31 chars");
         return ESP_FAIL;
     }
     for (int i = 0; i < tl; i++) {
         char c = to[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Use A-Z 0-9 _ only");
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Use letters, digits, _ or - only");
             return ESP_FAIL;
         }
     }
@@ -547,6 +563,12 @@ static esp_err_t files_raw_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "application/octet-stream");
     httpd_resp_set_hdr(req, "Content-Length", len_str);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    // the real container's name: the page used to call every download .RAW,
+    // though WAV/AIFF are served as they are (#183)
+    char cd[96];
+    const char *base = strrchr(path, '/');
+    snprintf(cd, sizeof(cd), "attachment; filename=\"%.64s\"", base ? base + 1 : path);
+    httpd_resp_set_hdr(req, "Content-Disposition", cd);
 
     char *buf = malloc(STREAM_CHUNK);
     if (!buf) { fclose(f); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
@@ -2464,11 +2486,11 @@ static esp_err_t ice_start_handler(httpd_req_t *req)
         if ((j = cJSON_GetObjectItemCaseSensitive(saved, "name"))  && cJSON_IsString(j)) strlcpy(name,  j->valuestring, sizeof(name));
         cJSON_Delete(saved);
     }
-    if (get_query_param(req, "host",  host,  sizeof(host)))  urldecode_inplace(host);
-    if (get_query_param(req, "port",  ports, sizeof(ports))) urldecode_inplace(ports);
-    if (get_query_param(req, "mount", mount, sizeof(mount))) urldecode_inplace(mount);
-    if (get_query_param(req, "pass",  pass,  sizeof(pass)))  urldecode_inplace(pass);
-    if (get_query_param(req, "name",  name,  sizeof(name)))  urldecode_inplace(name);
+    get_query_param(req, "host",  host,  sizeof(host));   // decoded inside (review #181)
+    get_query_param(req, "port",  ports, sizeof(ports));   // decoded inside (review #181)
+    get_query_param(req, "mount", mount, sizeof(mount));   // decoded inside (review #181)
+    get_query_param(req, "pass",  pass,  sizeof(pass));   // decoded inside (review #181)
+    get_query_param(req, "name",  name,  sizeof(name));   // decoded inside (review #181)
     int port = atoi(ports);
 
     int rc = audio_icepush_start(host, port, mount, pass, name);

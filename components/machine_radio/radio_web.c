@@ -9,15 +9,25 @@
 #include "cJSON.h"
 #include "radio_priv.h"
 
+static void url_decode(char *s);
+
+// the value comes back DECODED, read at its encoded length: a 23-char station
+// name is 29 encoded and overflowed name[24], landing as "custom" (#185).
+// A decoded value too long for out is cut (radio_station_add truncates too).
 static bool qparam(httpd_req_t *req, const char *key, char *out, size_t n)
 {
     size_t qlen = httpd_req_get_url_query_len(req) + 1;
     if (qlen <= 1) return false;
-    char *q = malloc(qlen);
+    char *q = malloc(qlen * 2);
     if (!q) return false;
+    char *v = q + qlen;
     bool ok = false;
-    if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK)
-        ok = (httpd_query_key_value(q, key, out, n) == ESP_OK);
+    if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK &&
+        httpd_query_key_value(q, key, v, qlen) == ESP_OK) {
+        url_decode(v);
+        strlcpy(out, v, n);
+        ok = true;
+    }
     free(q);
     return ok;
 }
@@ -54,7 +64,6 @@ static esp_err_t radio_play_handler(httpd_req_t *req)
         return send_json(req, "{\"ok\":true}");
     }
     if (qparam(req, "url", buf, sizeof(buf))) {
-        url_decode(buf);
         if (strncmp(buf, "http", 4) != 0) {
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "url must be http(s)://");
             return ESP_FAIL;
@@ -113,9 +122,7 @@ static esp_err_t station_save_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need ?url=");
         return ESP_FAIL;
     }
-    url_decode(url);
     bool hn = qparam(req, "name", name, sizeof(name));
-    if (hn) url_decode(name);
     int rc = radio_station_add(hn ? name : "custom", url);
     return send_json(req, rc == 0 ? "{\"ok\":true}" : "{\"ok\":false,\"err\":\"full or bad url\"}");
 }

@@ -150,7 +150,10 @@ bool sample_name_id(const char *fname, char *id_out, size_t id_len)
         int el = (int)strlen(SF_EXTS[i]);
         if (L > el && strcasecmp(fname + L - el, SF_EXTS[i]) == 0) {
             int keep = L - el;
-            if (keep >= (int)id_len) keep = (int)id_len - 1;
+            // a stem that does not fit is not an id at all: clamped, it was
+            // listed under a name that cannot resolve (card-copied files of
+            // 32..64 chars). Refuse, so the listers skip it (review #19).
+            if (keep >= (int)id_len) return false;
             memcpy(id_out, fname, keep);
             id_out[keep] = 0;
             return true;

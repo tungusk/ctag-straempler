@@ -23,6 +23,28 @@
 #include "cJSON.h"
 #include "fs_priv.h"
 
+static void urldecode(char *s);
+
+// the DECODED value, read at its encoded length (q_param gives it raw, which
+// the search proxy forwards as is): name/url/q were sized for the decoded text
+// but filled with the encoded one, and failed or cut early (review #185)
+static bool q_param_dec(httpd_req_t *req, const char *key, char *buf, size_t buflen)
+{
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen < 2) return false;
+    char *qs = malloc(qlen * 2);
+    if (!qs) return false;
+    char *v = qs + qlen;
+    bool ok = false;
+    if (httpd_req_get_url_query_str(req, qs, qlen) == ESP_OK &&
+        httpd_query_key_value(qs, key, v, qlen) == ESP_OK) {
+        urldecode(v);
+        if (strlen(v) < buflen) { strcpy(buf, v); ok = true; }
+    }
+    free(qs);
+    return ok;
+}
+
 static bool q_param(httpd_req_t *req, const char *key, char *buf, size_t buflen)
 {
     size_t qlen = httpd_req_get_url_query_len(req) + 1;
@@ -80,7 +102,8 @@ static esp_err_t fs_search_handler(httpd_req_t *req)
         if (!page[0]) strcpy(page, "1");
     }
 
-    strlcpy(fsm.last_query, q, sizeof(fsm.last_query));
+    // (last_query belongs to fs_search_task, which sets it with page and
+    // results; copying the ENCODED q here made the panel page with %XX (#131))
 
     char auth[160];
     fs_auth_query_suffix(auth, sizeof(auth));
@@ -138,14 +161,13 @@ static esp_err_t fs_get_handler(httpd_req_t *req)
 static esp_err_t fs_fetch_handler(httpd_req_t *req)
 {
     char url[320], name[SAMPLE_ID_LEN];
-    if (!q_param(req, "url", url, sizeof(url)) || !url[0])
+    if (!q_param_dec(req, "url", url, sizeof(url)) || !url[0])
         return send_json_status(req, "400 Bad Request", "{\"error\":\"missing url\"}");
-    urldecode(url);
     if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0)
         return send_json_status(req, "400 Bad Request", "{\"error\":\"http(s) URL required\"}");
 
     char raw[SAMPLE_ID_LEN];
-    if (!q_param(req, "name", raw, sizeof(raw)) || !raw[0])
+    if (!q_param_dec(req, "name", raw, sizeof(raw)) || !raw[0])
         return send_json_status(req, "400 Bad Request", "{\"error\":\"missing name\"}");
     fs_safe_name(raw, "", name, sizeof(name));
     if (!name[0])
@@ -173,9 +195,8 @@ static esp_err_t fs_fetch_handler(httpd_req_t *req)
 static esp_err_t fs_query_handler(httpd_req_t *req)
 {
     char q[FS_QUERY_LEN];
-    if (!q_param(req, "q", q, sizeof(q)) || !q[0])
+    if (!q_param_dec(req, "q", q, sizeof(q)) || !q[0])
         return send_json_status(req, "400 Bad Request", "{\"error\":\"missing q\"}");
-    urldecode(q);
     if (!fs_auth_ok())
         return send_json_status(req, "403 Forbidden", "{\"error\":\"no freesound API key set\"}");
 

@@ -1169,7 +1169,7 @@ function renderFiles(){
       // they stack and the row grows — hence the flex wrapper, not a bare pair.
       nameCell='<div style="display:flex;align-items:center;gap:5px">'
         +'<button class="btn" onclick="libCommit(\''+esc(f.name)+'\')">OK</button>'
-        +'<input id="lrn" value="'+esc(f.name)+'" maxlength="8" style="width:84px;padding:2px 4px;background:#000;color:#fff;border:1px solid #0af" '
+        +'<input id="lrn" value="'+esc(f.name)+'" maxlength="31" style="width:200px;padding:2px 4px;background:#000;color:#fff;border:1px solid #0af" '
         +'onkeydown="if(event.key===\'Enter\')libCommit(\''+esc(f.name)+'\');else if(event.key===\'Escape\')libCancel()">'
         +'</div>';
     }else{
@@ -1194,7 +1194,7 @@ function renderFiles(){
       +'<td><canvas class="wf" width="78" height="24" data-name="'+esc(f.name)+'" style="vertical-align:middle;background:#000;border-radius:2px"></canvas></td>'
       +'<td style="white-space:nowrap">'
       +dirSel+' '
-      +'<a class="btn" style="text-decoration:none" href="/files/raw?name='+encodeURIComponent(f.name)+'" download="'+esc(f.name)+'.RAW">&#11015;</a> '
+      +'<a class="btn" style="text-decoration:none" href="/files/raw?name='+encodeURIComponent(f.name)+'" download>&#11015;</a> '
       +'<button class="btn del'+(armed?' armed':'')+'" onclick="del(\''+esc(f.name)+'\')">&#10005;</button></td></tr>';
   });
   tb.innerHTML=h||'<tr><td colspan="6" style="color:#555;padding:12px">No files yet</td></tr>';
@@ -1246,7 +1246,8 @@ function libCommit(name){
   var el=document.getElementById('lrn');
   libEdit=null;
   if(!el){renderFiles();return;}
-  var to=el.value.toUpperCase().replace(/[^A-Z0-9_]/g,'').slice(0,8);
+  if(el.value===name){renderFiles();return;}   // unchanged: don't truncate a long name
+  var to=el.value.replace(/[^a-zA-Z0-9_]/g,'').slice(0,31);
   if(!to||to===name){renderFiles();return;}
   fetch('/files/rename?name='+encodeURIComponent(name)+'&to='+encodeURIComponent(to),{method:'POST'})
     .then(function(r){

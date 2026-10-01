@@ -65,7 +65,7 @@ int tracker_list_modules(char (**out)[TRK_NAME_LEN])
         while ((e = readdir(d)) != NULL && n < 192) {
             if (!has_mod_ext(e->d_name)) continue;
             int L = strlen(e->d_name);
-            if (L > TRK_NAME_LEN - 1) L = TRK_NAME_LEN - 1;
+            if (L > TRK_NAME_LEN - 1) continue;   // cut, it could not be opened (#113)
             memcpy(s_list[n], e->d_name, L);
             s_list[n][L] = 0;
             n++;
