@@ -293,23 +293,36 @@ static cJSON* read_json(const char *fileName){
         ESP_LOGE("FILEIO", "Could not open file %s for reading", fileName);
         return NULL;
     }
-    // Read into INTERNAL DMA-capable RAM, not PSRAM: SDMMC's DMA can't target
-    // PSRAM and falls back to a per-read internal bounce buffer that fails with
-    // ESP_ERR_NO_MEM under memory pressure. JSON files are small, so this is cheap.
+    // SDMMC's DMA can't target PSRAM, so the card is read through a SMALL
+    // internal DMA bounce and copied into a PSRAM buffer. The old whole-file
+    // internal DMA buffer (~5 KB for AUTOSAVE.JSN) failed while Deck or
+    // DoubleDecker held internal RAM, and autosave skipped (bench 09-30).
     // +1: cJSON_Parse wants a NUL-terminated string, and fread gives none — the
     // parser used to run off the end of the buffer into whatever followed it
-    buf = (char*) heap_caps_malloc(sz + 1, MALLOC_CAP_DMA);
+    enum { BOUNCE = 1024 };
+    buf = (char*) heap_caps_malloc(sz + 1, MALLOC_CAP_SPIRAM);
+    if (buf == NULL) buf = (char*) heap_caps_malloc(sz + 1, MALLOC_CAP_8BIT);
+    char *bounce = (char*) heap_caps_malloc(BOUNCE, MALLOC_CAP_DMA);
 
-    if(buf == NULL){
+    if(buf == NULL || bounce == NULL){
+        heap_caps_free(buf); heap_caps_free(bounce);
         fclose(fin);
         sd_lock_give();
         ESP_LOGE("FILEIO", "Could not allocate memory");
         return NULL;
     }
 
-    cnt = fread(buf, 1, sz, fin);
+    cnt = 0;
+    while (cnt < sz) {
+        int want = sz - cnt < BOUNCE ? sz - cnt : BOUNCE;
+        int got = (int)fread(bounce, 1, want, fin);
+        if (got <= 0) break;
+        memcpy(buf + cnt, bounce, got);
+        cnt += got;
+    }
+    heap_caps_free(bounce);
     if(cnt != sz){
-        free(buf);
+        heap_caps_free(buf);
         fclose(fin);
         sd_lock_give();
         ESP_LOGE("FILEIO", "Error reading from file");

@@ -13,6 +13,7 @@
 #include "list.h"
 #include "mp3.h"
 #include "menusys.h"
+#include "sampimport.h"
 #include "fileio.h"
 #include "storage.h"
 #include "ui_events.h"
@@ -701,6 +702,7 @@ static void autosave_cb(void *arg) {
 // A continuous gesture re-flags every second and would postpone the debounce
 // forever, so while dirty-kicks keep arriving a save is FORCED every ~10 s.
 static void dirty_poll_cb(void *arg) {
+    samp_import_retry();            // an import kick that found no RAM, once it's back
     if (!machine_state_dirty_consume()) return;
     if (esp_timer_get_time() - s_autosave_last_us > 10000000LL)
         autosave_cb(NULL);          // long gesture: checkpoint now

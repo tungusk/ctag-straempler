@@ -24,7 +24,8 @@ int samp_import_file(const char *vfs_path);
 
 // spawn a scan-and-convert pass over every pool folder. Returns 0, or -1 if
 // one is already running.
-int samp_import_start(void);
+int samp_import_start(void);   // 0 started/queued, -2 no RAM for the task (retried)
+void samp_import_retry(void);  // UI poll: re-kick a scan whose task could not be created
 
 // progress (scan task publishes; UI/REST read)
 extern volatile bool samp_import_busy;

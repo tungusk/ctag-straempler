@@ -489,6 +489,17 @@ static void import_task(void *pv)
     vTaskDelete(NULL);
 }
 
+// a kick whose task could not be created (20 KB internal stack: under Tracker
+// the largest internal block is ~19 KB) — retried by samp_import_retry() from
+// the UI's 1 s poll, so an upload converts once RAM is back (bench 09-30)
+static volatile bool s_import_retry = false;
+
+void samp_import_retry(void)
+{
+    if (!s_import_retry || samp_import_busy) return;
+    if (samp_import_start() == 0) ESP_LOGI(TAG, "import kick retried: scan started");
+}
+
 int samp_import_start(void)
 {
     if (samp_import_busy) { s_import_again = true; return 0; }   // queued: the running scan walks again
@@ -499,7 +510,11 @@ int samp_import_start(void)
     // overflowed (bench: stack canary panic mid-scan)
     if (xTaskCreate(import_task, "importer", 20480, NULL, 5, NULL) != pdPASS) {
         samp_import_busy = false;
-        return -1;
+        if (!s_import_retry)
+            ESP_LOGW(TAG, "no internal RAM for the import task — will retry");
+        s_import_retry = true;
+        return -2;
     }
+    s_import_retry = false;
     return 0;
 }

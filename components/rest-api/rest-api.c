@@ -1027,7 +1027,10 @@ static esp_err_t tftread_get_handler(httpd_req_t *req)
 
 static esp_err_t import_post_handler(httpd_req_t *req)
 {
-    if (samp_import_start() != 0)
+    int r = samp_import_start();
+    if (r == -2)   // not busy: no internal RAM for the 20 KB task (e.g. under Tracker)
+        return send_json(req, "{\"ok\":false,\"why\":\"no RAM for the import task, will retry\"}");
+    if (r != 0)
         return send_json(req, "{\"ok\":false,\"why\":\"busy\"}");
     return send_json(req, "{\"ok\":true}");
 }
