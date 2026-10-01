@@ -101,6 +101,7 @@ typedef struct {
     volatile uint32_t lsc_want;      // engine wish (0 = no cache needed)
     int16_t *ring;                   // PSRAM, S3_RING_FRAMES * 2
     volatile uint32_t wpos;          // stream write head (playback-order, absolute)
+    volatile uint32_t ring_lo;       // lowest ring frame streamed since the last seek (reader-published, set before wpos)
     // play cursor: double so through-zero varispeed can run it backwards.
     // Audio task owns `pos` during playback; the reader writes it only while
     // the engine is parked (load, deck seek protocol). rpos_i is a per-block

@@ -121,6 +121,7 @@ static void rebuild_head(s3_voice_t *v, s3_reader_voice_t *rv, int16_t *stage)
         vTaskDelay(1);          // SD courtesy gap (tracker pattern)
     }
     v->head_frames = got;
+    v->ring_lo = got;           // published before wpos (s3_frame_ok's lower bound)
     v->wpos = got;              // ring restarts empty right after the head
     rv->stream_p = got;
     v->head_valid = true;
@@ -357,6 +358,9 @@ static void reader_task(void *pv)
                 if (tgt < v->head_frames) tgt = v->head_frames;
                 if (tgt > v->play_len) tgt = v->play_len;
                 rv[i].stream_p = tgt;
+                // frames below the seek point were never streamed in this
+                // pass: bound the ring so they can't read as valid (#58)
+                v->ring_lo = tgt;
                 v->wpos = tgt;
                 if (v->play_len <= v->head_frames) v->loading = false;  // RAM-resident
                 worked = true;
@@ -447,6 +451,7 @@ void s3_toggle_arm(int vid)
     } else {
         recording_set_trig_func(1 - vid, TRIG_FUNC_VOICE);   // one armed voice max
         recording_set_trig_func(vid, TRIG_FUNC_RECORD);
+        s_discard_next = false;          // a fresh arm never eats its own take (#60)
         s3.arm_target = vid;
         // pre-open the take's file now so the actual start (recording_trigger,
         // fired ON a clock pulse from the audio task) costs nothing
@@ -483,6 +488,7 @@ static esp_err_t s3_start(void)
     // a reader that outlived the last stop() still reads s3: never memset under it
     if (!worker_idle(&s_rd, 3000)) { ESP_LOGE(TAG, "old reader still running"); return ESP_ERR_INVALID_STATE; }
     memset(&s3, 0, sizeof(s3));
+    s_arm_req = false; s_rec_abort_req = false; s_discard_next = false;   // never inherited (#60)
     s3.monitor = true;
     s3.arm_mutes = true;     // sampler2 inheritance: arm = mute track, cue input
     s3.arm_target = -1;
@@ -531,6 +537,11 @@ static esp_err_t s3_start(void)
 
 static void s3_stop(void)
 {
+    // the record arm and any take belong to this machine: a switch left the
+    // arm set (a gate on return still recorded) and a take running (#59)
+    if (recording_is_active()) recording_finish();
+    for (int i = 0; i < S3_NVOICES; i++) recording_set_trig_func(i, TRIG_FUNC_VOICE);
+    recording_cancel_prepared();
     // freeing under a live head/loop-cache rebuild corrupts the heap: leak instead
     if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking buffers"); return; }
     heap_caps_free(s_stage); s_stage = NULL;
@@ -569,7 +580,8 @@ static inline bool s3_frame_ok(const s3_voice_t *v, uint32_t f, bool resident)
     if (s3_lsc_has(v, f)) return true;     // loop-start cache: always readable
     if (v->loading) return false;
     if (f >= v->wpos) return false;
-    if (resident) return true;
+    if (f < v->ring_lo) return false;      // below the last seek: stale slots (#58)
+    if (resident) return v->ring_lo == v->head_frames;
     return (v->wpos - f) <= (S3_RING_FRAMES - S3_CHUNK_FRAMES);
 }
 
