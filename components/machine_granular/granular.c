@@ -268,7 +268,9 @@ static void granular_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "pos")) && cJSON_IsNumber(j))      gr.position = gr_clampi(j->valueint, 0, 4095);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "pitch")) && cJSON_IsNumber(j))    gr.pitch_cv = gr_clampi(j->valueint, 0, 4095);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "level")) && cJSON_IsNumber(j))    gr.level = gr_clampi(j->valueint, 0, 255);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])
+    // reload only a changed (or unloaded) sample: a web Apply posts it back (#163)
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0] &&
+        (!gr.len || strcmp(gr.sample, j->valuestring) != 0))
         granular_load(j->valuestring);
     cvmtx_load(&gr.mtx, node);
     cvmtx_rearm(&gr.mtx);      // knobs recapture against the loaded values

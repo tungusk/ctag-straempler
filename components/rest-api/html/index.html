@@ -1748,7 +1748,7 @@ function updateClkTag(){
   });
 }
 
-var rpData=null;
+var rpData=null,rpBase=null,rpMach='';
 var FILE_KEYS=['file','track','sample'];   // preset keys that name a card file
 var rpFileOpts=[];                          // filenames offered in the dropdown
 
@@ -1797,12 +1797,12 @@ var MTX_KEYS=['mxs','mxa','mxl','mxm','mxd','cvr','imap'];
 // /remote/params POST as everything else (rpApply harvests data-rp inputs).
 var FXK=['Off','Overdrive','Flanger','Tremolo','Delay','Filter','Band'];
 var FXDIV=['1/16','1/8T','1/8','1/8.','1/4','1/4.','1/2'];
-var FXRV=['Off','Room','Hall','Plate'];
+var FXRV=['Off','Room','Hall','Plate','Shimmer'];
 var FXP={
  1:[['oddr','drive',0,100],['odtn','tone',0,100],['odbs','bias',-100,100],['odlv','level',0,100]],
  2:[['flgrt','rate',1,1000],['flgdp','depth',0,100],['flgfb','feedback',-95,95],['flgmx','mix',0,100],['flgsy','sync','b'],['flgdv','div','d']],
  3:[['trmrt','rate',5,2000],['trmdp','depth',0,100],['trmsh','shape','s',['Sine','Tri','Sqr']],['trmst','stereo','b'],['trmsy','sync','b'],['trmdv','div','d']],
- 4:[['dlyt','time',1,1000],['dlyfb','feedback',0,100],['dlymx','mix',0,100],['dlytn','tone',0,100],['dlypp','ping-pong','b'],['dlysy','sync','b'],['dlydv','div','d']],
+ 4:[['dlyt','time',1,2000],['dlyfb','feedback',0,100],['dlymx','mix',0,100],['dlytn','tone',0,100],['dlypp','ping-pong','b'],['dlysy','sync','b'],['dlydv','div','d']],
  5:[['fim','mode','s',['LP','HP','BP']],['fic','cutoff',0,100],['fiq','q',0,100]],
  6:[['bnb','band',0,100],['bnw','width',0,100]]};
 var FX_KEYS=['fxsl','rv','rvmx'];
@@ -1817,6 +1817,7 @@ function fxv(inp){var sp=inp.nextElementSibling;if(sp)sp.textContent=fxFmt(inp.g
 function fxSel(name,cur,list,attr,skip){
   var h='<select '+attr+'>';
   list.forEach(function(n,i){if(skip&&skip.indexOf(i)>=0&&i!==cur)return;h+='<option value="'+i+'"'+(i===cur?' selected':'')+'>'+n+'</option>';});
+  if(!(cur>=0&&cur<list.length))h+='<option value="'+cur+'" selected>'+cur+'</option>';   // out-of-list value: never post back as 0
   return h+'</select>';
 }
 function fxGroup(kind,d){
@@ -2220,7 +2221,8 @@ function rpDrumForm(d,names){
     var p=d.pad[i];
     var opts='<option value=""'+(p.s?'':' selected')+'>(none)</option>';
     names.forEach(function(n){opts+='<option'+(n===p.s?' selected':'')+'>'+esc(n)+'</option>';});
-    var cvs='';
+    if(p.s&&names.indexOf(p.s)<0)opts+='<option selected>'+esc(p.s)+'</option>';
+    var cvs='<option value="0"'+(p.src?'':' selected')+'>none</option>';
     for(var c=1;c<=8;c++)cvs+='<option value="'+c+'"'+(c===p.src?' selected':'')+'>CV'+c+'</option>';
     h+='<fieldset style="border:1px solid #2a2a2a;border-radius:3px;padding:4px 8px 8px;margin:6px 0">'
       +'<legend style="color:#0af;font-size:10px;padding:0 4px">pad '+(i+1)+'</legend>'
@@ -2231,8 +2233,8 @@ function rpDrumForm(d,names){
       +'<button class="btn" style="flex:0 0 30px" onclick="rpStep('+i+',1)">+</button>'
       +'</div></div>'
       +'<div><label>trig in</label><select data-rp="pad.'+i+'.src">'+cvs+'</select></div></div>'
-      +'<label>level <span id="rdl'+i+'">'+p.lvl+'</span></label>'
-      +'<input type="range" min="0" max="255" value="'+p.lvl+'" data-rp="pad.'+i+'.lvl" oninput="document.getElementById(\'rdl'+i+'\').textContent=this.value">'
+      +'<label>level <span id="rdl'+i+'">'+p.lvl+'</span> (255=unity)</label>'
+      +'<input type="range" min="0" max="1023" value="'+p.lvl+'" data-rp="pad.'+i+'.lvl" oninput="document.getElementById(\'rdl'+i+'\').textContent=this.value">'
       +'<label>pan <span id="rdp'+i+'">'+p.pan+'</span> (128 = center)</label>'
       +'<input type="range" min="0" max="255" value="'+p.pan+'" data-rp="pad.'+i+'.pan" oninput="document.getElementById(\'rdp'+i+'\').textContent=this.value">'
       +'<div class="row"><div><label>decay ms (0 = full)</label><input type="number" min="0" max="5000" step="10" value="'+(p.dec||0)+'" data-rp="pad.'+i+'.dec"></div>'
@@ -2641,7 +2643,7 @@ function rpSetCard(inner,asTable){
 function rpLoad(retry){
   fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
     if(d.error){document.getElementById('rmatrix').innerHTML='';document.getElementById('rparams').innerHTML='<div class="msg er">'+esc(d.error)+'</div>';return;}
-    rpData=d;
+    rpData=d;rpBase=JSON.parse(JSON.stringify(d));rpMach=curMach;   // rpData gets fxHarvest edits, so keep a pristine copy
     updateClkTag();
     var el=document.getElementById('rparams');
     if(curMach==='Drums'&&d.pad){
@@ -2668,6 +2670,7 @@ function rpLoad(retry){
 
 function rpApply(){
   if(!rpData)return;
+  if(rpMach!==curMach){var m0=document.getElementById('rm');m0.className='msg er';m0.textContent='Machine changed \u2014 reloading, try again';rpLoad();return;}
   var d=JSON.parse(JSON.stringify(rpData)),glob={},a=mxCollect();
   document.querySelectorAll('[data-ik]').forEach(function(s){   // input-map picks, as the rows now read
     var v=(a.picks[s.dataset.ik]!==undefined)?a.picks[s.dataset.ik]:+s.value;
@@ -2684,12 +2687,16 @@ function rpApply(){
     else if(typeof old==='number')o[k]=parseFloat(inp.value)||0;
     else o[k]=inp.value;
   });
-  fetch('/remote/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)})
+  var full=d,body={},bs=rpBase||{};   // post only what changed, so device-side edits since load survive
+  Object.keys(full).forEach(function(k){if(JSON.stringify(full[k])!==JSON.stringify(bs[k]))body[k]=full[k];});
+  if(body.mxs!==undefined||body.mxa!==undefined||body.mxm!==undefined){body.mxs=full.mxs;body.mxa=full.mxa;body.mxm=full.mxm;}
+  if(bs.s3v!==undefined)body.s3v=full.s3v;   // Sampler ignores a body without s3v:2
+  fetch('/remote/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(function(r){return r.json();}).then(function(res){
       var m=document.getElementById('rm');
       m.className='msg '+(res.error?'er':'ok');
       m.textContent=res.error||'Applied — autosaves in a couple of seconds';
-      if(!res.error){rpData=d;setTimeout(rpLoad,600);}   // re-render: picks move rows, labels refresh
+      if(!res.error){rpData=d;rpBase=JSON.parse(JSON.stringify(d));setTimeout(rpLoad,600);}   // re-render: picks move rows, labels refresh
     }).catch(function(){});
 }
 
@@ -3757,7 +3764,8 @@ function updateScope(cv){
 function pollStatus(){
   if(webPaused)return;            // WEB card: quiet while judging audio
   fetch('/status').then(function(r){return r.json();}).then(function(d){
-    curMach=d.machine||'';
+    var pm=curMach;curMach=d.machine||'';
+    if(pm&&curMach!==pm)rpLoad();   // panel switched machine: reload its cards
     var cv=d.cv||[],h='';
     for(var i=0;i<cv.length;i++){
       var pct=Math.round(cv[i]/4095*100);

@@ -301,6 +301,16 @@ done:
 void editor_apply(const char *src, int op, float param, uint32_t in, uint32_t out)
 {
     if (!src || !src[0] || op < 0 || op >= OP_N || !ed_claim(false)) return;
+    // a web apply can name a different file than the one loaded: take ITS
+    // length, or A's waveform, length and crop were applied to B (#125)
+    if (strcmp(src, ed.src) != 0 || !ed.frames) {
+        uint32_t F = editor_probe(src);
+        if (F == 0) { set_err("cannot open source"); s_running = false; return; }
+        ed.frames = F;
+        memset((void *)ed.peaks, 0, sizeof(ed.peaks));   // stale: they drew the old file
+    }
+    if (out == 0 || out > ed.frames) out = ed.frames;      // 0 = to the end
+    if (in >= out) in = 0;
     strlcpy(ed.src, src, sizeof(ed.src));
     ed.op = op;
     ed.param = param;

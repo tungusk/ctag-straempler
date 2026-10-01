@@ -755,7 +755,20 @@ static void keys_preset_load(const cJSON *node)
     // explained by the arena ordering alone (the arena is session-sticky), so
     // the mechanism is not fully pinned; this keeps the sequence that has the
     // hardware evidence. fxrack_load below restores the preset's mode.
-    bool will_load = (cJSON_IsArray(zs) && cJSON_GetArraySize(zs) > 0);
+    // the zones array naming exactly the zones already loaded (a web Apply
+    // posts them back): apply root/fine/loop in place instead of clearing and
+    // reloading the whole arena, with the reverb forced off meanwhile (#163)
+    bool same = cJSON_IsArray(zs) && cJSON_GetArraySize(zs) == inst.nzones && inst.nzones > 0 && !s_unloaded_zones;
+    if (same) {
+        int k = 0;
+        const cJSON *e = NULL;
+        cJSON_ArrayForEach(e, zs) {
+            const cJSON *sj = cJSON_GetObjectItemCaseSensitive(e, "smp");
+            if (!cJSON_IsString(sj) || !inst.zone[k].frames || strcmp(inst.zone[k].sample, sj->valuestring) != 0) { same = false; break; }
+            k++;
+        }
+    }
+    bool will_load = !same && (cJSON_IsArray(zs) && cJSON_GetArraySize(zs) > 0);
     if (!will_load) {
         const cJSON *sj = cJSON_GetObjectItemCaseSensitive(node, "smp");
         will_load = cJSON_IsString(sj) && sj->valuestring[0];
@@ -764,18 +777,20 @@ static void keys_preset_load(const cJSON *node)
         reverb_set_mode(&inst.rv, RV_OFF);
     if (cJSON_IsArray(zs) && cJSON_GetArraySize(zs) > 0) {
         used_zones = true;
-        keys_clear_zones();
+        if (!same) keys_clear_zones();
         const cJSON *e = NULL;
+        int zk = 0;
         cJSON_ArrayForEach(e, zs) {
             const cJSON *sj = cJSON_GetObjectItemCaseSensitive(e, "smp");
             if (!cJSON_IsString(sj) || !sj->valuestring[0]) continue;
-            if (keys_load_zone_at(-1, sj->valuestring) != 0) {
+            if (same) zk++;
+            else if (keys_load_zone_at(-1, sj->valuestring) != 0) {
                 ESP_LOGW("keys", "zone %s did not load — kept in the patch", sj->valuestring);
                 if (!s_unloaded_zones) s_unloaded_zones = cJSON_CreateArray();
                 if (s_unloaded_zones) cJSON_AddItemToArray(s_unloaded_zones, cJSON_Duplicate(e, 1));
                 continue;
             }
-            is_zone_t *zz = &inst.zone[inst.nzones - 1];
+            is_zone_t *zz = same ? &inst.zone[zk - 1] : &inst.zone[inst.nzones - 1];
             const cJSON *q;
             if ((q = cJSON_GetObjectItemCaseSensitive(e, "root")) && cJSON_IsNumber(q))
                 zz->root = (uint8_t)clampi(q->valueint, 0, 127);
@@ -792,7 +807,7 @@ static void keys_preset_load(const cJSON *node)
             if (zz->loop_end > zz->frames) zz->loop_end = zz->frames;
             if (zz->loop_start >= zz->loop_end) zz->loop_start = 0;
         }
-        inst.edit_zone = 0;
+        if (!same) inst.edit_zone = 0;   // the zone being edited survives an in-place Apply
     }
     // load the sample FIRST (it resets loop points), then restore them
     else if ((j = cJSON_GetObjectItemCaseSensitive(node, "smp"))   && cJSON_IsString(j) && j->valuestring[0]) keys_load_zone(j->valuestring);

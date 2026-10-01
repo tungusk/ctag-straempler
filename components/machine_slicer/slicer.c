@@ -690,6 +690,9 @@ static void slicer_preset_load(const cJSON *node)
 {
     if (!node) return;
     cJSON *j;
+    // what the slicing depends on, to tell a re-slice from nothing (#163)
+    int was_tgt = sl.slice_target, was_sens = sl.sensitivity;
+    bool was_tr = sl.transient_mode, was_otoff = sl.ot_off;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "slices")) && cJSON_IsNumber(j)) sl.slice_target = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "transient"))) sl.transient_mode = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sens")) && cJSON_IsNumber(j)) sl.sensitivity = j->valueint;
@@ -710,8 +713,16 @@ static void slicer_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "otoff")))   sl.ot_off = cJSON_IsTrue(j);
     cvmtx_load(&sl.mtx, node);
     cvmtx_rearm(&sl.mtx);          // knobs recapture against the loaded values
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])
+    // a web Apply posts the loaded sample back: reload only a CHANGED one, and
+    // re-slice in place when only the slicing settings moved (#163)
+    j = cJSON_GetObjectItemCaseSensitive(node, "sample");
+    if (cJSON_IsString(j) && j->valuestring[0] && (!sl.len || strcmp(sl.sample, j->valuestring) != 0)) {
         slicer_load(j->valuestring);   // async: reader rebuilds everything
+    } else if (sl.len && (sl.slice_target != was_tgt || sl.sensitivity != was_sens ||
+                          sl.transient_mode != was_tr || sl.ot_off != was_otoff)) {
+        if (sl.ot_off != was_otoff) sl.ot_active = sl.ot_present && !sl.ot_off;
+        slicer_reslice();
+    }
 }
 
 extern const machine_ui_t slicer_menu_ui;

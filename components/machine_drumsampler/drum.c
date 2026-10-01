@@ -879,10 +879,15 @@ static void drum_preset_load(const cJSON *node)
                                                                     : DR_PCV_BI;
             // reload the remembered samples. An old preset has no "s2" — absent
             // simply means the pad has no B layer, which is today's behaviour.
-            if ((j = cJSON_GetObjectItemCaseSensitive(p, "s")) && cJSON_IsString(j) && j->valuestring[0])
-                drum_load_layer(i, 0, j->valuestring);
-            if ((j = cJSON_GetObjectItemCaseSensitive(p, "s2")) && cJSON_IsString(j) && j->valuestring[0])
-                drum_load_layer(i, 1, j->valuestring);   // fails soft if PSRAM is gone
+            // only a CHANGED (or not yet loaded) sample reloads: a web Apply
+            // posts the names back unchanged and reloaded every pad (#163)
+            for (int ly = 0; ly < 2; ly++) {
+                j = cJSON_GetObjectItemCaseSensitive(p, ly ? "s2" : "s");
+                if (!cJSON_IsString(j) || !j->valuestring[0]) continue;
+                dr_layer_t *L = &dr.pad[i].ly[ly];
+                if (L->len && strcmp(L->sample, j->valuestring) == 0) continue;
+                drum_load_layer(i, ly, j->valuestring);   // B fails soft if PSRAM is gone
+            }
             i++;
         }
     }
