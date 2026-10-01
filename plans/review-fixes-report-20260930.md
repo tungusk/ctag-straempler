@@ -27,6 +27,25 @@ targeted check of their own. What only a person can judge went to
 Per-theme notes (what exactly changed, what is owed) are under each theme in the
 triage file.
 
+## Tier 2 (same day, after the report above was first written)
+
+| Commit | Theme | Findings | Checked by |
+|---|---|---|---|
+| `f87f055` | J JSON files rewritten unsafely | #20 #24 #18 #29 #86 | bench autosave test |
+| `49ebd64` + `476df9f` | K settings not saved / wiped by partial updates | #162 #166 #167 #168 #169 #164 | bench; PSRAM measured across an aborted Keys load (the follow-up's leak) |
+| `94539b3` | M recording service and OTA | #37 #4 #1 #7 | bench |
+| `842d236` | N import, upload, file handling | #137 #36 #22 #182 #38 #138 #184 #52 #123 #124 #133 #47 | long module name -> 400; re-upload replaces; cross-folder twin -> 409 |
+
+The first tier 2 bench had Looper landing on Stub (its 4th 705 KB PSRAM track
+would not allocate). Cause found and fixed in `476df9f`: Keys' new unloaded-zone
+list outlived the machine after a switch away mid-load and pinned PSRAM. A bisect
+over the tier 2 commits (each flashed and measured at boot) showed no boot-time
+split; after the fix the full bench passes twice, the second with audio.
+
+New, pre-existing, not fixed: with Deck or DoubleDecker active the internal DMA
+buffer for reading AUTOSAVE.JSN cannot be allocated, so autosave skips — logged
+under theme J.
+
 ## Bench
 
 - Final run on `511b9f6`: **0 fail**. Click candidates all match the 09-16 runs
@@ -53,5 +72,4 @@ triage file.
 
 ## Next
 
-Tier 2: J (JSON writes), K (settings not saved / wiped), M (recording + OTA),
-N (import, upload, file handling). Then tier 3: Q, S, T, X, Z.
+Tier 3: Q, S, T, X, Z (and the tier 3 themes not in Fable's list: R U V W Y, menu/display).
