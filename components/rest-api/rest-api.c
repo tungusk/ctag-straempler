@@ -1087,10 +1087,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     free(body);
     if (!in) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad JSON"); return ESP_FAIL; }
 
+    int tft_mhz = 0;                      // display clock to apply once unlocked
+    config_lock();                        // read..write as one step (review #29)
     cJSON *cfg = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
-    if (!cfg) { cJSON_Delete(in); send_json(req, "{}"); return ESP_OK; }
+    if (!cfg) { config_unlock(); cJSON_Delete(in); send_json(req, "{}"); return ESP_OK; }
     cJSON *settings = cJSON_GetObjectItem(cfg, "settings");
-    if (!settings) { cJSON_Delete(in); cJSON_Delete(cfg); send_json(req, "{}"); return ESP_OK; }
+    if (!settings) { config_unlock(); cJSON_Delete(in); cJSON_Delete(cfg); send_json(req, "{}"); return ESP_OK; }
 
     bool wifiChanged = false;
     cJSON *j, *cur;
@@ -1180,12 +1182,14 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // persisted; PROVE it first with GET /tftread?pattern=1&clk=N (readback).
     if ((j = cJSON_GetObjectItem(in, "tftclk")) && cJSON_IsNumber(j) &&
         j->valueint >= 8 && j->valueint <= 80) {
-        if (ui_tft_set_clock_hz((uint32_t)j->valueint * 1000000u)) {
-            if (cJSON_GetObjectItem(settings, "tftclk"))
-                cJSON_ReplaceItemInObject(settings, "tftclk", cJSON_CreateNumber(j->valueint));
-            else
-                cJSON_AddNumberToObject(settings, "tftclk", j->valueint);
-        }
+        // applied AFTER config_unlock below: it takes disp_lock, and the UI
+        // task takes config_lock while holding disp_lock — never nest them
+        // the other way (8..80 MHz always applies, so persisting first is safe)
+        tft_mhz = j->valueint;
+        if (cJSON_GetObjectItem(settings, "tftclk"))
+            cJSON_ReplaceItemInObject(settings, "tftclk", cJSON_CreateNumber(j->valueint));
+        else
+            cJSON_AddNumberToObject(settings, "tftclk", j->valueint);
     }
 
     // the CORE clock's global settings (clock.h): applied live, persisted.
@@ -1227,6 +1231,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     cJSON_Delete(in);
     cJSON_Delete(cfg);
     if (s) { writeJSONFile("/sdcard/CONFIG.JSN", s); free(s); }
+    config_unlock();
+    if (tft_mhz) ui_tft_set_clock_hz((uint32_t)tft_mhz * 1000000u);
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -1815,6 +1821,7 @@ static esp_err_t blisten_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
     if (persist) {
+        config_lock();
         cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
         cJSON *settings = root ? cJSON_GetObjectItemCaseSensitive(root, "settings") : NULL;
         if (settings) {
@@ -1826,6 +1833,7 @@ static esp_err_t blisten_post_handler(httpd_req_t *req)
             if (s) { writeJSONFile("/sdcard/CONFIG.JSN", s); free(s); }
         }
         if (root) cJSON_Delete(root);
+        config_unlock();
     }
     send_json(req, "{\"ok\":true}");
     return ESP_OK;

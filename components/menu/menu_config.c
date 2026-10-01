@@ -2,6 +2,11 @@
 #include "string.h"
 #include "fileio.h"
 #include "esp_log.h"
+#include "sd_lock.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+static SemaphoreHandle_t s_cfg_mutex;   // see config_lock()
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -52,7 +57,24 @@ int configGetStringSetting(const char* key, char* out, int out_len){
     return found;
 }
 
+void config_lock(void){
+    static StaticSemaphore_t buf;
+    static SemaphoreHandle_t m;
+    if(!m){                                  // first use, serialised by the SD lock
+        sd_lock_take();
+        if(!m) m = xSemaphoreCreateRecursiveMutexStatic(&buf);
+        sd_lock_give();
+    }
+    s_cfg_mutex = m;
+    xSemaphoreTakeRecursive(m, portMAX_DELAY);
+}
+
+void config_unlock(void){
+    if(s_cfg_mutex) xSemaphoreGiveRecursive(s_cfg_mutex);
+}
+
 void configSetStringSetting(const char* key, const char* v){
+    config_lock();
     cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
     if(root != NULL){
         cJSON *settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
@@ -66,6 +88,7 @@ void configSetStringSetting(const char* key, const char* v){
         }
         cJSON_Delete(root);
     }
+    config_unlock();
 }
 
 int configGetIntSetting(const char* key, int dflt){
@@ -81,6 +104,7 @@ int configGetIntSetting(const char* key, int dflt){
 }
 
 void configSetIntSetting(const char* key, int v){
+    config_lock();
     cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
     if(root != NULL){
         cJSON *settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
@@ -94,6 +118,7 @@ void configSetIntSetting(const char* key, int v){
         }
         cJSON_Delete(root);
     }
+    config_unlock();
 }
 
 void savePresetConfig(char* preset, char* bank){

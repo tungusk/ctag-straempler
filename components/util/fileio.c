@@ -5,6 +5,7 @@
 #include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <sys/stat.h>
 #include "menu_config.h"
 #include "esp_log.h"
@@ -201,9 +202,21 @@ void printHeapInfo(const char* c){
 }
 
 int getFileSize(const char *file){
-    struct stat st;
-    stat(file, &st);
-    return st.st_size;
+    // a missing file reads 0: st was uninitialised and stat's result ignored,
+    // so the size was stack garbage (review #18)
+    struct stat st = {0};
+    sd_lock_take();
+    int r = stat(file, &st);
+    sd_lock_give();
+    return r == 0 ? (int)st.st_size : 0;
+}
+
+// the write-ahead / backup twins of a JSON file: X.JSN -> X.JTM / X.JBK
+static void json_sibling(const char *file, const char *ext, char *out, size_t n)
+{
+    const char *dot = strrchr(file, '.'), *sl = strrchr(file, '/');
+    int stem = (dot && (!sl || dot > sl)) ? (int)(dot - file) : (int)strlen(file);
+    snprintf(out, n, "%.*s%s", stem, file, ext);
 }
 
 int fileExists(const char *file){
@@ -215,8 +228,22 @@ int fileExists(const char *file){
     return st.st_size;
 }
 
-// reads json file and returns cJSON structure, adds tags_s item containing tags as string
+static cJSON* read_json(const char *fileName);
+
+// reads json file and returns cJSON structure. A file missing or empty while
+// its .JBK backup exists is a power cut inside writeJSONFile's swap: read the
+// backup (the last good version) instead of losing it
 cJSON* readJSONFileAsCJSON(const char *fileName){
+    cJSON *d = read_json(fileName);
+    if (d || getFileSize(fileName) > 0) return d;
+    char bak[112];
+    json_sibling(fileName, ".JBK", bak, sizeof(bak));
+    if (getFileSize(bak) <= 0) return NULL;
+    ESP_LOGW("FILEIO", "%s missing — reading its backup %s", fileName, bak);
+    return read_json(bak);
+}
+
+static cJSON* read_json(const char *fileName){
     struct stat st;
     int sz, cnt;
     char *buf;
@@ -308,27 +335,56 @@ void parseJSONAudioTags(cJSON* data){
     free(buf);
 }
 
-void writeJSONFile(const char *fileName, const char* data){
-    int len;
+// Never truncates the live file: the old fopen("wb") emptied it at open, so a
+// power cut inside the ~64 ms write left a zero-length CONFIG.JSN / AUTOSAVE.JSN
+// and every write was unchecked (review #20). Now: write X.JTM and check it,
+// park the live file as X.JBK (FAT can't rename over a file — imp_publish's
+// pattern), rename the new one in, drop the backup. Any failure keeps or
+// restores the old file. 0 = written, -1 = not (the old content stands).
+int writeJSONFile(const char *fileName, const char* data){
     if(data == NULL){
         ESP_LOGE("FILEIO", "data is NULL");
-        return;
+        return -1;
     }
+    char tmp[112], bak[112];
+    json_sibling(fileName, ".JTM", tmp, sizeof(tmp));
+    json_sibling(fileName, ".JBK", bak, sizeof(bak));
+    size_t len = strlen(data);
+    struct stat st;
 
     sd_lock_take();
-    FILE *fout = fopen(fileName, "wb");
+    FILE *fout = fopen(tmp, "wb");
     if(fout == NULL){
         sd_lock_give();
-        ESP_LOGE("FILEIO", "Could not open file %s for writing", fileName);
-        return;
+        ESP_LOGE("FILEIO", "Could not open %s for writing", tmp);
+        return -1;
     }
-
-    //ESP_LOGI("FILEIO", "Write - Free heap: %u", esp_get_free_heap_size());
-    len = strlen(data);
-    //ESP_LOGI("FILEIO", "File string length: %d Byte", len);
-    fwrite(data, 1, len, fout);
-    fclose(fout);
+    bool ok = fwrite(data, 1, len, fout) == len;
+    if (fclose(fout) != 0) ok = false;
+    if (!ok) {
+        remove(tmp);
+        sd_lock_give();
+        ESP_LOGE("FILEIO", "write of %s failed (card full?) — old file kept", fileName);
+        return -1;
+    }
+    remove(bak);
+    bool had = stat(fileName, &st) == 0;
+    if (had && rename(fileName, bak) != 0) {
+        remove(tmp);
+        sd_lock_give();
+        ESP_LOGE("FILEIO", "could not park %s — old file kept", fileName);
+        return -1;
+    }
+    if (rename(tmp, fileName) != 0) {
+        if (had) rename(bak, fileName);
+        remove(tmp);
+        sd_lock_give();
+        ESP_LOGE("FILEIO", "could not install %s — old file restored", fileName);
+        return -1;
+    }
+    if (had) remove(bak);
     sd_lock_give();
+    return 0;
 }
 
 // returns list of file names without extension

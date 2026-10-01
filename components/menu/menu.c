@@ -280,6 +280,7 @@ static void autosave_now(void);
 // queue the UI rebind — menuMachineBindNow rebuilds menusys with the new
 // machine's pages and re-enters M_MAIN on the next event-loop pass
 static bool s_bind_pending = false;   // activated, but its AUTOSAVE entry not loaded yet
+static bool s_bind_read_failed = false;   // AUTOSAVE.JSN exists but the bind could not read it
 static void autosave_disarm(void);
 
 static void menuSwitchMachine(const machine_t *m){
@@ -496,6 +497,7 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 // the text-entry page finds ssid/passwd/apikey by POSITION.
                 static const char *const own[] = {"ssid", "passwd", "apikey", "tz_shift",
                                                   "remote", "broadcast", "blisten", "blisten_out"};
+                config_lock();                   // read..write as one step (review #29)
                 cJSON *fresh = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
                 cJSON *fs = fresh ? cJSON_GetObjectItemCaseSensitive(fresh, "settings") : NULL;
                 if(fs){
@@ -513,6 +515,7 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                     if(js){ writeJSONFile("/sdcard/CONFIG.JSN", js); free(js); }
                 }else ESP_LOGE("UI", "settings exit: CONFIG.JSN re-read failed, not saving (won't roll back)");
                 if(fresh) cJSON_Delete(fresh);
+                config_unlock();
             }
             //set token 
             cJSON *tok = cJSON_GetObjectItem(settings, "apikey");
@@ -703,6 +706,9 @@ static void autosave_now(void) {
     // that gap (a 2 s debounce armed by the picker press, a slow SD start) wrote
     // the defaults over the saved state (code review 4.4).
     if (s_bind_pending) { ESP_LOGW("AUTOSAVE", "skipped: machine bind pending"); return; }
+    // the bind could not read this machine's saved entry (it runs on defaults):
+    // saving now would write those defaults over it (review #24)
+    if (s_bind_read_failed) { ESP_LOGW("AUTOSAVE", "skipped: saved state was not loaded"); return; }
     int64_t t_save0 = esp_timer_get_time();
     s_autosave_last_us = t_save0;                // the backstop paces off this
     clock_ui_flush();                            // core-clock Setup-row edits ride the same debounce
@@ -727,7 +733,11 @@ static void autosave_now(void) {
     cJSON_DeleteItemFromObjectCaseSensitive(root, m->name);   // replace this machine's entry
     cJSON_AddItemToObject(root, m->name, node);               // root now owns node
     char *out = cJSON_PrintUnformatted(root);
-    if (out) { writeJSONFile("/sdcard/AUTOSAVE.JSN", out); free(out); }
+    if (out) {
+        if (writeJSONFile("/sdcard/AUTOSAVE.JSN", out) != 0)
+            ESP_LOGE("AUTOSAVE", "write failed — previous AUTOSAVE.JSN kept");
+        free(out);
+    }
     cJSON_Delete(root);
     // TIMED (2026-07-26): Arlo hears one short burst ~1 s after ANY edit gesture —
     // a knob move with no FX involved does it too, which is this timer's debounce,
@@ -931,6 +941,13 @@ static void menuMachineBindNow(void){
     const machine_t *m = machine_active();
     if (m && m->preset_load) {
         cJSON *root = readJSONFileAsCJSON("/sdcard/AUTOSAVE.JSN");
+        // a NULL from a file that EXISTS is a failed read (DMA alloc, card),
+        // not "no saved state": retry once, and if it still fails run on
+        // defaults but keep autosave from writing them over the entry (#24)
+        if (!root && getFileSize("/sdcard/AUTOSAVE.JSN") > 2)
+            root = readJSONFileAsCJSON("/sdcard/AUTOSAVE.JSN");
+        s_bind_read_failed = !root && getFileSize("/sdcard/AUTOSAVE.JSN") > 2;
+        if (s_bind_read_failed) ESP_LOGE("AUTOSAVE", "could not read saved state — autosave held off");
         cJSON *node = root ? cJSON_GetObjectItemCaseSensitive(root, m->name) : NULL;
         m->preset_load(node);
         cJSON_Delete(root);

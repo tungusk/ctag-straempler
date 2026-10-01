@@ -5,6 +5,7 @@
 // fields, adopting the result through dk.feel, and caching it in the JSN sidecar
 // (v2: "dver"/"conf"). The PLL cannot see track-BPM error — p_trk derives from
 // the same seg_tf — so the audible lock quality is set entirely by the engine.
+#include "sd_lock.h"
 #include <string.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
@@ -51,6 +52,9 @@ void deck_analysis_commit(void)
 
     char jp[64];
     sample_resolve_aux(s_an_track, ".JSN", jp, sizeof(jp));
+    // the read..write is one step under the (recursive) SD lock: a Feel edit
+    // landing between them was overwritten by this stale copy (review #86)
+    sd_lock_take();
     cJSON *root = readJSONFileAsCJSON(jp);
     if (!root) root = cJSON_CreateObject();
     // sidecar v2: "dver" versions the analysis (missing = v1 -> auto-upgrade on
@@ -67,6 +71,7 @@ void deck_analysis_commit(void)
     char *s = cJSON_Print(root);
     cJSON_Delete(root);
     if (s) { writeJSONFile(jp, s); free(s); }
+    sd_lock_give();
     ESP_LOGI(TAG, "%s: %.4f BPM (conf %.2f), grid %lu (cached)", s_an_track, dk.an_bpm, dk.an_conf, (unsigned long)dk.an_grid);
 }
 

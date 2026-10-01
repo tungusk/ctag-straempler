@@ -20,6 +20,13 @@ void configSetIntSetting(const char* key, int v);
 int configGetStringSetting(const char* key, char* out, int out_len); // 1 if found
 void configSetStringSetting(const char* key, const char* v);
 
+// CONFIG.JSN read-modify-write lock (recursive). The UI task and httpd both
+// rewrite the whole file; hold this from the read to the write so neither
+// rolls the other's key back (review #29). Not sd_lock: that would stall the
+// SD readers through the parse and print.
+void config_lock(void);
+void config_unlock(void);
+
 /**
  * @brief Saves current preset/bank names to config
  * 

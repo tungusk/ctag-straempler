@@ -59,10 +59,9 @@ int preset_store_save(const preset_store_t *ps, cJSON *state, char *id_out, size
     char id[16]; snprintf(id, sizeof(id), "%s%03d", ps->pfx, idx);
 
     char path[64]; ps_path(ps, id, path, sizeof(path));
-    sd_lock_take();
-    writeJSONFile(path, txt);
-    sd_lock_give();
+    int wr = writeJSONFile(path, txt);       // takes sd_lock itself
     free(txt);
+    if (wr != 0) return -1;                  // card full / write error: say so (review #20)
     if (id_out) snprintf(id_out, n, "%s", id);
     return 0;
 }

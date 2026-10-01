@@ -26,7 +26,7 @@ cJSON* readJSONFileAsCJSON(const char *fileName);
  * @param fileName 
  * @param data 
  */
-void writeJSONFile(const char *fileName, const char* data);
+int writeJSONFile(const char *fileName, const char* data);   // 0 = written; -1 = old file kept
 
 /**
  * @brief 

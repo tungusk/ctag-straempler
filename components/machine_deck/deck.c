@@ -395,6 +395,7 @@ void deck_set_feel(float f)
     if (!dk.track[0]) return;
     char jp[64];
     sample_resolve_aux(dk.track, ".JSN", jp, sizeof(jp));
+    sd_lock_take();                 // one step with the analysis commit (review #86)
     cJSON *root = readJSONFileAsCJSON(jp);
     if (!root) root = cJSON_CreateObject();
     cJSON_DeleteItemFromObjectCaseSensitive(root, "feel");
@@ -402,6 +403,7 @@ void deck_set_feel(float f)
     char *js = cJSON_Print(root);
     cJSON_Delete(root);
     if (js) { writeJSONFile(jp, js); free(js); }
+    sd_lock_give();
 }
 
 // Hard-snap the playback phase so the track grid aligns to the external clock
