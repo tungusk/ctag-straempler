@@ -428,6 +428,12 @@ static void keys_stop(void)
     // the full size.
     if (inst.arena) { heap_caps_free(inst.arena); inst.arena = NULL; }
     inst.arena_cap = inst.arena_used = 0;
+    // the unloaded-zone list is cJSON in PSRAM: a few hundred bytes left behind
+    // here pinned the pool between big blocks, and Looper's 4th track could not
+    // allocate after a switch away mid-load (bench 09-30). The autosave already
+    // ran before stop(); the next preset load rebuilds the list.
+    cJSON_Delete(s_unloaded_zones);
+    s_unloaded_zones = NULL;
     for (int i = 0; i < IS_MAX_ZONES; i++) {
         inst.zone[i].buf = NULL;
         inst.zone[i].cap = 0;
