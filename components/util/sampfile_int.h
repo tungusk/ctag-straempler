@@ -110,8 +110,19 @@ static inline int sf_aiff_parse(sampfile_t *sf, long fsize, sf_read_at_fn rd, vo
                 uint8_t sh[8];
                 if (rd(ctx, pos + 8, sh, 8) != 8) break;  // offset + blocksize
                 uint32_t off = sf_rb32(sh);
-                sf->src_data_off = (uint32_t)(pos + 8 + 8 + off);
-                sf->src_data_len = (uint32_t)(fsize - sf->src_data_off);
+                // 64-bit, and inside the file: a wrapped offset played header
+                // bytes or gave frames near 2^30 (review #16)
+                int64_t doff = (int64_t)pos + 8 + 8 + (int64_t)off;
+                if (doff >= (int64_t)fsize) { sf->why = "AIFF: bad SSND offset"; return -1; }
+                sf->src_data_off = (uint32_t)doff;
+                // bounded by the SSND chunk and COMM's frame count, as the WAV
+                // parser bounds by its data chunk: MARK/INST/ID3 after SSND were
+                // converted as PCM onto the end of the take (review #21)
+                int64_t len = (int64_t)fsize - doff;
+                if (csz >= 8 + off && (int64_t)(csz - 8 - off) < len) len = (int64_t)(csz - 8 - off);
+                int64_t nlen = (int64_t)nframes * ch * (bits / 8);
+                if (nframes && bits >= 8 && nlen > 0 && nlen < len) len = nlen;
+                sf->src_data_len = (uint32_t)len;
             }
             if (bits != 16)         { sf->why = "AIFF: not 16-bit"; return -1; }
             if (rate != SF_RATE)    { sf->why = "AIFF: not 44.1kHz"; return -1; }
@@ -120,7 +131,7 @@ static inline int sf_aiff_parse(sampfile_t *sf, long fsize, sf_read_at_fn rd, vo
             sf->channels = (uint8_t)ch;
             sf->be = true;
             sf->data_off = sf->src_data_off;
-            uint32_t avail = (uint32_t)(fsize - sf->data_off) / (ch * 2);
+            uint32_t avail = sf->src_data_len / (ch * 2);
             sf->frames = (nframes && nframes <= avail) ? nframes : avail;
             return 0;
         }

@@ -124,6 +124,9 @@ uint32_t sample_load(const char *name, int16_t *dst, uint32_t max_frames, bool m
         return 0;
     }
 
+    // the probe's frame count is the audio: chunks after `data` (LIST, smpl,
+    // ID3 from a DAW export) used to load as a click at the end (review #15)
+    if (max_frames > sf.frames) max_frames = sf.frames;
     uint32_t n = 0;
     int16_t rbuf[256 * 2];                      // 256 native stereo frames
     size_t got;
