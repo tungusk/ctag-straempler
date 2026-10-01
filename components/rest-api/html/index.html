@@ -645,6 +645,7 @@ body.nosbar .sbar{display:none}
 </style>
 </head>
 <body class="nosbar">
+<span class="ptag" id="ptag" hidden style="position:fixed;top:6px;right:8px;z-index:50">PAUSED</span>
 <div class="pane on" id="p3">
   <div class="msg er" id="roff" style="display:none">Remote is disabled on the device (System &#8594; Settings &#8594; Remote).</div>
   <!-- BANDSTACK: row A / band / row B stack together, and #sidecol runs the FULL
@@ -2747,7 +2748,6 @@ function knFollow(cv){   // from updateRemote: idle knobs track the device
 var rdTimer=null;
 function rdState(){
   fetch('/radio/state').then(function(r){return r.json();}).then(function(d){
-    document.getElementById('rdnote').style.display='none';
     document.getElementById('rdstate').textContent=d.state||'stopped';
     var np=d.title||'';
     var tech=d.err ? d.err
@@ -2771,7 +2771,7 @@ function rdState(){
         box.appendChild(wrap);
       });
     }
-  }).catch(function(){document.getElementById('rdnote').style.display='';});
+  }).catch(function(){});
 }
 function rdPlayStation(i){fetch('/radio/play?station='+i,{method:'POST'}).catch(function(){});}
 function rdPlayUrl(){var u=document.getElementById('rdurl').value.trim();if(u)fetch('/radio/play?url='+encodeURIComponent(u),{method:'POST'}).catch(function(){});}
@@ -3238,7 +3238,6 @@ function edLoad(){
 }
 function edState(){
   fetch('/edit/state').then(function(r){return r.json();}).then(function(d){
-    document.getElementById('ednote').style.display='none';
     var s=d.state||'idle';
     document.getElementById('edstate').textContent=s+(s==='running'&&d.op?(' — '+d.op):'');
     document.getElementById('edout').textContent=d.out?('→ '+d.out):'';
@@ -3256,7 +3255,7 @@ function edState(){
     }
     if(s==='done'&&edLast!=='done')edLoad();   // new take appeared — refresh the list once
     edLast=s;
-  }).catch(function(){document.getElementById('ednote').style.display='';});
+  }).catch(function(){});
 }
 function edApply(op){
   var nm=document.getElementById('edsel').value;if(!nm)return;
