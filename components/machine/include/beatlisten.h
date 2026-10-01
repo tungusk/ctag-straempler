@@ -59,6 +59,7 @@ void beatlisten_out_render(int32_t out[64]);
 void beatlisten_set_out(int ch);
 int  beatlisten_get_out(void);
 
+void beatlisten_reserve(void);                     // boot: take the rings before any machine
 void beatlisten_set_mode(int mode);                // implies relock; allocs on first enable
 int  beatlisten_get_mode(void);
 void beatlisten_relock(void);                      // drop the model, re-acquire

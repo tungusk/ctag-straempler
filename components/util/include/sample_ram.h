@@ -54,6 +54,8 @@ const char *sample_dir_name(int di);            // "all"/"pool"/"REC"/"LOOPS"/"S
 void sample_folder_counts(int out[SAMPLE_DIR_N]);  // per-folder entry counts (display)
 int sample_list_shared_dir(int di, char (**out)[SAMPLE_ID_LEN]);
 int sample_list_recent_dir(int di, char (**out)[SAMPLE_ID_LEN]);
+void sample_list_recent_reserve(void);
+void sample_lists_reserve(void);   // boot: take the lifetime browser lists before any machine
 
 // load /sdcard/usr/<name>.RAW into dst. mono=false writes interleaved stereo
 // (dst must hold max_frames*2 int16); mono=true averages L/R to one int16 per

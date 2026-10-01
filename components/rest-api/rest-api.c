@@ -152,6 +152,13 @@ static bool sidecar_cache_get(const char *id, int di, uint32_t mtime,
     return false;
 }
 
+// boot: the cache lives forever — taken before any machine so it can't land
+// between machine slabs on the first /files call (09-30 PSRAM split)
+void rest_files_cache_reserve(void)
+{
+    if (!s_scc) s_scc = heap_caps_calloc(SCC_N, sizeof(scc_ent_t), MALLOC_CAP_SPIRAM);
+}
+
 static void sidecar_cache_put(const char *id, int di, uint32_t mtime,
                               uint32_t size, float bpm)
 {

@@ -18,6 +18,8 @@
 #include "menu.h"
 #include "menu_config.h"
 #include "clock.h"          // core clock settings at boot
+#include "beatlisten.h"
+#include "sample_ram.h"
 #include "freesound.h"
 #include "mp3.h"
 #include "wifi.h"
@@ -328,6 +330,13 @@ void initUI(){
     params->user_data = NULL;
 
     mountSDStorage();
+    // PSRAM buffers that live for the whole boot, taken FIRST so they sit at the
+    // bottom of the heap: allocated lazily (first /files call, first browse,
+    // first listener enable) they landed between machine slabs and split
+    // PSRAM, and Looper's 4th track or Deck's ring later failed (bench 09-30)
+    sample_lists_reserve();
+    rest_files_cache_reserve();
+    beatlisten_reserve();
     configDisplay();
     // settings.encres = quadrature counts per detent: 2 = prototype encoder
     // (rests at both states; default), 4 = the EC11-class parts on new units

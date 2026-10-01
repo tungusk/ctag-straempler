@@ -10,14 +10,21 @@
 #include "sample_ram.h"
 #include "sampfile.h"
 
+static char (*s_recent)[SAMPLE_ID_LEN] = NULL;   // kept for the whole boot
+
+// taken at boot (sample_lists_reserve): a lifetime buffer first allocated
+// mid-session lands between machine slabs and splits PSRAM (bench 09-30)
+void sample_list_recent_reserve(void)
+{
+    if (!s_recent) s_recent = heap_caps_malloc(SAMPLE_LIST_RECENT_MAX * SAMPLE_ID_LEN, MALLOC_CAP_SPIRAM);
+}
+
 int sample_list_recent_dir(int only, char (**out)[SAMPLE_ID_LEN])
 {
-    static char (*list)[SAMPLE_ID_LEN] = NULL;
     static uint32_t when[SAMPLE_LIST_RECENT_MAX];   // FatFS date<<16|time
-    if (!list) {
-        list = heap_caps_malloc(SAMPLE_LIST_RECENT_MAX * SAMPLE_ID_LEN, MALLOC_CAP_SPIRAM);
-        if (!list) { *out = NULL; return 0; }
-    }
+    sample_list_recent_reserve();
+    char (*list)[SAMPLE_ID_LEN] = s_recent;
+    if (!list) { *out = NULL; return 0; }
     int n = 0;
     sd_lock_take();
     // f_readdir hands over the timestamps in the SAME pass (a per-file stat()

@@ -90,6 +90,16 @@ static int cmp_name24(const void *a, const void *b)
     return strcasecmp((const char *)a, (const char *)b);
 }
 
+// The browser lists live for the whole boot. Taken here, at boot, before any
+// machine allocates: lazily, the first browse put them between machine slabs,
+// splitting PSRAM so Looper's 4th track / Deck's ring later failed (09-30).
+void sample_lists_reserve(void)
+{
+    if (!s_shared_list)
+        s_shared_list = heap_caps_malloc((size_t)SAMPLE_LIST_MAX * SAMPLE_ID_LEN, MALLOC_CAP_SPIRAM);
+    sample_list_recent_reserve();
+}
+
 int sample_list_shared_dir(int di, char (**out)[SAMPLE_ID_LEN])
 {
     if (!s_shared_list)

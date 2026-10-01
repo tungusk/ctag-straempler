@@ -631,6 +631,14 @@ static void bl_task(void *pv)
 
 // ---- config entry points ---------------------------------------------------------
 
+// boot: the rings live for the whole boot once enabled — take them before any
+// machine so a later first enable can't split PSRAM between machine slabs
+void beatlisten_reserve(void)
+{
+    if (!s_ring)    s_ring    = heap_caps_calloc(BL_RING, sizeof(float), MALLOC_CAP_SPIRAM);   // zeroed, as a first enable
+    if (!s_scratch) s_scratch = heap_caps_malloc(BL_RING * sizeof(float), MALLOC_CAP_SPIRAM);
+}
+
 void beatlisten_set_mode(int mode)
 {
     if (mode < 0 || mode >= BL_NMODES) mode = BL_OFF;
