@@ -62,6 +62,11 @@ static int16_t *s_chunk, *s_tail;
 
 // playback counter -> FILE frame. The reader owns this mapping; everyone else
 // (engine, UI) goes through it. A loop is a mapping, not a cursor wrap.
+// guards the reader's chunk commit against dualdeck_loop_toggle's truncations
+// in the audio task: a toggle during the SD read landed a chunk read under the
+// old mapping at the seam, marked valid (review #92)
+static portMUX_TYPE s_wpos_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static inline uint32_t dd_map(dd_deck_t *v, uint32_t p)
 {
     if (v->loop_active && v->rm_at && p >= v->rm_at && v->rm_len)
@@ -130,9 +135,16 @@ static void reader_serve(dd_deck_t *v, FILE **fp, char *cur, uint32_t *cur_ff,
             v->wf_col = 0;
             dd_tl_update(v);
             // park at the cue: pre-fill from the grid downbeat so a quantized
-            // start needs no SD round-trip
-            v->seek_to = (v->grid_offset < v->file_frames) ? v->grid_offset : 0;
-            v->seek_req = true;
+            // start needs no SD round-trip. A failed open has nothing to fill:
+            // `loading` stuck true kept dd_busy() up and every later analysis
+            // on that deck waited behind it (#90)
+            if (*fp) {
+                v->seek_to = (v->grid_offset < v->file_frames) ? v->grid_offset : 0;
+                v->seek_req = true;
+            } else {
+                v->loading = false;
+                v->seek_req = false;
+            }
         }
     }
     if (*fp && v->seek_req) {
@@ -169,7 +181,8 @@ static void reader_serve(dd_deck_t *v, FILE **fp, char *cur, uint32_t *cur_ff,
         uint32_t lead_cap = (v->loop_active && v->loop_len_fr)
                                 ? DD_LOOP_LEAD
                                 : (DD_RING_FRAMES - DD_RATE - 4096);
-        uint32_t ff = dd_map(v, v->wpos);
+        uint32_t w0 = v->wpos;
+        uint32_t ff = dd_map(v, w0);
         bool have_room = lp ? (lead < lead_cap)
                             : (ff < v->file_frames && lead < lead_cap);
         if (have_room && ff < v->file_frames) {
@@ -202,12 +215,17 @@ static void reader_serve(dd_deck_t *v, FILE **fp, char *cur, uint32_t *cur_ff,
             }
             sd_lock_give();
             if (got > 0) {
-                uint32_t w = v->wpos % DD_RING_FRAMES;
+                uint32_t w = w0 % DD_RING_FRAMES;          // ahead of the cursor: safe to copy
                 uint32_t first = DD_RING_FRAMES - w;
                 if (first > got) first = got;
                 memcpy(v->ring + w * 2, chunk, first * 4);
                 if (first < got) memcpy(v->ring, chunk + first * 2, (got - first) * 4);
-                v->wpos += got;
+                bool kept;                                  // commit only if nothing moved (#92)
+                portENTER_CRITICAL(&s_wpos_mux);
+                kept = (v->wpos == w0 && dd_map(v, w0) == ff);
+                if (kept) v->wpos = w0 + got;
+                portEXIT_CRITICAL(&s_wpos_mux);
+                if (!kept) *cur_ff = (uint32_t)-1;
             }
             if (v->loading && v->wpos - v->rpos_i >= DD_LOW_WATER) v->loading = false;
             return;                        // keep filling on the next pass
@@ -334,7 +352,14 @@ static void dd_analysis_task(void *pv)
         taskEXIT_CRITICAL(&s_an_mux);
         if (p < 0) break;
     }
-    dd.an_running = false;
+    // the queue-empty path cleared an_running under the lock; an unlocked
+    // store here could clobber a new request that set it meanwhile (#93) —
+    // only the abort path (run dropped) still needs clearing, under the lock
+    if (!s_an.run) {
+        taskENTER_CRITICAL(&s_an_mux);
+        dd.an_running = false; dd.an_deck = -1;
+        taskEXIT_CRITICAL(&s_an_mux);
+    }
     worker_exit(&s_an);
 }
 
@@ -374,6 +399,9 @@ static void dd_maybe_analyze(int deck)
 int dualdeck_load_track(int deck, const char *name)
 {
     dd_deck_t *v = &dd.d[deck & 1];
+    // the old loop window must not map the new file (deck_load_track does this) (#91)
+    v->loop_active = false;
+    v->rm_at = 0;
     v->playing = false;
     v->loading = true;
     v->track_bpm = 0;
@@ -596,7 +624,7 @@ void dualdeck_loop_toggle(int deck)
         v->map_f0 = ff;
         v->rm_at = 0;
         v->loop_active = false;             // mapping written BEFORE the flag
-        if (v->wpos > valid_to) v->wpos = valid_to;
+        { portENTER_CRITICAL(&s_wpos_mux); if (v->wpos > valid_to) v->wpos = valid_to; portEXIT_CRITICAL(&s_wpos_mux); }
         // CATCH-UP only for a knob this loop ACTUALLY BORROWED. Under the current
         // defaults the loops never touch the fader, yet every release used to
         // degrade the live crossfader to a slow slew for 0.3 s for no reason.
@@ -662,7 +690,7 @@ void dualdeck_loop_toggle(int deck)
     v->loop_active = true;                        // set LAST (write ordering)
     // the read-ahead stays valid up to the first seam; the reader wraps there
     uint32_t valid_to = v->map_p0 + len;
-    if (v->wpos > valid_to) v->wpos = valid_to;
+    { portENTER_CRITICAL(&s_wpos_mux); if (v->wpos > valid_to) v->wpos = valid_to; portEXIT_CRITICAL(&s_wpos_mux); }
 }
 
 // RESYNC — the shared both-trig gesture (Arlo: "long press both tr1 tr2 forces
@@ -927,7 +955,9 @@ static void dualdeck_process(int32_t out[MACHINE_BLOCK],
     if (per_bar < 1) per_bar = 1;
     if (!clock_core()->clk.locked) dd.pulses = 0;
     else if (pulse) dd.pulses++;
-    bool bar_edge = pulse && clock_core()->clk.locked && (dd.pulses % per_bar) == 1;
+    // per_bar 1 (one pulse per bar at PPQ 1): every pulse is a bar edge —
+    // `% 1 == 1` was never true, and armed starts/stops never fired (#87)
+    bool bar_edge = pulse && clock_core()->clk.locked && (per_bar <= 1 || (dd.pulses % per_bar) == 1);
     if (bar_edge || !clock_core()->clk.locked) { deck_fire(0); deck_fire(1); }
 
     // ---- LOOP KNOBS: while the FOCUSED deck loops, CV6/CV7 belong to the loop

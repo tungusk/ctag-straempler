@@ -56,6 +56,12 @@ dk_state_t dk;
 
 // playback counter -> FILE frame. The reader owns this mapping; everyone else
 // (engine, UI) goes through it. Loop = a mapping, not a cursor wrap.
+// guards the reader's chunk commit against the audio task's loop truncations:
+// the reader computes its file frame BEFORE the SD read, and an engage/release
+// in between used to land the chunk at the new position under the old mapping
+// (review #82 #80)
+static portMUX_TYPE s_wpos_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static inline uint32_t dk_map(uint32_t p)
 {
     if (dk.loop_active && dk.rm_at && p >= dk.rm_at && dk.rm_len)
@@ -165,6 +171,11 @@ static void reader_task(void *pv)
             uint32_t base = dk.wpos + DK_RING_FRAMES;   // fresh, non-aliasing slots
             dk.map_p0 = base;
             dk.map_f0 = to;
+            // inside an active loop dk_map ignores map_f0: anchor the window so
+            // the resume lands at `to`, not the window start (#83 — the engage form)
+            if (dk.loop_active && dk.loop_len_fr && to >= dk.loop_start &&
+                to < dk.loop_start + dk.loop_len_fr)
+                dk.map_p0 = base - (to - dk.loop_start);
             dk.rpos_i = base;                   // reader is the ONLY seek-writer of rpos
             dk.rpos_f = 0;
             dk.wpos = base;
@@ -193,7 +204,8 @@ static void reader_task(void *pv)
             uint32_t lead_cap = (dk.loop_active && dk.loop_len_fr)
                                     ? DK_LOOP_LEAD
                                     : (DK_RING_FRAMES - DK_RATE - 4096);
-            uint32_t ff = dk_map(dk.wpos);
+            uint32_t w0 = dk.wpos;
+            uint32_t ff = dk_map(w0);
             bool have_room = lp ? (lead < lead_cap)
                                 : (dk.wpos < dk.map_p0 + (dk.file_frames - dk.map_f0) &&
                                    lead < lead_cap);
@@ -225,12 +237,20 @@ static void reader_task(void *pv)
                 }
                 sd_lock_give();
                 if (got > 0) {
-                    uint32_t w = dk.wpos % DK_RING_FRAMES;
+                    // slots [w0, w0+got) are ahead of the play cursor, so the
+                    // copy is safe; the COMMIT is only valid if nobody moved
+                    // the frontier or the mapping during the read
+                    uint32_t w = w0 % DK_RING_FRAMES;
                     uint32_t first = DK_RING_FRAMES - w;
                     if (first > got) first = got;
                     memcpy(dk.ring + w * 2, chunk, first * 4);
                     if (first < got) memcpy(dk.ring, chunk + first * 2, (got - first) * 4);
-                    dk.wpos += got;
+                    bool kept;
+                    portENTER_CRITICAL(&s_wpos_mux);
+                    kept = (dk.wpos == w0 && dk_map(w0) == ff);
+                    if (kept) dk.wpos = w0 + got;
+                    portEXIT_CRITICAL(&s_wpos_mux);
+                    if (!kept) cur_ff = (uint32_t)-1;   // stale chunk dropped; re-read under the new mapping
                 }
                 if (dk.loading && dk.wpos - dk.rpos_i >= DK_LOW_WATER) dk.loading = false;
                 // keep filling without the delay below — but a read that got
@@ -350,6 +370,12 @@ void deck_toggle_play(void)
     // (the loop rework), and seeking to it jumped the playhead forward by the
     // counter/file skew (Arlo, bench: "the playhead jumps forward substantially")
     uint32_t to = dk_map(dk.rpos_i);
+    // a pending window move never commits while paused (rpos is still): fold
+    // it in now so the seek maps against the window the cursor is really in
+    if (dk.loop_active && dk.rm_at) {
+        dk.loop_start = dk.rm_start; dk.loop_len_fr = dk.rm_len; dk.map_p0 = dk.rm_p0;
+        dk.rm_at = 0;
+    }
     if (to >= dk.file_frames)
         to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;
     dk.loading = true;
@@ -472,9 +498,14 @@ static void deck_loop_toggle(void)
         uint32_t valid_to = p + (dk.loop_len_fr - off);   // the next seam
         dk.map_p0 = p;
         dk.map_f0 = ff;
+        // a scheduled window move: the ring past its switch point holds THAT
+        // window's audio, which the linear rebase would play as ours (#81)
+        if (dk.rm_at && dk.rm_at < valid_to) valid_to = dk.rm_at;
         dk.rm_at = 0;
         dk.loop_active = false;            // mapping written BEFORE the flag
+        portENTER_CRITICAL(&s_wpos_mux);
         if (dk.wpos > valid_to) dk.wpos = valid_to;
+        portEXIT_CRITICAL(&s_wpos_mux);
         // they have their own knobs now, but if a destination is assigned to a
         // channel the loop pair also uses, re-arming makes it CATCH on release
         // rather than jump — the old s_pk6/s_pk7 = -1, per destination
@@ -545,7 +576,9 @@ static void deck_loop_toggle(void)
     dk.loop_active = true;                        // set LAST (write ordering)
     // the read-ahead stays valid up to the first seam; the reader wraps there
     uint32_t valid_to = dk.map_p0 + len;
+    portENTER_CRITICAL(&s_wpos_mux);
     if (dk.wpos > valid_to) dk.wpos = valid_to;
+    portEXIT_CRITICAL(&s_wpos_mux);
 }
 
 // window move / length change while looping. The new mapping takes effect AT
