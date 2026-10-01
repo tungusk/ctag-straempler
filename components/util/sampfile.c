@@ -128,7 +128,12 @@ int sample_next_index(const char *prefix)
             sd_lock_give();
             if (e == NULL) break;
             if (strncasecmp(e->d_name, prefix, plen) != 0) continue;
-            int n = atoi(e->d_name + plen);
+            // only <prefix><digits>.<ext>: a date-stamped upload such as
+            // rec_20260913_jam.wav set the counter to 20260914 (review #4)
+            const char *d = e->d_name + plen, *q = d;
+            while (*q >= '0' && *q <= '9') q++;
+            if (q == d || (*q != '.' && *q != 0) || q - d > 6) continue;
+            int n = atoi(d);
             if (n > maxn) maxn = n;
         }
         sd_lock_take();

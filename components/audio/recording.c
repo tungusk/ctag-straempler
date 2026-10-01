@@ -32,6 +32,11 @@ typedef struct {
 static atomic_bool rec_active = ATOMIC_VAR_INIT(false);
 static atomic_bool rec_prepared = ATOMIC_VAR_INIT(false);
 static atomic_bool rec_cancel = ATOMIC_VAR_INIT(false);
+// latched by recording_trigger, cleared by recording_prepare: the writer parks
+// on THIS, not the level of rec_active — a start then stop inside the writer's
+// setup (dir scan + fopen) cleared rec_active before it parked, stranding it
+// with rec_prepared set, and bounce refused until a reboot (review #1)
+static atomic_bool rec_triggered = ATOMIC_VAR_INIT(false);
 static atomic_bool rec_load_pending = ATOMIC_VAR_INIT(false);
 static bool rec_enabled = true;
 static trig_func_t trig_func[2] = {TRIG_FUNC_VOICE, TRIG_FUNC_VOICE};
@@ -108,7 +113,9 @@ static void find_next_filename(char *buf, int buflen)
         hint = sample_next_index(pfx);
         strlcpy(last_pfx, pfx, sizeof(last_pfx));
     }
-    if (hint > 9999) { snprintf(buf, buflen, "/sdcard/usr/REC/%sOVFL.WAV", pfx); return; }
+    // no 4-digit cap: long filenames are on, so REC_10000 is a valid name. The
+    // old cap sent every take past 9999 to one <PFX>OVFL.WAV, each overwriting
+    // the last (review #4)
     snprintf(buf, buflen, "/sdcard/usr/REC/%s%04d.WAV", pfx, hint);
     hint++;
 }
@@ -134,7 +141,7 @@ static void rec_writer_task(void *pvParams)
 
     // park until the trigger (a clock pulse, via recording_trigger) or a
     // cancel (disarm before any capture — delete the empty file)
-    while (!atomic_load(&rec_active) && !atomic_load(&rec_cancel))
+    while (!atomic_load(&rec_triggered) && !atomic_load(&rec_cancel))
         vTaskDelay(1);   // >=1 TICK: pdMS_TO_TICKS(5) is ZERO at 100Hz — a
                          // busy-spin that starved the reader + httpd while armed
     if (atomic_load(&rec_cancel)) {
@@ -198,6 +205,9 @@ static void rec_writer_task(void *pvParams)
     sd_lock_take();
     sampwav_finish(f);            // patch RIFF + data sizes from real length
     int close_err = fclose(f);
+    // nothing captured: a header-only WAV probes as valid with 0 frames and
+    // sat in usr/REC for good (review #7). A partial take with chunks is kept.
+    if (chunks_written == 0) remove(fname);
     sd_lock_give();
 
     if (write_err || close_err != 0 || chunks_written == 0) {
@@ -254,6 +264,7 @@ void recording_prepare(int vid)
     rec_target_vid = vid;
     xQueueReset(rec_queue);
     atomic_store(&rec_cancel, false);
+    atomic_store(&rec_triggered, false);
     atomic_store(&rec_prepared, true);
     // priority 10, not 18: the 6s capture queue absorbs scheduling slack,
     // and 18 let the prepare-phase directory scan starve the sampler reader
@@ -278,7 +289,7 @@ bool recording_is_prepared(void)
 // audio-task safe: bare atomic stores, no logs/SD/allocation
 void recording_trigger(void)
 {
-    if (atomic_load(&rec_prepared)) atomic_store(&rec_active, true);
+    if (atomic_load(&rec_prepared)) { atomic_store(&rec_triggered, true); atomic_store(&rec_active, true); }
 }
 
 void recording_finish(void)

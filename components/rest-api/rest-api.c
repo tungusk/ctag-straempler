@@ -2476,6 +2476,15 @@ static esp_err_t ice_state_handler(httpd_req_t *req)
 //   curl -X POST --data-binary @build/ctag-straempler.bin http://<ip>/ota
 static esp_err_t ota_post_handler(httpd_req_t *req)
 {
+    // the restart at the end would destroy a take or bounce in flight, as
+    // /reboot already refuses for (review #37). A PREPARED writer is fine: Tape's
+    // card mode keeps one parked all the time, and its empty file is swept.
+    if (recording_is_active()) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"recording\"}");
+        return ESP_OK;
+    }
     const esp_partition_t *upd = esp_ota_get_next_update_partition(NULL);
     if (!upd) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no OTA slot"); return ESP_FAIL; }
     if (req->content_len < 0x10000) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "image too small"); return ESP_FAIL; }
