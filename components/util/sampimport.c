@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "sd_lock.h"
@@ -297,7 +298,7 @@ static int imp_publish(const char *src, const char *tmp, const char *dst)
     return 0;
 }
 
-int samp_import_file(const char *vfs_path)
+static int samp_import_file_locked(const char *vfs_path)
 {
     strlcpy(samp_import_cur, strrchr(vfs_path, '/') ? strrchr(vfs_path, '/') + 1
                                                     : vfs_path,
@@ -384,6 +385,23 @@ int samp_import_file(const char *vfs_path)
     if (rc == 0) ESP_LOGI(TAG, "%s -> %s (%u-bit%s @%lu)", vfs_path, dst,
                           sf.src_bits, sf.src_code == 3 ? " float" : "",
                           (unsigned long)sf.src_rate);
+    return rc;
+}
+
+// ONE import at a time across callers: the pool scan (its own task) and the
+// Freesound pipeline (fs_machine) both convert through here, and two decodes
+// at once used to share helix's buffers (review #13). Both callers are
+// background tasks, so waiting is fine.
+int samp_import_file(const char *vfs_path)
+{
+    static StaticSemaphore_t s_buf;
+    static SemaphoreHandle_t s_lock;
+    sd_lock_take();                      // first-use creation, serialised by the SD lock
+    if (!s_lock) s_lock = xSemaphoreCreateMutexStatic(&s_buf);
+    sd_lock_give();
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    int rc = samp_import_file_locked(vfs_path);
+    xSemaphoreGive(s_lock);
     return rc;
 }
 

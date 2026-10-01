@@ -14,6 +14,7 @@
 #include "esp_vfs_fat.h"
 #include "sd_lock.h"
 #include <stdint.h>
+#include <stdbool.h>
 
 #define MAX_FRAME_SIZE 4096
 
@@ -26,16 +27,21 @@ typedef struct{
     int mp3FileSize;
 }task_param_t;
 
-unsigned char *input;
-unsigned char *readPtr;
-    
+ 
 void initMP3Engine(xQueueHandle queueui){
     ui_ev_queue = queueui;
 }
 
-static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *out_samprate,
-                   void (*pcb)(int pct, void *arg), void *pcb_arg){
+// `input` is the caller's MAX_FRAME_SIZE buffer — it used to be a global shared
+// by every decode, so two at once (Freesound + the import scan) leaked one,
+// decoded through the other and double-freed (review #13). Returns 0 when the
+// whole file was consumed and every write landed, -1 otherwise, so a truncated
+// decode can't replace its source (#17).
+static int decode(FIL *mp3File, FIL* rawOut, unsigned char *input, int sz,
+                  int *out_channels, int *out_samprate,
+                  void (*pcb)(int pct, void *arg), void *pcb_arg){
     uint32_t toRead = sz, progress = 0;
+    unsigned char *readPtr;
 
     // A ZERO-LENGTH INPUT PANICS THE MODULE. Both progress calculations below
     // divide by sz, so a 0-byte mp3 took the whole device down with
@@ -46,14 +52,14 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *ou
     // turns a crash into an ordinary error.
     if(sz == 0){
         ESP_LOGE("MP3", "zero-length mp3 — nothing to decode");
-        return;
+        return -1;
     }
 
     HMP3Decoder decoder = MP3InitDecoder();
 
     if(decoder == NULL){
         ESP_LOGE("MP3", "No decoder allocated");
-        return;
+        return -1;
     }
 
     ESP_LOGI("MP3", "Decoder instantiated");
@@ -97,7 +103,10 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *ou
         }
         else
         {
-        offset = MP3FindSyncWord(input,MAX_FRAME_SIZE);
+        // only the bytes actually read: past nRead is stale heap, and an offset
+        // there wrapped the unsigned memmove length below (review #14)
+        offset = MP3FindSyncWord(input, (int)nRead);
+        if(offset >= (int)nRead) offset = -1;
         //ESP_LOGI("MP3", "Offset: %d", offset);
         if(offset < 0)
         {
@@ -159,15 +168,13 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *ou
     short output[2 * 1152]; // stereo
     int err;
     int bytesLeft = valid ? (int)valid : MAX_FRAME_SIZE;
+    int frames = 0, bad = 0;
+    bool io_err = false;
     readPtr = input;
-    do{
+    while(foundStartOfFrame && bytesLeft > 0){
         err = MP3Decode(decoder, &readPtr, &bytesLeft, output, 0);
-        //ESP_LOGI("MP3", "Error %d", err);
-        //ESP_LOGI("MP3", "bytes remaining %d", bytesLeft);
-        // bytesLeft will have number of bytes left in the input buffer. Input buffer will
-        // point to the first unconsumed byte.
-        // This code example shows how the errors can be handled.
-        // This may differ between applications.
+        // bytesLeft = unconsumed bytes; readPtr = the first of them. Slide them
+        // to the front and top the buffer back up.
         memmove(input, readPtr, bytesLeft);
         sd_lock_take();
         f_read(mp3File, input + bytesLeft, MAX_FRAME_SIZE - bytesLeft, &nRead);
@@ -177,37 +184,58 @@ static void decode(FIL *mp3File, FIL* rawOut, int sz, int *out_channels, int *ou
         if(pcb && progress != oldProgress){
             pcb((int)progress, pcb_arg);
         }
-        oldProgress = progress;;
-        //ESP_LOGI("MP3", "Read %d, size %d, to read %d, progress %d", nRead, sz, toRead, progress);
+        oldProgress = progress;
         readPtr = input;
         bytesLeft += nRead;
 
-        UINT nWrite;
-        if(err == ERR_MP3_NONE ){
-            // The MP3GetLastFrameInfo() function can be used to obtain information about the
-            // frame. The following shows an example.
-            // Get information about the last decoded frame. It is assumed that the frame was
-            // decoded by calling the decode function.
+        if(err == ERR_MP3_NONE){
             MP3FrameInfo mp3frameInfo;
             MP3GetLastFrameInfo(decoder, &mp3frameInfo);
-            // Get the size of the output raw audio frame.
-            //ESP_LOGI("MP3", "Decoded samples %d", mp3frameInfo.outputSamps );
-            if(mp3frameInfo.outputSamps != 0)
-            {
+            frames++;
+            if(mp3frameInfo.outputSamps != 0){
+                UINT want = mp3frameInfo.outputSamps * 2, nWrite = 0;
                 sd_lock_take();
-                f_write(rawOut, output, mp3frameInfo.outputSamps*2, &nWrite);
+                FRESULT wr = f_write(rawOut, output, want, &nWrite);
                 sd_lock_give();
-                //ESP_LOGI("MP3", "Number of output samples decoded %d", mp3frameInfo.outputSamps)
+                if(wr != FR_OK || nWrite != want){         // card full: stop, and say so
+                    ESP_LOGE("MP3", "write failed (%d, %u of %u)", wr, nWrite, want);
+                    io_err = true;
+                    break;
+                }
             }
+        }else if(err == ERR_MP3_MAINDATA_UNDERFLOW){
+            // the bit reservoir reaches back before what we have: helix
+            // consumed the frame, carry on with the next
+        }else if(err == ERR_MP3_INDATA_UNDERFLOW && bytesLeft < MAX_FRAME_SIZE){
+            if(nRead == 0) break;                           // end of file
         }else{
-            ESP_LOGI("MP3", "Error %d", err);
+            // a damaged frame: resync on the next sync word past it, as the
+            // Radio stream does, instead of ending the file here (#17)
+            bad++;
+            int off = bytesLeft > 1 ? MP3FindSyncWord(input + 1, bytesLeft - 1) : -1;
+            if(off < 0 || off >= bytesLeft - 1){
+                bytesLeft = 0;                              // nothing usable buffered: refill
+                sd_lock_take();
+                f_read(mp3File, input, MAX_FRAME_SIZE, &nRead);
+                sd_lock_give();
+                toRead -= nRead;
+                bytesLeft = (int)nRead;
+            }else{
+                memmove(input, input + 1 + off, bytesLeft - 1 - off);
+                bytesLeft -= 1 + off;
+            }
         }
-
     }
-    while(!err && bytesLeft > 0);
-
-
+    if(bad) ESP_LOGW("MP3", "%d damaged frame(s) skipped, %d decoded", bad, frames);
     MP3FreeDecoder(decoder);
+    // whole input consumed, every write landed, and not mostly damage
+    if(io_err || !foundStartOfFrame || toRead != 0 || frames == 0 ||
+       (bad > 8 && bad * 20 > frames)){
+        ESP_LOGE("MP3", "decode incomplete (io %d, left %u, frames %d, bad %d)",
+                 io_err, (unsigned)toRead, frames, bad);
+        return -1;
+    }
+    return 0;
 }
 
 // progress relay for the async path: keeps the old UI-event behaviour
@@ -250,10 +278,10 @@ static void decoder_task(void* pvParams){
         return;
     }
 
-    input = (unsigned char*) malloc(MAX_FRAME_SIZE);
+    unsigned char *input = (unsigned char*) malloc(MAX_FRAME_SIZE);
     decode_ev_cb(0, NULL);
 
-    decode(&fin, &fout, mp3FileSize, NULL, NULL, decode_ev_cb, NULL);
+    if(input) decode(&fin, &fout, input, mp3FileSize, NULL, NULL, decode_ev_cb, NULL);
     free(input);
 
     sd_lock_take();
@@ -293,7 +321,7 @@ int decodeMP3FileSync(const char *fin_path, const char *fout_path,
         return -1;
     }
 
-    input = (unsigned char*) malloc(MAX_FRAME_SIZE);
+    unsigned char *input = (unsigned char*) malloc(MAX_FRAME_SIZE);
     if(input == NULL){
         sd_lock_take();
         f_close(&fin);
@@ -301,7 +329,7 @@ int decodeMP3FileSync(const char *fin_path, const char *fout_path,
         sd_lock_give();
         return -1;
     }
-    decode(&fin, &fout, mp3FileSize, out_channels, out_samprate, progress_cb, arg);
+    int rc = decode(&fin, &fout, input, mp3FileSize, out_channels, out_samprate, progress_cb, arg);
     free(input);
 
     uint32_t written = f_size(&fout);
@@ -309,7 +337,7 @@ int decodeMP3FileSync(const char *fin_path, const char *fout_path,
     f_close(&fin);
     f_close(&fout);
     sd_lock_give();
-    return written > 0 ? 0 : -1;
+    return (rc == 0 && written > 0) ? 0 : -1;
 }
 
 
