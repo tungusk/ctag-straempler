@@ -599,10 +599,17 @@ void menuProcessEvent(int ev, void * ev_data){
         autosave_now();
         return;
     }
+    // s_bind_pending is the truth; the queued EV_MACHINE_BIND is only a wake-up.
+    // Whatever event arrives first after a switch runs the bind before it is
+    // handled, so a full queue (the post below is non-blocking) can't strand it.
     if(ev == EV_MACHINE_BIND){
-        menuMachineBindNow();
+        if(s_bind_pending) menuMachineBindNow();
         return;
     }
+    // the event that triggers a late bind was queued for the machine just
+    // STOPPED: bind, then drop it if it is input for its pages (below)
+    bool stale = s_bind_pending;
+    if(stale) menuMachineBindNow();
     // teleremote machine switch: runs here (UI task) so the autosave/activate/
     // rebind sequence is identical to a front-panel switch
     if(ev == EV_REMOTE_MACHINE){
@@ -632,7 +639,7 @@ void menuProcessEvent(int ev, void * ev_data){
     // web Setup-page mirror: one row stepped like a knob turn, on this task
     if(ev == EV_REMOTE_SETUP){
         int *a = (int*) ev_data;
-        if(a != NULL && s_bind_pending){ free(a); return; }   // rows of the machine just stopped
+        if(a != NULL && stale){ free(a); return; }   // rows of the machine just stopped
         if(a != NULL){
             setup_menu_remote_adjust(a[0], a[1], a[2]);
             free(a);
@@ -652,9 +659,9 @@ void menuProcessEvent(int ev, void * ev_data){
     // belong to the machine that was just STOPPED. An event already queued (a
     // page's slow timer tick, an encoder turn) ran its handler on freed state:
     // Deck's tick started an analysis on a stopped Deck (bench 2026-09-16), and
-    // Tape's tick would spawn a save from freed banks. Drop them; the bind is
-    // already queued and re-enters the new machine's main page.
-    if(s_bind_pending) return;
+    // Tape's tick would spawn a save from freed banks. Drop the one that ran
+    // the late bind above; the bind has re-entered the new machine's main page.
+    if(stale) return;
     menusys_process_ev(_ms, ev, ev_data);
 }
 
@@ -740,10 +747,17 @@ static void autosave_kick(void) {
 // registration, machine preset boot-load, full main-screen draw) runs on the
 // UI event task — app_main's 4KB stack is too small for the cJSON + TFT work
 // (suspected cause of the intermittent boot loop seen on 2026-07-03).
+//
+// Non-blocking: a switch calls this ON the UI task, the queue's only consumer,
+// and after a slow stop (Radio ~7 s, a Tape save) the timers and encoder can
+// have filled it — a blocking send then slept forever holding disp_lock (review
+// #27). If the wake-up is dropped, the next event (the 300 ms tick at worst)
+// runs the bind from s_bind_pending in menuProcessEvent.
 void menuBindMachineUI(void){
     s_bind_pending = true;
     ui_ev_ts_t ev = { .event = EV_MACHINE_BIND, .event_data = NULL };
-    xQueueSend(s_ev_queue, &ev, portMAX_DELAY);
+    if(xQueueSend(s_ev_queue, &ev, 0) != pdTRUE)
+        ESP_LOGW("UI", "bind wake-up dropped (queue full) — next event binds");
 }
 
 // ---- System > Settings > Tuner ---------------------------------------------
