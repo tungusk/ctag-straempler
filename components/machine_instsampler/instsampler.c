@@ -369,9 +369,10 @@ int keys_autotune(void)
     return 0;
 }
 
-uint32_t keys_snap_zero(uint32_t frame)
+uint32_t keys_snap_zero(const is_zone_t *z, uint32_t frame)
 {
-    is_zone_t *z = &inst.zone[0];
+    // the zone being edited, not zone 0: a loop edit past zone 0's length
+    // was pulled back to it (review #67)
     if (!z->buf || z->frames < 2) return frame;
     if (frame >= z->frames) frame = z->frames - 1;
     for (int r = 0; r < 512; r++)                        // nearest rising zero-cross within +/-512
@@ -532,10 +533,13 @@ static void keys_process(int32_t out[MACHINE_BLOCK],
         long len = le - ls;
         len = (long)((float)len * (1.0f + m_llen));
         if (len < 64) len = 64;
-        le = ls + len;
+        // keep the window INSIDE the sample: a full LoopMov pushed ls past the
+        // end, le = ls + 64 then exceeded frames and the voice went silent (#68)
+        if (ls > (long)z->frames - 64) ls = (long)z->frames - 64;
         if (ls < 0) ls = 0;
+        le = ls + len;
         if (le > (long)z->frames) le = (long)z->frames;
-        if (le <= ls) le = ls + 64;
+        if (le <= ls) le = ls + 64 <= (long)z->frames ? ls + 64 : (long)z->frames;
     }
 
     // note on (retrigger) — gate was read above, before the zone was chosen
@@ -720,21 +724,21 @@ static void keys_preset_load(const cJSON *node)
     // read BEFORE "smp": it decides whether the reload below auto-tunes at all
     // (the stored root/fine then land on top either way)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "atl"))   && cJSON_IsBool(j))   inst.autotune_load = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "atk"))   && cJSON_IsNumber(j)) inst.atk = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dec"))   && cJSON_IsNumber(j)) inst.dec = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sus"))   && cJSON_IsNumber(j)) inst.sus = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rel"))   && cJSON_IsNumber(j)) inst.rel = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "e2c"))   && cJSON_IsNumber(j)) inst.env_to_cut = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cut"))   && cJSON_IsNumber(j)) inst.cutoff_base = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "res"))   && cJSON_IsNumber(j)) inst.res01 = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) inst.glide = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) inst.level = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfr"))   && cJSON_IsNumber(j)) inst.lfo_rate = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfd"))   && cJSON_IsNumber(j)) inst.lfo_depth = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfx"))   && cJSON_IsNumber(j)) inst.lfo_dest = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "atk"))   && cJSON_IsNumber(j)) inst.atk = clampf((float)j->valuedouble, 0.0005f, 2.0f);   // the Setup ranges (#72)
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dec"))   && cJSON_IsNumber(j)) inst.dec = clampf((float)j->valuedouble, 0.001f, 2.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sus"))   && cJSON_IsNumber(j)) inst.sus = clampf((float)j->valuedouble, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rel"))   && cJSON_IsNumber(j)) inst.rel = clampf((float)j->valuedouble, 0.001f, 3.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "e2c"))   && cJSON_IsNumber(j)) inst.env_to_cut = clampf((float)j->valuedouble, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "cut"))   && cJSON_IsNumber(j)) inst.cutoff_base = clampf((float)j->valuedouble, 30.0f, 12000.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "res"))   && cJSON_IsNumber(j)) inst.res01 = clampf((float)j->valuedouble, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) inst.glide = clampf((float)j->valuedouble, 0.0f, 2.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) inst.level = clampf((float)j->valuedouble, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfr"))   && cJSON_IsNumber(j)) inst.lfo_rate = clampf((float)j->valuedouble, 0.05f, 20.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfd"))   && cJSON_IsNumber(j)) inst.lfo_depth = clampf((float)j->valuedouble, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfx"))   && cJSON_IsNumber(j)) inst.lfo_dest = clampi(j->valueint, LFO_OFF, LFO_PITCH);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfs"))   && cJSON_IsNumber(j)) inst.lfo_sync = j->valueint != 0;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfv"))   && cJSON_IsNumber(j)) inst.lfo_div = j->valueint;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfw"))   && cJSON_IsNumber(j)) inst.lfo_shape = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfv"))   && cJSON_IsNumber(j)) inst.lfo_div = clampi(j->valueint, 0, LFO_DIV_N - 1);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfw"))   && cJSON_IsNumber(j)) inst.lfo_shape = clampi(j->valueint, 0, LFO_SHAPE_N - 1);
     // ZONES array wins when present: clear, then append each entry and restore
     // its tuning and loop after the load (loading resets both). Falls back to
     // the legacy single "smp" key so every existing patch and autosave still
@@ -795,7 +799,7 @@ static void keys_preset_load(const cJSON *node)
             if ((q = cJSON_GetObjectItemCaseSensitive(e, "root")) && cJSON_IsNumber(q))
                 zz->root = (uint8_t)clampi(q->valueint, 0, 127);
             if ((q = cJSON_GetObjectItemCaseSensitive(e, "fn"))   && cJSON_IsNumber(q))
-                zz->fine = (float)q->valuedouble;
+                zz->fine = clampf((float)q->valuedouble, -1.0f, 1.0f);   // as the flat path (#71)
             if ((q = cJSON_GetObjectItemCaseSensitive(e, "lm"))   && cJSON_IsNumber(q))
                 zz->loop_mode = (uint8_t)q->valueint;
             if ((q = cJSON_GetObjectItemCaseSensitive(e, "ls"))   && cJSON_IsNumber(q))
@@ -807,7 +811,7 @@ static void keys_preset_load(const cJSON *node)
             if (zz->loop_end > zz->frames) zz->loop_end = zz->frames;
             if (zz->loop_start >= zz->loop_end) zz->loop_start = 0;
         }
-        if (!same) inst.edit_zone = 0;   // the zone being edited survives an in-place Apply
+        if (!same) { inst.edit_zone = 0; keys_build_peaks(); }   // peaks showed the LAST zone loaded (#69)
     }
     // load the sample FIRST (it resets loop points), then restore them
     else if ((j = cJSON_GetObjectItemCaseSensitive(node, "smp"))   && cJSON_IsString(j) && j->valuestring[0]) keys_load_zone(j->valuestring);
@@ -818,7 +822,7 @@ static void keys_preset_load(const cJSON *node)
     // re-posted, which is exactly how the multisample gets driven with no UI yet)
     // silently loses zone 0's tuning and loop to the legacy copy.
     if (!used_zones) {
-        if ((j = cJSON_GetObjectItemCaseSensitive(node, "root"))  && cJSON_IsNumber(j)) z->root = (uint8_t)j->valueint;
+        if ((j = cJSON_GetObjectItemCaseSensitive(node, "root"))  && cJSON_IsNumber(j)) z->root = (uint8_t)clampi(j->valueint, 0, 127);   // #71
         if ((j = cJSON_GetObjectItemCaseSensitive(node, "fn"))    && cJSON_IsNumber(j)) z->fine = clampf((float)j->valuedouble, -1.0f, 1.0f);
         if ((j = cJSON_GetObjectItemCaseSensitive(node, "lm"))    && cJSON_IsNumber(j)) z->loop_mode = (uint8_t)j->valueint;
         if ((j = cJSON_GetObjectItemCaseSensitive(node, "ls"))    && cJSON_IsNumber(j)) z->loop_start = (uint32_t)j->valuedouble;

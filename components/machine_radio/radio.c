@@ -89,6 +89,8 @@ int radio_station_del(int idx)
     if (idx < RADIO_N_DEFAULT || idx >= rd_n_stations) return -1;   // built-ins are permanent
     for (int i = idx; i < rd_n_stations - 1; i++) rd_stations[i] = rd_stations[i + 1];
     rd_n_stations--;
+    if (idx < rd.sel) rd.sel--;                 // keep pointing at the same station (#112)
+    if (rd.sel >= rd_n_stations) rd.sel = 0;
     radio_stations_save();
     return 0;
 }
@@ -295,6 +297,28 @@ static void stream_task(void *pv)
             continue;
         }
         esp_http_client_fetch_headers(cl);
+        // the status was never read: a 30x/404 body read once, then every
+        // retry reset the backoff and it reconnected forever (#111). Follow up
+        // to 3 redirects; refuse an explicit error. 0 = an ICY-style reply the
+        // parser did not number — those streams work, so let them through.
+        {
+            int hs = esp_http_client_get_status_code(cl), hops = 0;
+            while ((hs == 301 || hs == 302 || hs == 307 || hs == 308) && hops++ < 3) {
+                esp_http_client_set_redirection(cl);
+                esp_http_client_close(cl);
+                if (esp_http_client_open(cl, 0) != ESP_OK) { hs = -1; break; }
+                esp_http_client_fetch_headers(cl);
+                hs = esp_http_client_get_status_code(cl);
+            }
+            if (hs != 0 && hs != 200) {
+                char m[24];
+                snprintf(m, sizeof(m), "HTTP %d", hs);
+                set_err(m);
+                esp_http_client_close(cl);
+                esp_http_client_cleanup(cl);
+                break;
+            }
+        }
         int meta_int = s_meta_int_hdr;   // set by radio_http_evt during open/fetch
         s_audio_left = meta_int;
 
@@ -304,8 +328,7 @@ static void stream_task(void *pv)
             if (fill < RADIO_IN_SIZE) {
                 int r = icy_read(cl, inbuf + fill, RADIO_IN_SIZE - fill, meta_int);
                 if (r <= 0) { disconnected = true; break; }   // dropped -> reconnect
-                fill += r;
-                attempts = 0;                                  // real data: reset the backoff
+                fill += r;                                     // (backoff resets on decoded audio, below)
             }
             int cur = 0;
             while (fill - cur > RADIO_MIN_FRAME && !s_stop && gen == s_gen) {
@@ -317,6 +340,7 @@ static void stream_task(void *pv)
                 int err = MP3Decode(dec, &rp, &bl, pcm, 0);
                 if (err == ERR_MP3_INDATA_UNDERFLOW) break;
                 int used = (fill - cur) - bl;
+                if (err == 0) attempts = 0;                   // decoded audio: a real stream (#111)
                 if (err == 0) {
                     MP3FrameInfo fi;
                     MP3GetLastFrameInfo(dec, &fi);
@@ -384,6 +408,11 @@ void radio_play_url(const char *url, const char *name)
     for (int i = 0; i < 40 && s_ntasks > 0; i++) vTaskDelay(pdMS_TO_TICKS(10));
     strlcpy(rd.url, url, sizeof(rd.url));
     strlcpy(rd.station, name ? name : "custom", sizeof(rd.station));
+    // stop the drain BEFORE zeroing the counters: a process() pass already past
+    // its rpos < wpos test stored rpos++ after the zeroing, and the ring read
+    // as full forever (#114)
+    rd.state = RADIO_BUFFERING;
+    machine_block_wait();
     rd.wpos = rd.rpos = 0;
     rd.underruns = 0;
     rd.reconnects = 0;
@@ -474,7 +503,9 @@ static void radio_preset_load(const cJSON *node)
     rd.sel = 0;
     if (node) {
         cJSON *j = cJSON_GetObjectItemCaseSensitive(node, "sel");
-        if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint < RADIO_MAX_ST)
+        // against the stations actually loaded (radio_start ran first), not the
+        // table size: a press played nothing on a stale index (#112)
+        if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint < rd_n_stations)
             rd.sel = j->valueint;
     }
 }

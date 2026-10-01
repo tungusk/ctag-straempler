@@ -128,13 +128,21 @@ static esp_err_t fs_search_handler(httpd_req_t *req)
 
 static esp_err_t fs_state_handler(httpd_req_t *req)
 {
-    char buf[256];
-    snprintf(buf, sizeof(buf),
-             "{\"phase\":\"%s\",\"progress\":%d,\"id\":\"%s\",\"name\":\"%s\","
-             "\"err\":\"%s\",\"stack_min\":%u}",
-             fs_phase_name(fsm.phase), fsm.progress, fsm.cur_id, fsm.cur_name,
-             fsm.err, fsm.stack_min);
-    return send_json_status(req, "200 OK", buf);
+    // built with cJSON so err (the server's own text) is escaped: a quote in it
+    // made invalid JSON and the page's card froze (#132)
+    cJSON *o = cJSON_CreateObject();
+    if (!o) return send_json_status(req, "500 Internal Server Error", "{}");
+    cJSON_AddStringToObject(o, "phase", fs_phase_name(fsm.phase));
+    cJSON_AddNumberToObject(o, "progress", fsm.progress);
+    cJSON_AddStringToObject(o, "id", fsm.cur_id);
+    cJSON_AddStringToObject(o, "name", fsm.cur_name);
+    cJSON_AddStringToObject(o, "err", fsm.err);
+    cJSON_AddNumberToObject(o, "stack_min", fsm.stack_min);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    esp_err_t r = send_json_status(req, "200 OK", js ? js : "{}");
+    free(js);
+    return r;
 }
 
 static esp_err_t fs_get_handler(httpd_req_t *req)

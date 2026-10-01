@@ -237,7 +237,16 @@ static void do_load(void)
         uint32_t acc = 0;
         for (int o = 0; o < len; o++){
             int pat = m->xxo[o];
-            if (pat == XMP_MARK_SKIP || pat == XMP_MARK_END) break;   // stop at end/skip
+            if (pat == XMP_MARK_END) break;                            // the real end
+            // a '+++' skip marker (S3M/IT): libxmp steps over it and plays on,
+            // so the map must too — stopping here left later orders unmapped
+            // and the loop/scrub jumped to order 0 (#116). Zero rows: no time.
+            if (pat == XMP_MARK_SKIP || pat >= m->pat) {
+                trk.order_rows[o] = 0;
+                trk.order_step0[o] = acc;
+                trk.n_orders++;
+                continue;
+            }
             int rows = (pat < m->pat && m->xxp && m->xxp[pat]) ? m->xxp[pat]->rows : 64;
             if (rows < 1) rows = 1;
             trk.order_rows[o]  = (uint16_t)rows;
@@ -250,7 +259,14 @@ static void do_load(void)
     trk.loop_engage = false;        // a fresh module starts in normal play
     trk.loop_toggle_req = false;
 
-    xmp_start_player(s_ctx, TRK_RATE, 0);
+    int sr = xmp_start_player(s_ctx, TRK_RATE, 0);
+    if (sr < 0) {                    // left LOADED, play_buffer then read as 'ended' (#115)
+        xmp_release_module(s_ctx);
+        s_have_module = false;
+        snprintf(trk.fail_why, sizeof(trk.fail_why), "start err %d", sr);
+        trk.state = TRK_FAIL;
+        return;
+    }
     apply_sound_mode();
     trk.tf_cur = 1.0f;
     // stack headroom after the (deepest) load path — verify the 24 KB is enough

@@ -71,7 +71,8 @@ static void set_err(const char *msg)
 {
     strlcpy(fsm.err, msg, sizeof(fsm.err));
     fsm.phase = FS_ERROR;
-    fsm.busy = false;
+    // busy is NOT dropped here: the pipeline still has to close, unlink and tear
+    // down TLS; it clears busy at `out:` (#127). start_job clears its own.
     ESP_LOGE(TAG, "%s", msg);
 }
 
@@ -371,7 +372,6 @@ static void fs_pipeline(void *pv)
 
     fsm.phase = FS_DONE;
     fsm.progress = 100;
-    fsm.busy = false;
     ESP_LOGI(TAG, "installed %s as usr/%s.WAV",
              job->id[0] ? job->id : job->url, job->name);
 
@@ -386,6 +386,7 @@ out:
     if (buf) heap_caps_free(buf);
     if (client) esp_http_client_cleanup(client);
     free(job);
+    fsm.busy = false;                        // only now: everything above is done (#127)
     vTaskDelete(NULL);
 }
 

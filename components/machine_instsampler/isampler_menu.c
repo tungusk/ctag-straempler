@@ -666,7 +666,7 @@ static void klive_edit(int dir)
                 if (v < 0) v = 0;
                 if (v > (long)z->loop_end - 64) v = (long)z->loop_end - 64;
                 if (v < 0) v = 0;
-                v = (long)keys_snap_zero((uint32_t)v);       // declick the seam
+                v = (long)keys_snap_zero(z, (uint32_t)v);       // declick the seam
                 if (v >= (long)z->loop_end) v = (long)z->loop_end - 64;
                 if (v < 0) v = 0;
                 z->loop_start = (uint32_t)v;
@@ -674,7 +674,7 @@ static void klive_edit(int dir)
                 long v = (long)z->loop_end + dir * step;
                 if (v < (long)z->loop_start + 64) v = (long)z->loop_start + 64;
                 if (v > (long)z->frames) v = (long)z->frames;
-                v = (long)keys_snap_zero((uint32_t)v);
+                v = (long)keys_snap_zero(z, (uint32_t)v);
                 if (v > (long)z->frames) v = (long)z->frames;
                 if (v <= (long)z->loop_start) v = (long)z->loop_start + 64;
                 z->loop_end = (uint32_t)v;
@@ -953,14 +953,14 @@ static void ks_adj(int i, int dir)
         case KR_LOOPSTART: if (z->frames) {            // Loop Start (zero-cross snapped)
                     long ls = clampi((int)((long)z->loop_start + dir * step), 0, (int)z->loop_end - 64);
                     if (ls < 0) ls = 0;
-                    ls = (long)keys_snap_zero((uint32_t)ls);
+                    ls = (long)keys_snap_zero(z, (uint32_t)ls);
                     if (ls >= (long)z->loop_end) ls = (long)z->loop_end - 64;
                     if (ls < 0) ls = 0;
                     z->loop_start = (uint32_t)ls;
                 } break;
         case KR_LOOPEND: if (z->frames) {              // Loop End (zero-cross snapped)
                     long le = clampi((int)((long)z->loop_end + dir * step), (int)z->loop_start + 64, (int)z->frames);
-                    le = (long)keys_snap_zero((uint32_t)le);
+                    le = (long)keys_snap_zero(z, (uint32_t)le);
                     if (le > (long)z->frames) le = (long)z->frames;
                     if (le <= (long)z->loop_start) le = (long)z->loop_start + 64;
                     z->loop_end = (uint32_t)le;

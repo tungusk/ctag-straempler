@@ -324,6 +324,14 @@ static cJSON *synth_preset_save(void)
     return o;
 }
 
+// a preset value inside its Setup row's range (synth_menu.c), and never NaN:
+// the web form is free number boxes and sus = 5 drove the envelope wild (#119)
+static float syc(double v, float lo, float hi)
+{
+    float f = (float)v;
+    return !(f >= lo) ? lo : f > hi ? hi : f;
+}
+
 static void synth_preset_load(const cJSON *node)
 {
     if (!node) return;
@@ -332,26 +340,26 @@ static void synth_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "wave"))  && cJSON_IsString(j) && j->valuestring[0] &&
         (!sy.wave_len || strcmp(sy.wave_name, j->valuestring) != 0))   // unchanged: no reload (#163)
         synth_load_wave(j->valuestring);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fmr"))   && cJSON_IsNumber(j)) sy.fm_ratio = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fmi"))   && cJSON_IsNumber(j)) sy.fm_index = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fmr"))   && cJSON_IsNumber(j)) sy.fm_ratio = syc(j->valuedouble, 0.25f, 16.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fmi"))   && cJSON_IsNumber(j)) sy.fm_index = syc(j->valuedouble, 0.0f, 12.0f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "note"))  && cJSON_IsNumber(j)) sy.base_note = j->valueint;
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "quant")) && cJSON_IsBool(j))   sy.quantize = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "shape")) && cJSON_IsNumber(j)) sy.shape = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "atk"))   && cJSON_IsNumber(j)) sy.atk = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dec"))   && cJSON_IsNumber(j)) sy.dec = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sus"))   && cJSON_IsNumber(j)) sy.sus = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rel"))   && cJSON_IsNumber(j)) sy.rel = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "e2c"))   && cJSON_IsNumber(j)) sy.env_to_cut = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) sy.glide = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "shape")) && cJSON_IsNumber(j)) sy.shape = syc(j->valuedouble, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "atk"))   && cJSON_IsNumber(j)) sy.atk = syc(j->valuedouble, 0.0005f, 2.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "dec"))   && cJSON_IsNumber(j)) sy.dec = syc(j->valuedouble, 0.001f, 2.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sus"))   && cJSON_IsNumber(j)) sy.sus = syc(j->valuedouble, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rel"))   && cJSON_IsNumber(j)) sy.rel = syc(j->valuedouble, 0.001f, 3.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "e2c"))   && cJSON_IsNumber(j)) sy.env_to_cut = syc(j->valuedouble, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "gld"))   && cJSON_IsNumber(j)) sy.glide = syc(j->valuedouble, 0.0f, 2.0f);
     fxrack_load(&sy_rk, node);   // slots + every effect param (shared FX rack)
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfr"))   && cJSON_IsNumber(j)) sy.lfo_rate = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfd"))   && cJSON_IsNumber(j)) sy.lfo_depth = (float)j->valuedouble;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfx"))   && cJSON_IsNumber(j)) sy.lfo_dest = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfr"))   && cJSON_IsNumber(j)) sy.lfo_rate = syc(j->valuedouble, 0.05f, 20.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfd"))   && cJSON_IsNumber(j)) sy.lfo_depth = syc(j->valuedouble, 0.0f, 1.0f);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfx"))   && cJSON_IsNumber(j)) sy.lfo_dest = j->valueint < LFO_OFF ? LFO_OFF : j->valueint > LFO_PITCH ? LFO_PITCH : j->valueint;
     // absent in pre-LFO-sync presets: the init defaults stand (free-running sine)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfs"))   && cJSON_IsNumber(j)) sy.lfo_sync = j->valueint != 0;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfv"))   && cJSON_IsNumber(j)) sy.lfo_div = j->valueint;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfw"))   && cJSON_IsNumber(j)) sy.lfo_shape = j->valueint;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) sy.level = (float)j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfv"))   && cJSON_IsNumber(j)) sy.lfo_div = j->valueint < 0 ? 0 : j->valueint >= LFO_DIV_N ? LFO_DIV_N - 1 : j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lfw"))   && cJSON_IsNumber(j)) sy.lfo_shape = j->valueint < 0 ? 0 : j->valueint >= LFO_SHAPE_N ? LFO_SHAPE_N - 1 : j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "lvl"))   && cJSON_IsNumber(j)) sy.level = syc(j->valuedouble, 0.0f, 1.0f);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "cut")) && cJSON_IsNumber(j)) {
         float c = (float)j->valuedouble;
         sy.cutoff_base = c < 10.0f ? 10.0f : c > 6000.0f ? 6000.0f : c;

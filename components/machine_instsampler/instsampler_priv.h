@@ -222,7 +222,7 @@ int keys_autotune(void);
 
 // snap a frame index to the nearest RISING zero crossing in zone[0]'s buffer
 // (declick for loop points). Offline scan — call from the UI/adjust path only.
-uint32_t keys_snap_zero(uint32_t frame);
+uint32_t keys_snap_zero(const is_zone_t *z, uint32_t frame);   // snaps inside THAT zone (#67)
 
 // named patches — usr/keys/PAT_NNN.jsn via the shared preset_store (the #23
 // pattern). UI/menu context only.

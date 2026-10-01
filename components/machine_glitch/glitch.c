@@ -52,7 +52,8 @@ static const int8_t gl_mtx_defaults[GLM_N] = { 5, 6, 0 };
 static esp_err_t glitch_start(void)
 {
     memset(&gl, 0, sizeof(gl));
-    gl.ring = heap_caps_malloc((size_t)GL_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    // zeroed: the first window after start wraps into the unwritten tail (#108)
+    gl.ring = heap_caps_calloc((size_t)GL_RING_FRAMES * 2, sizeof(int16_t), MALLOC_CAP_SPIRAM);
     gl.win  = heap_caps_malloc((size_t)GL_MAX_WIN * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     if (!gl.ring || !gl.win) { ESP_LOGE("GLITCH", "PSRAM alloc failed"); return ESP_ERR_NO_MEM; }
     gl.win_ms = 120;

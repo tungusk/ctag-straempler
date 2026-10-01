@@ -142,8 +142,13 @@ static void hint(void)
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
+// the strip was painted while a peak scan was still filling it: repaint once
+// the scan ends (the frames test alone never fired — load set frames first) (#33)
+static bool s_drawn_mid_scan;
+
 static void live_full_redraw(void)
 {
+    if (ed.scanning) s_drawn_mid_scan = true;
     TFT_resetclipwin();
     TFT_fillScreen(TFT_BLACK);
     s_skip_clear = true;
@@ -178,7 +183,11 @@ static int editor_live_handler(int it_id, int event, void *ev_data)
         case EV_TIMER_REPEATING_SLOW:
             if (hdr_sig() != s_hdr_sig) header();
             // a scan finishing is the one thing that changes the waveform itself
-            if (!ed.scanning && s_wave.frames != ed.frames) { wave_sync(); wave_edit_draw(&s_wave); }
+            if (ed.scanning) s_drawn_mid_scan = true;
+            else if (s_wave.frames != ed.frames || s_drawn_mid_scan) {
+                s_drawn_mid_scan = false;
+                wave_sync(); wave_edit_draw(&s_wave);
+            }
             break;
 
         case EV_FWD: case EV_BWD: case EV_SHORT_PRESS: case EV_LONG_PRESS: {

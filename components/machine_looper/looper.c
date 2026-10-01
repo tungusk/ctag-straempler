@@ -462,7 +462,10 @@ int looper_bounce(void)
         lp.tr[i].state = LP_EMPTY;
         lp.tr[i].len = lp.tr[i].pos = lp.tr[i].target = 0;
     }
-    vTaskDelay(1);   // >=1 tick: pdMS_TO_TICKS(5)==0 at 100Hz = busy-spin
+    // a block that started before the store may still be reading track 1:
+    // the handshake, not a tick (a tick can land inside a running block).
+    // busy_mask (set above) keeps TR1 from re-arming it meanwhile (#107)
+    machine_block_wait();
 
     lp_track_t *d = &lp.tr[0];
     memcpy(d->buf, scratch, bounce_len * sizeof(int16_t));
@@ -500,7 +503,7 @@ static void looper_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync")))                     lp.sync_on = cJSON_IsTrue(j);
     // "clk_src" / "ppq" (pre-core-clock presets) are ignored: the clock is a
     // module-wide setting now and a preset must not silently repoint it
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "bars")) && cJSON_IsNumber(j))    lp.bars = j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "bars")) && cJSON_IsNumber(j))    lp.bars = j->valueint < 1 ? 1 : j->valueint > 8 ? 8 : j->valueint;   // the Setup row's range (#109)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor")))                  lp.monitor = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "filter")))                   lp.filter_on = cJSON_IsTrue(j);
     cvmtx_load(&lp.mtx, node);

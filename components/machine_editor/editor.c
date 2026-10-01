@@ -64,6 +64,9 @@ static FILE *open_src(sampfile_t *sf)
     sd_lock_take();
     FILE *f = fopen(path, "rb");
     if (f && sampfile_probe(f, sf) != 0) { fclose(f); f = NULL; }
+    // a zero-frame source (a 44-byte WAV) probes OK: closing it here is the one
+    // fix for the job and clip paths, which jumped past their fclose (#121 #122)
+    if (f && sf->frames == 0) { fclose(f); f = NULL; }
     sd_lock_give();
     return f;
 }
@@ -185,7 +188,9 @@ static int span_rev(FILE *src, sampfile_t *sf, FILE *out, int16_t *buf,
         uint32_t start = pos - n;
         seek_frame(src, sf, start);
         size_t got = rd(src, sf, buf, n);
-        if (got == 0) { s_io_err = true; break; }
+        // any SHORT chunk is an error: n-got frames vanished and the job said
+        // DONE (#129); fail_output() then deletes the take
+        if (got != n) { s_io_err = true; break; }
         for (uint32_t i = 0, j = (uint32_t)got - 1; i < j; i++, j--) {
             int16_t l = buf[i * 2], r = buf[i * 2 + 1];
             buf[i * 2] = buf[j * 2]; buf[i * 2 + 1] = buf[j * 2 + 1];
@@ -213,15 +218,18 @@ static void job_task(void *pv)
     }
     uint32_t F = sf.frames;
 
+    // op and param are SNAPSHOT: the Op row has no running guard, and a change
+    // during open_out ran another op's branch with this job's numbers (#128)
     ed_xf_t x = { .op = ed.op, .F = F, .gain = 1.0f, .fade = 0 };
+    float xparam = ed.param;
     x.in  = ed.in_pt < F ? ed.in_pt : 0;
     x.out = (ed.out_pt == 0 || ed.out_pt > F) ? F : ed.out_pt;
     if (x.out <= x.in) { x.in = 0; x.out = F; }     // a nonsense range means "all of it"
 
-    FILE *out = open_out(ed.op);
+    FILE *out = open_out(x.op);
     if (!out) { set_err("output create failed"); goto close_src; }
 
-    if (ed.op == OP_NORMALIZE) {
+    if (x.op == OP_NORMALIZE) {
         // pass 1: peak OVER THE RANGE ONLY — normalizing to a peak that lives
         // outside the selection would make the selection quieter, not louder
         int peak = 1;
@@ -239,24 +247,24 @@ static void job_task(void *pv)
         if (x.gain > 32.0f) x.gain = 32.0f;      // don't blow up a near-silent file
         span_fwd(src, &sf, out, buf, &x, 0, F, 50, 100);
 
-    } else if (ed.op == OP_REVERSE) {
+    } else if (x.op == OP_REVERSE) {
         ed_xf_t flat = { .op = OP_N, .in = 0, .out = 0, .F = F, .gain = 1.0f };
         span_fwd(src, &sf, out, buf, &flat, 0, x.in, 0, 10);        // head, as-is
         span_rev(src, &sf, out, buf, x.in, x.out, 10, 90);          // the selection, flipped
         span_fwd(src, &sf, out, buf, &flat, x.out, F, 90, 100);     // tail, as-is
 
-    } else if (ed.op == OP_FADEIN || ed.op == OP_FADEOUT) {
-        float ms = ed.param > 0 ? ed.param : 50.0f;
+    } else if (x.op == OP_FADEIN || x.op == OP_FADEOUT) {
+        float ms = xparam > 0 ? xparam : 50.0f;
         x.fade = (uint32_t)(ms * ED_RATE / 1000.0f);
         if (x.fade > x.out - x.in) x.fade = x.out - x.in;
         span_fwd(src, &sf, out, buf, &x, 0, F, 0, 100);
 
-    } else if (ed.op == OP_CROP) {
+    } else if (x.op == OP_CROP) {
         ed_xf_t flat = { .op = OP_N, .in = 0, .out = 0, .F = F, .gain = 1.0f };
         span_fwd(src, &sf, out, buf, &flat, x.in, x.out, 0, 100);   // the range, alone
 
-    } else if (ed.op == OP_TRIM) {
-        int thr = ed.param > 0 ? (int)ed.param : 150;   // ~0.5% FS
+    } else if (x.op == OP_TRIM) {
+        int thr = xparam > 0 ? (int)xparam : 150;   // ~0.5% FS
         // pass 1: find first/last non-silent frame INSIDE the range
         uint32_t span = x.out - x.in;
         uint32_t first = x.out, last = x.in, idx = x.in;
@@ -285,7 +293,7 @@ static void job_task(void *pv)
     if (s_io_err) { fail_output(ed.out); goto close_src; }
     ed.progress = 100;
     ed.state = ED_DONE;
-    ESP_LOGI(TAG, "%s: %s [%u,%u) -> %s", ed_op_names[ed.op], ed.src,
+    ESP_LOGI(TAG, "%s: %s [%u,%u) -> %s", ed_op_names[x.op], ed.src,
              (unsigned)x.in, (unsigned)x.out, ed.out);
 
 close_src:
@@ -395,7 +403,8 @@ int editor_load(const char *name)
     ed.state = ED_IDLE;
     ed.err[0] = 0;
     ed.out[0] = 0;
-    if (xTaskCreate(scan_task, "editor_scan", 8192, NULL, 4, NULL) != pdPASS) { s_scanning = false; return -1; }
+    ed.scanning = true;                   // raised BEFORE the task runs, so Live never sees it false (#33)
+    if (xTaskCreate(scan_task, "editor_scan", 8192, NULL, 4, NULL) != pdPASS) { ed.scanning = false; s_scanning = false; return -1; }
     return 0;
 }
 
@@ -589,6 +598,10 @@ int editor_slice(int n)      { return start_clip(CJ_SLICE, n); }
 // ---- machine (silent) -------------------------------------------------------
 static esp_err_t editor_start(void)
 {
+    // a job or scan that outlived the last stop still reads and writes ed:
+    // the memset wiped it, and ed_claim then refused every action until it
+    // ended (#130 — fsnd_start's rule)
+    if (s_running || s_scanning) { ESP_LOGW(TAG, "previous job still running — state kept"); s_play = NULL; return ESP_OK; }
     memset(&ed, 0, sizeof(ed));
     ed.state = ED_IDLE;
     s_play = NULL;                        // created on first audition

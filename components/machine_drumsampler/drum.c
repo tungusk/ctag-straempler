@@ -832,7 +832,10 @@ static void drum_preset_load(const cJSON *node)
                 if (lv > DR_LEVEL_MAX) lv = DR_LEVEL_MAX;
                 dr.pad[i].level = (uint16_t)lv;
             }
-            if ((j = cJSON_GetObjectItemCaseSensitive(p, "pan")) && cJSON_IsNumber(j)) dr.pad[i].pan = (uint8_t)j->valueint;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "pan")) && cJSON_IsNumber(j)) {
+                int pn = j->valueint;             // clamp, not a cast that wraps 300 to 44 (#76)
+                dr.pad[i].pan = (uint8_t)(pn < 0 ? 0 : (pn > 255 ? 255 : pn));
+            }
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "rvs")) && cJSON_IsNumber(j)) {
                 int rs = j->valueint;               // clamp, don't mask (house lesson)
                 dr.pad[i].rv_send = (uint8_t)(rs < 0 ? 0 : (rs > 255 ? 255 : rs));
@@ -869,7 +872,10 @@ static void drum_preset_load(const cJSON *node)
                 dr.pad[i].ly[1].trig_src = (j->valueint <= 0) ? DR_SRC_NONE
                                                               : ((j->valueint - 1) & 7);
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "cw")) && cJSON_IsNumber(j))
-                dr.pad[i].cw_mode = (uint8_t)(j->valueint % DR_CW_MODES);
+            {   // range-check: -1 % 5 was a negative cast to 255, a dead mode (#77)
+                int cw = j->valueint;
+                dr.pad[i].cw_mode = (uint8_t)((cw < 0 || cw >= DR_CW_MODES) ? DR_CW_LOOP : cw);
+            }
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "reps")) && cJSON_IsNumber(j)) {
                 int rp = j->valueint;
                 if (rp < 0) rp = 0;
