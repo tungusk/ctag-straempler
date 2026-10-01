@@ -152,11 +152,24 @@ static bool sidecar_cache_get(const char *id, int di, uint32_t mtime,
     return false;
 }
 
+// the /files folder index (one folder at a time), file scope so the boot
+// reserve can take it too
+typedef struct {
+    char     id[SAMPLE_ID_LEN];
+    uint32_t asize;          // audio container size (0 = none seen)
+    uint32_t amt;            // audio FAT date<<16|time
+    uint32_t jmt, jsz;       // sidecar stamp+size (bpm cache key)
+    uint8_t  jsn, ot;
+} fidx_t;
+#define FIDX_MAX 512
+static fidx_t *s_fidx = NULL;
+
 // boot: the cache lives forever — taken before any machine so it can't land
 // between machine slabs on the first /files call (09-30 PSRAM split)
 void rest_files_cache_reserve(void)
 {
     if (!s_scc) s_scc = heap_caps_calloc(SCC_N, sizeof(scc_ent_t), MALLOC_CAP_SPIRAM);
+    if (!s_fidx) s_fidx = heap_caps_malloc(FIDX_MAX * sizeof(fidx_t), MALLOC_CAP_SPIRAM);
 }
 
 static void sidecar_cache_put(const char *id, int di, uint32_t mtime,
@@ -222,16 +235,8 @@ static esp_err_t files_get_handler(httpd_req_t *req)
     // the same pass (the sample_list_recent lesson); the only per-entry
     // opens left are sidecar READS on bpm-cache misses. mtime is now the
     // FAT-packed date<<16|time — a sort key, which is all the web uses.
-    typedef struct {
-        char     id[SAMPLE_ID_LEN];
-        uint32_t asize;          // audio container size (0 = none seen)
-        uint32_t amt;            // audio FAT date<<16|time
-        uint32_t jmt, jsz;       // sidecar stamp+size (bpm cache key)
-        uint8_t  jsn, ot;
-    } fidx_t;
-    #define FIDX_MAX 512
-    static fidx_t *idx = NULL;   // PSRAM, one folder at a time (~22 KB)
-    if (!idx) idx = heap_caps_malloc(FIDX_MAX * sizeof(fidx_t), MALLOC_CAP_SPIRAM);
+    fidx_t *idx = s_fidx;        // PSRAM, one folder at a time (~26 KB), taken at boot
+    if (!idx) idx = s_fidx = heap_caps_malloc(FIDX_MAX * sizeof(fidx_t), MALLOC_CAP_SPIRAM);
     static const char *const fdirs[] = {"usr", "usr/REC", "usr/LOOPS", "usr/SLICES", "usr/DRUMS", "usr/KEYS", "usr/TAPE"};
 
     for (int di = 0; idx && di < JN_DIRS && !dead; di++) {
