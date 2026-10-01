@@ -127,13 +127,19 @@ static uint32_t read_slice_frames(FILE *f, const sampfile_t *sf, int s,
         sd_lock_give();
         if (got == 0) break;
         if (sl.reverse) {
-            for (uint32_t i = 0; i < got; i++) {
-                dst[(got_total + i) * 2]     = stage[(got - 1 - i) * 2];
-                dst[(got_total + i) * 2 + 1] = stage[(got - 1 - i) * 2 + 1];
+            // flip IN stage with a two-ended swap: callers pass dst == stage,
+            // and a one-way copy over the same buffer folds the chunk into a
+            // palindrome (the first half is never heard)
+            for (uint32_t i = 0, j = got - 1; i < j; i++, j--) {
+                int16_t l = stage[i * 2], r = stage[i * 2 + 1];
+                stage[i * 2]     = stage[j * 2];
+                stage[i * 2 + 1] = stage[j * 2 + 1];
+                stage[j * 2]     = l;
+                stage[j * 2 + 1] = r;
             }
-        } else {
-            memcpy(dst + got_total * 2, stage, got * 4);
         }
+        if (dst + got_total * 2 != stage)
+            memcpy(dst + got_total * 2, stage, got * 4);
         got_total += got;
         if (got < want) break;
     }
