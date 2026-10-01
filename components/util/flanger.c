@@ -40,6 +40,9 @@ esp_err_t flanger_init(flanger_t *g)
         g->depth = 0.6f;
         g->fb    = 0.25f;        // gentle default: high feedback rings up on held tones
         g->wet   = 0.0f;
+        // the host's sync/div survive a FRESH init too: Tape sets them at start
+        // without params, and this memset wiped them on first use (#170)
+        g->sync = keep.sync; g->div = keep.div;
     }
     g->params = true;
     __sync_synchronize();        // everything above lands before the publish
@@ -116,6 +119,7 @@ void flanger_block_f(flanger_t *g, float *buf, int frames)
         lfo += lfo_step;
         float rp  = (float)w - dl; while (rp < 0) rp += cap;
         int   i0  = (int)rp; float fr = rp - (float)i0;
+        if (i0 >= cap) i0 -= cap;   // rp + cap can ROUND to exactly cap: one past the line (#8)
         int   i1  = i0 + 1; if (i1 >= cap) i1 -= cap;
         float tl  = g->bufL[i0] * (1.0f - fr) + g->bufL[i1] * fr;
         float tr  = g->bufR[i0] * (1.0f - fr) + g->bufR[i1] * fr;

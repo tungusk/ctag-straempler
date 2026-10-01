@@ -50,6 +50,7 @@ esp_err_t fxdelay_init(fxdelay_t *d)
         d->fb   = 0.35f;
         d->wet  = 0.0f;              // silent until a host opens the mix
         d->damp = 0.25f;
+        d->sync = keep.sync; d->div = keep.div;   // the host's choice survives (#170)
     }
     d->params = true;
     __sync_synchronize();        // everything above lands before the publish

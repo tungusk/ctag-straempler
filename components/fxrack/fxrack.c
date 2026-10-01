@@ -412,7 +412,9 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rv")) && cJSON_IsNumber(j)) {
         int m = j->valueint; if (m < 0 || m >= RV_N_MODES) m = RV_OFF;
         if (m != RV_OFF && !rk->rv->slab && reverb_init(rk->rv) != ESP_OK) m = RV_OFF;
-        reverb_set_mode(rk->rv, m);
+        // an unchanged mode keeps running: set_mode fades, clears the tank and
+        // fades back, so every web Apply cut the tail (#171)
+        if (m != rk->rv->mode) reverb_set_mode(rk->rv, m);
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx")) && cJSON_IsNumber(j)) reverb_set_mix(rk->rv, (float)j->valueint / 100.0f);
     // slots, or migrate from legacy on/off bools. Parsed into a LOCAL first and
@@ -442,6 +444,11 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
         if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "dly"))  && s < FX_NSLOT_GEN) kind[s++] = FXK_DLY;
         while (s < FX_NSLOT_GEN) kind[s++] = FXK_OFF;
     }
+    // one instance per kind (slot_set's rule): a preset naming the same effect
+    // in both slots ran that one struct twice per block (#11)
+    for (int s = 1; s < FX_NSLOT_GEN; s++)
+        for (int e = 0; e < s; e++)
+            if (kind[s] != FXK_OFF && kind[s] == kind[e]) kind[s] = FXK_OFF;
     for (int s = 0; s < FX_NSLOT_GEN; s++) {   // ensure buffers exist for slots that need them
         if (kind[s] == FXK_DLY && !rk->dly->bufL && fxdelay_init(rk->dly) != ESP_OK) kind[s] = FXK_OFF;
         if (kind[s] == FXK_FLG && !rk->flg->bufL && flanger_init(rk->flg) != ESP_OK) kind[s] = FXK_OFF;
