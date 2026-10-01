@@ -64,6 +64,10 @@ Hands, not ears — each is a crash or hang that was fixed in code but not force
 - **Tape Len during a long autosave.** Change Setup > Tape Len right after
   punching out a 30 s take: it waits for the save instead of freeing the banks
   under it.
+- **Knob settings that never saved, now do** (tier 2, K): Granular position /
+  pitch / level, Drums' knob-7 attack / start / loop per pad, Slicer's FX box,
+  reverb mode and mix, and a Grid/Transient choice on a sample with an `.OT`.
+  Set them, power-cycle, check they came back.
 
 ## Real bug, still open — promoted out of the old "results" section
 
