@@ -86,7 +86,9 @@ static esp_err_t looper_start(void)
             lp.tr[i].buf = heap_caps_malloc(LP_BUF_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
         }
         if (!lp.tr[i].buf) {
-            ESP_LOGE("LOOPER", "PSRAM alloc failed for track %d", i);
+            ESP_LOGE("LOOPER", "PSRAM alloc failed for track %d (free %u, largest %u)", i,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
             // free the tracks that did allocate: activate() won't call stop() on a
             // failed start, and the next start's memset would drop the pointers
             for (int k = 0; k < i; k++) { free(lp.tr[k].buf); lp.tr[k].buf = NULL; }

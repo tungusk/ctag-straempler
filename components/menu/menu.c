@@ -648,9 +648,14 @@ void menuProcessEvent(int ev, void * ev_data){
                 autosave_kick();
                 // re-enter the page, as EV_REMOTE_SETUP does: a host caches its
                 // rows (the FX page's kind and params) and a preset can change
-                // what they point at (review #9)
+                // what they point at (review #9). Not on the machine's main /
+                // live page: no cached rows there, and a full repaint right
+                // after a machine switch flashed the screen twice (Arlo 09-30)
+                const machine_ui_t *mui = machine_ui();
+                int cur = (_ms && _ms->active_item) ? _ms->active_item->id : -1;
+                bool live = (cur == M_MAIN) || (mui && mui->boot_target && cur == mui->boot_target);
                 ui_ev_ts_t re = { .event = EV_ENTERED_MENU, .event_data = NULL };
-                if(s_ev_queue) xQueueSend(s_ev_queue, &re, 0);
+                if(!live && s_ev_queue) xQueueSend(s_ev_queue, &re, 0);
             }
         }
         free(js);
