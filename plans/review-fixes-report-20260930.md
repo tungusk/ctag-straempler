@@ -46,6 +46,18 @@ New, pre-existing, not fixed: with Deck or DoubleDecker active the internal DMA
 buffer for reading AUTOSAVE.JSN cannot be allocated, so autosave skips — logged
 under theme J.
 
+## Tier 3
+
+| Commit | Theme | Findings | Checked by |
+|---|---|---|---|
+| `716553e` | Q web Apply / loaders | #176 #177 #178 #179 #45 #44 #163 #125 | bench; page items by a Sonnet helper, diff reviewed, `node --check` |
+| `a0d82c1` | S long-filename leftovers, query decoding | #39 #43 #183 #181 #185 #131 #19 #113 | long rename, download name, `%2D`, delete-404 on the unit |
+| `3a045c3` | T Drums | #73 #74 #75 | bench |
+| `1069aa3` | X sample loading | #15 #21 #16 | bench |
+| `6678b95` | Z zero-tick waits, broadcast | #150 #2 #5 #152 #153 | short trig spans 2 ticks |
+
+Final bench on `6678b95` (`--audio`): 0 fail, one known Keys zone-load note.
+
 ## Bench
 
 - Final run on `511b9f6`: **0 fail**. Click candidates all match the 09-16 runs
@@ -72,4 +84,4 @@ under theme J.
 
 ## Next
 
-Tier 3: Q, S, T, X, Z (and the tier 3 themes not in Fable's list: R U V W Y, menu/display).
+Not yet done: the tier 3 themes outside Fable's list — R (web page, other), U (Sampler), V (Deck/DoubleDecker), W (FX and DSP), Y (Keys/Synth/Looper/Radio clamps), Menu and display — and the two new findings (import task under Tracker, AUTOSAVE read under the decks).

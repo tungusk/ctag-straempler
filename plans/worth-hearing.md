@@ -68,6 +68,11 @@ Hands, not ears — each is a crash or hang that was fixed in code but not force
   pitch / level, Drums' knob-7 attack / start / loop per pad, Slicer's FX box,
   reverb mode and mix, and a Grid/Transient choice on a sample with an `.OT`.
   Set them, power-cycle, check they came back.
+- **Web Apply keeps device-side edits** (tier 3, Q): turn a knob on the unit,
+  then Apply an unrelated change from the page — the knob's value should stay.
+- **Drums reverb Send Tap = post** with two pads at different sends (T): the
+  tail should sound as before, without crackle. And a DAW-exported one-shot
+  (with a LIST chunk) should end without a click (X).
 
 ## Real bug, still open — promoted out of the old "results" section
 
