@@ -27,8 +27,11 @@ esp_err_t fxdelay_init(fxdelay_t *d)
     fxdelay_t keep = *d;
     memset(d, 0, sizeof(*d));
     // one slab, two lines back to back (calloc = silence, no click on first read)
-    d->bufL = heap_caps_calloc((size_t)FXD_MAX_FR * 2, sizeof(float), MALLOC_CAP_SPIRAM);
-    if (!d->bufL) {
+    // bufL is what process() gates on, and the audio task may be running it on
+    // the other core: fill in cap/bufR/params first and publish bufL LAST
+    // (review #12)
+    float *slab = heap_caps_calloc((size_t)FXD_MAX_FR * 2, sizeof(float), MALLOC_CAP_SPIRAM);
+    if (!slab) {
         ESP_LOGE(TAG, "PSRAM slab alloc failed (%u KB)",
                  (unsigned)((size_t)FXD_MAX_FR * 2 * sizeof(float) / 1024));
         *d = keep;
@@ -36,7 +39,7 @@ esp_err_t fxdelay_init(fxdelay_t *d)
         return ESP_ERR_NO_MEM;
     }
     d->cap  = FXD_MAX_FR;
-    d->bufR = d->bufL + d->cap;
+    d->bufR = slab + d->cap;
     d->w    = 0;
     if (keep.params) {
         d->len = (keep.len >= 1 && keep.len < d->cap) ? keep.len : FXD_RATE * 3 / 8;
@@ -49,6 +52,8 @@ esp_err_t fxdelay_init(fxdelay_t *d)
         d->damp = 0.25f;
     }
     d->params = true;
+    __sync_synchronize();        // everything above lands before the publish
+    d->bufL = slab;
     ESP_LOGI(TAG, "slab %u KB PSRAM",
              (unsigned)((size_t)FXD_MAX_FR * 2 * sizeof(float) / 1024));
     return ESP_OK;

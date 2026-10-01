@@ -335,8 +335,11 @@ void fxrack_menu_val(const fxrack_t *rk, int slot, int param, char *v, size_t n)
         snprintf(v, n, "%s", slot == 2 ? reverb_mode_name(rk->rv->mode) : gen_desc[rk->slot[slot]].name);
         return;
     }
-    if (slot == 2) rev_desc.p[param].fmt(rk, v, n);
-    else gen_desc[rk->slot[slot]].p[param].fmt(rk, v, n);
+    // the host caches its rows: a preset load can change the slot's kind under
+    // them (Off has no table at all), so a stale param must not index past it
+    const fx_desc_t *d = slot == 2 ? &rev_desc : &gen_desc[rk->slot[slot]];
+    if (param >= d->np) return;
+    d->p[param].fmt(rk, v, n);
 }
 
 void fxrack_menu_adj(const fxrack_t *rk, int slot, int param, int dir)
@@ -359,8 +362,9 @@ void fxrack_menu_adj(const fxrack_t *rk, int slot, int param, int dir)
         }
         return;
     }
-    if (slot == 2) rev_desc.p[param].adj(rk, dir);
-    else gen_desc[rk->slot[slot]].p[param].adj(rk, dir);
+    const fx_desc_t *d = slot == 2 ? &rev_desc : &gen_desc[rk->slot[slot]];
+    if (param >= d->np) return;                        // stale row (see fxrack_menu_val)
+    d->p[param].adj(rk, dir);
 }
 
 // ---- autosave (owns the whole FX serialization) -------------------------------
@@ -411,26 +415,31 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
         reverb_set_mode(rk->rv, m);
     }
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx")) && cJSON_IsNumber(j)) reverb_set_mix(rk->rv, (float)j->valueint / 100.0f);
-    // slots, or migrate from legacy on/off bools
+    // slots, or migrate from legacy on/off bools. Parsed into a LOCAL first and
+    // published per slot only after its buffers exist (slot_set's order): the
+    // audio task is running process() on the other core, and a kind stored
+    // before its init ran against a delay/flanger with cap 0 (review #12)
+    int8_t kind[FX_NSLOT_GEN];
     cJSON *sl = cJSON_GetObjectItemCaseSensitive(node, "fxsl");
     if (cJSON_IsArray(sl)) {
         for (int s = 0; s < FX_NSLOT_GEN; s++) {
             cJSON *si = cJSON_GetArrayItem(sl, s);
             int v = cJSON_IsNumber(si) ? si->valueint : FXK_OFF;
-            rk->slot[s] = (v < 0 || v >= FXK_NGEN) ? FXK_OFF : (int8_t)v;
-            if (rk->no_filter && (v == FXK_FILT || v == FXK_BAND)) rk->slot[s] = FXK_OFF;
+            kind[s] = (v < 0 || v >= FXK_NGEN) ? FXK_OFF : (int8_t)v;
+            if (rk->no_filter && (v == FXK_FILT || v == FXK_BAND)) kind[s] = FXK_OFF;
         }
     } else {
         int s = 0;
-        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "od"))   && s < FX_NSLOT_GEN) rk->slot[s++] = FXK_OD;
-        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "flg"))  && s < FX_NSLOT_GEN) rk->slot[s++] = FXK_FLG;
-        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "trem")) && s < FX_NSLOT_GEN) rk->slot[s++] = FXK_TREM;
-        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "dly"))  && s < FX_NSLOT_GEN) rk->slot[s++] = FXK_DLY;
-        while (s < FX_NSLOT_GEN) rk->slot[s++] = FXK_OFF;
+        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "od"))   && s < FX_NSLOT_GEN) kind[s++] = FXK_OD;
+        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "flg"))  && s < FX_NSLOT_GEN) kind[s++] = FXK_FLG;
+        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "trem")) && s < FX_NSLOT_GEN) kind[s++] = FXK_TREM;
+        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "dly"))  && s < FX_NSLOT_GEN) kind[s++] = FXK_DLY;
+        while (s < FX_NSLOT_GEN) kind[s++] = FXK_OFF;
     }
     for (int s = 0; s < FX_NSLOT_GEN; s++) {   // ensure buffers exist for slots that need them
-        if (rk->slot[s] == FXK_DLY && !rk->dly->bufL && fxdelay_init(rk->dly) != ESP_OK) rk->slot[s] = FXK_OFF;
-        if (rk->slot[s] == FXK_FLG && !rk->flg->bufL && flanger_init(rk->flg) != ESP_OK) rk->slot[s] = FXK_OFF;
+        if (kind[s] == FXK_DLY && !rk->dly->bufL && fxdelay_init(rk->dly) != ESP_OK) kind[s] = FXK_OFF;
+        if (kind[s] == FXK_FLG && !rk->flg->bufL && flanger_init(rk->flg) != ESP_OK) kind[s] = FXK_OFF;
+        rk->slot[s] = kind[s];
     }
     // Not gated on the slab either (see the flanger note below): the delay's
     // settings round-trip whether or not it sits in a slot. dlyt <= 0 was written

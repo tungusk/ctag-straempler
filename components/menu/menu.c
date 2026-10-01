@@ -631,6 +631,11 @@ void menuProcessEvent(int ev, void * ev_data){
                 m->preset_load(node);
                 cJSON_Delete(node);
                 autosave_kick();
+                // re-enter the page, as EV_REMOTE_SETUP does: a host caches its
+                // rows (the FX page's kind and params) and a preset can change
+                // what they point at (review #9)
+                ui_ev_ts_t re = { .event = EV_ENTERED_MENU, .event_data = NULL };
+                if(s_ev_queue) xQueueSend(s_ev_queue, &re, 0);
             }
         }
         free(js);

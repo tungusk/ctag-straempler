@@ -19,8 +19,11 @@ esp_err_t flanger_init(flanger_t *g)
     // its slab: keep the user's settings (code review 2.2), defaults only when fresh
     flanger_t keep = *g;
     memset(g, 0, sizeof(*g));
-    g->bufL = heap_caps_calloc((size_t)FLG_MAX_FR * 2, sizeof(float), MALLOC_CAP_SPIRAM);
-    if (!g->bufL) {
+    // bufL is what process() gates on, and the audio task may be running it on
+    // the other core: fill in cap/bufR/params first and publish bufL LAST
+    // (review #12)
+    float *slab = heap_caps_calloc((size_t)FLG_MAX_FR * 2, sizeof(float), MALLOC_CAP_SPIRAM);
+    if (!slab) {
         ESP_LOGE(TAG, "PSRAM slab alloc failed (%u B)",
                  (unsigned)((size_t)FLG_MAX_FR * 2 * sizeof(float)));
         *g = keep;
@@ -28,7 +31,7 @@ esp_err_t flanger_init(flanger_t *g)
         return ESP_ERR_NO_MEM;
     }
     g->cap  = FLG_MAX_FR;
-    g->bufR = g->bufL + g->cap;
+    g->bufR = slab + g->cap;
     if (keep.params) {
         g->rate = keep.rate; g->depth = keep.depth; g->fb = keep.fb; g->wet = keep.wet;
         g->sync = keep.sync; g->div = keep.div; g->phase = keep.phase;
@@ -39,6 +42,8 @@ esp_err_t flanger_init(flanger_t *g)
         g->wet   = 0.0f;
     }
     g->params = true;
+    __sync_synchronize();        // everything above lands before the publish
+    g->bufL = slab;
     return ESP_OK;
 }
 
