@@ -252,7 +252,8 @@ static void reader_task(void *pv)
                 scan_file(f, &sf, stage);
                 int otn = slicer_parse_ot(sl.sample, sl.len, sl.ot_pt, SL_OT_SLICES + 1);
                 sl.ot_n = otn > 0 ? otn : 0;
-                sl.ot_present = sl.ot_active = (otn > 0);
+                sl.ot_present = (otn > 0);
+                sl.ot_active = sl.ot_present && !sl.ot_off;   // a saved Grid/Transient pick stands
                 recompute_slices();
                 build_heads(f, &sf, stage);
                 sl.cur = 0;
@@ -675,6 +676,12 @@ static cJSON *slicer_preset_save(void)
     cJSON_AddBoolToObject(o, "auto", sl.auto_on);
     cJSON_AddBoolToObject(o, "reverse", sl.reverse);
     cJSON_AddNumberToObject(o, "pcv", sl.pitch_src);
+    // the FX box, reverb and the OT/grid choice were never saved (review #167);
+    // "rv"/"rvmx" use the fxrack's key names and scale
+    cJSON_AddBoolToObject(o, "fx", sl.fx_on);
+    cJSON_AddNumberToObject(o, "rv", sl.fx_rv.mode);
+    cJSON_AddNumberToObject(o, "rvmx", (int)(sl.fx_rvmix * 100.0f + 0.5f));
+    cJSON_AddBoolToObject(o, "otoff", sl.ot_off);
     cvmtx_save(&sl.mtx, o);                 // "mxs"/"mxa"/"mxm"
     return o;
 }
@@ -689,6 +696,18 @@ static void slicer_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "auto")))    sl.auto_on = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "reverse"))) sl.reverse = cJSON_IsTrue(j);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "pcv")) && cJSON_IsNumber(j)) sl.pitch_src = (int8_t)j->valueint;
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "fx")))      sl.fx_on = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rv")) && cJSON_IsNumber(j)) {
+        int m = j->valueint; if (m < 0 || m >= RV_N_MODES) m = RV_OFF;
+        if (m != RV_OFF && !sl.fx_rv.slab && reverb_init(&sl.fx_rv) != ESP_OK) m = RV_OFF;
+        reverb_set_mode(&sl.fx_rv, m);
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "rvmx")) && cJSON_IsNumber(j)) {
+        int x = j->valueint; if (x < 0) x = 0; if (x > 100) x = 100;
+        sl.fx_rvmix = (float)x / 100.0f;
+        reverb_set_mix(&sl.fx_rv, sl.fx_rvmix);
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "otoff")))   sl.ot_off = cJSON_IsTrue(j);
     cvmtx_load(&sl.mtx, node);
     cvmtx_rearm(&sl.mtx);          // knobs recapture against the loaded values
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])

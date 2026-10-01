@@ -420,7 +420,13 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
     // audio task is running process() on the other core, and a kind stored
     // before its init ran against a delay/flanger with cap 0 (review #12)
     int8_t kind[FX_NSLOT_GEN];
+    for (int s = 0; s < FX_NSLOT_GEN; s++) kind[s] = rk->slot[s];
     cJSON *sl = cJSON_GetObjectItemCaseSensitive(node, "fxsl");
+    // a body with neither "fxsl" nor a legacy flag is a PARTIAL update: keep
+    // the slots (it used to switch both Off and free their slabs — cvmtx_load's
+    // partial-update rule, review #162)
+    bool legacy = cJSON_GetObjectItemCaseSensitive(node, "od") || cJSON_GetObjectItemCaseSensitive(node, "flg") ||
+                  cJSON_GetObjectItemCaseSensitive(node, "trem") || cJSON_GetObjectItemCaseSensitive(node, "dly");
     if (cJSON_IsArray(sl)) {
         for (int s = 0; s < FX_NSLOT_GEN; s++) {
             cJSON *si = cJSON_GetArrayItem(sl, s);
@@ -428,7 +434,7 @@ void fxrack_load(const fxrack_t *rk, const cJSON *node)
             kind[s] = (v < 0 || v >= FXK_NGEN) ? FXK_OFF : (int8_t)v;
             if (rk->no_filter && (v == FXK_FILT || v == FXK_BAND)) kind[s] = FXK_OFF;
         }
-    } else {
+    } else if (legacy) {
         int s = 0;
         if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "od"))   && s < FX_NSLOT_GEN) kind[s++] = FXK_OD;
         if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(node, "flg"))  && s < FX_NSLOT_GEN) kind[s++] = FXK_FLG;

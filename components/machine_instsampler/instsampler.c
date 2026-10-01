@@ -84,8 +84,16 @@ static bool arena_ensure(void)
     return true;
 }
 
+// zones a preset NAMED but that did not load (arena short, file missing): kept
+// verbatim so the autosave still carries them and the next load retries,
+// instead of silently dropping them from the patch (review #164). Cleared with
+// the zones themselves (Load Sample, Clear Zones, a preset load).
+static cJSON *s_unloaded_zones;
+
 void keys_clear_zones(void)
 {
+    cJSON_Delete(s_unloaded_zones);
+    s_unloaded_zones = NULL;
     // keys_process re-reads frames/buf per sample: zero the length (and raise
     // loading) first, let the block in flight finish, THEN drop the pointers —
     // the drum_clear_layer order. buf = NULL first read through NULL mid-block.
@@ -668,6 +676,8 @@ static cJSON *keys_preset_save(void)
         cJSON_AddNumberToObject(e, "lx", (double)zz->loop_xfade);
         cJSON_AddItemToArray(zs, e);
     }
+    const cJSON *ue = NULL;                    // zones named but not loaded (#164)
+    cJSON_ArrayForEach(ue, s_unloaded_zones) cJSON_AddItemToArray(zs, cJSON_Duplicate(ue, 1));
     cJSON_AddStringToObject(o, "smp", z->sample);
     cJSON_AddNumberToObject(o, "root", z->root);
     cJSON_AddNumberToObject(o, "fn", z->fine);      // cents-as-semitones (auto-tune)
@@ -753,7 +763,12 @@ static void keys_preset_load(const cJSON *node)
         cJSON_ArrayForEach(e, zs) {
             const cJSON *sj = cJSON_GetObjectItemCaseSensitive(e, "smp");
             if (!cJSON_IsString(sj) || !sj->valuestring[0]) continue;
-            if (keys_load_zone_at(-1, sj->valuestring) != 0) continue;
+            if (keys_load_zone_at(-1, sj->valuestring) != 0) {
+                ESP_LOGW("keys", "zone %s did not load — kept in the patch", sj->valuestring);
+                if (!s_unloaded_zones) s_unloaded_zones = cJSON_CreateArray();
+                if (s_unloaded_zones) cJSON_AddItemToArray(s_unloaded_zones, cJSON_Duplicate(e, 1));
+                continue;
+            }
             is_zone_t *zz = &inst.zone[inst.nzones - 1];
             const cJSON *q;
             if ((q = cJSON_GetObjectItemCaseSensitive(e, "root")) && cJSON_IsNumber(q))

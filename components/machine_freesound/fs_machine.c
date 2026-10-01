@@ -793,9 +793,10 @@ static cJSON *fsnd_preset_save(void)
 static void load_str_array(const cJSON *node, const char *key,
                            char dst[][FS_QUERY_LEN], int max, int *n_out)
 {
-    *n_out = 0;
+    // an absent key is a partial update: leave the list alone (review #166)
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(node, key);
     if (!cJSON_IsArray(arr)) return;
+    *n_out = 0;
     cJSON *it = NULL;
     cJSON_ArrayForEach(it, arr) {
         if (*n_out >= max) break;
@@ -818,7 +819,7 @@ static void fsnd_preset_load(const cJSON *node)
     if (j && cJSON_IsString(j))
         strlcpy(fsm.last_query, j->valuestring, sizeof(fsm.last_query));
     cJSON *ap = cJSON_GetObjectItemCaseSensitive(node, "autoplay");
-    fsm.autoplay = ap ? cJSON_IsTrue(ap) : true;
+    if (ap) fsm.autoplay = cJSON_IsTrue(ap);
     load_str_array(node, "recents", fsm.recents, FS_RECENTS, &fsm.n_recents);
     load_str_array(node, "saved",   fsm.saved,   FS_SAVED,   &fsm.n_saved);
 }

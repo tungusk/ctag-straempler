@@ -669,12 +669,15 @@ int drum_load_layer(int pad, int ly, const char *name)
             ESP_LOGE("DRUM", "PSRAM full: pad %d layer %c (%u KB free)",
                      pad + 1, 'A' + ly,
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
-            L->sample[0] = 0;
+            // keep the NAME (len is 0, so nothing plays): the autosave still
+            // carries it and the next boot retries, instead of the kit quietly
+            // losing the pad (review #164)
+            strlcpy(L->sample, name, sizeof(L->sample));
             return -1;
         }
     }
     uint32_t n = sample_load(name, L->buf, DR_MAX_FRAMES, true);   // mono
-    if (n == 0) { L->sample[0] = 0; return -1; }
+    if (n == 0) { strlcpy(L->sample, name, sizeof(L->sample)); return -1; }   // as above (#164)
     strncpy(L->sample, name, sizeof(L->sample) - 1);
     L->sample[sizeof(L->sample) - 1] = 0;
     L->len = n;
@@ -737,6 +740,10 @@ static cJSON *drum_preset_save(void)
         cJSON_AddNumberToObject(p, "pan", dr.pad[i].pan);
         cJSON_AddNumberToObject(p, "rvs", dr.pad[i].rv_send);
         cJSON_AddNumberToObject(p, "dec", dr.pad[i].decay_ms);
+        // the other knob-7 targets: set by knob, flagged dirty, never saved (#168)
+        cJSON_AddNumberToObject(p, "atk", dr.pad[i].attack_ms);
+        cJSON_AddNumberToObject(p, "sto", dr.pad[i].start_off);
+        cJSON_AddNumberToObject(p, "lpm", dr.pad[i].loop_ms);
         cJSON_AddBoolToObject(p, "en", dr.pad[i].enabled);
         cJSON_AddNumberToObject(p, "src", dr.pad[i].ly[0].trig_src + 1);  // CV number, 1-based
         cJSON_AddBoolToObject(p, "lay", dr.pad[i].layered);               // B layer on?
@@ -820,6 +827,21 @@ static void drum_preset_load(const cJSON *node)
                 if (d < 0) d = 0;
                 if (d > 5000) d = 5000;
                 dr.pad[i].decay_ms = (uint16_t)d;
+            }
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "atk")) && cJSON_IsNumber(j)) {
+                int a = j->valueint;
+                dr.pad[i].attack_ms = (uint16_t)(a < 0 ? 0 : a > DR_ATTACK_MAX ? DR_ATTACK_MAX : a);
+            }
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "sto")) && cJSON_IsNumber(j)) {
+                int o = j->valueint;
+                dr.pad[i].start_off = (uint8_t)(o < 0 ? 0 : o > DR_START_MAX ? DR_START_MAX : o);
+            }
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lpm")) && cJSON_IsNumber(j)) {
+                int l = j->valueint;              // 0 = straight through, else MIN..MAX
+                if (l <= 0) l = 0;
+                else if (l < DR_LOOP_MIN_MS) l = DR_LOOP_MIN_MS;
+                else if (l > DR_LOOP_MAX_MS) l = DR_LOOP_MAX_MS;
+                dr.pad[i].loop_ms = (uint16_t)l;
             }
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "en")))                       dr.pad[i].enabled = cJSON_IsTrue(j);
             // src is 1-based; 0 (or absent) means NONE, which is how a -1 round-trips

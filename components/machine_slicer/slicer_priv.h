@@ -109,6 +109,7 @@ typedef struct {
     int      ot_n;
     volatile bool ot_present;
     volatile bool ot_active;
+    bool     ot_off;              // the user chose Grid/Transient over this sample's .OT (persisted, #167)
 
     // one-shot commands (engine consumes)
     volatile uint8_t cmd_fire;

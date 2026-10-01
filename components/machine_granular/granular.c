@@ -243,6 +243,11 @@ static cJSON *granular_preset_save(void)
     cJSON_AddNumberToObject(o, "density", gr.density);
     cJSON_AddNumberToObject(o, "spray", gr.spray);
     cJSON_AddNumberToObject(o, "spread", gr.spread);
+    // knob-set since the matrix move (a knob only writes once moved): without
+    // these the cloud came back at the sample start, unity pitch (review #169)
+    cJSON_AddNumberToObject(o, "pos", gr.position);
+    cJSON_AddNumberToObject(o, "pitch", gr.pitch_cv);
+    cJSON_AddNumberToObject(o, "level", gr.level);
     cJSON_AddStringToObject(o, "sample", gr.sample);
     cvmtx_save(&gr.mtx, o);
     return o;
@@ -260,6 +265,9 @@ static void granular_preset_load(const cJSON *node)
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "density")) && cJSON_IsNumber(j))  gr.density = gr_clampi(j->valueint, 1, 120);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "spray")) && cJSON_IsNumber(j))    gr.spray = gr_clampi(j->valueint, 0, 100);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "spread")) && cJSON_IsNumber(j))   gr.spread = gr_clampi(j->valueint, 0, 100);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "pos")) && cJSON_IsNumber(j))      gr.position = gr_clampi(j->valueint, 0, 4095);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "pitch")) && cJSON_IsNumber(j))    gr.pitch_cv = gr_clampi(j->valueint, 0, 4095);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "level")) && cJSON_IsNumber(j))    gr.level = gr_clampi(j->valueint, 0, 255);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])
         granular_load(j->valuestring);
     cvmtx_load(&gr.mtx, node);

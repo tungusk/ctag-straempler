@@ -314,6 +314,7 @@ static void cycle_target(int dir){
     else         { if(n == 0) n = 128; else if(n <= 8) n = 0; else n /= 2; }
     sl.slice_target = n;
     sl.ot_active = false;      // dialing a count = leaving OT mode
+    if (sl.ot_present) sl.ot_off = true;   // ...and that choice is saved
     slicer_reslice();
 }
 
@@ -323,6 +324,7 @@ static void cycle_mode(int dir){
     int nmodes = sl.ot_present ? 3 : 2;
     m = (m + (dir > 0 ? 1 : nmodes - 1)) % nmodes;
     sl.ot_active = (m == 2);
+    if (sl.ot_present) sl.ot_off = (m != 2);
     sl.transient_mode = (m == 1);
     slicer_reslice();
 }
@@ -405,7 +407,8 @@ static int slicer_setup_handler(int it_id, int event, void *ev_data){
 static int slicer_load_handler(int it_id, int event, void *ev_data){
     if (event == EV_ENTERED_MENU){ sample_browser_enter_dir(false, "Load Sample", sl.sample, SAMPLE_DIR_SLICES); return 0; }
     int r = sample_browser_event(event);
-    if (r == 1){ slicer_load((char*)sample_browser_selected()); return M_SLICER_SETUP; }
+    if (r == 1){ sl.ot_off = false;   // a fresh pick honours its own .OT
+                 slicer_load((char*)sample_browser_selected()); return M_SLICER_SETUP; }
     if (r == 2) return M_SLICER_SETUP;
     return 0;
 }
@@ -460,6 +463,7 @@ static int slicer_sens_handler(int it_id, int event, void *ev_data){
             sl.transient_mode = true;
             sl.slice_target = 0;
             sl.ot_active = false;      // as the count row does: an .OT map outranks transient (review 8.3)
+            if (sl.ot_present) sl.ot_off = true;
             slicer_reslice();
             sens_full_redraw();
             break;
