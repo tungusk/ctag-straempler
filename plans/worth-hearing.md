@@ -39,6 +39,32 @@ before this commit).
    dry; the tape preamp always prints. Listen for the doubling the route fix
    removed, and that `off` does not dump level.
 
+## From the 09-29 review fixes (added 09-30)
+
+Everything here was checked by bench and measurement first; these are the
+parts only a person playing can judge. Details: `plans/review-fixes-report-20260930.md`.
+
+5. **Reverse on Sampler and Slicer.** It used to play every ~93 ms chunk as a
+   mirror-fold (the second half backwards, then the same half forwards), so
+   reverse never sounded like reverse. A chirp proved the fix on Sampler; play a
+   take you know well both ways, and the same on Slicer (same code, not
+   captured).
+6. **Tape edits survive leaving.** Norm / Rev / Fade / Cut / Paste on a take,
+   switch machine, come back: the edited take should load, saved as a new
+   `CUT_`. A reboot before you leave still loses the last edit (deliberately —
+   saving per edit would mint a file per press); say if that bites.
+
+Hands, not ears — each is a crash or hang that was fixed in code but not forced:
+
+- **FX page during a web Apply** (Keys or Synth): sit on the FX1 page, Apply a
+  preset from the web that sets that slot to Off, turn the encoder. It used to be
+  able to read a NULL table; now the rows rebuild.
+- **Pull the SD card while Deck plays.** The reader used to spin and starve the
+  web page; it should now stay reachable.
+- **Tape Len during a long autosave.** Change Setup > Tape Len right after
+  punching out a 30 s take: it waits for the save instead of freeing the banks
+  under it.
+
 ## Real bug, still open — promoted out of the old "results" section
 
 **A multisample preset with reverb on drops its LAST zone when loaded.** The tank
