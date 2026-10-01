@@ -679,6 +679,10 @@ static esp_err_t deck_start(void)
     s_pending[0] = 0;
     s_track_req = false;
     dk.ring = heap_caps_malloc((size_t)DK_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    for (int t = 0; !dk.ring && t < 5; t++) {   // the last machine may still be releasing PSRAM
+        vTaskDelay(pdMS_TO_TICKS(100));
+        dk.ring = heap_caps_malloc((size_t)DK_RING_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    }
     if (!dk.ring) { ESP_LOGE(TAG, "PSRAM ring alloc failed"); return ESP_ERR_NO_MEM; }
     cvmtx_init(&dk.mtx, deck_mtx_labels, DKM_N, deck_mtx_defaults);
     // the two takeover styles Deck hand-rolled, now declared: the loop pair

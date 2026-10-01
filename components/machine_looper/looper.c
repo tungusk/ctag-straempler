@@ -77,7 +77,14 @@ static esp_err_t looper_start(void)
     lp.sel = 0;
     cvmtx_init(&lp.mtx, lp_mtx_labels, LPM_N, lp_mtx_defaults);
     for (int i = 0; i < LP_TRACKS; i++) {
+        // four separate 705 KB blocks is tight: the machine just stopped can
+        // still be releasing PSRAM from its own task for a moment — retry
+        // briefly before falling back to Stub (bench 09-30)
         lp.tr[i].buf = heap_caps_malloc(LP_BUF_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+        for (int t = 0; !lp.tr[i].buf && t < 5; t++) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            lp.tr[i].buf = heap_caps_malloc(LP_BUF_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+        }
         if (!lp.tr[i].buf) {
             ESP_LOGE("LOOPER", "PSRAM alloc failed for track %d", i);
             // free the tracks that did allocate: activate() won't call stop() on a
