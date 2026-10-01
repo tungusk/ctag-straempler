@@ -459,7 +459,7 @@ static void draw_crop_readout(void)
     // changes nothing on screen, so this is the whole feedback channel)
     if (tp.drop_ticks > 0 && tp.drop_note[0]) {
         char d[20];
-        bool bad = tp.drop_spoiled && !tp.save_busy;    // recorded over mid-write
+        bool bad = (tp.drop_spoiled || !tp.save_ok) && !tp.save_busy;   // recorded over mid-write, or the write failed
         snprintf(d, sizeof(d), tp.save_busy ? ">%s..." : bad ? "!%s" : ">%s", tp.drop_note);
         _fg = bad ? (color_t){235, 165, 60}             // amber = the file is a blend
                   : (color_t){120, 225, 150};           // green = it went to the card
@@ -789,11 +789,17 @@ static const setup_item_t tape_setup_items[] = {
 // (FX rack slot editor state s_cur_slot / s_setup_return declared up top)
 
 static const char *stopped_or(const char *s) { return (!tp.playing && !tp.recording) ? s : "stop first"; }
+// the buffer edits also wait out a take being written (they refuse meanwhile)
+static const char *edit_or(const char *s) { return tp.save_busy ? "saving..." : stopped_or(s); }
+static bool s_cut_refused;            // last Cut found too little room for the clipboard
 
 static void tape_val(int i, char *v, size_t n)
 {
     switch (i) {
-        case 0: snprintf(v, n, "%d", BEAT_LADDER[s_beats_idx]); break;
+        case 0:
+            if (clock_core_src() == CLK_SRC_OFF) snprintf(v, n, "no clock");
+            else snprintf(v, n, "%d", BEAT_LADDER[s_beats_idx]);
+            break;
         case 1: snprintf(v, n, "%s", clock_source_name(clock_core_src())); break;   // core clock
         case 2: snprintf(v, n, "%.0f", clock_core_int_bpm()); break;                 // INT / fallback tempo
         case 3: snprintf(v, n, "%s", tp.flt_mode == TPF_LP ? "LP" : tp.flt_mode == TPF_BP ? "BP" :
@@ -814,18 +820,18 @@ static void tape_val(int i, char *v, size_t n)
         case 12: snprintf(v, n, "%s >", fxrack_slot_name(&tp_rk, 2)); break;
         case 13: {
             if (tp.clip_len) snprintf(v, n, "%.2fs held", (float)tp.clip_len / TP_RATE);
-            else             snprintf(v, n, "%s", stopped_or("copy >"));
+            else             snprintf(v, n, "%s", edit_or("copy >"));
             break;
         }
-        case 14: snprintf(v, n, "%s", stopped_or("cut >")); break;
+        case 14: snprintf(v, n, "%s", s_cut_refused ? "no room" : edit_or("cut >")); break;
         case 15: {
             if (!tp.clip_len) snprintf(v, n, "(empty)");
-            else              snprintf(v, n, "%s", stopped_or("at IN >"));
+            else              snprintf(v, n, "%s", edit_or("at IN >"));
             break;
         }
-        case 16: snprintf(v, n, "%s", stopped_or("crop >")); break;
-        case 17: snprintf(v, n, "%s", stopped_or("crop >")); break;
-        case 18: snprintf(v, n, "%s", stopped_or("crop >")); break;
+        case 16: snprintf(v, n, "%s", edit_or("crop >")); break;
+        case 17: snprintf(v, n, "%s", edit_or("crop >")); break;
+        case 18: snprintf(v, n, "%s", edit_or("crop >")); break;
         case 19: {   // save-loop-then-crop — works while playing, so no stopped_or here
             if (tp.save_busy)       snprintf(v, n, "saving...");
             else if (tp.save_id[0]) snprintf(v, n, "%s", tp.save_id);
@@ -884,8 +890,8 @@ static int tape_action(int i)
         case 10: s_setup_return = 10; s_cur_slot = 0; return M_TAPE_FX;   // FX1
         case 11: s_setup_return = 11; s_cur_slot = 1; return M_TAPE_FX;   // FX2
         case 12: s_setup_return = 12; s_cur_slot = 2; return M_TAPE_FX;   // FX3 reverb
-        case 13: tape_copy(); break;
-        case 14: tape_cut(); break;
+        case 13: s_cut_refused = false; tape_copy(); break;
+        case 14: s_cut_refused = tape_cut() != 0 && tp_ui_stopped() && !tp.save_busy && tp.len; break;
         case 15: tape_paste(); break;
         case 16: tape_norm(); break;
         case 17: tape_reverse(); break;

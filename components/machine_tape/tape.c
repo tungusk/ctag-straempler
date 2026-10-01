@@ -159,7 +159,9 @@ static inline float tp_softclip(float x, float amt)
 // len as it rolls). While already PLAYING = overdub over the running loop.
 static void tape_rec_start(void)
 {
-    if (!tp.playing) {
+    // TR1 can roll a BLANK tape (rec_src INPUT); an overdub there would need
+    // w < len = 0 and store nothing under a REC header (review #96)
+    if (!tp.playing || tp.len == 0) {
         tp.len = 0; tp.pos = 0.0;
         tp.in_pt = 0; tp.out_pt = 0;
         tp.rec_extend = true;            // first-pass fill
@@ -167,6 +169,7 @@ static void tape_rec_start(void)
         tp.cropped = false;              // fresh take: not yet cropped
         tp.restore_id[0] = 0;            // new take is unsaved until it's persisted
         tp.take_num++;                   // -> "REC-###" title
+        tp.rec_stop_target = 0;          // a stale beat-stop must not end this take (#95)
     } else {
         tp.rec_extend = false;           // overdub within the existing loop
     }
@@ -185,6 +188,7 @@ static void tape_rec_start(void)
 static void tape_rec_stop(void)
 {
     tp.recording = false;
+    tp.rec_stop_target = 0;
     if (tp.rec_extend) {
         tp.in_pt = 0;
         tp.out_pt = tp.len;
@@ -246,7 +250,7 @@ static void tape_stash_and_save(void)
 // a pending auto-save can still read it.
 static void tape_erase(void)
 {
-    tp.playing = false; tp.recording = false;
+    tp.playing = false; tp.recording = false; tp.rec_stop_target = 0;
     tp.len = 0; tp.in_pt = tp.out_pt = 0; tp.pos = 0.0;
     tp.peaks_done = 0;
     tp.take_dirty = false; tp.cropped = false; tp.restore_id[0] = 0;
@@ -397,11 +401,14 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
     // MOMENTARY: record only while the gate is HELD (active low -> bit clear).
     if (tp.rec_mode == TPR_MOMENTARY) {
         bool gate = !(io->trig_level & TP_RECBIT);
-        if (gate && !tp.recording) {
+        if (!gate) tp.full_latch = false;                // released: the next hold may record
+        if (gate && !tp.recording && !tp.full_latch) {
             if (tp.playing) tape_rec_start();            // overdub while held
             else            tape_begin_fresh();          // fresh take (auto-saves the old one)
         }
-        else if (!gate && tp.recording) tape_rec_stop_request();   // quantize to beat if enabled
+        // a pending beat-stop runs to its target; re-requesting every released
+        // block fell through to an immediate stop (#95)
+        else if (!gate && tp.recording && !tp.rec_stop_target) tape_rec_stop_request();
     } else {
         if (io->trig_rising & TP_RECBIT) {   // the rtr pick, not a hard-wired TR2 (review 11.2)
             tp.tr2_hold = 0; tp.tr2_armed = false;
@@ -511,7 +518,12 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
             if (empty_rec && w < tp.cap) {
                 wpos[f] = w; wdo[f] = true;
                 if (w + 1 > tp.len) tp.len = w + 1;
-                if (w + 1 >= tp.cap) { tape_rec_stop(); tp.playing = false; }   // tape full
+                if (w + 1 >= tp.cap) {                   // tape full
+                    tape_rec_stop(); tp.playing = false;
+                    // a momentary gate still held must not roll a fresh take over
+                    // the one just finished before its save starts (#102)
+                    tp.full_latch = true;
+                }
             } else if (!empty_rec && w < tp.len) {
                 wpos[f] = w; wdo[f] = true;
             }
@@ -568,6 +580,33 @@ static void tape_process(int32_t out[MACHINE_BLOCK],
 }
 
 // ---- edits (UI context, transport stopped) -------------------------------------
+// UI context: get every pending write of the current take onto the card before
+// the buffer changes under it — a punch-out's queued autosave, a writer in
+// flight, then a take still dirty from edits (as a CUT_ take, adopted).
+static void tp_settle_saves(void)
+{
+    tape_autosave_kick();
+    while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));
+    if (tp.take_dirty && tp.len > 1) {
+        tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped, true);
+        while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+// an edit changed the buffer: it is unsaved again, so leaving Tape or loading
+// over it writes it out (review #100). Bumping dirty_gen stops a writer still
+// running from marking it clean; clearing restore_id drops the saved check.
+static void tp_edited(void)
+{
+    tp.take_dirty = true;
+    tp.dirty_gen++;
+    tp.restore_id[0] = 0;
+}
+
+// edits refuse while a writer is reading the banks: the file would hold a blend
+// that save_task then marks clean (review #98)
+static bool tp_can_edit(void) { return tp_stopped() && !tp.save_busy && tp.len != 0; }
+
 static void crop_clamp(void)
 {
     if (tp.len == 0) { tp.in_pt = tp.out_pt = 0; return; }
@@ -578,6 +617,7 @@ static void crop_clamp(void)
 int tape_set_len_sel(int sel)
 {
     if (!tp_stopped()) return -1;
+    tp_settle_saves();                          // bank_free below must not run under the writer
     sel = tp_clampi(sel, 0, TP_LEN_OPTS - 1);
     uint32_t want = TP_LEN_SECS[sel] * TP_RATE;
     tp.cap = 0; tp.len = 0;                     // nothing to play or record into meanwhile
@@ -608,10 +648,7 @@ static int tape_load_inner(const char *name)
     if (!tp_stopped() || tp.tape.nblk == 0 || !name || !name[0]) return -1;
     char path[64];
     if (sample_resolve(name, path, sizeof(path)) != 0) return -2;
-    if (tp.take_dirty && tp.len > 1) {              // persist the current take before replacing it
-        tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped, true);
-        while (tp.save_busy) vTaskDelay(pdMS_TO_TICKS(20));
-    }
+    tp_settle_saves();                              // persist the current take before replacing it
 
     // stream through sampfile in bursts; staging is INTERNAL DMA RAM (FatFS
     // can hand the buffer straight to SDMMC, which cannot target PSRAM)
@@ -668,7 +705,7 @@ void tape_clear(void)
 
 void tape_norm(void)
 {
-    if (!tp_stopped() || tp.len == 0) return;
+    if (!tp_can_edit()) return;
     crop_clamp();
     int pk = 1;
     for (uint32_t i = tp.in_pt; i < tp.out_pt; i++) { int v = tp_rd(i); if (v < 0) v = -v; if (v > pk) pk = v; }
@@ -678,21 +715,23 @@ void tape_norm(void)
         float v = (float)tp_rd(i) * g;
         tp_wr(i, (int16_t)tp_clampf(v, -32768.0f, 32767.0f));
     }
+    tp_edited();
     tape_rebuild_peaks(true);
 }
 
 void tape_reverse(void)
 {
-    if (!tp_stopped() || tp.len == 0) return;
+    if (!tp_can_edit()) return;
     crop_clamp();
     uint32_t a = tp.in_pt, b = tp.out_pt - 1;
     while (a < b) { int16_t t = tp_rd(a); tp_wr(a, tp_rd(b)); tp_wr(b, t); a++; b--; }
+    tp_edited();
     tape_rebuild_peaks(true);
 }
 
 void tape_fade(void)
 {
-    if (!tp_stopped() || tp.len == 0) return;
+    if (!tp_can_edit()) return;
     crop_clamp();
     uint32_t n = tp.out_pt - tp.in_pt;
     uint32_t F = TP_RATE * TP_FADE_MS / 1000;
@@ -702,25 +741,32 @@ void tape_fade(void)
         tp_wr(tp.in_pt + i, (int16_t)((float)tp_rd(tp.in_pt + i) * g));
         tp_wr(tp.out_pt - 1 - i, (int16_t)((float)tp_rd(tp.out_pt - 1 - i) * g));
     }
+    if (F) tp_edited();
     tape_rebuild_peaks(true);
 }
 
+// 0 = whole crop held, 1 = clipboard TRIMMED to what PSRAM gave (the head of
+// the crop is held), <0 = nothing copied
 int tape_copy(void)
 {
-    if (!tp_stopped() || tp.len == 0) return -1;
+    if (!tp_can_edit()) return -1;
     crop_clamp();
     uint32_t n = tp.out_pt - tp.in_pt;
-    if (bank_alloc(&tp.clip, n) < 0) { tp.clip_len = 0; return -2; }
+    int r = bank_alloc(&tp.clip, n);
+    if (r < 0) { tp.clip_len = 0; return -2; }
     if (tp.clip.cap < n) n = tp.clip.cap;             // trimmed (fail-soft)
     for (uint32_t i = 0; i < n; i++) bank_wr(&tp.clip, i, tp_rd(tp.in_pt + i));
     tp.clip_len = n;
-    return 0;
+    return r;
 }
 
+// refuses unless the WHOLE crop reached the clipboard: closing the gap over a
+// trimmed copy deleted the remainder for good (review #97)
 int tape_cut(void)
 {
     if (tape_copy() != 0) return -1;
     uint32_t n = tp.out_pt - tp.in_pt;
+    if (tp.clip_len < n) return -1;
     for (uint32_t i = tp.out_pt; i < tp.len; i++)     // close the gap (forward)
         tp_wr(i - n, tp_rd(i));
     tp.len -= n;
@@ -731,13 +777,14 @@ int tape_cut(void)
         crop_clamp();
     } else tp.in_pt = tp.out_pt = 0;
     if (tp.pos > (double)tp.len) tp.pos = 0;
+    tp_edited();
     tape_rebuild_peaks(true);
     return 0;
 }
 
 int tape_paste(void)
 {
-    if (!tp_stopped() || tp.clip_len == 0 || tp.tape.nblk == 0) return -1;
+    if (!tp_stopped() || tp.save_busy || tp.clip_len == 0 || tp.tape.nblk == 0) return -1;
     uint32_t n = tp.clip_len;
     if (tp.len + n > tp.cap) n = tp.cap - tp.len;     // clamp: paste what fits
     if (n == 0) return -2;
@@ -749,6 +796,7 @@ int tape_paste(void)
     tp.len += n;
     tp.in_pt = at;
     tp.out_pt = at + n;                               // crop = the pasted material
+    tp_edited();
     tape_rebuild_peaks(true);
     return 0;
 }
@@ -757,6 +805,7 @@ void tape_crop_beats(int beats)
 {
     if (tp.len == 0) return;
     uint32_t b = tape_beat_frames();
+    if (b < 64) return;                           // Clock Src OFF: no grid (review #101)
     uint64_t o = (uint64_t)tp.in_pt + (uint64_t)b * (uint32_t)beats;
     tp.out_pt = o > tp.len ? tp.len : (uint32_t)o;
     crop_clamp();
@@ -783,7 +832,7 @@ static void save_task(void *pv)
         if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
         if (chunk) heap_caps_free(chunk);
         ESP_LOGE(TAG, "save: %s failed", f ? "alloc" : "fopen");
-        tp.save_id[0] = 0; tp.save_busy = false;
+        tp.save_id[0] = 0; tp.save_ok = false; tp.save_busy = false;
         vTaskDelete(NULL); return;
     }
 
@@ -819,6 +868,7 @@ static void save_task(void *pv)
     // that nothing has recorded into since the save began.
     if (ok && tp.save_adopt && !tp.drop_spoiled && tp.dirty_gen == tp.save_gen)
         tp.take_dirty = false;
+    tp.save_ok = ok;
     tp.save_busy = false;
     vTaskDelete(NULL);
 }
@@ -845,6 +895,7 @@ static int tape_spawn_save(uint32_t a, uint32_t b, bool crop, bool adopt)
     tp.save_a = a; tp.save_b = b; tp.save_crop = crop;
     tp.save_adopt = adopt; tp.save_gen = tp.dirty_gen;
     tp.drop_spoiled = false;          // arm the overwrite detector for THIS write
+    tp.save_ok = false;
     tp.save_busy = true;
     if (xTaskCreate(save_task, "tape_sv", 8192, NULL, 4, NULL) != pdPASS) {
         tp.save_busy = false; tp.save_id[0] = 0; return -2;
@@ -898,8 +949,26 @@ void tape_drop_adopt_kick(void)
         ESP_LOGW(TAG, "crop %s recorded over mid-write — not adopting", id);
         return;
     }
+    if (!tp.save_ok) {                       // fopen/alloc failed or short write (#103)
+        ESP_LOGE(TAG, "crop %s: save failed — not adopting", id);
+        return;
+    }
+    // hold the gates (tp.loading) BEFORE the recording check, so a punch-in
+    // cannot land between the check and the load (review #99)
+    tp.loading = true;
+    machine_block_wait();
+    if (tp.recording) {
+        tp.loading = false;
+        ESP_LOGW(TAG, "crop %s: recording — not adopting", id);
+        return;
+    }
     tp.playing = false;                      // tape_load refuses unless stopped
-    if (tape_load(id) != 0) { ESP_LOGE(TAG, "crop %s: load-back failed", id); return; }
+    int lr = tape_load(id);                  // clears tp.loading on return
+    if (lr != 0) {
+        ESP_LOGE(TAG, "crop %s: load-back failed (%d)", id, lr);
+        if (resume) tp.playing = true;       // keep the take rolling as it was
+        return;
+    }
     if (resume) { tp.pos = (double)tp.in_pt; tp.playing = true; }
 }
 

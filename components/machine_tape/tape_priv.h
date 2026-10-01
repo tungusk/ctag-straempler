@@ -87,6 +87,7 @@ typedef struct {
     uint32_t rec_stop_target;        // frame to finalize a fresh take at (0 = none pending)
     uint32_t tr2_hold;                // frames TR2 gate held (punch: long-hold = erase, arm)
     bool     tr2_armed;               // long-hold erased the tape -> record starts on release
+    bool     full_latch;              // momentary: tape filled while held -> wait for a release
     bool     tr2_recgest;             // this TR2 press STARTED a recording (overdub or fresh take)
                                       // -> holding it converts the take into an erase + re-arm.
                                       // Not set by a punch-OUT press, so holding after punching
@@ -149,6 +150,7 @@ typedef struct {
     uint32_t save_a, save_b;          // frames [a,b) the writer will emit
     bool     save_crop;              // true = an actively-cropped take (marked TCR_)
     bool     save_adopt;             // this save makes the file the take (see tape_spawn_save)
+    volatile bool save_ok;           // the last writer closed a whole file (false on fopen/alloc/short write)
     volatile uint32_t dirty_gen;     // bumped per punch-in (audio task)
     uint32_t save_gen;               // dirty_gen when the running save began
     // The writer reads the bank in the background while the audio task may still
