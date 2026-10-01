@@ -1099,7 +1099,7 @@ function loadMods(){
     (d.modules||[]).forEach(function(m){
       h+='<tr><td>'+esc(m.name)+'</td><td>'+(m.size?Math.round(m.size/1024)+'KB':'')+'</td><td style="white-space:nowrap">'
         +'<a class="btn" style="text-decoration:none" href="/trk/get?name='+encodeURIComponent(m.name)+'" download="'+esc(m.name)+'">&#11015;</a> '
-        +'<button class="btn del" onclick="delMod(\''+esc(m.name)+'\')">&#10005;</button></td></tr>';
+        +'<button class="btn del" onclick="delMod(\''+jsq(m.name)+'\')">&#10005;</button></td></tr>';
     });
     tb.innerHTML=h||'<tr><td colspan="3" style="color:#555;padding:8px">No modules yet</td></tr>';
   }).catch(function(){tb.innerHTML='<tr><td colspan="3" class="er">Failed to load</td></tr>';});
@@ -1168,17 +1168,17 @@ function renderFiles(){
       // wide as an 8-char name, so button + field must be held on ONE line or
       // they stack and the row grows — hence the flex wrapper, not a bare pair.
       nameCell='<div style="display:flex;align-items:center;gap:5px">'
-        +'<button class="btn" onclick="libCommit(\''+esc(f.name)+'\')">OK</button>'
+        +'<button class="btn" onclick="libCommit(\''+jsq(f.name)+'\')">OK</button>'
         +'<input id="lrn" value="'+esc(f.name)+'" maxlength="31" style="width:200px;padding:2px 4px;background:#000;color:#fff;border:1px solid #0af" '
-        +'onkeydown="if(event.key===\'Enter\')libCommit(\''+esc(f.name)+'\');else if(event.key===\'Escape\')libCancel()">'
+        +'onkeydown="if(event.key===\'Enter\')libCommit(\''+jsq(f.name)+'\');else if(event.key===\'Escape\')libCancel()">'
         +'</div>';
     }else{
-      nameCell='<span class="ren" title="rename in place" onclick="libRename(\''+esc(f.name)+'\')">'+esc(f.name)+'</span>';
+      nameCell='<span class="ren" title="rename in place" onclick="libRename(\''+jsq(f.name)+'\')">'+esc(f.name)+'</span>';
     }
     // the folder pull-down rides in the actions cell: it shows where the file
     // lives; picking another folder moves it (audio+sidecar+slices together)
     var dirSel='<select style="width:auto;font-size:10px;padding:1px 2px;color:#aaa" '
-      +'onchange="moveFile(\''+esc(f.name)+'\',this.value)">';
+      +'onchange="moveFile(\''+jsq(f.name)+'\',this.value)">';
     ['pool','REC','LOOPS','SLICES','DRUMS','KEYS','TAPE'].forEach(function(dd){
       dirSel+='<option value="'+dd+'"'+((f.dir||'pool')===dd?' selected':'')+'>'+dd.toUpperCase()+'</option>';
     });
@@ -1195,7 +1195,7 @@ function renderFiles(){
       +'<td style="white-space:nowrap">'
       +dirSel+' '
       +'<a class="btn" style="text-decoration:none" href="/files/raw?name='+encodeURIComponent(f.name)+'" download>&#11015;</a> '
-      +'<button class="btn del'+(armed?' armed':'')+'" onclick="del(\''+esc(f.name)+'\')">&#10005;</button></td></tr>';
+      +'<button class="btn del'+(armed?' armed':'')+'" onclick="del(\''+jsq(f.name)+'\')">&#10005;</button></td></tr>';
   });
   tb.innerHTML=h||'<tr><td colspan="6" style="color:#555;padding:12px">No files yet</td></tr>';
   if(libEdit!==null){var el=document.getElementById('lrn');if(el){el.focus();el.select();}}
@@ -1252,6 +1252,7 @@ function libCommit(name){
   fetch('/files/rename?name='+encodeURIComponent(name)+'&to='+encodeURIComponent(to),{method:'POST'})
     .then(function(r){
       if(r.ok){   // update the local entry — no 10 s sidecar refetch
+        delete wfCache[name];delete wfCache[to];
         libFiles.forEach(function(f){if(f.name===name)f.name=to;});
         renderFiles();return;
       }
@@ -1260,6 +1261,8 @@ function libCommit(name){
 }
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+// a value inside a '...' JS literal inside an HTML attribute: JS-escape first, then HTML-escape
+function jsq(s){return esc(String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));}
 
 // two-click delete: click once to ARM (the button goes bright red with a black
 // X), click the same button again to delete. Anything else — 3 s passing, a
@@ -1274,7 +1277,7 @@ function del(name){
     delPend=name;renderFiles();
     fetch('/files?name='+encodeURIComponent(name),{method:'DELETE'}).then(function(r){
       delPend=null;
-      if(r.ok)libFiles=libFiles.filter(function(f){return f.name!==name;});
+      if(r.ok){delete wfCache[name];libFiles=libFiles.filter(function(f){return f.name!==name;});}
       else alert('Delete failed');
       renderFiles();
     }).catch(function(){delPend=null;alert('Delete failed');renderFiles();});
@@ -1300,7 +1303,7 @@ function convertAudio(file){
   return file.arrayBuffer().then(function(ab){
     var AC=window.AudioContext||window.webkitAudioContext;
     ac=new AC();
-    return ac.decodeAudioData(ab);
+    return ac.decodeAudioData(ab).catch(function(e){try{ac.close();}catch(_){}throw e;});   // don't leak the context on a bad file
   }).then(function(audio){
     if(ac){try{ac.close();}catch(e){}}   // free the context (browsers cap ~6 live)
     if(audio.duration>MAX_AUDIO_SECS)throw new Error('too long ('+Math.round(audio.duration)+'s, max '+MAX_AUDIO_SECS+'s)');
@@ -1334,6 +1337,7 @@ function putFile(url,headers,body,onprog){
     xhr.send(body);
   });
 }
+var batchBusy=false,batchTimer=null;   // batchBusy: an upload is running, the list is frozen
 var batchFiles=[];   // [{file, name(custom|null), base(sanitized), ext, kind}]
 function fileMeta(file){
   var m=file.name.match(/\.([^.]+)$/),ext=m?m[1]:'';
@@ -1347,6 +1351,8 @@ function fileMeta(file){
 }
 function nameOf(b){return b.name||b.base.substring(0,31)||'FILE';}
 function stageBatch(files){
+  if(batchBusy)return;
+  clearTimeout(batchTimer);
   batchFiles=Array.prototype.slice.call(files).map(fileMeta);
   document.getElementById('batch').style.display='block';
   renderBatch();
@@ -1398,7 +1404,7 @@ function renderBatch(){
   tb.innerHTML=h||'<tr><td colspan="3" style="color:#555;padding:8px">Batch empty</td></tr>';
   if(editIdx>=0){var el=document.getElementById('brn');if(el){el.focus();el.select();}}
 }
-function renameBatch(i){editIdx=i;renderBatch();}
+function renameBatch(i){if(batchBusy)return;editIdx=i;renderBatch();}
 function commitRename(){
   if(editIdx<0)return;
   var el=document.getElementById('brn');
@@ -1406,7 +1412,7 @@ function commitRename(){
   editIdx=-1;renderBatch();
 }
 function cancelRename(){editIdx=-1;renderBatch();}
-function removeBatch(i){editIdx=-1;batchFiles.splice(i,1);batchFiles.length?renderBatch():clearBatch();}
+function removeBatch(i){if(batchBusy)return;editIdx=-1;batchFiles.splice(i,1);batchFiles.length?renderBatch():clearBatch();}
 function clearBatch(){editIdx=-1;batchCancel=false;batchFiles=[];document.getElementById('batch').style.display='none';document.getElementById('bm').textContent='';showBatchBtns(true);}
 function showBatchBtns(idle){   // idle = show Upload/Clear; else show Cancel
   document.getElementById('bup').style.display=idle?'':'none';
@@ -1421,17 +1427,18 @@ function doBatchUpload(){
     m0.textContent='Two files would be stored under the same name \u2014 rename one first';
     return;
   }
-  var pr=document.getElementById('bpr'),bm=document.getElementById('bm'),N=batchFiles.length,i=0,ok=0,fail=0,lastErr='';
-  batchCancel=false;showBatchBtns(false);
+  var pr=document.getElementById('bpr'),bm=document.getElementById('bm'),list=batchFiles.slice(),N=list.length,i=0,ok=0,fail=0,lastErr='';
+  batchBusy=true;batchCancel=false;showBatchBtns(false);
   pr.style.display='block';pr.value=0;
   function finish(msg,err){
+    batchBusy=false;
     pr.style.display='none';pr.value=0;
     bm.className='msg '+(err?'er':'ok');bm.textContent=msg;
     showBatchBtns(true);loadFiles();loadMods();
     pollImport();   // an upload KICKS a convert-on-import pass — show it, don't hide it
-    if(!err&&!batchCancel)setTimeout(clearBatch,1500);
+    if(!err&&!batchCancel)batchTimer=setTimeout(clearBatch,1500);
   }
-  var okcb=function(){ok++;i++;next();};
+  var okcb=function(){delete wfCache[nameOf(list[i])];ok++;i++;next();};
   var failcb=function(e){
     if(e&&e.message==='cancelled'){next();return;}   // stop (next() sees batchCancel)
     fail++;lastErr=(e&&e.message)?e.message:'error';i++;next();
@@ -1440,7 +1447,7 @@ function doBatchUpload(){
   function next(){
     if(batchCancel){finish('Cancelled — '+ok+' uploaded, '+(N-ok)+' skipped',false);return;}
     if(i>=N){finish('Done: '+ok+' uploaded'+(fail?', '+fail+' failed ('+lastErr+')':''),!!fail);return;}
-    var b=batchFiles[i],name=nameOf(b),pfx=(i+1)+'/'+N+': '+name;
+    var b=list[i],name=nameOf(b),pfx=(i+1)+'/'+N+': '+name;
     bm.className='msg';
     if(b.kind==='mod'||b.kind==='raw'||b.kind==='ot'||b.kind==='native'){
       // all of these upload the ORIGINAL file bytes (no in-browser convert) —
@@ -1464,7 +1471,7 @@ function doBatchUpload(){
 }
 // dropzone / picker entry: every drop (one file or many) goes to the staging list
 function onFiles(files){
-  if(!files||!files.length)return;
+  if(batchBusy||!files||!files.length)return;
   stageBatch(files);
 }
 var dz=document.getElementById('dz');
@@ -1570,7 +1577,7 @@ function fsSearch(page){
 
 function fsChip(q,saved){
   return '<button class="btn" style="flex:0 0 auto;padding:2px 8px;font-size:11px'
-    +(saved?';color:#4c9':'')+'" onclick="fsChipGo(\''+esc(q).replace(/'/g,"\\'")+'\')">'
+    +(saved?';color:#4c9':'')+'" onclick="fsChipGo(\''+jsq(q)+'\')">'
     +(saved?'\u2605 ':'')+esc(q)+'</button>';
 }
 function fsChipGo(q){document.getElementById('fq').value=q;fsSearch(1);}
@@ -1581,7 +1588,7 @@ function fsRender(d){
   (d.results||[]).forEach(function(sd){
     var nm=String(sd.name||'').replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'').substring(0,31)||('FS'+sd.id);
     h+='<tr><td>'+esc(sd.name)+'</td><td>'+(sd.dur!=null?sd.dur.toFixed(1)+'s':'')+'</td><td>'+esc(sd.user||'')+'</td>'
-      +'<td style="white-space:nowrap"><button class="btn" onclick="fsGet(\''+esc(sd.id)+'\',\''+nm+'\')">&#11015; Get</button></td></tr>';
+      +'<td style="white-space:nowrap"><button class="btn" onclick="fsGet(\''+jsq(sd.id)+'\',\''+nm+'\')">&#11015; Get</button></td></tr>';
   });
   if(d.state==='searching')tb.innerHTML='<tr><td colspan="4" style="color:#555;padding:12px">Searching\u2026</td></tr>';
   else tb.innerHTML=h||'<tr><td colspan="4" style="color:#555;padding:12px">No results</td></tr>';
@@ -1666,10 +1673,15 @@ function fsFetch(){
   fsAskName('fetch',u,def);
 }
 
+var fsFails=0;
+function fsStop(){clearInterval(fsPoll);fsPoll=null;fsFails=0;document.getElementById('fspr').style.display='none';}
 function fsState(){
-  fetch('/fs/state').then(function(r){return r.json();}).then(function(d){
+  if(webPaused)return;
+  fetch('/fs/state').then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(d){
     var m=document.getElementById('fsm'),pr=document.getElementById('fspr');
-    if(d.phase==='done'){
+    fsFails=0;
+    if(d.phase==='idle'){fsStop();}
+    else if(d.phase==='done'){
       clearInterval(fsPoll);fsPoll=null;pr.style.display='none';
       m.className='msg ok';m.textContent='Installed '+d.name+' to the library!';
     }else if(d.phase==='error'){
@@ -1679,7 +1691,7 @@ function fsState(){
       pr.value=d.progress||0;
       m.className='msg';m.textContent=d.phase+' '+d.name+' '+(d.progress||0)+'%';
     }
-  }).catch(function(){});
+  }).catch(function(){if(++fsFails>=3)fsStop();});
 }
 
 var remMachines=[],curMach='';
@@ -2741,7 +2753,8 @@ function remTrig(t,ms){fetch('/remote/trig?t='+t+'&ms='+(ms||40),{method:'POST'}
 var holdEl=[null,null,null];
 function remHold(t,el,down){remTrig(t,down?60000:5);el.parentNode.classList.toggle('on',!!down);holdEl[t]=down?el:null;}   // hold = gate for the press; 60 s is only the ceiling if the release never arrives; release = a 5 ms trig (an absolute deadline that cuts it)
 function holdDropAll(){for(var t=1;t<=2;t++)if(holdEl[t])remHold(t,holdEl[t],0);}
-window.addEventListener('blur',holdDropAll);document.addEventListener('visibilitychange',function(){if(document.hidden)holdDropAll();});
+function midiRelAll(){Object.keys(midiHeld).forEach(function(n){midiOff(parseInt(n));});}   // keyup is lost on blur: notes would hang
+window.addEventListener('blur',function(){holdDropAll();midiRelAll();});document.addEventListener('visibilitychange',function(){if(document.hidden){holdDropAll();midiRelAll();}});
 // Perform CV: POST /remote/cv overrides a channel in the audio task with a
 // timeout decay, so a released knob returns to the physical one — nothing can
 // be pinned by a stale value.
@@ -2999,7 +3012,7 @@ var MT_LBL=[];
   for(var k in MT_UP)MT_LBL[MT_UP[k]].u=k.toUpperCase();
 })();
 document.addEventListener('keydown',function(ev){
-  if(ev.repeat)return;
+  if(ev.repeat||ev.metaKey||ev.ctrlKey||ev.altKey)return;   // leave Cmd/Ctrl shortcuts alone
   var t=ev.target.tagName;
   if(t=='INPUT'||t=='TEXTAREA'||t=='SELECT')return;
   if(!document.getElementById('midityping').checked)return;
@@ -3017,7 +3030,7 @@ document.addEventListener('keyup',function(ev){
 function midiOct(d){
   var b=midiBase+d*12;
   if(b<24||b>96)return;
-  midiBase=b; midiHeldClear(); midiOctShow();
+  midiRelAll(); midiBase=b; midiHeldClear(); midiOctShow();
 }
 function midiOctShow(){
   var o=document.getElementById('midioct');
@@ -3340,7 +3353,11 @@ function machCardPoll(name,on){
     // load whatever the DEVICE is already holding, so opening the card shows the
     // panel's current result list and query store rather than an empty table
     if(on)fsResultsPoll();
-    else if(fsResPoll){clearInterval(fsResPoll);fsResPoll=null;}
+    else{
+      if(fsResPoll){clearInterval(fsResPoll);fsResPoll=null;}
+      if(fsPoll){clearInterval(fsPoll);fsPoll=null;}
+      var fp=document.getElementById('fspr');if(fp)fp.style.display='none';
+    }
   }else if(name==='Radio'){
     if(on){rdState();rdTimer=rdTimer||setInterval(rdState,1000);}
     else if(rdTimer){clearInterval(rdTimer);rdTimer=null;}
@@ -3762,9 +3779,11 @@ function updateScope(cv){
   if(hint)hint.textContent='leave it running with your hands off the panel';
 }
 
+var stBusy=false;
 function pollStatus(){
-  if(webPaused)return;            // WEB card: quiet while judging audio
-  fetch('/status').then(function(r){return r.json();}).then(function(d){
+  if(webPaused||stBusy)return;    // WEB card: quiet while judging audio; one request at a time
+  stBusy=true;
+  fetch('/status').then(function(r){stBusy=false;return r.json();}).then(function(d){
     var pm=curMach;curMach=d.machine||'';
     if(pm&&curMach!==pm)rpLoad();   // panel switched machine: reload its cards
     var cv=d.cv||[],h='';
@@ -3790,7 +3809,7 @@ function pollStatus(){
     if(foldOpen('sys'))sysDraw();
     updateScope(d.cv);
     if(document.getElementById('p3').className.indexOf('on')>=0){bncPoll();bcastPoll();scrPoll();}   // bounce+broadcast+screen while Remote is open
-  }).catch(function(){});
+  }).catch(function(){stBusy=false;});
 }
 setInterval(pollStatus,500);
 pollImport();
