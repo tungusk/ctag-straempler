@@ -58,16 +58,15 @@ static void probe_task(void *arg)
         p.seq++;
         p.tick = (uint32_t)xTaskGetTickCount();
         esp_now_send(BCAST, (const uint8_t *)&p, sizeof(p));
-        int period_ms = 1000 / hz;
-        if (period_ms < 1) period_ms = 1;
-        vTaskDelay(pdMS_TO_TICKS(period_ms));
+        TickType_t tk = pdMS_TO_TICKS(1000 / hz);
+        vTaskDelay(tk < 1 ? 1 : tk);      // >= 1 tick: above 100 Hz it spun (#152)
     }
 }
 
 int espnow_probe_set_hz(int hz)
 {
     if (hz < 0) hz = 0;
-    if (hz > 500) hz = 500;
+    if (hz > configTICK_RATE_HZ) hz = configTICK_RATE_HZ;   // one send per tick at most
 
     if (hz > 0 && !s_inited) {
         // esp_now_init REQUIRES the wifi driver to be started — call only after

@@ -58,6 +58,10 @@ static void fill_once(sampplay_t *p)
     uint32_t left = (p->src < p->out_pt) ? (p->out_pt - p->src) : 0;
     if (left == 0) { p->src = p->in_pt; left = p->out_pt - p->in_pt; }
     if (want > left) want = left;
+    // no dribble reads: a sub-chunk top-up is only worth its SD seek+read when it
+    // finishes the loop span (sampler3's rule) — each 64-frame drain used to
+    // trigger one (#150)
+    if (want < SP_CHUNK && want < left) return;
     if (want == 0) return;
 
     sd_lock_take();
@@ -99,8 +103,9 @@ static void reader_task(void *pv)
         // start on an almost-empty ring
         if (!p->gate && (p->wpos - p->rpos) >= p->ring_frames / 2) p->gate = true;
         // full ring: nothing to do until the audio task has drained some
-        if ((p->wpos - p->rpos) >= p->ring_frames - SP_CHUNK) vTaskDelay(pdMS_TO_TICKS(5));
-        else vTaskDelay(1);
+        // >= 1 tick either way: pdMS_TO_TICKS(5) is ZERO at 100 Hz, and a full
+        // ring is the steady state while auditioning — it spun (review #150)
+        vTaskDelay(1);
     }
     worker_exit(&p->w);
 }

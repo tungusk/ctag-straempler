@@ -55,7 +55,11 @@ static volatile TickType_t s_remote_trig_until[2] = {0, 0};
 
 void audio_remote_trig(int t, int ms) {
     if (t < 0 || t > 1) return;
-    s_remote_trig_until[t] = xTaskGetTickCount() + pdMS_TO_TICKS(ms > 0 ? ms : 30);
+    // at least 2 ticks: 5..9 ms is ZERO ticks at 100 Hz, so a fresh short pulse
+    // asserted nothing (review #153); a release (ms=5) still drops in 10-20 ms
+    TickType_t tk = pdMS_TO_TICKS(ms > 0 ? ms : 30);
+    if (tk < 2) tk = 2;
+    s_remote_trig_until[t] = xTaskGetTickCount() + tk;
 }
 
 // DIAGNOSTIC: a 30 s soft trig released after ~2 s even though the handler
@@ -371,7 +375,8 @@ static void broadcast_push(const int32_t *out, int frames)
 {
     if (!s_bc_on || !s_bc_ring) return;
     for (int f = 0; f < frames; f++) {
-        if (s_bc_w - s_bc_r >= BC_FRAMES) s_bc_r++;   // ring full: drop oldest
+        // ring full: the oldest frame is simply overwritten. s_bc_r belongs to the
+        // READER (it snaps forward) — two tasks incrementing it raced (#5)
         uint32_t idx = (s_bc_w % BC_FRAMES) * 2;
         s_bc_ring[idx] = (int16_t)(out[f * 2] >> 16);
         s_bc_ring[idx + 1] = (int16_t)(out[f * 2 + 1] >> 16);
@@ -408,6 +413,7 @@ static void bc_stream_mp3(int sock, volatile bool *run)
     s_bc_err = "ok";
     bool ok = true;
     while (ok && (!run || *run)) {
+        if (s_bc_w - s_bc_r > BC_FRAMES) s_bc_r = s_bc_w - BC_FRAMES;   // overrun: skip to the oldest kept
         if (s_bc_w - s_bc_r < (uint32_t)pass) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
         for (int f = 0; f < pass; f++) {                 // stereo bus -> mono mid
             uint32_t idx = (s_bc_r % BC_FRAMES) * 2;
@@ -513,21 +519,28 @@ static void broadcast_server_task(void *pv)
         s_bc_src = want_in ? 1 : 0;
         s_bc_w = s_bc_r = 0;
         s_bc_on = true;
+        // a stalled listener must not hold the task (and its 12 KB stack) in a
+        // blocked send forever, and a disable must end the stream (09-16 1.5, #2)
+        {
+            struct timeval stv = { .tv_sec = 2, .tv_usec = 0 };
+            setsockopt(cl, SOL_SOCKET, SO_SNDTIMEO, &stv, sizeof(stv));
+        }
 
         if (want_mp3) {
             if (send(cl, HDR_MP3, strlen(HDR_MP3), 0) > 0)
-                bc_stream_mp3(cl, NULL);
+                bc_stream_mp3(cl, &s_bc_srv_run);
         } else {
             bool ok = send(cl, HDR, strlen(HDR), 0) > 0 && send(cl, wav, 44, 0) > 0;
-            while (ok) {
+            while (ok && s_bc_srv_run) {
                 int fr = 0;
+                if (s_bc_w - s_bc_r > BC_FRAMES) s_bc_r = s_bc_w - BC_FRAMES;   // overrun (#5)
                 while (fr < 1024 && s_bc_r < s_bc_w) {
                     uint32_t idx = (s_bc_r % BC_FRAMES) * 2;
                     sbuf[fr * 2] = s_bc_ring[idx]; sbuf[fr * 2 + 1] = s_bc_ring[idx + 1];
                     s_bc_r++; fr++;
                 }
                 if (fr > 0) { if (send(cl, sbuf, fr * 4, 0) < 0) ok = false; }
-                else vTaskDelay(pdMS_TO_TICKS(8));
+                else vTaskDelay(1);   // pdMS_TO_TICKS(8) is ZERO at 100 Hz: it spun (#2)
             }
         }
         s_bc_on = false;
@@ -770,7 +783,11 @@ bool audio_broadcast_enabled(void) { return s_bc_srv_run; }
 void audio_broadcast_set_enabled(bool on)
 {
     if (on) {
-        if (s_bc_srv_run || s_bc_srv_alive) return;   // already up / tearing up
+        if (s_bc_srv_run) return;                     // already up
+        // an off-then-on while the old task is still tearing down used to be
+        // dropped (the new one never started): give it a moment to go (#2)
+        for (int i = 0; i < 30 && s_bc_srv_alive; i++) vTaskDelay(pdMS_TO_TICKS(100));
+        if (s_bc_srv_alive) { ESP_LOGW("BCAST", "old server still stopping — enable dropped"); return; }
         s_bc_srv_run = true;
         s_bc_srv_alive = true;
         if (xTaskCreate(broadcast_server_task, "bc_srv", 12288, NULL, 5, NULL) != pdPASS) {
