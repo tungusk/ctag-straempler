@@ -1096,7 +1096,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
 
     bool wifiChanged = false;
     cJSON *j, *cur;
-    if ((j = cJSON_GetObjectItem(in, "ssid")) && j->valuestring) {
+    if ((j = cJSON_GetObjectItem(in, "ssid")) && j->valuestring && strlen(j->valuestring) > 0) {   // as passwd/apikey: blank never overwrites (#52)
         cur = cJSON_GetObjectItem(settings, "ssid");
         if (!cur || !cur->valuestring || strcmp(cur->valuestring, j->valuestring) != 0) wifiChanged = true;
         cJSON_ReplaceItemInObject(settings, "ssid", cJSON_CreateString(j->valuestring));
@@ -1345,6 +1345,7 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     int file_len_d100 = req->content_len / 100;
     char file_name[64] = "";      // "/usr/<id>.RAW", id < SAMPLE_ID_LEN
     char file_name_jsn[64] = "";  // "/sdcard/usr/<id>.JSN"
+    char up_id[SAMPLE_ID_LEN] = "";
     cJSON *val;
     cJSON *root = cJSON_CreateObject();
 
@@ -1367,6 +1368,7 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
             cJSON_AddItemToObject(root, "id", val);
             snprintf(file_name, sizeof(file_name), "/usr/%s.RAW", buf);
             snprintf(file_name_jsn, sizeof(file_name_jsn), "/sdcard/usr/%s.JSN", buf);
+            strlcpy(up_id, buf, sizeof(up_id));
         }
         free(buf);
     } else {
@@ -1388,6 +1390,27 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
         if (buf && httpd_req_get_hdr_value_str(req, "Tags", buf, buf_len) == ESP_OK) { cleanString(buf); val = cJSON_CreateString(buf); cJSON_AddItemToObject(root, "tags_s", val); }
         free(buf);
     } else { cJSON_AddStringToObject(root, "tags_s", ""); }
+
+    // one id, one file: an id already living in a machine folder (moved to
+    // DRUMS/KEYS, or a card copy) would get a twin in usr/, and delete/rename
+    // sweep every folder by id, so the twins went together (review #184). A
+    // re-upload of a usr/ sample is fine — the importer replaces it (#137).
+    {
+        char rp[96];
+        sd_lock_take();
+        int have = sample_resolve(up_id, rp, sizeof(rp)) == 0;
+        sd_lock_give();
+        const char *rest = rp + strlen("/sdcard/usr/");
+        if (have && strncmp(rp, "/sdcard/usr/", 12) == 0 && strchr(rest, '/')) {
+            char msg[80];
+            snprintf(msg, sizeof(msg), "Name already used in %.*s", (int)(strchr(rest, '/') - rest), rest);
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "409 Conflict");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_sendstr(req, msg);
+            return ESP_OK;
+        }
+    }
 
     // FS_LOCK makes this fail with FR_LOCKED if a voice is streaming the file —
     // refuse rather than truncate a sample that is currently playing
@@ -1454,11 +1477,13 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     // non-4-multiple upload by 1-3 bytes, which was invisible for RAW audio
     // but corrupted byte-exact containers (bench: every MP3 upload arrived
     // with 0x00 bytes prepended and helix refused the stream)
+    FRESULT tail_fr = FR_OK;
     if (req->content_len % 4 != 0) {
         int pad = 4 - (req->content_len % 4);
         const char zeros[3] = {0};
         sd_lock_take();
-        f_write(&raw_file, zeros, pad, &bw);
+        tail_fr = f_write(&raw_file, zeros, pad, &bw);
+        if (tail_fr == FR_OK && bw != (UINT)pad) tail_fr = FR_DISK_ERR;
         sd_lock_give();
     }
 
@@ -1471,10 +1496,20 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
     }
 
     sd_lock_take();
-    f_close(&raw_file);
+    FRESULT close_fr = f_close(&raw_file);
+    if (tail_fr != FR_OK || close_fr != FR_OK) { f_unlink(file_name); remove(file_name_jsn); }
     sd_lock_give();
     free(buf);
     cJSON_Delete(root);
+    if (tail_fr != FR_OK || close_fr != FR_OK) {
+        // the flush or directory update failed: the entry may say 0 bytes —
+        // don't answer 200 and start the importer on it (review #138)
+        ESP_LOGE(TAG, "drop_sample: finish failed (pad %d, close %d)", tail_fr, close_fr);
+        ev.event = EV_DECODING_DONE;
+        xQueueSend(ui_ev_queue, &ev, pdMS_TO_TICKS(100));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD write failed");
+        return ESP_FAIL;
+    }
 
     // convert-on-import: the upload landed verbatim as <name>.RAW — kick the
     // background importer to sniff and convert it. NOT done inline: helix +
@@ -2046,17 +2081,18 @@ static bool mod_name_safe(const char *n){
     return strstr(n, "..") == NULL;
 }
 
-// PUT /trk/upload — headers Name (8.3 base, clamped) + Ext; body = raw bytes,
-// stored verbatim (no conversion) to usr/TRACKER/<NAME>.<EXT>.
+// PUT /trk/upload — headers Name + Ext; body = raw bytes, stored verbatim (no
+// conversion) to usr/TRACKER/<NAME>.<EXT>. Long filenames are on: a name is
+// refused, never cut — the old 8.3 clamp made AMBIENT_PART1.xm and
+// AMBIENT_PART2.xm the same AMBIENT_.XM, the second overwriting the first (#182).
 static esp_err_t mod_upload_handler(httpd_req_t *req)
 {
-    char name[16] = "", ext[8] = "";
+    char name[SAMPLE_ID_LEN + 8] = "", ext[8] = "";
     size_t nl = httpd_req_get_hdr_value_len(req, "Name") + 1;
     if (nl > 1) {
         char *b = malloc(nl);
         if (b && httpd_req_get_hdr_value_str(req, "Name", b, nl) == ESP_OK) {
             cleanStringSpace(b);
-            if (nl > 9) b[8] = 0;                    // 8.3 clamp (b may be shorter)
             strlcpy(name, b, sizeof(name));
         }
         free(b);
@@ -2070,13 +2106,17 @@ static esp_err_t mod_upload_handler(httpd_req_t *req)
     if (!name[0] || !mod_ext_ok(ext)) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad name/ext"); return ESP_FAIL;
     }
+    // /trk/list and /trk/get handle filenames under 32 chars
+    if (strlen(name) + 1 + strlen(ext) >= SAMPLE_ID_LEN) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Name too long"); return ESP_FAIL;
+    }
     if (req->content_len == 0 || req->content_len > MOD_MAX_FILE) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Module too big or empty"); return ESP_FAIL;
     }
 
     char up[8]; strlcpy(up, ext, sizeof(up));
     for (char *p = up; *p; p++) *p = toupper((unsigned char)*p);
-    char path[48];
+    char path[80];
     snprintf(path, sizeof(path), MOD_DIR_FAT "/%s.%s", name, up);
 
     // ATOMIC WRITE: stream to a temp file, rename to the real name only after
@@ -2117,9 +2157,12 @@ static esp_err_t mod_upload_handler(httpd_req_t *req)
         }
     }
     sd_lock_take();
-    f_close(&f);
-    f_unlink(path);                          // replace any existing same-named module
-    FRESULT rr = f_rename(MOD_TMP, path);     // publish atomically
+    FRESULT cr = f_close(&f);
+    FRESULT rr = cr;
+    if (cr == FR_OK) {                       // a failed flush must not replace a good module
+        f_unlink(path);                      // replace any existing same-named module
+        rr = f_rename(MOD_TMP, path);        // publish atomically
+    }
     if (rr != FR_OK) f_unlink(MOD_TMP);
     sd_lock_give();
     free(buf);
@@ -2177,16 +2220,25 @@ static esp_err_t drop_ot_put_handler(httpd_req_t *req)
         }
         timeouts = 0;
         remaining -= ret;
-        sd_lock_take(); f_write(&f, buf, ret, &bw); sd_lock_give();
+        sd_lock_take();
+        FRESULT wr = f_write(&f, buf, ret, &bw);
+        sd_lock_give();
+        if (wr != FR_OK || bw != (UINT)ret) {   // as mod_upload: never replace the old map with a short one (#38)
+            ESP_LOGE(TAG, "ot write failed (%d, %u/%d)", wr, (unsigned)bw, ret);
+            sd_lock_take(); f_close(&f); f_unlink(OT_TMP); sd_lock_give();
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD write failed"); return ESP_FAIL;
+        }
     }
     sd_lock_take();
-    f_close(&f);
-    f_unlink(path);
-    FRESULT rr = f_rename(OT_TMP, path);
+    FRESULT rr = f_close(&f);
+    if (rr == FR_OK) {
+        f_unlink(path);
+        rr = f_rename(OT_TMP, path);
+    }
     if (rr != FR_OK) f_unlink(OT_TMP);
     sd_lock_give();
     if (rr != FR_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD rename failed"); return ESP_FAIL;
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD write failed"); return ESP_FAIL;
     }
     ESP_LOGI(TAG, "ot upload %s", path);
     // a sample with a slice map belongs in usr/SLICES (Arlo) — sweep every

@@ -406,8 +406,10 @@ static void fs_setup_val(int i, char *v, size_t n)
         case FR_AUTO:  snprintf(v, n, "%s", fsm.autoplay ? "on" : "off"); break;
         // deliberately NOT on the results page: deleting a take should take a
         // deliberate trip to Setup, not a stray hold while browsing
+        // the job's name counts only once it INSTALLED: a failed fetch left
+        // cur_name naming the user's own sample, and Drop deleted it (#123)
         case FR_DROP:  snprintf(v, n, "%s", fs_audition_name()[0] ? fs_audition_name()
-                                          : (fsm.cur_name[0] ? fsm.cur_name : "-")); break;
+                                          : (fsm.phase == FS_DONE && fsm.cur_name[0] ? fsm.cur_name : "-")); break;
         default:       v[0] = 0; break;
     }
 }
@@ -434,7 +436,7 @@ static int fs_setup_action(int i)
             break;
         case FR_DROP:
             if (fs_audition_name()[0]) fs_audition_drop();
-            else if (fsm.cur_name[0])  { fs_audition(fsm.cur_name); fs_audition_drop(); }
+            else if (fsm.phase == FS_DONE && fsm.cur_name[0]) { fs_audition(fsm.cur_name); fs_audition_drop(); }
             break;
         default: break;
     }

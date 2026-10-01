@@ -20,6 +20,9 @@
 static const char *TAG = "IMPORT";
 
 volatile bool samp_import_busy = false;
+// a kick while a scan runs: walk the pool again when this pass ends. An upload
+// that finished during a scan was otherwise never converted (review #36).
+static volatile bool s_import_again = false;
 volatile int  samp_import_done = 0;
 volatile int  samp_import_fail = 0;
 volatile int  samp_import_seen = 0;
@@ -271,21 +274,45 @@ static int convert_pcm(imp_src_t *src, const char *dst_vfs)
 static int imp_publish(const char *src, const char *tmp, const char *dst)
 {
     struct stat st;
+    // the backup is named after the file it protects (X.WAV.BAK, not a pool
+    // extension and not *.TMP): the boot sweep deleted IMPBAK.TMP, which after
+    // a power cut between the two renames held the only copy (review #22).
+    // checkSDStructure's sweep puts X.WAV.BAK back when X.WAV is missing.
+    char bak[112];
+    snprintf(bak, sizeof(bak), "%s.BAK", dst);
     if (strcasecmp(src, dst) != 0) {
         if (stat(dst, &st) == 0) {
-            ESP_LOGE(TAG, "%s exists — keeping %s unconverted", dst, src);
-            remove(tmp);
-            return -1;
+            // a RE-UPLOAD: the web upload / download scratch twin (X.RAW or
+            // X.MP3) of an X.WAV that already exists — replace it, or the
+            // unconverted upload shadows the old WAV (.RAW wins the resolver)
+            // and plays as noise (review #137). Any other twin (X.AIF beside
+            // X.WAV) stays refused.
+            const char *se = strrchr(src, '.');
+            bool scratch = se && (strcasecmp(se, ".RAW") == 0 || strcasecmp(se, ".MP3") == 0);
+            if (!scratch) {
+                ESP_LOGE(TAG, "%s exists — keeping %s unconverted", dst, src);
+                remove(tmp);
+                return -1;
+            }
+            remove(bak);
+            if (rename(dst, bak) != 0) { ESP_LOGE(TAG, "backup of %s failed", dst); remove(tmp); return -1; }
+            if (rename(tmp, dst) != 0) {
+                ESP_LOGE(TAG, "rename -> %s failed, old file restored", dst);
+                rename(bak, dst);
+                remove(tmp);
+                return -1;
+            }
+            remove(bak);
+            remove(src);
+            ESP_LOGI(TAG, "%s replaced by the re-upload", dst);
+            return 0;
         }
         if (rename(tmp, dst) != 0) { ESP_LOGE(TAG, "rename -> %s failed", dst); remove(tmp); return -1; }
         remove(src);
         return 0;
     }
     // converting X.WAV in place: FAT can't rename over a file, so park the
-    // source under a backup name and put it back if the rename fails
-    char bak[96];
-    const char *sl = strrchr(dst, '/');
-    snprintf(bak, sizeof(bak), "%.*s/IMPBAK.TMP", sl ? (int)(sl - dst) : 0, dst);
+    // source under the backup name and put it back if the rename fails
     remove(bak);
     if (rename(src, bak) != 0) { ESP_LOGE(TAG, "backup of %s failed", src); remove(tmp); return -1; }
     if (rename(tmp, dst) != 0) {
@@ -423,6 +450,8 @@ static void import_task(void *pv)
     samp_import_done = 0;
     samp_import_fail = 0;
     samp_import_seen = 0;
+  do {
+    s_import_again = false;
     for (int di = 0; di < (int)(sizeof(dirs)/sizeof(dirs[0])); di++) {
         sd_lock_take();
         DIR *d = opendir(dirs[di]);
@@ -452,6 +481,7 @@ static void import_task(void *pv)
         closedir(d);
         sd_lock_give();
     }
+  } while (s_import_again);
     ESP_LOGI(TAG, "scan done: %d converted, %d failed",
              samp_import_done, samp_import_fail);
     samp_import_cur[0] = 0;
@@ -461,7 +491,7 @@ static void import_task(void *pv)
 
 int samp_import_start(void)
 {
-    if (samp_import_busy) return -1;
+    if (samp_import_busy) { s_import_again = true; return 0; }   // queued: the running scan walks again
     samp_import_busy = true;
     // unpinned, modest priority: it's a background chore
     // 20 KB: helix decodeMP3FileSync runs IN THIS TASK (the house MP3 tasks

@@ -1351,19 +1351,40 @@ function stageBatch(files){
   renderBatch();
 }
 var editIdx=-1;   // batch row being renamed inline (-1 = none)
+// what a batch row will be stored as: two rows with the same key overwrite each
+// other on the device (FA_CREATE_ALWAYS), and the summary used to count both
+function batchKey(b){return b.kind==='mod'||b.kind==='ot'?(nameOf(b)+'.'+b.ext).toUpperCase():nameOf(b).toUpperCase();}
+function batchDupes(){
+  var seen={},d={};
+  batchFiles.forEach(function(b){var k=batchKey(b);if(seen[k])d[k]=1;seen[k]=1;});
+  return d;
+}
+// a sample name already in the library: in usr/ the upload replaces it; in a
+// machine folder the device refuses it (one id, one file)
+function libClash(b){
+  if(b.kind==='mod'||b.kind==='ot')return null;
+  var n=nameOf(b).toUpperCase();
+  for(var i=0;i<libFiles.length;i++)if((libFiles[i].name||'').toUpperCase()===n)return libFiles[i];
+  return null;
+}
 function renderBatch(){
   var tb=document.getElementById('btb'),h='';
   document.getElementById('bcount').textContent=batchFiles.length;
+  var dup=batchDupes();
   batchFiles.forEach(function(b,i){
     var nameCell,actCell;
     if(i===editIdx){   // inline edit box, highlighted in place
-      nameCell='<input id="brn" value="'+esc(nameOf(b))+'" maxlength="8" style="width:84px;padding:2px 4px;background:#000;color:#fff;border:1px solid #0af" '
+      nameCell='<input id="brn" value="'+esc(nameOf(b))+'" maxlength="31" style="width:200px;padding:2px 4px;background:#000;color:#fff;border:1px solid #0af" '
         +'onkeydown="if(event.key===\'Enter\')commitRename();else if(event.key===\'Escape\')cancelRename()">';
       actCell='<button class="btn" onclick="commitRename()">OK</button>';
     }else{
-      // first 8 chars (what's stored) in white, the truncated tail in grey
+      // first 31 chars (what's stored) in white, any cut tail in grey
       nameCell=b.name ? '<span style="color:#fff">'+esc(b.name)+'</span>'
-        : '<span style="color:#fff">'+esc(b.base.substring(0,31)||'FILE')+'</span><span style="color:#666">'+esc(b.base.substring(8))+'</span>';
+        : '<span style="color:#fff">'+esc(b.base.substring(0,31)||'FILE')+'</span><span style="color:#666">'+esc(b.base.substring(31))+'</span>';
+      var lc=libClash(b);
+      if(dup[batchKey(b)])nameCell+=' <span style="color:#f66">same name in batch</span>';
+      else if(lc&&lc.dir&&lc.dir!=='pool')nameCell+=' <span style="color:#f66">taken in '+esc(lc.dir)+'</span>';
+      else if(lc)nameCell+=' <span style="color:#fa4">replaces</span>';
       actCell='<button class="btn" onclick="renameBatch('+i+')">rename</button> '
         +'<button class="btn del" onclick="removeBatch('+i+')">&#10005;</button>';
     }
@@ -1394,6 +1415,11 @@ function showBatchBtns(idle){   // idle = show Upload/Clear; else show Cancel
 function cancelBatch(){batchCancel=true;if(curXhr){try{curXhr.abort();}catch(e){}}}
 function doBatchUpload(){
   if(!batchFiles.length)return;
+  if(Object.keys(batchDupes()).length){   // the later file would overwrite the earlier
+    var m0=document.getElementById('bm');m0.className='msg er';
+    m0.textContent='Two files would be stored under the same name \u2014 rename one first';
+    return;
+  }
   var pr=document.getElementById('bpr'),bm=document.getElementById('bm'),N=batchFiles.length,i=0,ok=0,fail=0,lastErr='';
   batchCancel=false;showBatchBtns(false);
   pr.style.display='block';pr.value=0;
@@ -1501,10 +1527,19 @@ function blRelock(){
   });
 }
 function saveSet(){
-  var g=function(id){var e=document.getElementById(id);return e?e.value:'';};
-  // only the four text rows. Remote / Timezone / Listen / ClkOut are toggles
-  // that already wrote themselves, and resending them here would fight that.
-  var body=JSON.stringify({ssid:g('gsSsid'),passwd:g('gsPass'),apikey:g('gsKey'),hostname:g('gsHost')});
+  var m0=document.getElementById('sm');
+  // settings never loaded (a failed /settings renders blank rows): saving
+  // them would post an empty SSID and drop the unit off the LAN
+  if(!rpGlob||!rpGlob.s||rpGlob.s.ssid===undefined){
+    if(m0){m0.className='msg er';m0.textContent='Settings not loaded \u2014 nothing saved';}
+    return;
+  }
+  // only the four text rows, and only those actually on screen. Remote /
+  // Timezone / Listen / ClkOut are toggles that already wrote themselves, and
+  // resending them here would fight that.
+  var o={},rows={ssid:'gsSsid',passwd:'gsPass',apikey:'gsKey',hostname:'gsHost'};
+  Object.keys(rows).forEach(function(k){var e=document.getElementById(rows[k]);if(e)o[k]=e.value;});
+  var body=JSON.stringify(o);
   fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(function(r){
     var m=document.getElementById('sm');
     if(m){m.className='msg '+(r.ok?'ok':'er');

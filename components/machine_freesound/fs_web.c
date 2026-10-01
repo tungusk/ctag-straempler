@@ -11,6 +11,8 @@
 // purpose: the proxy hands freesound's JSON straight to a browser that wants to
 // parse it itself, while /fs/query drives the machine, so a query typed in the
 // browser lands in the SAME result list and recents the panel is showing.
+#include "sd_lock.h"
+#include "sampfile.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -148,6 +150,17 @@ static esp_err_t fs_fetch_handler(httpd_req_t *req)
     fs_safe_name(raw, "", name, sizeof(name));
     if (!name[0])
         return send_json_status(req, "400 Bad Request", "{\"error\":\"bad name\"}");
+    // an existing id would be shadowed (X.RAW beats the new X.WAV) and get the
+    // new sidecar, and Drop Last could then delete the user's file (#124);
+    // there is no id to suffix on this path, so refuse
+    {
+        char probe[96];
+        sd_lock_take();
+        int taken = sample_resolve(name, probe, sizeof(probe)) == 0;
+        sd_lock_give();
+        if (taken)
+            return send_json_status(req, "409 Conflict", "{\"error\":\"name taken\"}");
+    }
 
     int r = fs_fetch_start(url, name);
     if (r == -1)

@@ -150,8 +150,10 @@ static int fs_write_sidecar(const char *name, cJSON *meta, const char *id)
     snprintf(jsn_path, sizeof(jsn_path), "/sdcard/usr/%s.JSN", name);
     char *s = cJSON_Print(sc);
     cJSON_Delete(sc);
-    if (s) { writeJSONFile(jsn_path, s); free(s); }
-    return 0;
+    if (!s) return -1;                       // the caller's "sidecar write failed" (#133)
+    int rc = writeJSONFile(jsn_path, s);
+    free(s);
+    return rc;
 }
 
 typedef struct { char id[16]; char name[SAMPLE_ID_LEN]; char url[320]; } fs_job_t;

@@ -75,13 +75,30 @@ static void sweepDir(const char *dir){
     if(!d) return;
     char victims[16][64];
     int nv = 0;
+    char restores[4][64];                 // X.WAV.BAK whose X.WAV is missing
+    int nr = 0;
     struct dirent *e;
     while((e = readdir(d)) != NULL && nv < 16){
         if(e->d_name[0] == '.') continue;
         int L = strlen(e->d_name);
         if(L >= 64) continue;
         bool tmp = (L >= 4 && strcasecmp(e->d_name + L - 4, ".TMP") == 0) ||
-                   (L >= 5 && strcasecmp(e->d_name + L - 5, ".PART") == 0);
+                   (L >= 5 && strcasecmp(e->d_name + L - 5, ".PART") == 0) ||
+                   (L >= 4 && strcasecmp(e->d_name + L - 4, ".JTM") == 0);   // a JSON write cut short
+        // X.WAV.BAK: the importer's in-place backup (imp_publish). If X.WAV is
+        // gone a power cut fell between its two renames: put the backup back.
+        // Otherwise it is stale (review #22).
+        if (L >= 8 && strcasecmp(e->d_name + L - 4, ".BAK") == 0) {
+            char p[300], orig[300]; struct stat s;
+            snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+            snprintf(orig, sizeof(orig), "%s/%.*s", dir, L - 4, e->d_name);
+            (void)p;
+            if (stat(orig, &s) != 0) {    // renamed after closedir, like the removals
+                if (nr < 4) strcpy(restores[nr++], e->d_name);
+                continue;
+            }
+            tmp = true;
+        }
         bool zero = false;
         if(!tmp){
             char p[300]; struct stat s;
@@ -91,6 +108,14 @@ static void sweepDir(const char *dir){
         if(tmp || zero) strcpy(victims[nv++], e->d_name);
     }
     closedir(d);
+    for(int i = 0; i < nr; i++){
+        char p[300], orig[300];
+        int L = strlen(restores[i]);
+        snprintf(p, sizeof(p), "%s/%s", dir, restores[i]);
+        snprintf(orig, sizeof(orig), "%s/%.*s", dir, L - 4, restores[i]);
+        ESP_LOGW("SD", "sweep: restoring %s from its import backup", orig);
+        rename(p, orig);
+    }
     for(int i = 0; i < nv; i++){
         char p[300]; snprintf(p, sizeof(p), "%s/%s", dir, victims[i]);
         ESP_LOGW("SD", "sweep: removing incomplete file %s", p);
@@ -99,8 +124,12 @@ static void sweepDir(const char *dir){
 }
 
 static void sweepIncompleteFiles(){
-    sweepDir("/sdcard/usr");
-    sweepDir("/sdcard/usr/TRACKER");
+    // every folder the importer converts in (sampimport.c import_task), plus
+    // the tracker uploads — leftovers in the machine homes used to stay (#22)
+    static const char *const dirs[] = { "/sdcard/usr", "/sdcard/usr/REC", "/sdcard/usr/LOOPS",
+                                        "/sdcard/usr/SLICES", "/sdcard/usr/DRUMS", "/sdcard/usr/KEYS",
+                                        "/sdcard/usr/TAPE", "/sdcard/usr/TRACKER" };
+    for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); i++) sweepDir(dirs[i]);
 }
 
 void checkSDStructure(){
