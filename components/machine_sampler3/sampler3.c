@@ -27,6 +27,10 @@ static const char *TAG = "S3";
 s3_state_t s3;
 
 static worker_t s_rd;   // reader task lifecycle (worker.h)
+// the reader's DMA staging buffer: allocated in s3_start() so a failure falls
+// back to Stub instead of the first read storing through NULL (review #57),
+// freed in s3_stop() only once the reader is gone
+static int16_t *s_stage;
 // audio task -> reader for the gate workflow's SLOW actions (arm = SD prepare,
 // abort = stop+log). The fast actions — recording_trigger/finish on a clock
 // pulse — are bare atomics and run directly in the audio task.
@@ -145,7 +149,7 @@ static void rebuild_head(s3_voice_t *v, s3_reader_voice_t *rv, int16_t *stage)
 static void reader_task(void *pv)
 {
     s3_reader_voice_t rv[S3_NVOICES] = {0};
-    int16_t *stage = heap_caps_malloc(S3_CHUNK_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    int16_t *stage = (int16_t *)pv;              // s_stage, owned by start/stop
 
     while (s_rd.run) {
         bool worked = false;
@@ -338,7 +342,9 @@ static void reader_task(void *pv)
                     v->lsc_start = lw;
                     v->lsc_frames = got;
                     v->lsc_valid = got > 0;
-                    worked = true;
+                    // a read that returned nothing retries next pass: only
+                    // real work skips the loop's tick, or this spins (#61)
+                    worked = got > 0;
                 }
             }
 
@@ -403,7 +409,6 @@ static void reader_task(void *pv)
     }
     for (int i = 0; i < S3_NVOICES; i++)
         if (rv[i].f) { sd_lock_take(); fclose(rv[i].f); sd_lock_give(); }
-    free(stage);
     worker_exit(&s_rd);
 }
 
@@ -509,8 +514,10 @@ static esp_err_t s3_start(void)
     }
     cvmtx_init(&s3.mtx, s3_mtx_labels, S3M_N, s3_mtx_defaults);
     s3.rec_wait_vid = -1;
-    if (!worker_spawn(&s_rd, reader_task, "s3_reader", 4096, NULL, 6, NULL)) {
-        ESP_LOGE(TAG, "reader task create failed");
+    s_stage = heap_caps_malloc(S3_CHUNK_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    if (!s_stage || !worker_spawn(&s_rd, reader_task, "s3_reader", 4096, s_stage, 6, NULL)) {
+        ESP_LOGE(TAG, "%s", s_stage ? "reader task create failed" : "DMA stage alloc failed");
+        heap_caps_free(s_stage); s_stage = NULL;
         for (int k = 0; k < S3_NVOICES; k++) {
             free(s3.v[k].head); s3.v[k].head = NULL;
             free(s3.v[k].ring); s3.v[k].ring = NULL;
@@ -526,6 +533,7 @@ static void s3_stop(void)
 {
     // freeing under a live head/loop-cache rebuild corrupts the heap: leak instead
     if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking buffers"); return; }
+    heap_caps_free(s_stage); s_stage = NULL;
     for (int i = 0; i < S3_NVOICES; i++) {
         free(s3.v[i].head); s3.v[i].head = NULL;
         free(s3.v[i].ring); s3.v[i].ring = NULL;

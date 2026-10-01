@@ -110,6 +110,10 @@ static void dk_tl_update(void)
 
 
 static worker_t s_rd;   // reader task lifecycle (worker.h)
+// the reader's DMA buffers: allocated in deck_start() so a failure falls back
+// to Stub instead of the first fill storing through NULL (review #79), freed in
+// deck_stop() only once the reader is gone
+static int16_t *s_chunk, *s_tail;
 static volatile bool s_track_req = false;
 static char s_pending[DK_NAME_LEN];
 
@@ -121,8 +125,7 @@ static void reader_task(void *pv)
     char cur[DK_NAME_LEN] = "";
     // DMA-capable internal RAM per the SD house rule (with CAPS_ALLOC plain
     // malloc is internal anyway; explicit caps guard against config drift)
-    int16_t *chunk = heap_caps_malloc(4096 * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
-    int16_t *tail  = heap_caps_malloc(DK_XFADE * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    int16_t *chunk = s_chunk, *tail = s_tail;   // owned by start/stop
     uint32_t cur_ff = (uint32_t)-1;    // file frame the handle is parked at
 
     while (s_rd.run) {
@@ -230,7 +233,14 @@ static void reader_task(void *pv)
                     dk.wpos += got;
                 }
                 if (dk.loading && dk.wpos - dk.rpos_i >= DK_LOW_WATER) dk.loading = false;
-                continue;              // keep filling without the delay below
+                // keep filling without the delay below — but a read that got
+                // NOTHING (card error, card pulled; FatFS keeps the error
+                // sticky) falls through to the tick, or this spins at prio 6
+                // and starves httpd (review #78)
+                if (got > 0) continue;
+                static uint32_t s_zero_reads;       // one log line per ~1.3 s of retries
+                if ((s_zero_reads++ & 127) == 0)
+                    ESP_LOGW(TAG, "read at frame %u returned nothing", (unsigned)ff);
             }
             if (dk.loading && !lp && ff >= dk.file_frames) dk.loading = false;
 
@@ -260,8 +270,6 @@ static void reader_task(void *pv)
         vTaskDelay(1);   // >=1 tick: pdMS_TO_TICKS(5)==0 at 100Hz = busy-spin
     }
     if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
-    free(chunk);
-    free(tail);
     worker_exit(&s_rd);
 }
 
@@ -649,8 +657,13 @@ static esp_err_t deck_start(void)
     dk.rate_sm = 1.0f;
     dk.feel = 1.0f;
     dk.clk_scale = 1.0f;
-    if (!worker_spawn(&s_rd, reader_task, "deck_reader", 4096, NULL, 6, NULL)) {
-        ESP_LOGE(TAG, "reader task create failed");
+    s_chunk = heap_caps_malloc(4096 * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    s_tail  = heap_caps_malloc(DK_XFADE * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    if (!s_chunk || !s_tail ||
+        !worker_spawn(&s_rd, reader_task, "deck_reader", 4096, NULL, 6, NULL)) {
+        ESP_LOGE(TAG, "%s", (s_chunk && s_tail) ? "reader task create failed" : "DMA buffer alloc failed");
+        heap_caps_free(s_chunk); s_chunk = NULL;
+        heap_caps_free(s_tail);  s_tail = NULL;
         free(dk.ring); dk.ring = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -668,6 +681,8 @@ static void deck_stop(void)
     if (!deck_analysis_stop(3000)) ESP_LOGE(TAG, "analysis still running after stop");
     // a reader parked on sd_lock can outlive any wait: leak rather than free under it
     if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking ring"); return; }
+    heap_caps_free(s_chunk); s_chunk = NULL;
+    heap_caps_free(s_tail);  s_tail = NULL;
     free(dk.ring);
     dk.ring = NULL;
 }

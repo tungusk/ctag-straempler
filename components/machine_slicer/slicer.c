@@ -27,6 +27,10 @@ static const char *TAG = "SLICER";
 sl_state_t sl;
 
 static worker_t s_rd;   // reader task lifecycle (worker.h)
+// the reader's DMA staging buffer: allocated in slicer_start() so a failure
+// falls back to Stub instead of the auto-load's first read storing through
+// NULL (review #65), freed in slicer_stop() only once the reader is gone
+static int16_t *s_stage;
 #define SL_CHUNK 4096                    // reader chunk (frames); first is small
 
 // ---- slicing (reader-task context: env lives in PSRAM) ---------------------
@@ -222,7 +226,7 @@ static void reader_task(void *pv)
     FILE *f = NULL;
     sampfile_t sf = {0};
     bool was_reverse = sl.reverse;
-    int16_t *stage = heap_caps_malloc(SL_CHUNK * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    int16_t *stage = (int16_t *)pv;              // s_stage, owned by start/stop
     uint32_t fill_gen = 0;             // generation the ring fill belongs to
     uint32_t wfill = 0;                // playback-order frames delivered
     uint32_t fill_slice_len = 0;
@@ -318,7 +322,6 @@ static void reader_task(void *pv)
         vTaskDelay(1);   // >=1 tick: shorter is a busy-spin (house rule)
     }
     if (f) { sd_lock_take(); fclose(f); sd_lock_give(); }
-    free(stage);
     worker_exit(&s_rd);
 }
 
@@ -416,8 +419,10 @@ static esp_err_t slicer_start(void)
     }
     sl.pitch_src = 0;                       // CV1 = the module's 1V/oct jack
     cvmtx_init(&sl.mtx, slicer_mtx_labels, SLM_N, slicer_mtx_defaults);
-    if (!worker_spawn(&s_rd, reader_task, "sl_reader", 4096, NULL, 6, NULL)) {
-        ESP_LOGE(TAG, "reader task create failed");
+    s_stage = heap_caps_malloc(SL_CHUNK * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    if (!s_stage || !worker_spawn(&s_rd, reader_task, "sl_reader", 4096, s_stage, 6, NULL)) {
+        ESP_LOGE(TAG, "%s", s_stage ? "reader task create failed" : "DMA stage alloc failed");
+        heap_caps_free(s_stage); s_stage = NULL;
         free(sl.heads); sl.heads = NULL;
         free(sl.ring);  sl.ring = NULL;
         free(sl.env);   sl.env = NULL;
@@ -437,6 +442,7 @@ static void slicer_stop(void)
     // the reader aborts scans within one chunk (~10 ms) once run drops;
     // wait generously anyway — freeing under a live scan corrupts the heap
     if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking slabs"); return; }
+    heap_caps_free(s_stage); s_stage = NULL;
     free(sl.heads); sl.heads = NULL;
     free(sl.ring);  sl.ring = NULL;
     free(sl.env);   sl.env = NULL;

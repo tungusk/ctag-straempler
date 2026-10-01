@@ -55,6 +55,10 @@ void dd_fmt_beats(int q, char *out, int n)
 }
 
 static worker_t s_rd;   // reader task lifecycle (worker.h)
+// the reader's DMA buffers: allocated in dualdeck_start() so a failure falls
+// back to Stub instead of the first fill storing through NULL (review #89),
+// freed in dualdeck_stop() only once the reader is gone
+static int16_t *s_chunk, *s_tail;
 
 // playback counter -> FILE frame. The reader owns this mapping; everyone else
 // (engine, UI) goes through it. A loop is a mapping, not a cursor wrap.
@@ -237,8 +241,7 @@ static void reader_task(void *pv)
     FILE *f[2] = {NULL, NULL};
     char cur[2][DD_NAME_LEN] = {"", ""};
     uint32_t cur_ff[2] = {(uint32_t)-1, (uint32_t)-1};   // file frame each handle sits at
-    int16_t *chunk = heap_caps_malloc(4096 * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
-    int16_t *tail  = heap_caps_malloc(DD_XFADE * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    int16_t *chunk = s_chunk, *tail = s_tail;   // owned by start/stop
     while (s_rd.run) {
         reader_serve(&dd.d[0], &f[0], cur[0], &cur_ff[0], chunk, tail);
         reader_serve(&dd.d[1], &f[1], cur[1], &cur_ff[1], chunk, tail);
@@ -246,8 +249,6 @@ static void reader_task(void *pv)
     }
     for (int i = 0; i < 2; i++)
         if (f[i]) { sd_lock_take(); fclose(f[i]); sd_lock_give(); }
-    free(chunk);
-    free(tail);
     worker_exit(&s_rd);
 }
 
@@ -842,8 +843,13 @@ static esp_err_t dualdeck_start(void)
     dd.filt_cv[0] = dd.filt_cv[1] = 2048;   // both filters start CENTRE (off), not a heavy LP at 0
     dd.manual = true;
     dd.an_deck = -1;                        // memset zeroed it to 0, a valid deck idx
-    if (!worker_spawn(&s_rd, reader_task, "dd_reader", 4096, NULL, 6, NULL)) {
-        ESP_LOGE(TAG, "reader task create failed");
+    s_chunk = heap_caps_malloc(4096 * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    s_tail  = heap_caps_malloc(DD_XFADE * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
+    if (!s_chunk || !s_tail ||
+        !worker_spawn(&s_rd, reader_task, "dd_reader", 4096, NULL, 6, NULL)) {
+        ESP_LOGE(TAG, "%s", (s_chunk && s_tail) ? "reader task create failed" : "DMA buffer alloc failed");
+        heap_caps_free(s_chunk); s_chunk = NULL;
+        heap_caps_free(s_tail);  s_tail = NULL;
         free(dd.d[0].ring); dd.d[0].ring = NULL;
         free(dd.d[1].ring); dd.d[1].ring = NULL;
         return ESP_ERR_NO_MEM;
@@ -862,6 +868,8 @@ static void dualdeck_stop(void)
     dd.d[0].playing = dd.d[1].playing = false;
     // a reader parked on sd_lock can outlive any wait: leak rather than free under it
     if (!worker_stop(&s_rd, 3000)) { ESP_LOGE(TAG, "reader did not stop; leaking rings"); return; }
+    heap_caps_free(s_chunk); s_chunk = NULL;
+    heap_caps_free(s_tail);  s_tail = NULL;
     free(dd.d[0].ring); dd.d[0].ring = NULL;
     free(dd.d[1].ring); dd.d[1].ring = NULL;
 }
