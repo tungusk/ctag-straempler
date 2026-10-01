@@ -30,6 +30,12 @@ static esp_err_t slicer_ot_get_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No sample loaded");
         return ESP_FAIL;
     }
+    if (sl.loading) {                    // mid load/reslice: the map is half-written
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_sendstr(req, "Slicer is loading, try again");
+        return ESP_OK;
+    }
     if (sl.n_slices > SL_OT_SLICES) {
         char msg[64];
         snprintf(msg, sizeof(msg), "Octatrack max is 64 slices (have %d)", sl.n_slices);

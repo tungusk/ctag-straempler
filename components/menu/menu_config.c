@@ -17,30 +17,23 @@ void initTimeshift(int *tz_shift){
 }
 
 int wifiSettingsChanged(cJSON* curSettings){
-    cJSON *root = NULL, *settings = NULL;
-    root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
+    // compared BY KEY, as settings_post_handler does: the old loop paired the
+    // two objects by position, so a hand-edited CONFIG.JSN with a number ahead
+    // of ssid strcmp'd a NULL and panicked on every Settings exit (review #31)
+    int changed = 0;
+    cJSON *root = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
     if(root != NULL){
-        cJSON* element = NULL;
-        settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
-        cJSON* val;
-        int i = 0;
-        cJSON_ArrayForEach(element, settings){
-            if(cJSON_IsString(element) && element != NULL){
-                val = cJSON_GetArrayItem(curSettings, i);
-                if(val != NULL){
-                    if(strcmp(element->string, "ssid") == 0 || strcmp(element->string, "passwd") == 0){
-                        if(strcmp(element->valuestring, val->valuestring) != 0){
-                            cJSON_Delete(root);
-                            return 1;
-                        }
-                    }
-                }
-                i++;
-            }
+        cJSON *settings = cJSON_GetObjectItemCaseSensitive(root, "settings");
+        static const char *const keys[] = { "ssid", "passwd" };
+        for(int k = 0; k < 2 && !changed; k++){
+            cJSON *f = cJSON_GetObjectItemCaseSensitive(settings, keys[k]);
+            cJSON *c = cJSON_GetObjectItemCaseSensitive(curSettings, keys[k]);
+            if(!cJSON_IsString(f) || !cJSON_IsString(c)) continue;
+            if(strcmp(f->valuestring, c->valuestring) != 0) changed = 1;
         }
     }
     cJSON_Delete(root);
-    return 0;
+    return changed;
 }
 
 int configGetStringSetting(const char* key, char* out, int out_len){

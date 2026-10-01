@@ -111,8 +111,11 @@ int slicer_parse_ot(const char *name, uint32_t sample_len, uint32_t *out_pt, int
 
 int slicer_build_ot(uint8_t out[OT_SIZE], float bpm)
 {
-    if (sl.len == 0 || sl.n_slices < 1) return -1;
-    if (sl.n_slices > SL_OT_SLICES) return -1;   // Octatrack tops out at 64
+    // n_slices is volatile and the reader task can reslice under httpd: read
+    // it ONCE, so the range check and the loop bound agree (review #147)
+    int ns = sl.n_slices;
+    if (sl.len == 0 || ns < 1) return -1;
+    if (ns > SL_OT_SLICES) return -1;            // Octatrack tops out at 64
     if (bpm <= 0) bpm = 120.0f;
 
     memset(out, 0, OT_SIZE);
@@ -134,13 +137,13 @@ int slicer_build_ot(uint8_t out[OT_SIZE], float bpm)
     put_be32(out + 0x32, sl.len);                // trimEnd
     put_be32(out + 0x36, 0);                     // loopPoint
 
-    for (int i = 0; i < sl.n_slices; i++) {
+    for (int i = 0; i < ns; i++) {
         uint8_t *s = out + OT_SLICES_AT + i * 12;
         put_be32(s,     sl.slice_pt[i]);         // start
         put_be32(s + 4, sl.slice_pt[i + 1]);     // end = next start (contiguous)
         put_be32(s + 8, 0xFFFFFFFF);             // no slice loop
     }
-    put_be32(out + OT_COUNT_AT, (uint32_t)sl.n_slices);
+    put_be32(out + OT_COUNT_AT, (uint32_t)ns);
     put_be16(out + OT_CSUM_AT, ot_checksum(out));
     return 0;
 }

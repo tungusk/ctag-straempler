@@ -391,7 +391,10 @@ int dualdeck_load_track(int deck, const char *name)
     cJSON *root = readJSONFileAsCJSON(jp);
     if (root) {
         cJSON *j;
-        if ((j = cJSON_GetObjectItemCaseSensitive(root, "bpm")) && cJSON_IsNumber(j))
+        // a sane tempo or none: an absurd hand-edited value read as unknown so
+        // it is re-analysed; past ~2.6e6 beat_tf was 0 and rate_sm went NaN (#94)
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, "bpm")) && cJSON_IsNumber(j) &&
+            j->valuedouble >= 20.0 && j->valuedouble <= 1000.0)
             v->track_bpm = (float)j->valuedouble;
         if ((j = cJSON_GetObjectItemCaseSensitive(root, "grid")) && cJSON_IsNumber(j))
             v->grid_offset = (uint32_t)j->valuedouble;
@@ -752,7 +755,9 @@ static void deck_fire(int i)
 static float deck_rate(dd_deck_t *v)
 {
     float rate = 1.0f;
-    if (v->track_bpm > 20.0f && clock_core()->clk.locked && clock_core()->clk.period > 0) {
+    // beat_tf 0 (an absurd bpm) would make every phase below NaN (#94)
+    if (v->track_bpm > 20.0f && clock_core()->clk.locked && clock_core()->clk.period > 0 &&
+        (uint32_t)(60.0f * DD_RATE / v->track_bpm) > 0) {
         uint32_t beat_tf = (uint32_t)(60.0f * DD_RATE / v->track_bpm);
         float seg_tf = (float)beat_tf / DD_PPB_EFF();   // EFFECTIVE: the fold counts here
         float base = seg_tf / (float)clock_core()->clk.period;

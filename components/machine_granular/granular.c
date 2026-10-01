@@ -172,6 +172,7 @@ static void granular_process(int32_t out[MACHINE_BLOCK],
 
     for (int f = 0; f < frames; f++) {
         gr.spawn_phase += spawn_per_sample;
+        if (!(gr.spawn_phase >= 0.0f)) gr.spawn_phase = 0.0f;   // no standing deficit (or NaN)
         while (gr.spawn_phase >= 1.0f) { gr.spawn_phase -= 1.0f; spawn_grain(); }
 
         float l = 0.0f, r = 0.0f;
@@ -247,14 +248,18 @@ static cJSON *granular_preset_save(void)
     return o;
 }
 
+static int gr_clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
 static void granular_preset_load(const cJSON *node)
 {
     if (!node) return;
     cJSON *j;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "grain_ms")) && cJSON_IsNumber(j)) gr.grain_ms = j->valueint;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "density")) && cJSON_IsNumber(j))  gr.density = j->valueint;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "spray")) && cJSON_IsNumber(j))    gr.spray = j->valueint;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "spread")) && cJSON_IsNumber(j))   gr.spread = j->valueint;
+    // the Setup rows' ranges (granular_menu.c gr_adj): the web form is a free
+    // number box, and density in the millions stopped the audio task (#118)
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "grain_ms")) && cJSON_IsNumber(j)) gr.grain_ms = gr_clampi(j->valueint, 10, 500);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "density")) && cJSON_IsNumber(j))  gr.density = gr_clampi(j->valueint, 1, 120);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "spray")) && cJSON_IsNumber(j))    gr.spray = gr_clampi(j->valueint, 0, 100);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "spread")) && cJSON_IsNumber(j))   gr.spread = gr_clampi(j->valueint, 0, 100);
     if ((j = cJSON_GetObjectItemCaseSensitive(node, "sample")) && cJSON_IsString(j) && j->valuestring[0])
         granular_load(j->valuestring);
     cvmtx_load(&gr.mtx, node);

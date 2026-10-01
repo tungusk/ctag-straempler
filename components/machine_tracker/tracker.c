@@ -299,6 +299,18 @@ static void render_task(void *pv)
 {
     s_ctx = xmp_create_context();
     s_have_module = false;
+    if (!s_ctx) {
+        // no RAM for libxmp's context (PSRAM nearly gone): every xmp_* call
+        // and the free at exit would dereference NULL (review #117). Stay
+        // alive so worker_stop() works, failing each load with a reason.
+        ESP_LOGE(TAG, "xmp_create_context failed");
+        strlcpy(trk.fail_why, "no RAM for player", sizeof(trk.fail_why));
+        while (s_rd.run) {
+            if (trk.load_req) { trk.load_req = false; trk.state = TRK_FAIL; }
+            vTaskDelay(1);
+        }
+        worker_exit(&s_rd);
+    }
 
     bool     cv6_grabbed = false;   // CV6 has MOVED since engage: it owns the window
     int      cv6_applied = -1;      // knob value the current start was computed AT

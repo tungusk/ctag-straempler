@@ -297,7 +297,10 @@ int deck_load_track(const char *name)
     cJSON *root = readJSONFileAsCJSON(jp);
     if (root) {
         cJSON *j;
-        if ((j = cJSON_GetObjectItemCaseSensitive(root, "bpm")) && cJSON_IsNumber(j))
+        // a sane tempo or none: an absurd hand-edited value read as unknown, so
+        // auto-analysis repairs it (and beat_tf can never reach 0) (#84)
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, "bpm")) && cJSON_IsNumber(j) &&
+            j->valuedouble >= 20.0 && j->valuedouble <= 1000.0)
             dk.bpm_raw = (float)j->valuedouble;
         if ((j = cJSON_GetObjectItemCaseSensitive(root, "grid")) && cJSON_IsNumber(j))
             dk.grid_offset = (uint32_t)j->valuedouble;
@@ -364,6 +367,7 @@ void deck_seek_beats(int beats)
     uint32_t beat_tf = (dk.track_bpm > 20.0f)
         ? (uint32_t)(60.0f * DK_RATE / dk.track_bpm)
         : DK_RATE;                              // no grid yet: 1 s steps
+    if (!beat_tf) beat_tf = DK_RATE;            // as every other caller guards it (#84)
     // snap current position to the nearest grid beat, then step whole beats —
     // scrubbing during sync'd playback lands phase-true by construction
     int64_t rel = (int64_t)dk_map(dk.rpos_i) - (int64_t)dk.grid_offset;
