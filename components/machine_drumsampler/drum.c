@@ -152,6 +152,8 @@ static esp_err_t drum_start(void)
     dr.mtx.nodirty = (1u << DRM_LEVEL) | (1u << DRM_DECAY);
     svf_reset(&dr.flt_l);
     svf_reset(&dr.flt_r);
+    svf_reset(&dr.snd_l);
+    svf_reset(&dr.snd_r);
     dr.sens = 1;            // Med
     dr.sel_src[0] = 5;      // knob6/knob7 — the two fully-good CV channels
     dr.sel_src[1] = 6;
@@ -470,7 +472,12 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
             // read still wraps inside the loop window), so it can't be the thing
             // that ends the voice — only a retrigger does
             bool inf = (ll && p->loop_reps == DR_REPS_INF);
-            if (!inf && pos >= len) { p->playing = false; break; }
+            if (!inf && pos >= len) {
+                // a retrigger/choke queued in the last few frames: land it now
+                // instead of ending the voice with it still pending (#75)
+                if (p->retrig) { p->fade = 0; continue; }
+                p->playing = false; break;
+            }
             int env;
             if (p->retrig) {
                 env = p->fade;
@@ -550,7 +557,9 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
     // their rings/tails are still decaying
     bool flt_live = dr.flt_box && dr.flt_on;
     bool rv_live = (dr.rv.mode != RV_OFF) && dr.rv.slab;
-    if (!any && !flt_live && !rv_live && !fx_live) return;
+    // nothing to render — but out[] is the audio task's persistent block and
+    // must be written, or the last block repeats as a ~1.4 kHz buzz (#73)
+    if (!any && !flt_live && !rv_live && !fx_live) { memset(out, 0, MACHINE_BLOCK * sizeof(int32_t)); return; }
 
     // ---- FX bus through the rack's generic slots (FX1/FX2) ----------------------
     // pack the wet bus into a machine-format block, run the shared chain, fold
@@ -572,9 +581,12 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
     }
 
     // a NaN in an SVF is PERMANENT silence — it would read as dead hardware
-    if (!(fabsf(dr.flt_l.lp) < 1e9f) || !(fabsf(dr.flt_r.lp) < 1e9f)) {
+    if (!(fabsf(dr.flt_l.lp) < 1e9f) || !(fabsf(dr.flt_r.lp) < 1e9f) ||
+        !(fabsf(dr.snd_l.lp) < 1e9f) || !(fabsf(dr.snd_r.lp) < 1e9f)) {
         svf_reset(&dr.flt_l);
         svf_reset(&dr.flt_r);
+        svf_reset(&dr.snd_l);
+        svf_reset(&dr.snd_r);
     }
 
     for (int f = 0; f < frames; f++) {
@@ -597,16 +609,19 @@ static void drum_process(int32_t out[MACHINE_BLOCK],
         if (ro32 > 32767) ro32 = 32767; else if (ro32 < -32768) ro32 = -32768;
         out[f * 2]     = lo32 << 16;
         out[f * 2 + 1] = ro32 << 16;
-        if (dr.rv_post && flt_live && dr.flt_mode) {
-            // POST tap: re-derive the send from the FILTERED mix, keeping each
-            // pad's send weighting. The filter is linear, so filtering the
-            // pre-send bus is equivalent to scaling the filtered mix by the
-            // bus/dry ratio — cheaper and phase-true (no second SVF pair).
-            int32_t dl = accL[f], dr_ = accR[f];
-            if (dl > 32767) dl = 32767; else if (dl < -32768) dl = -32768;
-            if (dr_ > 32767) dr_ = 32767; else if (dr_ < -32768) dr_ = -32768;
-            sndL[f] = dl ? (int32_t)(((int64_t)sndL[f] * lo32) / dl) : 0;
-            sndR[f] = dr_ ? (int32_t)(((int64_t)sndR[f] * ro32) / dr_) : 0;
+        if (rv_live && dr.rv_post && flt_live && dr.flt_mode) {
+            // POST tap: the send bus through its OWN copy of the filter. The old
+            // shortcut scaled the filtered mix by send/dry, which only holds for
+            // one constant ratio: two pads at different sends, or a pad on the
+            // FX bus, made it unbounded wherever the dry sum crossed zero (#74)
+            float slo, shi;
+            svf_step(&dr.snd_l, (float)sndL[f], dr.flt_f, dr.flt_q, &slo, NULL, &shi);
+            sndL[f] = (int32_t)(dr.flt_mode == 1 ? slo : shi);
+            svf_step(&dr.snd_r, (float)sndR[f], dr.flt_f, dr.flt_q, &slo, NULL, &shi);
+            sndR[f] = (int32_t)(dr.flt_mode == 1 ? slo : shi);
+        } else {
+            svf_park(&dr.snd_l, (float)sndL[f]);   // re-engaging can't thump
+            svf_park(&dr.snd_r, (float)sndR[f]);
         }
     }
     if (rv_live) {

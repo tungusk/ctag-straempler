@@ -221,6 +221,7 @@ typedef struct {
                                   // unlike the pads' stepped take-over below)
     float flt_f, flt_q;           // slewed coefficient + damping (engine only)
     svf_t flt_l, flt_r;           // engine only
+    svf_t snd_l, snd_r;           // the same filter on the reverb SEND bus (POST tap)
 
     // master REVERB (shared util/reverb.h): sits AFTER the filter on the
     // summed mix. Slab is LAZY (an OFF reverb costs no PSRAM). It is the
