@@ -16,9 +16,15 @@ typedef struct {
     setup_kind_t kind;
 } setup_item_t;
 
+struct ptab_s;
+
 typedef struct {
     const setup_item_t *items;
     int          n;
+    // optional (2026-10-04): the rows come from a parameter table (ptab.h)
+    // instead — items/n/render/adjust/action are then unused, and the row count
+    // is the table's own, so it cannot go stale.
+    const struct ptab_s *tab;
     const char  *title;        // page title, top-left
     const char  *aff_label;    // top affordance label (e.g. "Machine"); pos -1
     int          aff_target;   // menu id when the affordance is pressed

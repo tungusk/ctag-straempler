@@ -1,5 +1,6 @@
 #pragma once
 #include "cvmtx.h"
+#include "ptab.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include "svf.h"
@@ -39,6 +40,7 @@ typedef struct {
     lp_track_t tr[LP_TRACKS];
     volatile int  sel;            // selected lane (UI + trig target)
     cvmtx_t mtx;                  // assignable CV matrix (destinations below)
+    ptab_rt_t pmx;                // its labels/defaults, built from lp_dests (ptab.h)
 
     // settings (UI writes, engine reads)
     volatile bool sync_on;
@@ -69,7 +71,15 @@ extern lp_state_t lp;
 // Selecting another track RE-ARMS all four, so the track you land on keeps the
 // level and pan it had until you actually move a control.
 enum { LPM_LEVEL = 0, LPM_PAN, LPM_CUTOFF, LPM_RESO, LPM_N };
-extern const char *const lp_mtx_labels[LPM_N];
+
+// The Looper's PARAMETER TABLE (ptab.h): Setup rows + preset keys live in
+// looper_menu.c (lp_tab), the knob destinations in looper.c (lp_dests).
+// LPS_* are the state bits lp_state() reports; a row or destination names the
+// bits it needs in its `when` / `unless`.
+#define LPS_FILTER  (1u << 0)     // the per-track bandpass is on
+extern const ptab_t lp_tab;
+extern const pt_dest_t lp_dests[LPM_N];
+uint16_t lp_state(void);
 
 // save track i's RAM loop to the SD library (LOOP_NNNN.RAW + .JSN). Returns 0
 // on success, -1 if the track is empty or the write failed. Call from UI task.

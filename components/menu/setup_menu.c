@@ -8,6 +8,32 @@
 #include <stdio.h>
 #include <string.h>
 #include "machine.h"      // machine_active() -> its Setup page for the web mirror
+#include "ptab.h"
+
+// One page, two ways to describe its rows: the machine's own items[] + index
+// callbacks, or a parameter table (m->tab). Everything below asks through these.
+static int row_n(const setup_menu_t *m) { return m->tab ? m->tab->n_rows : m->n; }
+static const char *row_label(const setup_menu_t *m, int i)
+{
+    const char *l = m->tab ? m->tab->rows[i].label : m->items[i].label;
+    return l ? l : "";
+}
+static setup_kind_t row_kind(const setup_menu_t *m, int i)
+{ return m->tab ? ptab_row_kind(m->tab, i) : m->items[i].kind; }
+static bool row_live(const setup_menu_t *m, int i)
+{ return m->tab ? ptab_row_live(m->tab, i) : true; }
+static void row_render(const setup_menu_t *m, int i, char *v, size_t n)
+{
+    if (m->tab) ptab_row_render(m->tab, i, v, n);
+    else if (m->render) m->render(i, v, n);
+}
+static void row_adjust(const setup_menu_t *m, int i, int dir)
+{
+    if (m->tab) ptab_row_adjust(m->tab, i, dir);
+    else if (m->adjust) m->adjust(i, dir);
+}
+static int row_action(const setup_menu_t *m, int i)
+{ return m->tab ? ptab_row_action(m->tab, i) : (m->action ? m->action(i) : 0); }
 
 static void draw(setup_menu_t *m)
 {
@@ -27,18 +53,19 @@ static void draw(setup_menu_t *m)
 
     for (int r = 0; r < vis; r++) {
         int i = top + r;
-        if (i >= m->n) break;
+        if (i >= row_n(m)) break;
         int y = y0 + r * row_h;
         _bg = (i == m->pos) ? (color_t){10, 18, 56} : TFT_BLACK;
         _fg = (i == m->pos && m->sel) ? TFT_CYAN : TFT_WHITE;
+        if (!row_live(m, i)) _fg = TFT_DARKGREY;   // not in this state: dim, inert
         TFT_fillRect(0, y - 2, _width, fh + 4, _bg);
-        TFT_print((char *)m->items[i].label, 8, y);
+        TFT_print((char *)row_label(m, i), 8, y);
 
         char v[28]; v[0] = 0;
-        if (m->render) m->render(i, v, sizeof(v));
+        row_render(m, i, v, sizeof(v));
         // value fixed at a right position padded by ONE char, so it never shifts
         // when selected; in RANGE edit mode brackets hug it directly (no spaces)
-        bool editing = (i == m->pos && m->sel && m->items[i].kind == ST_RANGE);
+        bool editing = (i == m->pos && m->sel && row_kind(m, i) == ST_RANGE);
         int cw = TFT_getStringWidth("]");
         int vw = TFT_getStringWidth(v);
         int vx = _width - 10 - cw - vw;
@@ -82,13 +109,14 @@ int setup_menu_remote_json(char *out, size_t n)
     jesc(t, sizeof(t), m->title ? m->title : "");
     jesc(a, sizeof(a), m->aff_label ? m->aff_label : "");
     int p = snprintf(out, n, "{\"title\":\"%s\",\"aff\":\"%s\",\"pos\":%d,\"rows\":[", t, a, m->pos);
-    for (int i = 0; i < m->n && p < (int)n - 96; i++) {
+    for (int i = 0; i < row_n(m) && p < (int)n - 96; i++) {
         raw[0] = 0;
-        if (m->render) m->render(i, raw, sizeof(raw));
-        jesc(l, sizeof(l), m->items[i].label ? m->items[i].label : "");
+        row_render(m, i, raw, sizeof(raw));
+        jesc(l, sizeof(l), row_label(m, i));
         jesc(v, sizeof(v), raw);
-        p += snprintf(out + p, n - p, "%s{\"l\":\"%s\",\"k\":%d,\"v\":\"%s\"}",
-                      i ? "," : "", l, (int)m->items[i].kind, v);
+        // "d":1 = the row is not live in the machine's current state (ptab.h)
+        p += snprintf(out + p, n - p, "%s{\"l\":\"%s\",\"k\":%d,\"v\":\"%s\"%s}",
+                      i ? "," : "", l, (int)row_kind(m, i), v, row_live(m, i) ? "" : ",\"d\":1");
     }
     p += snprintf(out + p, n - p, "]}");
     return p;
@@ -98,10 +126,10 @@ int setup_menu_remote_json(char *out, size_t n)
 void setup_menu_remote_adjust(int i, int dir, int cnt)
 {
     setup_menu_t *m = (setup_menu_t *)active_setup();
-    if (!m || i < 0 || i >= m->n || m->items[i].kind == ST_ACTION || !m->adjust) return;
+    if (!m || i < 0 || i >= row_n(m) || row_kind(m, i) == ST_ACTION || (!m->tab && !m->adjust)) return;
     if (cnt < 1) cnt = 1;
     if (cnt > 50) cnt = 50;
-    for (int k = 0; k < cnt; k++) m->adjust(i, dir < 0 ? -1 : +1);
+    for (int k = 0; k < cnt; k++) row_adjust(m, i, dir < 0 ? -1 : +1);
     s_rem_m = m; s_rem_pos = i;
 }
 
@@ -109,34 +137,35 @@ int setup_menu_event(setup_menu_t *m, int event)
 {
     switch (event) {
         case EV_ENTERED_MENU:
-            m->pos = (m == s_rem_m && s_rem_pos >= 0 && s_rem_pos < m->n) ? s_rem_pos : 0;
+            m->pos = (m == s_rem_m && s_rem_pos >= 0 && s_rem_pos < row_n(m)) ? s_rem_pos : 0;
             s_rem_m = NULL; s_rem_pos = -1;
             m->sel = 0;
             draw(m);
             break;
         case EV_FWD:
-            if (m->sel) { if (m->adjust) m->adjust(m->pos, +1); }     // editing a RANGE
-            else { m->pos++; if (m->pos >= m->n) m->pos = -1; }        // navigate (wrap to affordance)
+            if (m->sel) row_adjust(m, m->pos, +1);                     // editing a RANGE
+            else { m->pos++; if (m->pos >= row_n(m)) m->pos = -1; }    // navigate (wrap to affordance)
             draw(m);
             break;
         case EV_BWD:
-            if (m->sel) { if (m->adjust) m->adjust(m->pos, -1); }
-            else { m->pos--; if (m->pos < -1) m->pos = m->n - 1; }
+            if (m->sel) row_adjust(m, m->pos, -1);
+            else { m->pos--; if (m->pos < -1) m->pos = row_n(m) - 1; }
             draw(m);
             break;
         case EV_SHORT_PRESS:
             if (m->pos == -1) return m->aff_target;                    // top affordance
-            switch (m->items[m->pos].kind) {
+            switch (row_kind(m, m->pos)) {
                 case ST_TOGGLE:                                        // press CYCLES
-                    if (m->adjust) m->adjust(m->pos, +1);
+                    row_adjust(m, m->pos, +1);
                     draw(m);
                     break;
                 case ST_RANGE:                                        // press enters/exits [ ] edit
+                    if (!m->sel && !row_live(m, m->pos)) break;        // a dim row has no edit mode
                     m->sel = !m->sel;
                     draw(m);
                     break;
                 case ST_ACTION: {                                     // press fires -> sub-page
-                    int t = m->action ? m->action(m->pos) : 0;
+                    int t = row_action(m, m->pos);
                     if (t) return t;
                     draw(m);
                     break;
@@ -155,7 +184,7 @@ int setup_menu_event(setup_menu_t *m, int event)
 // e.g. returning from a sub-page to the line that opened it. Clamps out-of-range.
 void setup_menu_enter_at(setup_menu_t *m, int pos)
 {
-    m->pos = (pos >= 0 && pos < m->n) ? pos : 0;
+    m->pos = (pos >= 0 && pos < row_n(m)) ? pos : 0;
     m->sel = 0;
     draw(m);
 }

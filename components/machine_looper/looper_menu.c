@@ -325,75 +325,63 @@ static int looper_live_handler(int it_id, int event, void *ev_data){
 // mode/list cycles are ST_TOGGLE (press cycles), numeric rows are ST_RANGE
 // (press [ ] edit + turn), the Save/Bounce action rows are ST_ACTION (press
 // fires, stays on the page and repaints with its result message).
-static const setup_item_t setup_items[] = {
-    {"Sync",      ST_TOGGLE},   // 0
-    {"Clock Src", ST_TOGGLE},   // 1  clock-source cycle
-    {"Bars",      ST_RANGE },   // 2
-    {"Monitor",   ST_TOGGLE},   // 3
-    {"BP Filter", ST_TOGGLE},   // 4
-    {"Clock PPQ", ST_RANGE },   // 5  ladder 1/2/4/8
-    {"Save Trk",  ST_ACTION},   // 6
-    {"Bounce",    ST_ACTION},   // 7
-    {"CV Matrix", ST_ACTION},   // 8
-};
-#define SETUP_N ((int)(sizeof(setup_items) / sizeof(setup_items[0])))
-#define SETUP_MATRIX_ROW 8
-#define SETUP_SAVE_ROW 6
-#define SETUP_BOUNCE_ROW 7
+// Since 2026-10-04 the rows are ONE table (ptab.h): label, preset key, storage
+// and range together, so the page, the web mirror and the preset cannot drift.
 static const char *s_save_msg = "";   // transient result shown on the Save row
 static const char *s_bounce_msg = ""; // transient result shown on the Bounce row
 
-static void setup_value_str(int i, char *v, size_t n){
-    switch(i){
-        case 0: snprintf(v, n, "%s", lp.sync_on ? "ON" : "OFF"); break;
-        case 1: snprintf(v, n, "%s", clock_source_name(clock_core_src())); break;   // core clock
-        case 2: snprintf(v, n, "%d", lp.bars); break;
-        case 3: snprintf(v, n, "%s", lp.monitor ? "ON" : "OFF"); break;
-        case 4: snprintf(v, n, "%s", lp.filter_on ? "ON" : "OFF"); break;
-        case 5: snprintf(v, n, "%d", looper_get_ppq()); break;
-        case 6: snprintf(v, n, "%s trk %d",
-                         s_save_msg[0] ? s_save_msg : "press:", lp.sel + 1); break;
-        case 7: snprintf(v, n, "%s",
-                         s_bounce_msg[0] ? s_bounce_msg : "press: all->1"); break;
-        default: v[0] = 0;
-    }
+// the CORE clock's source and ppq (module-wide, write-through; the source pick
+// wakes the ear on AUDIO). TR sources are still reachable from the web /settings.
+static void clk_src_str(char *v, size_t n){ snprintf(v, n, "%s", clock_source_name(clock_core_src())); }
+static void clk_src_adj(int dir){ clock_ui_cycle_src(dir); }
+static void clk_ppq_str(char *v, size_t n){ snprintf(v, n, "%d", looper_get_ppq()); }
+static void clk_ppq_adj(int dir){ clock_ui_cycle_ppq(dir); }   // ladder 1/2/4/8
+
+static void bars_adj(int dir){              // doubling ladder 1/2/4/8, wraps
+    int b = (dir > 0) ? lp.bars * 2 : lp.bars / 2;
+    lp.bars = (b > 8) ? 1 : (b < 1) ? 8 : b;
 }
 
-static void setup_adj(int i, int dir){
-    switch(i){
-        case 0: lp.sync_on = !lp.sync_on; break;
-        case 1:
-            // the CORE clock's source (module-wide, write-through; wakes the ear
-            // on AUDIO). TR sources are still reachable from the web /settings.
-            clock_ui_cycle_src(dir);
-            break;
-        case 2: {
-            int b = (dir > 0) ? lp.bars * 2 : lp.bars / 2;
-            lp.bars = (b > 8) ? 1 : (b < 1) ? 8 : b;
-            break;
-        }
-        case 3: lp.monitor = !lp.monitor; break;
-        case 5: clock_ui_cycle_ppq(dir); break;   // core clock ppq ladder (1/2/4/8)
-        case 4: lp.filter_on = !lp.filter_on; break;
-    }
-}
-
-// ST_ACTION press: Save writes the selected track to the SD library; Bounce
+// ACTION rows: Save writes the selected track to the SD library; Bounce
 // resamples all tracks into track 1. Both do their work in place, set the row's
 // transient result message, and return 0 so the framework repaints the page.
-static int looper_setup_action(int i){
-    if(i == SETUP_SAVE_ROW){
-        int r = looper_save_track(lp.sel);
-        s_save_msg = (r == 0) ? "SAVED" : (r == -3) ? "FAILED" : "EMPTY";
-    } else if(i == SETUP_BOUNCE_ROW){
-        int r = looper_bounce();
-        s_bounce_msg = (r == 0) ? "BOUNCED" : (r == -2) ? "STOP REC" : "EMPTY";
-        if (r == 0) lp.sel = 0;   // the bounce lands on track 1 — focus it
-    } else if(i == SETUP_MATRIX_ROW){
-        return M_LOOPER_MATRIX;
-    }
+static void save_str(char *v, size_t n){
+    snprintf(v, n, "%s trk %d", s_save_msg[0] ? s_save_msg : "press:", lp.sel + 1);
+}
+static int save_act(void){
+    int r = looper_save_track(lp.sel);
+    s_save_msg = (r == 0) ? "SAVED" : (r == -3) ? "FAILED" : "EMPTY";
     return 0;
 }
+static void bounce_str(char *v, size_t n){
+    snprintf(v, n, "%s", s_bounce_msg[0] ? s_bounce_msg : "press: all->1");
+}
+static int bounce_act(void){
+    int r = looper_bounce();
+    s_bounce_msg = (r == 0) ? "BOUNCED" : (r == -2) ? "STOP REC" : "EMPTY";
+    if (r == 0) lp.sel = 0;   // the bounce lands on track 1 — focus it
+    return 0;
+}
+static int matrix_act(void){ return M_LOOPER_MATRIX; }
+
+static const pt_row_t lp_rows[] = {
+    { .label = "Sync",      .key = "sync",    .type = PT_BOOL, .p = (void *)&lp.sync_on },
+    { .label = "Clock Src",                   .type = PT_TOGGLE, .render = clk_src_str, .adjust = clk_src_adj },
+    { .label = "Bars",      .key = "bars",    .type = PT_INT,  .p = (void *)&lp.bars, .lo = 1, .hi = 8,
+      .adjust = bars_adj },
+    { .label = "Monitor",   .key = "monitor", .type = PT_BOOL, .p = (void *)&lp.monitor },
+    { .label = "BP Filter", .key = "filter",  .type = PT_BOOL, .p = (void *)&lp.filter_on },
+    { .label = "Clock PPQ",                   .type = PT_RANGE, .render = clk_ppq_str, .adjust = clk_ppq_adj },
+    { .label = "Save Trk",                    .type = PT_ACTION, .render = save_str,   .action = save_act },
+    { .label = "Bounce",                      .type = PT_ACTION, .render = bounce_str, .action = bounce_act },
+    { .label = "CV Matrix",                   .type = PT_ACTION, .action = matrix_act },
+};
+
+const ptab_t lp_tab = {
+    .rows  = lp_rows,  .n_rows  = PT_N(lp_rows),
+    .dests = lp_dests, .n_dests = LPM_N,
+    .state = lp_state,
+};
 
 static int looper_matrix_handler(int it_id, int event, void *ev_data)
 {
@@ -403,9 +391,8 @@ static int looper_matrix_handler(int it_id, int event, void *ev_data)
 }
 
 static setup_menu_t lp_setup = {
-    .items = setup_items, .n = SETUP_N, .title = "Looper Setup",
+    .tab = &lp_tab, .title = "Looper Setup",
     .aff_label = "Machine", .aff_target = M_MORE, .live_target = M_LOOPER_LIVE,
-    .render = setup_value_str, .adjust = setup_adj, .action = looper_setup_action,
 };
 
 static int looper_setup_handler(int it_id, int event, void *ev_data){

@@ -62,10 +62,25 @@ static void track_start_record(lp_track_t *t)
 // CV1 cutoff   CV2 resonance   CV6 level   CV7 pan  — the same wiring as before,
 // now assignable. Cutoff and resonance stay on the 1V/oct jacks by default: they
 // are the "patch an envelope at it" controls, not knob jobs.
-const char *const lp_mtx_labels[LPM_N] = {
-    "Track level", "Track pan", "Cutoff", "Resonance",
+// All four drive the SELECTED track (focus-style, see looper_priv.h). The two
+// filter controls are live only while the bandpass is on; switched off they are
+// held, so switching it on arms them where the control then sits.
+static void lp_k_level(float k)  { lp.tr[lp.sel].vol    = (uint16_t)(k * 255.0f); }
+static void lp_k_pan(float k)    { lp.tr[lp.sel].pan    = (uint16_t)(k * 4095.0f); }
+static void lp_k_cutoff(float k) { lp.tr[lp.sel].cutoff = 295 + (uint16_t)(k * 3800.0f); }
+static void lp_k_reso(float k)   { lp.tr[lp.sel].res    = 900 + (uint16_t)(k * 3000.0f); }
+
+const pt_dest_t lp_dests[LPM_N] = {
+    [LPM_LEVEL]  = { "Track level", 5, .apply = lp_k_level  },
+    [LPM_PAN]    = { "Track pan",   6, .apply = lp_k_pan    },
+    [LPM_CUTOFF] = { "Cutoff",      0, .apply = lp_k_cutoff, .when = LPS_FILTER },
+    [LPM_RESO]   = { "Resonance",   1, .apply = lp_k_reso,   .when = LPS_FILTER },
 };
-static const int8_t lp_mtx_defaults[LPM_N] = { 5, 6, 0, 1 };
+
+uint16_t lp_state(void)
+{
+    return lp.filter_on ? LPS_FILTER : 0;
+}
 
 static esp_err_t looper_start(void)
 {
@@ -75,7 +90,7 @@ static esp_err_t looper_start(void)
     lp.sync_on = true;
     lp.bars = 4;
     lp.sel = 0;
-    cvmtx_init(&lp.mtx, lp_mtx_labels, LPM_N, lp_mtx_defaults);
+    ptab_mtx_init(&lp_tab, &lp.mtx, &lp.pmx);
     for (int i = 0; i < LP_TRACKS; i++) {
         // four separate 705 KB blocks is tight: the machine just stopped can
         // still be releasing PSRAM from its own task for a moment — retry
@@ -202,15 +217,7 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
           s_sel_prev = lp.sel;
           cvmtx_rearm(&lp.mtx);
       } }
-    cvmtx_hold(&lp.mtx, LPM_CUTOFF, !lp.filter_on);
-    cvmtx_hold(&lp.mtx, LPM_RESO,   !lp.filter_on);
-    cvmtx_track(&lp.mtx, cvm);
-    { float k;
-      lp_track_t *t = &lp.tr[lp.sel];
-      if (cvmtx_abs(&lp.mtx, LPM_LEVEL,  &k)) t->vol    = (uint16_t)(k * 255.0f);
-      if (cvmtx_abs(&lp.mtx, LPM_PAN,    &k)) t->pan    = (uint16_t)(k * 4095.0f);
-      if (cvmtx_abs(&lp.mtx, LPM_CUTOFF, &k)) t->cutoff = 295 + (uint16_t)(k * 3800.0f);
-      if (cvmtx_abs(&lp.mtx, LPM_RESO,   &k)) t->res    = 900 + (uint16_t)(k * 3000.0f); }
+    ptab_knobs(&lp_tab, &lp.mtx, cvm);   // holds, takeover, lp_dests' apply()
 
     // per-block SVF coeffs for every track (cheap: 4 sinf per 1.45ms block)
     for (int i = 0; i < LP_TRACKS; i++) {
@@ -497,10 +504,7 @@ int looper_bounce(void)
 static cJSON *looper_preset_save(void)
 {
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddBoolToObject(o, "sync", lp.sync_on);
-    cJSON_AddNumberToObject(o, "bars", lp.bars);
-    cJSON_AddBoolToObject(o, "monitor", lp.monitor);
-    cJSON_AddBoolToObject(o, "filter", lp.filter_on);
+    ptab_save(&lp_tab, o);     // sync / bars / monitor / filter — the keyed rows
     cvmtx_save(&lp.mtx, o);
     return o;
 }
@@ -508,13 +512,10 @@ static cJSON *looper_preset_save(void)
 static void looper_preset_load(const cJSON *node)
 {
     if (!node) return;   // no saved state — keep start() defaults
-    cJSON *j;
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "sync")))                     lp.sync_on = cJSON_IsTrue(j);
     // "clk_src" / "ppq" (pre-core-clock presets) are ignored: the clock is a
-    // module-wide setting now and a preset must not silently repoint it
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "bars")) && cJSON_IsNumber(j))    lp.bars = j->valueint < 1 ? 1 : j->valueint > 8 ? 8 : j->valueint;   // the Setup row's range (#109)
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "monitor")))                  lp.monitor = cJSON_IsTrue(j);
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "filter")))                   lp.filter_on = cJSON_IsTrue(j);
+    // module-wide setting now and a preset must not silently repoint it. "bars"
+    // is clamped to its Setup row's range by the table (#109).
+    ptab_load(&lp_tab, node);
     cvmtx_load(&lp.mtx, node);
     cvmtx_rearm(&lp.mtx);      // knobs recapture against the loaded values
 }
