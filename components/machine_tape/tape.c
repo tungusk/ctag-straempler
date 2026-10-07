@@ -271,19 +271,25 @@ static void tape_begin_fresh(void)
 // streaming recorder (usr/REC/TAP_NNNN.WAV). TR2 punches record in/out; the UI
 // task (tape_card_service) re-arms the writer after each take. Audio task only
 // does trigger/finish/push — all atomic/queue, no SD.
+// s_card_take: the running take is OURS (we triggered it). The service is also
+// active during a web /bounce, whose blocks the core taps from the output bus —
+// pushing ours as well would double that file the same way the core's line-in
+// push used to double a card take (machine_t.feeds_recorder, 2026-10-06).
+static bool s_card_take = false;
 static void tape_card_process(int32_t out[MACHINE_BLOCK],
                               const int32_t in[MACHINE_BLOCK],
                               const machine_io_t *io)
 {
     bool rec = recording_is_active();
+    if (!rec) s_card_take = false;
     if (tp.rec_mode == TPR_MOMENTARY) {
         bool gate = !(io->trig_level & TP_RECBIT);
-        if (gate && !rec && recording_is_prepared()) { recording_trigger(); tp.pos = 0.0; }
+        if (gate && !rec && recording_is_prepared()) { recording_trigger(); s_card_take = true; tp.pos = 0.0; }
         else if (!gate && rec) recording_finish();
     } else {
         if (io->trig_rising & TP_RECBIT) {   // the rtr pick, not a hard-wired TR2 (review 11.2)
             if (rec) recording_finish();
-            else if (recording_is_prepared()) { recording_trigger(); tp.pos = 0.0; }
+            else if (recording_is_prepared()) { recording_trigger(); s_card_take = true; tp.pos = 0.0; }
         }
     }
     tp.recording = recording_is_active();
@@ -315,7 +321,7 @@ static void tape_card_process(int32_t out[MACHINE_BLOCK],
     tp_rk.bpm = bpm;
     fxrack_process_i32(&tp_rk, out, frames);      // print the chain into the stream too
 
-    if (recording_is_active()) { recording_push(out); tp.pos += (double)frames; }  // pos = elapsed frames
+    if (s_card_take && recording_is_active()) { recording_push(out); tp.pos += (double)frames; }  // pos = elapsed frames
 
     float lvl = tp_lvl_eff();                     // Level + CV matrix offset
     for (int f = 0; f < frames; f++) {            // monitor output (level applied last)
@@ -1196,4 +1202,5 @@ const machine_t machine_tape = {
     .preset_load = tape_preset_load,
     .inputs = tape_inputs,
     .ui = &tape_menu_ui,
+    .feeds_recorder = true,   // card takes are pushed post-FX from tape_card_process
 };

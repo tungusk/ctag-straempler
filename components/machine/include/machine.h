@@ -115,6 +115,14 @@ typedef struct machine_s {
     // and re-applies the preset); without one it is a fixed job. The CLOCK is
     // not described here: it is the core's (clock.h), appended by the core.
     int (*inputs)(struct machine_input_s *out, int max);
+
+    // Optional (2026-10-06): this machine pushes its OWN blocks into the
+    // recording service from process() (Tape prints its input chain into card
+    // takes), so the core must not also push the raw line-in. With both
+    // pushing, a take came out at twice its length as alternating dry and
+    // processed blocks (hostsim 2026-10-04). A bounce is unaffected: that tap
+    // is the core's and reads the output bus.
+    bool feeds_recorder;
 } machine_t;
 
 // Source encoding = clock.h's: 0-7 = CV1-8, 8 = TR1, 9 = TR2, 10 = AUDIO,

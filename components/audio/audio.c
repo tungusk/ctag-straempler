@@ -653,7 +653,10 @@ static void audio_task(void *pvParams)
 
         // always read I2S to drain the RX buffer; route to machine or recording
         i2s_read(I2S_NUM_0, in, 256, &nb, portMAX_DELAY);
-        if (recording_is_active() && !s_bounce)
+        const machine_t *m = machine_active();
+        // a machine that feeds the recorder itself (Tape's card takes) gets no
+        // second copy of the block from here — see machine_t.feeds_recorder
+        if (recording_is_active() && !s_bounce && !(m && m->feeds_recorder))
             recording_push(in);
         // beat listener: core input tap like the recorder's, runs every block
         // regardless of machine (OFF = one branch). Runs BEFORE the machine so
@@ -683,15 +686,17 @@ static void audio_task(void *pvParams)
             s_loop_prev = now;
         }
 
-        const machine_t *m = machine_active();
+        // machine.h promises process() a pre-zeroed out[]; until 2026-10-06 it
+        // only held when NO machine was active, so a machine that skipped a
+        // block got its previous one back (hostsim). 512 bytes, well under 1 us.
+        memset(out, 0, sizeof(out));
         if (m) {
             int64_t pt0 = esp_timer_get_time();
             m->process(out, in, &io);                    // includes the machine's FX chain
             uint32_t pus = (uint32_t)(esp_timer_get_time() - pt0);
             s_proc_us = s_proc_us ? (s_proc_us * 7 + pus) / 8 : pus;   // EMA; 1450us = 100%
             if (pus > s_proc_pk) s_proc_pk = pus;                       // peak-hold (see above)
-        } else
-            memset(out, 0, sizeof(out));
+        }
         machine_block_done();   // the block handshake (machine_block_wait)
 
         // BOUNCE tap: capture the machine's output HERE (before clock-out

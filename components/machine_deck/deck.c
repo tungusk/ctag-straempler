@@ -694,6 +694,12 @@ static esp_err_t deck_start(void)
     cvmtx_set_takeover(&dk.mtx, DKM_SPEED, CVM_TK_CATCH);
     // window moves are performance, not patch edits: keep them off the autosave
     dk.mtx.nodirty = (uint16_t)(1u << DKM_LWIN);
+    // Filter and Speed are the noon-neutral pair and their knobs CATCH, so the
+    // value they start at is what the knob must come back to. memset left both
+    // at 0: half-time while synced, 0.5x free-run, and a catch at full-left
+    // (hostsim 2026-10-04 — Deck booted at half speed until K7 was swept down).
+    dk.pitch_cv = 2048;      // 1x
+    dk.filt_cv  = 2048;      // bypass
     dk.sync = true;
     dk.loop = true;
     dk.auto_an = true;       // auto-analyze unanalyzed tracks on load

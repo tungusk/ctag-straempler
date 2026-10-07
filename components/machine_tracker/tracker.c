@@ -81,7 +81,9 @@ int tracker_list_modules(char (**out)[TRK_NAME_LEN])
 // ---- UI-side controls (set flags; render task acts) -------------------------
 void tracker_request_load(const char *name)
 {
-    strlcpy(trk.file, name, sizeof(trk.file));
+    // start() and the preset loader pass trk.file itself: strlcpy's
+    // arguments are restrict, and the self-copy traps on the host build
+    if (name != trk.file) strlcpy(trk.file, name, sizeof(trk.file));
     strlcpy(trk.pending, name, sizeof(trk.pending));
     strlcpy(s_cur_file, name, sizeof(s_cur_file));   // track intended module
     trk.playing = false;
