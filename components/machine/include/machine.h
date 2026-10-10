@@ -46,6 +46,10 @@ typedef struct {
     int n_main;
     void (*register_pages)(void *menusys);       // create the machine's pages
     int  (*main_event)(int event, void *ev_data); // main-screen live area
+    // optional: machine-ambient work, run on the UI task every SLOW tick on
+    // WHATEVER page is open (after the page handled the tick). main_event only
+    // ticks on the hub page, so background services had no home on Setup.
+    void (*ambient)(void);
     // page to land on after boot/machine switch; 0 = the main menu screen
     // (machines with a dedicated live view set this to it — the samplers'
     // home IS the main screen, so they leave it 0)

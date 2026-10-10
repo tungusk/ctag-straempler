@@ -1036,6 +1036,17 @@ static const char *const tape_main_items[] = { "Tape", "Setup" };
 static const int tape_main_targets[] = { M_TAPE_MAIN, M_TAPE_SETUP };
 
 extern const httpd_uri_t tape_web_uris[];
+// every slow tick on ANY Tape page (Setup, FX, CV, browser): the background
+// services the Live page's own tick runs, plus the quiet-pause edit save
+void tape_ambient(void)
+{
+    tape_autosave_kick();
+    tape_drop_adopt_kick();
+    tape_card_service();
+    tape_web_load_service();
+    tape_edit_save_tick();
+}
+
 const machine_ui_t tape_menu_ui = {
     .main_items = tape_main_items,
     .main_targets = tape_main_targets,
@@ -1044,6 +1055,7 @@ const machine_ui_t tape_menu_ui = {
     .main_event = tape_main_event,
     .boot_target = M_TAPE_MAIN,
     .setup = &tape_setup,
+    .ambient = tape_ambient,
     .web_uris = tape_web_uris,
     .n_web_uris = 1,
     .caps = MC_CLOCK | MC_MATRIX | MC_FX,

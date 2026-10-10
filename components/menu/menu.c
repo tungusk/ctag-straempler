@@ -688,6 +688,10 @@ void menuProcessEvent(int ev, void * ev_data){
     // the late bind above; the bind has re-entered the new machine's main page.
     if(stale) return;
     menusys_process_ev(_ms, ev, ev_data);
+    if(ev == EV_TIMER_REPEATING_SLOW){
+        const machine_ui_t *mui = machine_ui();
+        if(mui && mui->ambient) mui->ambient();
+    }
 }
 
 static esp_timer_handle_t s_autosave_timer = NULL;

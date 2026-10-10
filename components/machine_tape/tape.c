@@ -1,6 +1,7 @@
 // Tape engine (see tape_priv.h). process() reads/writes the PSRAM tape only —
 // destructive edits (cut/paste/normalize/...) are UI-context and REQUIRE the
 // transport stopped, so the audio task never sees a moving buffer.
+#include "esp_timer.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -604,6 +605,8 @@ static void tp_settle_saves(void)
 // running from marking it clean; clearing restore_id drops the saved check.
 static void tp_edited(void)
 {
+    tp.edit_pending = true;              // saved once edits go quiet (tape_edit_save_tick)
+    tp.edit_us = esp_timer_get_time();
     tp.take_dirty = true;
     tp.dirty_gen++;
     tp.restore_id[0] = 0;
@@ -980,6 +983,22 @@ void tape_drop_adopt_kick(void)
 
 // UI task: spawn the auto-save the audio task requested (buffer is held intact
 // while pending). Called every menu tick.
+// UI task, every slow tick on any Tape page: a take that was edited and then
+// left alone for TP_EDIT_QUIET_US is written out once (a CUT_ take, adopted, so
+// tapelast points at it). Before, edits reached the card only on leave or
+// load, and a power cut lost them; a burst of Norm/Rev/Fade makes ONE file.
+#define TP_EDIT_QUIET_US (10LL * 1000000)
+void tape_edit_save_tick(void)
+{
+    if (!tp.edit_pending) return;
+    if (tp.recording || tp.save_busy || tp.autosave_req || tp.loading) return;
+    if (esp_timer_get_time() - tp.edit_us < TP_EDIT_QUIET_US) return;
+    tp.edit_pending = false;
+    if (!tp.take_dirty || tp.len <= 1) return;
+    if (tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped, true) == 0)
+        ESP_LOGI(TAG, "edited take saved after a quiet pause");
+}
+
 void tape_autosave_kick(void)
 {
     if (!tp.autosave_req || tp.save_busy) return;
