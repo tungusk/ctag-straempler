@@ -49,6 +49,7 @@ static uint32_t bar_frames(void)
 
 static void track_start_record(lp_track_t *t)
 {
+    if (!t->buf) { t->state = LP_EMPTY; return; }   // a track started without RAM can't record
     t->pos = 0;
     t->len = 0;
     // synced: auto-stop after N bars; unsynced: cap at buffer length
@@ -104,10 +105,15 @@ static esp_err_t looper_start(void)
             ESP_LOGE("LOOPER", "PSRAM alloc failed for track %d (free %u, largest %u)", i,
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-            // free the tracks that did allocate: activate() won't call stop() on a
-            // failed start, and the next start's memset would drop the pointers
-            for (int k = 0; k < i; k++) { free(lp.tr[k].buf); lp.tr[k].buf = NULL; }
-            return ESP_ERR_NO_MEM;
+            // four separate 705 KB blocks is tight on a split pool: run with the
+            // tracks we got (a missing one refuses to record) rather than fall
+            // back to Stub. Track 1 is required — the bounce lands there.
+            if (i > 0) { ESP_LOGW("LOOPER", "starting without track %d", i + 1); }
+            else {
+                // free nothing allocated: activate() won't call stop() on a
+                // failed start, and the next start's memset would drop pointers
+                return ESP_ERR_NO_MEM;
+            }
         }
         lp.tr[i].state = LP_EMPTY;
         lp.tr[i].vol = 255;      // unity
