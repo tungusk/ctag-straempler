@@ -107,13 +107,13 @@ call and starves the capture queue (bench-caught: 1804 dropped chunks).
 
 **FatFS paths only** — file paths passed to `f_open()` must NOT have a `/sdcard` prefix. VFS-style paths (`/sdcard/...`) cause an `f_open` abort crash. Use bare paths like `usr/REC_0001.RAW`. (VFS `fopen()` is the opposite — it DOES want `/sdcard/usr/...`.)
 
-**Sample ids must be ≤ 8 chars — the card is FatFS 8.3, LFN OFF.** A base name
-over 8 chars is an invalid 8.3 filename and `fopen`/`f_open` rejects it with
-EINVAL (errno 22). This is why every id in the system is short: recording uses
-`REC_NNNN`, the web upload truncates names to 8, and generators use
-`<PFX>NNNN`. When you MINT a new id (editor outputs, bounces, derived takes) keep
-it ≤ 8 chars — do NOT append `_<tag>` to an existing (already up-to-8-char) id.
-`sample_next_index("XX_")` gives a safe `XX_NNNN`.
+**Sample ids are up to 31 chars — long filenames are ON** (`SAMPLE_ID_LEN` 32,
+since 2026-09-13; the old 8-char cap was `CONFIG_FATFS_LFN_NONE` in sdkconfig,
+not FAT32). Uploads, renames and module uploads REFUSE a name over 31 chars
+rather than cut it; a card-copied file whose stem is longer than 31 is skipped
+by the listers (it could not resolve). Generated ids are still `<PFX>NNNN`
+(`sample_next_index("XX_")`, which counts only `<prefix><digits>.<ext>`, and
+past 9999 simply grows a digit).
 
 **Machine SD home folders (2026-07-17)** — the pool is split into per-machine
 homes: `SF_DIRS[]` in sampfile.c = `usr`, `usr/REC`, `usr/LOOPS`,
@@ -488,7 +488,7 @@ The machines (all working; archives in `bin/`):
   reverse (tail-chunk read + flip), fade in/out (gain ramp), trim silence
   (two-pass). Control via web_uris (`/edit/apply?name=&op=&param=`,
   `/edit/state`) + an "Editor" web tab; on-device Live is status-only. Output ids
-  are short generated `<PFX>NNNN` (see the 8.3 rule in Code rules). v2: crop +
+  are generated `<PFX>NNNN` (see the id rule in Code rules). v2: crop +
   zero-crossing loop-snap (needs a crop UI), audition-while-tweaking.
 - **Keys is a MULTISAMPLER** (2026-07-28): up to 8 zones in one PSRAM arena,
   mapped by NEAREST ROOT with auto-tune writing the roots — there are no editable
@@ -613,7 +613,9 @@ The machines (all working; archives in `bin/`):
   UI/loader context, as bpm_analysis is. Host: Keys auto-tune; the live
   line-in tuner (beatlisten-shaped service) is the queued second consumer,
   which is why the single-window entry point is public.
-- `components/util/svf.{h,c}` — the Chamberlin state-variable filter, ONE copy
+- `components/util/svf.{h,c}` — the TRAPEZOIDAL (TPT) state-variable filter, ONE
+  copy used everywhere, one filter at a time (09-16 review; it replaced the
+  Chamberlin form, which misbehaved near Nyquist — see the note in svf.h)
   (it had been hand-written three times: deck, looper engine, looper bounce).
   `svf_step()` gives lp/bp/hp taps; the caller keeps the coefficient slew and
   the clamp ceiling, which is what made porting deck + looper bit-identical.
@@ -723,7 +725,8 @@ Sampler3 SHIPPED 2026-07-12.
   slot. Still announce before flashing (it reboots). No rollback yet (a bad
   image needs serial recovery — a deliberate follow-up). A long
   screenshot/OTA/take marathon can exhaust internal RAM (`ota_begin failed`,
-  audio glitches) — there is NO /reboot endpoint; recover with a power-cycle.
+  audio glitches) — `POST /reboot` recovers it (refused while recording; it
+  flushes the machine state first), or a power-cycle.
 - **Serial flash = migration + recovery only.** Use the esptool invocation with
   `--flash_size detect` when (a) migrating the partition layout, or (b)
   recovering a device that won't boot: `bin/<archive>/flash.sh` restores a
