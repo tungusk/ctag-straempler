@@ -566,20 +566,23 @@ static void broadcast_server_task(void *pv)
 // one machine_io_t.trig_rising bit per validated assert — a 1 ms gate can no
 // longer fall between block samples, and sub-100 us noise never registers.
 #define TRIG_MIN_US 200
-static volatile int64_t s_trig_t_assert[2] = {0, 0};   // stamp of last assert edge
+// 32-bit stamps: one load is atomic, so the audio task can never read a torn
+// value the ISR is writing (an int64 is two loads — review #6). Unsigned
+// differences wrap cleanly; the period is ~71 min.
+static volatile uint32_t s_trig_t_assert[2] = {0, 0};   // stamp of last assert edge
 static volatile bool    s_trig_low[2] = {false, false}; // ISR's view of the line
 static volatile bool    s_trig_pulse[2] = {false, false}; // completed valid pulse
 
 static void IRAM_ATTR trig_isr(void *arg)
 {
     int t = (int)(intptr_t)arg;
-    int64_t now = esp_timer_get_time();
+    uint32_t now = (uint32_t)esp_timer_get_time();
     if (gpio_get_level(t ? TRIG1_PIN : TRIG0_PIN) == 0) {   // assert (active low)
         s_trig_t_assert[t] = now;
         s_trig_low[t] = true;
     } else if (s_trig_low[t]) {                              // release: validate
         s_trig_low[t] = false;
-        if (now - s_trig_t_assert[t] >= TRIG_MIN_US) s_trig_pulse[t] = true;
+        if ((uint32_t)(now - s_trig_t_assert[t]) >= TRIG_MIN_US) s_trig_pulse[t] = true;
     }
 }
 
@@ -587,13 +590,13 @@ static void IRAM_ATTR trig_isr(void *arg)
 // still held past the validation width; s_rep_t de-dupes by assert stamp
 static uint8_t trig_rising_bits(void)
 {
-    static int64_t s_rep_t[2] = {-1, -1};
-    int64_t now = esp_timer_get_time();
+    static uint32_t s_rep_t[2] = {0xFFFFFFFFu, 0xFFFFFFFFu};   // "none reported yet"
+    uint32_t now = (uint32_t)esp_timer_get_time();
     uint8_t bits = 0;
     for (int t = 0; t < 2; t++) {
-        int64_t ta = s_trig_t_assert[t];
+        uint32_t ta = s_trig_t_assert[t];
         bool valid = s_trig_pulse[t] ||
-                     (s_trig_low[t] && now - ta >= TRIG_MIN_US);
+                     (s_trig_low[t] && (uint32_t)(now - ta) >= TRIG_MIN_US);
         s_trig_pulse[t] = false;
         if (valid && ta != s_rep_t[t]) {
             bits |= (uint8_t)(1 << t);
