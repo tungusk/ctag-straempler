@@ -17,8 +17,8 @@ static inline void guard(fxfilter_t *fl, float cf)
 void fxfilter_block_f(fxfilter_t *fl, float *buf, int frames)
 {
     int   mode = fl->mode; if (mode < 0 || mode >= FILT_NMODE) mode = FILT_LP;
-    float cut  = fl->cutoff; if (cut < 0) cut = 0; else if (cut > 1) cut = 1;
-    float reso = fl->reso;   if (reso < 0) reso = 0; else if (reso > 1) reso = 1;
+    float cut  = fl->cutoff + fl->cv_cut; if (cut < 0) cut = 0; else if (cut > 1) cut = 1;
+    float reso = fl->reso + fl->cv_reso;  if (reso < 0) reso = 0; else if (reso > 1) reso = 1;
 
     float fc = 30.0f * powf(400.0f, cut);          // 30 Hz .. ~12 kHz (log)
     float cf = svf_coef(fc, FLT_RATE, 2.0f);       // no ceiling: stable to the top
@@ -39,8 +39,8 @@ void fxfilter_block_f(fxfilter_t *fl, float *buf, int frames)
 
 void fxfilter_band_block_f(fxfilter_t *fl, float *buf, int frames)
 {
-    float base  = fl->cutoff; if (base < 0) base = 0; else if (base > 1) base = 1;
-    float width = fl->reso;   if (width < 0) width = 0; else if (width > 1) width = 1;
+    float base  = fl->cutoff + fl->cv_cut; if (base < 0) base = 0; else if (base > 1) base = 1;
+    float width = fl->reso + fl->cv_reso;  if (width < 0) width = 0; else if (width > 1) width = 1;
     float fc = 30.0f * powf(400.0f, base);            // center: 30 Hz .. ~12 kHz
     float cf = svf_coef(fc, FLT_RATE, 2.0f);
     float q  = 0.3f + width * 3.7f;                   // narrow/resonant .. wide/gentle

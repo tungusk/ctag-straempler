@@ -29,6 +29,10 @@ typedef struct {
     bool   params;          // settings are set (defaults or a preset): init keeps them
     float  phase;           // 0..1 LFO phase
     float  lpL, lpR;        // feedback damping one-pole state (tames the ring-up)
+    // CV offsets, written by the FX rack before each block and read only by
+    // the block function: the base fields above stay the user's values, so
+    // save and the menu never see a modulated number (review #10)
+    float  cv_depth, cv_fb;
 } flanger_t;
 
 static inline void flanger_set_rate_beats(flanger_t *g, float beats, float bpm)

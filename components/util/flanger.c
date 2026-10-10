@@ -68,8 +68,8 @@ void flanger_block_f(flanger_t *g, float *buf, int frames)
     if (!g->bufL) return;
     const int cap = g->cap;
     float rate  = g->rate;  if (rate < 0.01f) rate = 0.01f; else if (rate > 10.0f) rate = 10.0f;
-    float depth = g->depth; if (depth < 0) depth = 0; else if (depth > 1) depth = 1;
-    float fb    = g->fb;    if (fb < -0.95f) fb = -0.95f; else if (fb > 0.95f) fb = 0.95f;
+    float depth = g->depth + g->cv_depth; if (depth < 0) depth = 0; else if (depth > 1) depth = 1;
+    float fb    = g->fb + g->cv_fb;       if (fb < -0.95f) fb = -0.95f; else if (fb > 0.95f) fb = 0.95f;
     float wet   = g->wet;   if (wet < 0) wet = 0; else if (wet > 1) wet = 1;
     float wetg  = sinf(wet * 1.5707963f);
     float dryg  = cosf(wet * 1.5707963f);

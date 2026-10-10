@@ -39,10 +39,10 @@ static inline float fast_tanh(float x)
 
 void overdrive_block_f(overdrive_t *o, float *buf, int frames)
 {
-    float drive = o->drive; if (drive < 0) drive = 0; else if (drive > 1) drive = 1;
+    float drive = o->drive + o->cv_drive; if (drive < 0) drive = 0; else if (drive > 1) drive = 1;
     float tone  = o->tone;  if (tone < 0)  tone = 0;  else if (tone > 1)  tone = 1;
     float bias  = o->bias;  if (bias < -1) bias = -1; else if (bias > 1)  bias = 1;
-    float level = o->level; if (level < 0) level = 0; else if (level > 1) level = 1;
+    float level = o->level + o->cv_level; if (level < 0) level = 0; else if (level > 1) level = 1;
 
     float g   = 1.0f + drive * 29.0f;             // input gain 1..30
     // BIAS IS NOT SCALED BY g (fixed 2026-07-26). It used to enter as

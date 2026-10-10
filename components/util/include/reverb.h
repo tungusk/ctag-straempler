@@ -81,6 +81,10 @@ typedef struct {
     volatile int clear_off;
     // instrumentation: EMA of process cost, microseconds per block
     volatile int cost_us;
+    // CV offsets, written by the FX rack before each block and read only by
+    // the block function: the base fields above stay the user's values, so
+    // save and the menu never see a modulated number (review #10)
+    float cv_wet;
 } reverb_t;
 
 // allocate the PSRAM slab and set RV_OFF. Safe to call from UI tasks.

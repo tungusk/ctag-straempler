@@ -17,6 +17,10 @@ typedef struct {
     volatile float bias;    // -1..1 asymmetry (0 = symmetric)
     volatile float level;   // 0..1 output trim
     svf_t  tl, tr;          // tone filter state per channel
+    // CV offsets, written by the FX rack before each block and read only by
+    // the block function: the base fields above stay the user's values, so
+    // save and the menu never see a modulated number (review #10)
+    float  cv_drive, cv_level;
 } overdrive_t;
 
 static inline void overdrive_reset(overdrive_t *o) { svf_reset(&o->tl); svf_reset(&o->tr); }

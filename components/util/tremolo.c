@@ -23,8 +23,13 @@ static inline float trem_wave(int shape, float ph)
 // float worker: pure amplitude ride (gain <= 1), reads/writes float scratch.
 void tremolo_block_f(tremolo_t *t, float *buf, int frames)
 {
-    float rate  = t->rate;  if (rate < 0.01f) rate = 0.01f; else if (rate > 30.0f) rate = 30.0f;
-    float depth = t->depth; if (depth < 0) depth = 0; else if (depth > 1) depth = 1;
+    float rate  = t->rate;
+    if (t->cv_rate_oct != 0.0f) {          // +/-3 octaves LOG, on top of sync (the rack's old range)
+        rate *= exp2f(t->cv_rate_oct * 3.0f);
+        if (rate < 0.05f) rate = 0.05f; else if (rate > 20.0f) rate = 20.0f;
+    }
+    if (rate < 0.01f) rate = 0.01f; else if (rate > 30.0f) rate = 30.0f;
+    float depth = t->depth + t->cv_depth; if (depth < 0) depth = 0; else if (depth > 1) depth = 1;
     int   shape = t->shape; if (shape < 0 || shape >= TREM_NSHAPE) shape = TREM_SINE;
     bool  st    = t->stereo;
     float inc   = rate / TR_RATE;

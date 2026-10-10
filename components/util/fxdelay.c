@@ -118,8 +118,8 @@ void fxdelay_block_f(fxdelay_t *d, float *buf, int frames)
 
     const int   cap = d->cap;
     const int   len = d->len < 1 ? 1 : (d->len > cap - 1 ? cap - 1 : d->len);
-    const float fb  = d->fb;
-    const float w01 = d->wet;
+    float fb  = d->fb + d->cv_fb;   if (fb < 0) fb = 0; else if (fb > 0.95f) fb = 0.95f;
+    float w01 = d->wet + d->cv_wet; if (w01 < 0) w01 = 0; else if (w01 > 1) w01 = 1;
     const bool  pp  = d->pingpong;
     // equal-power wet/dry (matches reverb's crossfade feel)
     const float wetg = sinf(w01 * 1.5707963f);

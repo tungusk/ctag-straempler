@@ -19,6 +19,10 @@ typedef struct {
     volatile bool  sync;    // clock-sync the rate to `div` (fxrack sets it per block)
     volatile int8_t div;    // division index into fxrack_div_beats[] when synced
     float phase;            // 0..1 LFO phase
+    // CV offsets, written by the FX rack before each block and read only by
+    // the block function: the base fields above stay the user's values, so
+    // save and the menu never see a modulated number (review #10)
+    float cv_depth, cv_rate_oct;   // rate: octaves (x3 range applied in the block)
 } tremolo_t;
 
 // one LFO cycle every `beats` quarter-notes at `bpm` -> Hz

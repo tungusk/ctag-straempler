@@ -16,6 +16,10 @@ typedef struct {
     volatile float reso;     // 0..1 -> resonance (0 clean .. 1 near self-osc)
     svf_t  l, r;             // per-channel filter state
     float  cf_slew;          // slewed coefficient (no zipper on a fast sweep)
+    // CV offsets, written by the FX rack before each block and read only by
+    // the block function: the base fields above stay the user's values, so
+    // save and the menu never see a modulated number (review #10)
+    float  cv_cut, cv_reso;
 } fxfilter_t;
 
 static inline void fxfilter_init(fxfilter_t *fl)

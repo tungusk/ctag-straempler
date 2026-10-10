@@ -445,6 +445,13 @@ static inline bool rv_flush_tick(reverb_t *rv)
     return true;
 }
 
+// the wet target the slew follows: the user's mix plus the rack's CV offset
+static inline float rv_wet_eff(const reverb_t *rv)
+{
+    float w = rv->wet + rv->cv_wet;
+    return w < 0 ? 0 : w > 1 ? 1 : w;
+}
+
 void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames)
 {
     if (!rv->slab) { rv->cost_us = 0; return; }
@@ -457,7 +464,7 @@ void reverb_send_i32(reverb_t *rv, int32_t *dry, const int16_t *send, int frames
     // RETURN level (wet doubles as return gain on the send bus) — slewed and
     // ramped across the block for the same reason as gd/gw in reverb_block_f
     const float r0 = rv->wet_z;
-    rv->wet_z += 0.15f * (rv->wet - rv->wet_z);
+    rv->wet_z += 0.15f * (rv_wet_eff(rv) - rv->wet_z);
     float ret = r0;
     const float reti = (rv->wet_z - r0) / (float)frames;
     const bool meter = audio_fx_meters_armed();   // per-sample cost: opt in only
@@ -510,7 +517,7 @@ void reverb_block_f(reverb_t *rv, float *buf, int frames)
     // (~8 ms), then gd/gw computed at both block ends and interpolated per
     // sample — the flanger LFO idiom, so the trig cost stays 4 calls/block.
     const float w0 = rv->wet_z;
-    rv->wet_z += 0.15f * (rv->wet - rv->wet_z);
+    rv->wet_z += 0.15f * (rv_wet_eff(rv) - rv->wet_z);
     const float w1 = rv->wet_z;
     float gd = cosf(w0 * (float)M_PI_2);
     float gw = sinf(w0 * (float)M_PI_2);

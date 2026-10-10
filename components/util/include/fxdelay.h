@@ -41,6 +41,10 @@ typedef struct {
     bool   params;              // settings are set (defaults or a preset): init keeps them
     float  lpL, lpR;            // feedback one-pole states
     volatile int cost_us;       // EMA process cost, us per block (1450 = 100%)
+    // CV offsets, written by the FX rack before each block and read only by
+    // the block function: the base fields above stay the user's values, so
+    // save and the menu never see a modulated number (review #10)
+    float  cv_wet, cv_fb;
 } fxdelay_t;
 
 esp_err_t fxdelay_init(fxdelay_t *d);   // alloc slab, silent (len 375ms, wet 0)
