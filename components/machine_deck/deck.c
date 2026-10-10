@@ -62,9 +62,15 @@ dk_state_t dk;
 // (review #82 #80)
 static portMUX_TYPE s_wpos_mux = portMUX_INITIALIZER_UNLOCKED;
 
+// The play counters (rpos_i, wpos, map_p0, rm_at, valid_to) are uint32 and
+// wrap after ~27 h of continuous play: compare them by SIGNED DIFFERENCE, never
+// directly, or the deck went silent at the wrap with playing still set (#85)
+static inline bool dk_ge(uint32_t a, uint32_t b) { return (int32_t)(a - b) >= 0; }
+static inline bool dk_gt(uint32_t a, uint32_t b) { return (int32_t)(a - b) > 0; }
+
 static inline uint32_t dk_map(uint32_t p)
 {
-    if (dk.loop_active && dk.rm_at && p >= dk.rm_at && dk.rm_len)
+    if (dk.loop_active && dk.rm_at && dk_ge(p, dk.rm_at) && dk.rm_len)
         return dk.rm_start + ((p - dk.rm_p0) % dk.rm_len);   // scheduled window
     if (dk.loop_active && dk.loop_len_fr)
         return dk.loop_start + ((p - dk.map_p0) % dk.loop_len_fr);
@@ -78,7 +84,7 @@ static inline uint32_t dk_map(uint32_t p)
 // the active streaming window (KO-II loop, else track loop). false = linear.
 static inline bool dk_window(uint32_t *st, uint32_t *len)
 {
-    if (dk.loop_active && dk.rm_at && dk.wpos >= dk.rm_at && dk.rm_len) {
+    if (dk.loop_active && dk.rm_at && dk_ge(dk.wpos, dk.rm_at) && dk.rm_len) {
         *st = dk.rm_start; *len = dk.rm_len; return true;    // scheduled window
     }
     if (dk.loop_active && dk.loop_len_fr) { *st = dk.loop_start; *len = dk.loop_len_fr; return true; }
@@ -207,13 +213,13 @@ static void reader_task(void *pv)
             uint32_t w0 = dk.wpos;
             uint32_t ff = dk_map(w0);
             bool have_room = lp ? (lead < lead_cap)
-                                : (dk.wpos < dk.map_p0 + (dk.file_frames - dk.map_f0) &&
+                                : ((uint32_t)(dk.wpos - dk.map_p0) < (dk.file_frames - dk.map_f0) &&
                                    lead < lead_cap);
             if (have_room && ff < dk.file_frames) {
                 // never read past the window end (loop) or the file end (linear)
                 uint32_t limit = lp ? (win_st + win_len - ff) : (dk.file_frames - ff);
                 uint32_t want = limit < 4096 ? limit : 4096;
-                bool seam = lp && ff == win_st && dk.wpos > dk.map_p0;
+                bool seam = lp && ff == win_st && dk_gt(dk.wpos, dk.map_p0);
                 sd_lock_take();
                 if (cur_ff != ff) { fseek(f, sf_seek_pos(&sfl, ff), SEEK_SET); cur_ff = ff; }
                 size_t got = sampfile_read(f, &sfl, chunk, want);
@@ -501,11 +507,11 @@ static void deck_loop_toggle(void)
         dk.map_f0 = ff;
         // a scheduled window move: the ring past its switch point holds THAT
         // window's audio, which the linear rebase would play as ours (#81)
-        if (dk.rm_at && dk.rm_at < valid_to) valid_to = dk.rm_at;
+        if (dk.rm_at && dk_gt(valid_to, dk.rm_at)) valid_to = dk.rm_at;
         dk.rm_at = 0;
         dk.loop_active = false;            // mapping written BEFORE the flag
         portENTER_CRITICAL(&s_wpos_mux);
-        if (dk.wpos > valid_to) dk.wpos = valid_to;
+        if (dk_gt(dk.wpos, valid_to)) dk.wpos = valid_to;
         portEXIT_CRITICAL(&s_wpos_mux);
         // they have their own knobs now, but if a destination is assigned to a
         // channel the loop pair also uses, re-arming makes it CATCH on release
@@ -578,7 +584,7 @@ static void deck_loop_toggle(void)
     // the read-ahead stays valid up to the first seam; the reader wraps there
     uint32_t valid_to = dk.map_p0 + len;
     portENTER_CRITICAL(&s_wpos_mux);
-    if (dk.wpos > valid_to) dk.wpos = valid_to;
+    if (dk_gt(dk.wpos, valid_to)) dk.wpos = valid_to;
     portEXIT_CRITICAL(&s_wpos_mux);
 }
 
@@ -604,7 +610,12 @@ static void deck_loop_remap(uint32_t new_start, uint32_t new_len)
     if (!dk.loop_active || !new_len) return;
     if (new_start + new_len > dk.file_frames) return;
     uint32_t at = dk.wpos;                        // first frame the reader writes
-    uint32_t off = (at - dk.map_p0) % dk.loop_len_fr;
+    // the frames at `at` are mapped by the PENDING window once the reader is
+    // past its switch point: measure the phase there, or a second move before
+    // the first committed mapped them as the committed window (#80)
+    uint32_t p0 = dk.map_p0, plen = dk.loop_len_fr;
+    if (dk.rm_at && dk.rm_len && dk_ge(at, dk.rm_at)) { p0 = dk.rm_p0; plen = dk.rm_len; }
+    uint32_t off = (at - p0) % plen;
     if (off >= new_len) off %= new_len;           // shrank under the cursor
     dk.rm_start = new_start;
     dk.rm_len = new_len;
@@ -1017,7 +1028,7 @@ filter_done:;                // mild resonance, DJ-ish
     for (int fno = 0; fno < frames; fno++) {
         // wpos is the reader's frontier in PLAYBACK space; the file end only
         // bounds playback when we're NOT looping (a loop never reaches it)
-        bool can_play = dk.playing && !dk.loading && dk.rpos_i + 1 < dk.wpos;
+        bool can_play = dk.playing && !dk.loading && dk_gt(dk.wpos, dk.rpos_i + 1);
         uint32_t ff_now = dk_map(dk.rpos_i);
         // mid-track mute with the reader as the limiter = ring underrun;
         // counted per block into /status so click reports are attributable
@@ -1082,7 +1093,7 @@ filter_done:;                // mild resonance, DJ-ish
     }
     if (starved) dk.dbg_starve++;
     // the scheduled window becomes the live one once the cursor reaches it
-    if (dk.loop_active && dk.rm_at && dk.rpos_i >= dk.rm_at) {
+    if (dk.loop_active && dk.rm_at && dk_ge(dk.rpos_i, dk.rm_at)) {
         dk.loop_start = dk.rm_start;
         dk.loop_len_fr = dk.rm_len;
         dk.map_p0 = dk.rm_p0;
