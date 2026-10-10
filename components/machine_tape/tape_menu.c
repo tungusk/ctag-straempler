@@ -739,6 +739,7 @@ static int tape_main_handler(int it_id, int event, void *ev_data)
             tape_autosave_kick();
             tape_drop_adopt_kick();          // finish a crop once its file is closed
             tape_card_service();
+            if (tape_web_load_service()) { main_full_redraw(); break; }   // a web load landed: new take, new page
             if (tp.recording && tp.len != s_wave_len) {  // live record growth (throttled to 1 Hz)
                 tape_rebuild_peaks(false);
                 draw_wave();
@@ -1018,7 +1019,7 @@ static int tape_main_event(int event, void *ev_data)
     (void)ev_data;
     tape_autosave_kick();   // machine-ambient: spawn a requested auto-save from any Tape page
     tape_card_service();    // machine-ambient: keep the card recorder armed from any Tape page
-    tape_web_load_service();   // a web 'load to machine': the load streams from the card, so UI task
+    tape_web_load_service();   // a web 'load to machine' from a non-Live Tape page
     if (event == EV_ENTERED_MENU || event == EV_TIMER_REPEATING_SLOW) {
         int fh = TFT_getfontheight();
         _bg = TFT_BLACK; TFT_fillRect(0, fh + 12, _width, 24, _bg);

@@ -287,6 +287,6 @@ void tape_autosave_kick(void);            // UI task: spawn the deferred auto-sa
 void tape_restore_last(void);             // UI task: reload the persisted take (session continuity)
 void tape_card_service(void);             // UI task: re-arm the streaming recorder in card mode
 
-void tape_web_load_service(void);   // UI task: run a queued web 'load to machine'
+bool tape_web_load_service(void);   // UI task: run a queued web 'load to machine' (true = loaded)
 
 #endif

@@ -34,14 +34,16 @@ static esp_err_t load_handler(httpd_req_t *req)
     return send_json(req, "200 OK", "{\"ok\":true}");
 }
 
-// UI task (Tape's ambient tick): run a queued web load
-void tape_web_load_service(void)
+// UI task (the Live page's slow tick, or Tape's other pages): run a queued web
+// load. True when a load ran, so the Live page repaints.
+bool tape_web_load_service(void)
 {
-    if (!tp.web_load_req) return;
+    if (!tp.web_load_req) return false;
     tp.web_load_req = false;
-    if (tp.playing || tp.recording) { ESP_LOGW(TAG, "web load %s dropped: tape rolling", tp.web_load); return; }
+    if (tp.playing || tp.recording) { ESP_LOGW(TAG, "web load %s dropped: tape rolling", tp.web_load); return false; }
     int r = tape_load(tp.web_load);
     if (r != 0) ESP_LOGE(TAG, "web load %s failed (%d)", tp.web_load, r);
+    return r == 0;
 }
 
 const httpd_uri_t tape_web_uris[] = {
