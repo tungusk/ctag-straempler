@@ -103,3 +103,17 @@ The checks still owed by ear and by hand are in **`plans/test-list-20260930.md`*
 
 - `CLAUDE.md` still says "ids ≤ 8 chars / LFN OFF", "svf is Chamberlin" and "no /reboot
   endpoint" — all stale (handoff note). Left for the next docs pass.
+
+## Follow-up, 2026-10-10
+
+| Commit | What | Checked |
+|---|---|---|
+| `3975965` `6d01376` | **Web file browser: load into the active machine** — a button or slot picker per row (Sampler voice, DoubleDecker deck, Drums pad A/B, Keys replace/add zone, Deck, Granular, Slicer, Synth wave, Tape, Editor); new `POST /tape/load`, `POST /edit/load` | every target loaded and read back; Tape on screen; picker driven in Chrome |
+| `73cba38` | **Tape saves an edited take after a 10 s quiet pause** (Arlo's call); new core hook `machine_ui_t.ambient` runs a machine's background work on any page | Norm on the unit: nothing at 4 s, `CUT_0227` at 14 s, header ✓ |
+| `fedaae1` | **#10** FX CV rides per-effect `cv_*` offsets; base values are never written by the audio path | bench (no audio — Scarlett unplugged); **ear check owed** |
+| `582a4c4` | **#6** trigger stamps 32-bit (atomic) | bench |
+| `ba31246` | **#85** Deck counters compare wrap-safe; **#80** a second move maps against the pending window | bench |
+| `4268636` | Looper starts with the tracks it gets instead of Stub (track 1 required) | bench |
+| `e31e66f` | CLAUDE.md: long filenames on, trapezoidal SVF, `/reboot` exists | — |
+
+Bench on `e31e66f` (no audio): 0 fail. Left: the SD write timeouts (try another card).
