@@ -4,6 +4,7 @@
 // moves the selected cursor (grid-snapped when a clock/BPM is known, zero-
 // cross otherwise), press cycles IN -> OUT -> WIN (slide both), hold = Setup.
 // TR1 = play/stop, TR2 = record punch. Everything else lives in Setup.
+#include <esp_http_server.h>
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -1017,6 +1018,7 @@ static int tape_main_event(int event, void *ev_data)
     (void)ev_data;
     tape_autosave_kick();   // machine-ambient: spawn a requested auto-save from any Tape page
     tape_card_service();    // machine-ambient: keep the card recorder armed from any Tape page
+    tape_web_load_service();   // a web 'load to machine': the load streams from the card, so UI task
     if (event == EV_ENTERED_MENU || event == EV_TIMER_REPEATING_SLOW) {
         int fh = TFT_getfontheight();
         _bg = TFT_BLACK; TFT_fillRect(0, fh + 12, _width, 24, _bg);
@@ -1032,6 +1034,7 @@ static int tape_main_event(int event, void *ev_data)
 static const char *const tape_main_items[] = { "Tape", "Setup" };
 static const int tape_main_targets[] = { M_TAPE_MAIN, M_TAPE_SETUP };
 
+extern const httpd_uri_t tape_web_uris[];
 const machine_ui_t tape_menu_ui = {
     .main_items = tape_main_items,
     .main_targets = tape_main_targets,
@@ -1040,5 +1043,7 @@ const machine_ui_t tape_menu_ui = {
     .main_event = tape_main_event,
     .boot_target = M_TAPE_MAIN,
     .setup = &tape_setup,
+    .web_uris = tape_web_uris,
+    .n_web_uris = 1,
     .caps = MC_CLOCK | MC_MATRIX | MC_FX,
 };

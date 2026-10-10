@@ -43,6 +43,22 @@ static esp_err_t apply_handler(httpd_req_t *req)
     return send_json(req, "{\"ok\":true}");
 }
 
+// POST /edit/load?name=<id> — the web file browser's "load to machine": open
+// the sample as the Editor's source, exactly as the panel's Load does
+static esp_err_t load_handler(httpd_req_t *req)
+{
+    char name[ED_NAME_LEN];
+    if (!qparam(req, "name", name, sizeof(name)) || !name[0]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need ?name=");
+        return ESP_FAIL;
+    }
+    if (editor_load(name) != 0) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return send_json(req, "{\"ok\":false,\"error\":\"busy or not loadable\"}");
+    }
+    return send_json(req, "{\"ok\":true}");
+}
+
 static esp_err_t state_handler(httpd_req_t *req)
 {
     static const char *const st[] = { "idle", "running", "done", "error" };
@@ -69,5 +85,6 @@ static esp_err_t state_handler(httpd_req_t *req)
 const httpd_uri_t editor_web_uris[] = {
     { .uri = "/edit/apply", .method = HTTP_POST, .handler = apply_handler },
     { .uri = "/edit/state", .method = HTTP_GET,  .handler = state_handler },
+    { .uri = "/edit/load",  .method = HTTP_POST, .handler = load_handler },
 };
 const int editor_web_n_uris = sizeof(editor_web_uris) / sizeof(editor_web_uris[0]);

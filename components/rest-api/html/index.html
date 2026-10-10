@@ -915,6 +915,7 @@ body.nosbar .sbar{display:none}
       <div class="tab" id="fd-KEYS" onclick="setDirFilt('KEYS')">KEYS</div>
       <div class="tab" id="fd-TAPE" onclick="setDirFilt('TAPE')">TAPE</div>
     </div>
+    <div class="msg" id="ldm"></div>
     <div class="fscroll" id="fscroll">
     <table id="ftab">
       <thead><tr>
@@ -1194,6 +1195,7 @@ function renderFiles(){
       +'<td><canvas class="wf" width="78" height="24" data-name="'+esc(f.name)+'" style="vertical-align:middle;background:#000;border-radius:2px"></canvas></td>'
       +'<td style="white-space:nowrap">'
       +dirSel+' '
+      +ldCtl(f.name)
       +'<a class="btn" style="text-decoration:none" href="/files/raw?name='+encodeURIComponent(f.name)+'" download>&#11015;</a> '
       +'<button class="btn del'+(armed?' armed':'')+'" onclick="del(\''+jsq(f.name)+'\')">&#10005;</button></td></tr>';
   });
@@ -1238,6 +1240,70 @@ function moveFile(name,dir){
       }
       return r.text().then(function(t){alert('Move failed: '+t);renderFiles();});
     }).catch(function(){alert('Move failed');renderFiles();});
+}
+
+// LOAD TO MACHINE: put a library sample into the ACTIVE machine. One-slot
+// machines get a button; multi-slot ones a small picker (voice / deck / pad /
+// zone). Each target is a partial /remote/params body (the machine's own
+// preset_load does the load, exactly as the panel's browser would), or a
+// machine route for Tape and Editor, which do not load by preset key.
+function ldSlots(m){
+  var P=function(o){return {params:o};};
+  switch(m){
+    case 'Sampler':   return [['Voice 1',function(n){return P({s3v:2,voices:[{name:n},{}]});}],
+                              ['Voice 2',function(n){return P({s3v:2,voices:[{},{name:n}]});}]];
+    case 'DoubleDecker': return [['Deck A',function(n){return P({ta:n});}],['Deck B',function(n){return P({tb:n});}]];
+    case 'Drums': {
+      var o=[];
+      for(var p=0;p<4;p++)for(var l=0;l<2;l++)(function(p,l){
+        o.push(['Pad '+(p+1)+(l?' B':' A'),function(n){
+          var pads=[];for(var k=0;k<=p;k++)pads.push({});
+          pads[p]=l?{s2:n,lay:true}:{s:n};
+          return P({pad:pads});}]);
+      })(p,l);
+      return o;
+    }
+    case 'Keys':      return [['Replace all',function(n){return P({smp:n});}],
+                              ['Add zone',function(n){return {addZone:n};}]];
+    case 'Deck':      return [['Deck',function(n){return P({track:n});}]];
+    case 'Granular':
+    case 'Slicer':    return [[m,function(n){return P({sample:n});}]];
+    case 'Synth':     return [['Wave',function(n){return P({wave:n});}]];
+    case 'Tape':      return [['Tape',function(n){return {url:'/tape/load?name='+encodeURIComponent(n)};}]];
+    case 'Editor':    return [['Editor',function(n){return {url:'/edit/load?name='+encodeURIComponent(n)};}]];
+  }
+  return [];
+}
+function ldCtl(name){
+  var sl=ldSlots(curMach);
+  if(!sl.length)return '';
+  if(sl.length===1)return '<button class="btn" title="load into '+esc(curMach)+'" onclick="libLoad(\''+jsq(name)+'\',0)">&#9654;</button> ';
+  var h='<select class="btn" style="width:auto;font-size:10px;padding:1px 2px" title="load into '+esc(curMach)+'" '
+    +'onchange="if(this.value!==\'\')libLoad(\''+jsq(name)+'\',+this.value);this.value=\'\'">'
+    +'<option value="" selected>&#9654; load</option>';
+  sl.forEach(function(s,i){h+='<option value="'+i+'">'+esc(s[0])+'</option>';});
+  return h+'</select> ';
+}
+function libLoad(name,i){
+  var m=curMach,sl=ldSlots(m),e=document.getElementById('ldm');
+  if(!sl[i])return;
+  var t=sl[i][1](name),msg=function(ok,txt){if(e){e.className='msg '+(ok?'ok':'er');e.textContent=txt;}};
+  var done=function(r){
+    if(!r.ok)return r.text().then(function(x){var j;try{j=JSON.parse(x);}catch(_){}msg(false,'Load failed: '+((j&&(j.error||j.why))||x||r.status));});
+    msg(true,name+' \u2192 '+m+(sl.length>1?' ('+sl[i][0]+')':''));
+    if(typeof rpLoad==='function')setTimeout(rpLoad,800);   // the machine cards show the new state
+  };
+  var post=function(body){return fetch('/remote/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});};
+  if(t.url)fetch(t.url,{method:'POST'}).then(done).catch(function(){msg(false,'Load failed');});
+  else if(t.params)post(t.params).then(done).catch(function(){msg(false,'Load failed');});
+  else if(t.addZone){   // Keys: the current zones + this one (the firmware reloads the set)
+    fetch('/remote/params').then(function(r){return r.json();}).then(function(d){
+      var zs=(d.zones||[]).slice();
+      if(zs.length>=8){msg(false,'Keys holds 8 zones at most');return;}
+      zs.push({smp:name});
+      return post({zones:zs}).then(done);
+    }).catch(function(){msg(false,'Load failed');});
+  }
 }
 
 function libRename(name){libEdit=name;renderFiles();}
@@ -3786,6 +3852,7 @@ function pollStatus(){
   fetch('/status').then(function(r){stBusy=false;return r.json();}).then(function(d){
     var pm=curMach;curMach=d.machine||'';
     if(pm&&curMach!==pm)rpLoad();   // panel switched machine: reload its cards
+    if(curMach!==pm&&libFiles.length)renderFiles();   // the rows' load control follows the machine
     var cv=d.cv||[],h='';
     for(var i=0;i<cv.length;i++){
       var pct=Math.round(cv[i]/4095*100);

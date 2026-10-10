@@ -179,6 +179,8 @@ typedef struct {
     // loaded sample name); persisted to CONFIG "tapelast" on leave and reloaded
     // on return so work-in-progress survives a machine switch.
     char     restore_id[SAMPLE_ID_LEN];
+    char     web_load[SAMPLE_ID_LEN];        // a web 'load to machine' request, run on the UI tick
+    volatile bool web_load_req;
     bool     restore_pending;        // reload the persisted take on first Tape-screen entry
     int      take_num;               // session take counter -> "REC-###" title until saved
     // load progress ("" = idle) for the menu
@@ -284,5 +286,7 @@ void tape_rebuild_peaks(bool full);       // UI task; incremental while recordin
 void tape_autosave_kick(void);            // UI task: spawn the deferred auto-save if requested
 void tape_restore_last(void);             // UI task: reload the persisted take (session continuity)
 void tape_card_service(void);             // UI task: re-arm the streaming recorder in card mode
+
+void tape_web_load_service(void);   // UI task: run a queued web 'load to machine'
 
 #endif

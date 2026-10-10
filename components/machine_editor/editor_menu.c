@@ -387,6 +387,6 @@ const machine_ui_t editor_menu_ui = {
     .main_event = editor_main_event,
     .boot_target = M_EDITOR_LIVE,
     .web_uris = editor_web_uris,
-    .n_web_uris = 2,
+    .n_web_uris = 3,   // apply, state, load (editor_web.c)
     .setup = &ed_setup,
 };
