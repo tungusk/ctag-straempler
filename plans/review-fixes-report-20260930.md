@@ -117,3 +117,11 @@ The checks still owed by ear and by hand are in **`plans/test-list-20260930.md`*
 | `e31e66f` | CLAUDE.md: long filenames on, trapezoidal SVF, `/reboot` exists | — |
 
 Bench on `e31e66f` (no audio): 0 fail. Left: the SD write timeouts (try another card).
+
+## Follow-up, 2026-10-11 — review of the fixes
+
+A second pass over `8750c96..e95d8c4` found eight regressions in these fixes; all
+fixed with the rest of that review (`3daf228` `ec03130` `bb8ffa7` `b20913d`
+`6a72805`). Details and unit checks: `plans/fix-review-2026-10-11.md`. The SD write
+timeouts were the card (swapped 10-11, none since). Hands-on list: the START HERE
+block in `plans/test-list-20260930.md`.
