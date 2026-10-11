@@ -888,11 +888,12 @@ static void tape_adj(int i, int dir)
 
 static int tape_action(int i)
 {
+    if (i != 14) s_cut_refused = false;   // "no room" describes the last Cut only (G2-8)
     switch (i) {
         case 10: s_setup_return = 10; s_cur_slot = 0; return M_TAPE_FX;   // FX1
         case 11: s_setup_return = 11; s_cur_slot = 1; return M_TAPE_FX;   // FX2
         case 12: s_setup_return = 12; s_cur_slot = 2; return M_TAPE_FX;   // FX3 reverb
-        case 13: s_cut_refused = false; tape_copy(); break;
+        case 13: tape_copy(); break;
         case 14: s_cut_refused = tape_cut() != 0 && tp_ui_stopped() && !tp.save_busy && tp.len; break;
         case 15: tape_paste(); break;
         case 16: tape_norm(); break;

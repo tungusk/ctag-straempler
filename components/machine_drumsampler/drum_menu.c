@@ -895,8 +895,10 @@ static int drum_load_handler(int it_id, int event, void *ev_data){
     if (r == 1){
         // re-loading the sample the layer already holds costs an SD read and
         // rebuilds the thumbnail for nothing (Arlo) — confirming is a no-op
+        // — but a kept name with nothing loaded (a failed load) is a retry
         const char *sel = sample_browser_selected();
-        if (strcmp(sel, dr.pad[dr.sel_pad].ly[s_layer].sample) != 0)
+        const dr_layer_t *L = &dr.pad[dr.sel_pad].ly[s_layer];
+        if (!L->len || strcmp(sel, L->sample) != 0)
             drum_load_layer(dr.sel_pad, s_layer, (char*)sel);
         return s_load_ret;
     }

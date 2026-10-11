@@ -1,3 +1,4 @@
+#include <math.h>
 #include "clock.h"
 #include "beatlisten.h"
 
@@ -54,6 +55,7 @@ void clock_reset(beatclock_t *c)
     c->since = 0;
     c->ring_n = 0;
     c->period = 0;
+    c->period_f = 0.0f;
     c->idle = 0;
     c->bpm = 0.0f;
     c->locked = false;
@@ -149,6 +151,12 @@ bool clock_tick(beatclock_t *c, uint16_t cv)
             c->period = s[(n - 1) / 2];
             c->bpm = (float)CLK_RATE * 60.0f / (float)c->period;
             c->locked = (n >= 2);
+            // slow average, re-seeded from the median on a real tempo change
+            float fiv = (float)iv;
+            if (c->period_f <= 0.0f || fabsf(fiv - c->period_f) > c->period_f / 8.0f)
+                c->period_f = (float)c->period;
+            else
+                c->period_f += (fiv - c->period_f) / 32.0f;
             edge = true;
         }
         c->since = 0;
@@ -160,6 +168,7 @@ bool clock_tick(beatclock_t *c, uint16_t cv)
         c->locked = false;
         c->ring_n = 0;
         c->period = 0;
+        c->period_f = 0.0f;
         c->bpm = 0.0f;
     }
     return edge;
@@ -269,7 +278,7 @@ typedef struct {
     bool     fallback;     // INT currently standing in for an external source
     bool     edge;         // accepted edge in the last block
     uint32_t pulses;       // accepted edges since boot
-    uint32_t int_ph;       // INT generator phase (frames into the pulse period)
+    uint32_t int_ph;       // INT generator phase, 1/256 frame units into the pulse period
     // external-activity watch for the fallback hand-back: its own tiny
     // floor-tracked Schmitt, because while INT stands in the detector sees
     // INT pulses, not the jack
@@ -295,6 +304,17 @@ static void cc_ensure(void)
 }
 
 const clockin_t *clock_core(void)      { cc_ensure(); return &s_cc.ci; }
+
+float clock_core_pulse_frames(void)
+{
+    cc_ensure();
+    if (!s_cc.ci.clk.locked) return 0.0f;
+    if (s_cc.src == CLK_SRC_INT || s_cc.fallback) {      // the generator's own period
+        float ppm = s_cc.int_bpm * (s_cc.ci.ppb > 0 ? s_cc.ci.ppb : 1.0f);
+        return (float)CLK_RATE * 60.0f / ppm;
+    }
+    return s_cc.ci.clk.period_f > 0.0f ? s_cc.ci.clk.period_f : (float)s_cc.ci.clk.period;
+}
 bool  clock_core_edge(void)            { return s_cc.edge; }
 uint32_t clock_core_pulses(void)       { return s_cc.pulses; }
 int   clock_core_src(void)             { cc_ensure(); return s_cc.src; }
@@ -357,9 +377,11 @@ void clock_core_set_auto(bool on)
 static uint16_t cc_int_level(int frames)
 {
     float ppm = s_cc.int_bpm * (s_cc.ci.ppb > 0 ? s_cc.ci.ppb : 1.0f);
-    uint32_t period = (uint32_t)((float)CLK_RATE * 60.0f / ppm);
-    if (period < 64) period = 64;
-    s_cc.int_ph += (uint32_t)frames;
+    // fractional period (1/256 frame): truncated to whole frames, 120 BPM at
+    // 4 ppb ran 5512 for 5512.5 and a synced bar came out short (hostsim)
+    uint32_t period = (uint32_t)((float)CLK_RATE * 60.0f * 256.0f / ppm);
+    if (period < 64u * 256u) period = 64u * 256u;
+    s_cc.int_ph += (uint32_t)frames * 256u;
     if (s_cc.int_ph >= period) s_cc.int_ph -= period;
     if (s_cc.int_ph >= period) s_cc.int_ph = 0;          // period shrank under us
     return (s_cc.int_ph < period / 2) ? 4095 : 0;

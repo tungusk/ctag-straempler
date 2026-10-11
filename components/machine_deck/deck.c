@@ -376,12 +376,21 @@ void deck_toggle_play(void)
     // resume at the cursor's FILE position — rpos_i is a playback counter now
     // (the loop rework), and seeking to it jumped the playhead forward by the
     // counter/file skew (Arlo, bench: "the playhead jumps forward substantially")
-    uint32_t to = dk_map(dk.rpos_i);
     // a pending window move never commits while paused (rpos is still): fold
-    // it in now so the seek maps against the window the cursor is really in
+    // it in FIRST, then map — mapped before the fold, a large move resumed at
+    // the new loop's start instead of at the cursor's phase in it (G3-4)
     if (dk.loop_active && dk.rm_at) {
         dk.loop_start = dk.rm_start; dk.loop_len_fr = dk.rm_len; dk.map_p0 = dk.rm_p0;
         dk.rm_at = 0;
+    }
+    uint32_t to;
+    if (dk.loop_active && dk.loop_len_fr) {
+        // signed: the folded window's p0 can lie AHEAD of a paused counter
+        int64_t rel = (int64_t)(int32_t)(dk.rpos_i - dk.map_p0) % (int64_t)dk.loop_len_fr;
+        if (rel < 0) rel += dk.loop_len_fr;
+        to = dk.loop_start + (uint32_t)rel;
+    } else {
+        to = dk_map(dk.rpos_i);
     }
     if (to >= dk.file_frames)
         to = (dk.grid_offset < dk.file_frames) ? dk.grid_offset : 0;

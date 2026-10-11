@@ -2625,6 +2625,15 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
                             err == ESP_ERR_OTA_VALIDATE_FAILED ? "image validation failed" : "ota_end failed");
         return ESP_FAIL;
     }
+    // a take started during the tens-of-seconds upload: a reboot now would
+    // destroy it. The image is written but not activated — re-flash after (G2-3)
+    if (recording_is_active()) {
+        audio_output_mute(false);
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"recording started during the upload; not activated\"}");
+        return ESP_OK;
+    }
     if (esp_ota_set_boot_partition(upd) != ESP_OK) {
         audio_output_mute(false);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set_boot failed"); return ESP_FAIL;

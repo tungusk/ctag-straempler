@@ -35,7 +35,7 @@ static esp_err_t load_handler(httpd_req_t *req)
     if (tp.web_load_req) return send_json(req, "409 Conflict", "{\"error\":\"a load is already queued\"}");
     strlcpy(tp.web_load, name, sizeof(tp.web_load));
     tp.web_load_req = true;
-    return send_json(req, "200 OK", "{\"ok\":true}");
+    return send_json(req, "200 OK", "{\"ok\":true,\"queued\":true}");   // loads on the next UI tick
 }
 
 // UI task (the Live page's slow tick, or Tape's other pages): run a queued web

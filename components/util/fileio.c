@@ -88,7 +88,18 @@ static void sweepDir(const char *dir){
         // X.WAV.BAK: the importer's in-place backup (imp_publish). If X.WAV is
         // gone a power cut fell between its two renames: put the backup back.
         // Otherwise it is stale (review #22).
+        // Only the importer's own shape, X.<audio ext>.BAK: a user's FOO.BAK
+        // was renamed to FOO, or deleted when FOO existed (G4-3).
+        bool imp_bak = false;
         if (L >= 8 && strcasecmp(e->d_name + L - 4, ".BAK") == 0) {
+            static const char *const ax[] = { ".WAV", ".AIF", ".AIFF", ".RAW", ".MP3" };
+            int sl = L - 4;                                   // stem length, ".BAK" off
+            for (int k = 0; k < 5 && !imp_bak; k++) {
+                int xl = (int)strlen(ax[k]);
+                imp_bak = sl > xl && strncasecmp(e->d_name + sl - xl, ax[k], xl) == 0;
+            }
+        }
+        if (imp_bak) {
             char p[300], orig[300]; struct stat s;
             snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
             snprintf(orig, sizeof(orig), "%s/%.*s", dir, L - 4, e->d_name);

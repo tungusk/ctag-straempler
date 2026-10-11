@@ -27,6 +27,11 @@ typedef struct {
     uint8_t  split_run;      // consecutive ~2x intervals split as missed edges
     uint8_t  ghost_run;      // consecutive raw edges at ~half period (faster-clock escape)
     uint32_t since_raw;      // frames since the previous RAW edge (accept or not)
+    // long-run average of accepted intervals: edges are seen per 64-frame
+    // block, so the median is block-quantized; this tracks the true period
+    // to a fraction of a frame (0 = none). Anything sized in WHOLE pulses
+    // over many of them (a synced loop) wants this, not `period`.
+    float    period_f;
 } beatclock_t;
 
 void clock_reset(beatclock_t *c);
@@ -151,3 +156,4 @@ float clock_core_int_bpm(void);     void clock_core_set_int_bpm(float bpm);
 bool  clock_core_auto(void);        void clock_core_set_auto(bool on);    // INT fallback
 bool  clock_core_fallback(void);    // INT pulses currently standing in for the source
 float clock_core_beat_bpm(void);    // locked ? detected BEAT tempo : 0 (INT locks too)
+float clock_core_pulse_frames(void); // frames per pulse, sub-frame exact (INT: by construction; external: period_f); 0 = unlocked

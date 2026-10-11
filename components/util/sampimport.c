@@ -23,6 +23,7 @@ volatile bool samp_import_busy = false;
 // a kick while a scan runs: walk the pool again when this pass ends. An upload
 // that finished during a scan was otherwise never converted (review #36).
 static volatile bool s_import_again = false;
+static portMUX_TYPE s_imp_mux = portMUX_INITIALIZER_UNLOCKED;   // samp_import_busy + s_import_again
 volatile int  samp_import_done = 0;
 volatile int  samp_import_fail = 0;
 volatile int  samp_import_seen = 0;
@@ -450,6 +451,7 @@ static void import_task(void *pv)
     samp_import_done = 0;
     samp_import_fail = 0;
     samp_import_seen = 0;
+  bool again;
   do {
     s_import_again = false;
     for (int di = 0; di < (int)(sizeof(dirs)/sizeof(dirs[0])); di++) {
@@ -481,11 +483,16 @@ static void import_task(void *pv)
         closedir(d);
         sd_lock_give();
     }
-  } while (s_import_again);
     ESP_LOGI(TAG, "scan done: %d converted, %d failed",
              samp_import_done, samp_import_fail);
     samp_import_cur[0] = 0;
-    samp_import_busy = false;
+    // the again test and the busy release are ONE step against
+    // samp_import_start: a kick between them was lost (G4-2)
+    portENTER_CRITICAL(&s_imp_mux);
+    again = s_import_again;
+    if (!again) samp_import_busy = false;
+    portEXIT_CRITICAL(&s_imp_mux);
+  } while (again);
     vTaskDelete(NULL);
 }
 
@@ -502,8 +509,16 @@ void samp_import_retry(void)
 
 int samp_import_start(void)
 {
-    if (samp_import_busy) { s_import_again = true; return 0; }   // queued: the running scan walks again
+    // test-and-set under the lock: the httpd kick and the UI's retry could
+    // both pass the test and start two importers (G4-2)
+    portENTER_CRITICAL(&s_imp_mux);
+    if (samp_import_busy) {
+        s_import_again = true;                                    // queued: the running scan walks again
+        portEXIT_CRITICAL(&s_imp_mux);
+        return 0;
+    }
     samp_import_busy = true;
+    portEXIT_CRITICAL(&s_imp_mux);
     // unpinned, modest priority: it's a background chore
     // 20 KB: helix decodeMP3FileSync runs IN THIS TASK (the house MP3 tasks
     // give themselves 16 KB) plus the scan/convert frames on top — 12 KB

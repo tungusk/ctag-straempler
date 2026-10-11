@@ -44,7 +44,12 @@ static uint32_t bar_frames(void)
     // the looper could never lock it)
     uint32_t ppb = (uint32_t)(clock_core()->ppb + 0.5f);
     if (ppb < 1) ppb = 1;
-    return clock_core()->clk.period * 4u * ppb * (uint32_t)(lp.bars > 0 ? lp.bars : 1);
+    // the sub-frame pulse period, not the block-quantized median: a bar is
+    // 16+ pulses, and the median's rounding added up to a loop ~136 frames
+    // short at 120 BPM / 4 ppb (hostsim)
+    float pf = clock_core_pulse_frames();
+    if (pf <= 0.0f) pf = (float)clock_core()->clk.period;
+    return (uint32_t)(pf * 4.0f * (float)ppb * (float)(lp.bars > 0 ? lp.bars : 1) + 0.5f);
 }
 
 static void track_start_record(lp_track_t *t)
@@ -92,16 +97,20 @@ static esp_err_t looper_start(void)
     lp.bars = 4;
     lp.sel = 0;
     ptab_mtx_init(&lp_tab, &lp.mtx, &lp.pmx);
+    bool short_pool = false;     // one track already failed after its retries
     for (int i = 0; i < LP_TRACKS; i++) {
         // four separate 705 KB blocks is tight: the machine just stopped can
         // still be releasing PSRAM from its own task for a moment — retry
         // briefly before falling back to Stub (bench 09-30)
         lp.tr[i].buf = heap_caps_malloc(LP_BUF_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-        for (int t = 0; !lp.tr[i].buf && t < 5; t++) {
+        // retry only until one track has failed: the pool is short then, and
+        // 5 x 100 ms per missing track stalled the switch (G2-6)
+        for (int t = 0; !lp.tr[i].buf && !short_pool && t < 5; t++) {
             vTaskDelay(pdMS_TO_TICKS(100));
             lp.tr[i].buf = heap_caps_malloc(LP_BUF_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
         }
         if (!lp.tr[i].buf) {
+            short_pool = true;
             ESP_LOGE("LOOPER", "PSRAM alloc failed for track %d (free %u, largest %u)", i,
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
@@ -144,6 +153,9 @@ static void apply_cmd(int i)
     // re-arm here zeroed len under it (divide by zero) or recorded over what
     // was being written (review #105 #106). Drop the action.
     if (lp.busy_mask & (1u << i)) { lp.cmd_action[i] = 0; lp.cmd_clear[i] = 0; return; }
+    // a track started without a buffer (short PSRAM) can't record: don't arm
+    // it, or it showed ARMED and then fell silently back to EMPTY (G2-6)
+    if (!t->buf) { lp.cmd_action[i] = 0; lp.cmd_clear[i] = 0; return; }
     if (lp.cmd_clear[i]) {
         lp.cmd_clear[i] = 0;
         t->state = LP_EMPTY;

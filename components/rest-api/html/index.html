@@ -1290,8 +1290,12 @@ function libLoad(name,i){
   var t=sl[i][1](name),msg=function(ok,txt){if(e){e.className='msg '+(ok?'ok':'er');e.textContent=txt;}};
   var done=function(r){
     if(!r.ok)return r.text().then(function(x){var j;try{j=JSON.parse(x);}catch(_){}msg(false,'Load failed: '+((j&&(j.error||j.why))||x||r.status));});
-    msg(true,name+' \u2192 '+m+(sl.length>1?' ('+sl[i][0]+')':''));
-    if(typeof rpLoad==='function')setTimeout(rpLoad,800);   // the machine cards show the new state
+    return r.text().then(function(x){
+      var j;try{j=JSON.parse(x);}catch(_){}
+      var q=(j&&j.queued!==undefined)?!!j.queued:m==='Tape';   // the device only queued it (loads on the unit's next UI tick)
+      msg(true,name+(q?' queued for ':' \u2192 ')+m+(sl.length>1?' ('+sl[i][0]+')':''));
+      if(typeof rpLoad==='function')setTimeout(rpLoad,q?1500:800);   // the machine cards show the new state
+    });
   };
   var post=function(body){return fetch('/remote/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});};
   if(t.url)fetch(t.url,{method:'POST'}).then(done).catch(function(){msg(false,'Load failed');});
@@ -1313,7 +1317,7 @@ function libCommit(name){
   libEdit=null;
   if(!el){renderFiles();return;}
   if(el.value===name){renderFiles();return;}   // unchanged: don't truncate a long name
-  var to=el.value.replace(/[^a-zA-Z0-9_]/g,'').slice(0,31);
+  var to=el.value.replace(/[^a-zA-Z0-9_-]/g,'').slice(0,31);
   if(!to||to===name){renderFiles();return;}
   fetch('/files/rename?name='+encodeURIComponent(name)+'&to='+encodeURIComponent(to),{method:'POST'})
     .then(function(r){
@@ -1407,7 +1411,7 @@ var batchBusy=false,batchTimer=null;   // batchBusy: an upload is running, the l
 var batchFiles=[];   // [{file, name(custom|null), base(sanitized), ext, kind}]
 function fileMeta(file){
   var m=file.name.match(/\.([^.]+)$/),ext=m?m[1]:'';
-  var base=file.name.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_]/g,'');
+  var base=file.name.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'');
   var lo=ext.toLowerCase();
   var kind=(m&&lo==='ot')?'ot':(m&&MOD_EXTS.indexOf(lo)>=0)?'mod'
           :(/\.raw$/i.test(file.name))?'raw'
@@ -1474,7 +1478,7 @@ function renameBatch(i){if(batchBusy)return;editIdx=i;renderBatch();}
 function commitRename(){
   if(editIdx<0)return;
   var el=document.getElementById('brn');
-  if(el){var v=el.value.replace(/[^a-zA-Z0-9_]/g,'').substring(0,31);batchFiles[editIdx].name=v||null;}
+  if(el){var v=el.value.replace(/[^a-zA-Z0-9_-]/g,'').substring(0,31);batchFiles[editIdx].name=v||null;}
   editIdx=-1;renderBatch();
 }
 function cancelRename(){editIdx=-1;renderBatch();}
@@ -3860,10 +3864,11 @@ var stBusy=false;
 function pollStatus(){
   if(webPaused||stBusy)return;    // WEB card: quiet while judging audio; one request at a time
   stBusy=true;
-  fetch('/status').then(function(r){stBusy=false;return r.json();}).then(function(d){
+  var ac=typeof AbortController!=='undefined'?new AbortController():null,tm=ac&&setTimeout(function(){ac.abort();},3000);   // a hung fetch must not wedge polling
+  fetch('/status',ac?{signal:ac.signal}:undefined).then(function(r){stBusy=false;return r.json();}).then(function(d){
     var pm=curMach;curMach=d.machine||'';
     if(curMach!==pm&&(pm||(rpData&&rpMach!==curMach)))rpLoad();   // panel switched machine: reload its cards
-    if(curMach!==pm&&libFiles.length)renderFiles();   // the rows' load control follows the machine
+    if(curMach!==pm&&libFiles.length&&libEdit===null)renderFiles();   // the rows' load control follows the machine
     var cv=d.cv||[],h='';
     for(var i=0;i<cv.length;i++){
       var pct=Math.round(cv[i]/4095*100);
@@ -3887,7 +3892,7 @@ function pollStatus(){
     if(foldOpen('sys'))sysDraw();
     updateScope(d.cv);
     if(document.getElementById('p3').className.indexOf('on')>=0){bncPoll();bcastPoll();scrPoll();}   // bounce+broadcast+screen while Remote is open
-  }).catch(function(){stBusy=false;});
+  }).catch(function(){stBusy=false;}).then(function(){if(tm)clearTimeout(tm);});
 }
 setInterval(pollStatus,500);
 pollImport();

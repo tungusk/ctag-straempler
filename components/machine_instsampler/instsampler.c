@@ -6,6 +6,8 @@
 #include <string.h>
 #include <math.h>
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include "machine.h"
@@ -89,11 +91,40 @@ static bool arena_ensure(void)
 // instead of silently dropping them from the patch (review #164). Cleared with
 // the zones themselves (Load Sample, Clear Zones, a preset load).
 static cJSON *s_unloaded_zones;
+// preset_save reads the list on httpd (GET /remote/params) while a load on the
+// UI task builds or frees it (G3-5): every touch goes under this lock. A mutex,
+// not a spinlock — cJSON allocates.
+static SemaphoreHandle_t s_uz_mx;
+static portMUX_TYPE s_uz_init = portMUX_INITIALIZER_UNLOCKED;
+static void uz_lock(void)
+{
+    if (!s_uz_mx) {
+        static StaticSemaphore_t buf;
+        portENTER_CRITICAL(&s_uz_init);
+        if (!s_uz_mx) s_uz_mx = xSemaphoreCreateMutexStatic(&buf);
+        portEXIT_CRITICAL(&s_uz_init);
+    }
+    xSemaphoreTake(s_uz_mx, portMAX_DELAY);
+}
+static void uz_unlock(void) { xSemaphoreGive(s_uz_mx); }
+static void uz_clear(void)
+{
+    uz_lock();
+    cJSON_Delete(s_unloaded_zones);
+    s_unloaded_zones = NULL;
+    uz_unlock();
+}
+static void uz_add(const cJSON *e)
+{
+    uz_lock();
+    if (!s_unloaded_zones) s_unloaded_zones = cJSON_CreateArray();
+    if (s_unloaded_zones) cJSON_AddItemToArray(s_unloaded_zones, cJSON_Duplicate(e, 1));
+    uz_unlock();
+}
 
 void keys_clear_zones(void)
 {
-    cJSON_Delete(s_unloaded_zones);
-    s_unloaded_zones = NULL;
+    uz_clear();
     // keys_process re-reads frames/buf per sample: zero the length (and raise
     // loading) first, let the block in flight finish, THEN drop the pointers —
     // the drum_clear_layer order. buf = NULL first read through NULL mid-block.
@@ -433,8 +464,7 @@ static void keys_stop(void)
     // here pinned the pool between big blocks, and Looper's 4th track could not
     // allocate after a switch away mid-load (bench 09-30). The autosave already
     // ran before stop(); the next preset load rebuilds the list.
-    cJSON_Delete(s_unloaded_zones);
-    s_unloaded_zones = NULL;
+    uz_clear();
     for (int i = 0; i < IS_MAX_ZONES; i++) {
         inst.zone[i].buf = NULL;
         inst.zone[i].cap = 0;
@@ -687,7 +717,9 @@ static cJSON *keys_preset_save(void)
         cJSON_AddItemToArray(zs, e);
     }
     const cJSON *ue = NULL;                    // zones named but not loaded (#164)
+    uz_lock();
     cJSON_ArrayForEach(ue, s_unloaded_zones) cJSON_AddItemToArray(zs, cJSON_Duplicate(ue, 1));
+    uz_unlock();
     cJSON_AddStringToObject(o, "smp", z->sample);
     cJSON_AddNumberToObject(o, "root", z->root);
     cJSON_AddNumberToObject(o, "fn", z->fine);      // cents-as-semitones (auto-tune)
@@ -790,8 +822,7 @@ static void keys_preset_load(const cJSON *node)
             if (same) zk++;
             else if (keys_load_zone_at(-1, sj->valuestring) != 0) {
                 ESP_LOGW("keys", "zone %s did not load — kept in the patch", sj->valuestring);
-                if (!s_unloaded_zones) s_unloaded_zones = cJSON_CreateArray();
-                if (s_unloaded_zones) cJSON_AddItemToArray(s_unloaded_zones, cJSON_Duplicate(e, 1));
+                uz_add(e);
                 continue;
             }
             is_zone_t *zz = same ? &inst.zone[zk - 1] : &inst.zone[inst.nzones - 1];

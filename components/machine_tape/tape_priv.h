@@ -146,7 +146,7 @@ typedef struct {
     volatile uint32_t peaks_done;     // frames covered by peaks so far
     // background save job (Save Crop + auto-save both route through it)
     volatile bool save_busy;
-    char     save_id[12];             // last minted take id ("" = none)
+    char     save_id[16];             // last minted take id ("" = none); 16: past 9999 it grows
     uint32_t save_a, save_b;          // frames [a,b) the writer will emit
     bool     save_crop;              // true = an actively-cropped take (marked TCR_)
     bool     save_adopt;             // this save makes the file the take (see tape_spawn_save)
@@ -163,7 +163,7 @@ typedef struct {
     // crop-drop ADOPTION: after the writer closes the file, the UI task loads it
     // back as the tape's content (the "crop" half of the gesture). Deferred
     // because the load must not race the writer, and it needs UI context (SD).
-    char     adopt_id[12];           // "" = nothing pending
+    char     adopt_id[16];           // "" = nothing pending
     bool     adopt_resume;           // transport was rolling -> play the new take
     // monitor mute while a load streams from the card: without it you sit on the
     // raw line-in for the whole read (very audible on the crop's load-back, which
@@ -191,7 +191,7 @@ typedef struct {
     // Crop-drop confirmation for the Live page: the drop is a background copy
     // with no visible effect on the tape, so without this it looks like nothing
     // happened. Holds the dropped id; counts down on the SLOW menu tick.
-    char     drop_note[12];
+    char     drop_note[16];
     int      drop_ticks;
     // ui hints
     float    disp_bpm;                // effective grid bpm for the header

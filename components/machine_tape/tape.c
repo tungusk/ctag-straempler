@@ -773,9 +773,24 @@ int tape_copy(void)
 // trimmed copy deleted the remainder for good (review #97)
 int tape_cut(void)
 {
-    if (tape_copy() != 0) return -1;
+    if (!tp_can_edit()) return -1;
+    crop_clamp();
     uint32_t n = tp.out_pt - tp.in_pt;
-    if (tp.clip_len < n) return -1;
+    // stage the cut in a fresh bank: a refused Cut used to have replaced the
+    // clipboard already (G2-8). Only when the old clipboard is what's in the
+    // way is it given up for one more try.
+    static tp_bank_t nb;
+    if (bank_alloc(&nb, n) != 0) {
+        bank_free(&nb);
+        if (!tp.clip_len) return -1;
+        bank_free(&tp.clip); tp.clip_len = 0;
+        if (bank_alloc(&nb, n) != 0) { bank_free(&nb); return -1; }
+    }
+    bank_free(&tp.clip);
+    tp.clip = nb;
+    memset(&nb, 0, sizeof(nb));                       // the blocks belong to clip now
+    for (uint32_t i = 0; i < n; i++) bank_wr(&tp.clip, i, tp_rd(tp.in_pt + i));
+    tp.clip_len = n;
     for (uint32_t i = tp.out_pt; i < tp.len; i++)     // close the gap (forward)
         tp_wr(i - n, tp_rd(i));
     tp.len -= n;
@@ -904,8 +919,9 @@ static int tape_spawn_save_ex(uint32_t a, uint32_t b, bool crop, bool adopt, boo
     const char *pfx = crop ? "TLP_" : "CUT_";
     int idx = sample_next_index(pfx);
     if (idx < 0) idx = 0;
-    if (idx > 9999) idx = 9999;                // 8.3: id stays exactly 8 chars
-    snprintf(tp.save_id, sizeof(tp.save_id), "%s%04d", pfx, idx % 10000);
+    // long filenames are on: past 9999 the id just grows (it was clamped for
+    // 8.3, so CUT_9999 was overwritten forever after — G2-7)
+    snprintf(tp.save_id, sizeof(tp.save_id), "%s%04d", pfx, idx);
     if (adopt) { snprintf(tp.restore_id, sizeof(tp.restore_id), "%s", tp.save_id); tp_persist_last(); }
     tp.save_a = a; tp.save_b = b; tp.save_crop = crop;
     tp.save_adopt = adopt; tp.save_keep_dirty = keep_dirty; tp.save_gen = tp.dirty_gen;
@@ -956,7 +972,7 @@ int tape_save_crop(void)
 void tape_drop_adopt_kick(void)
 {
     if (!tp.adopt_id[0] || tp.save_busy) return;
-    char id[12];
+    char id[16];
     snprintf(id, sizeof(id), "%s", tp.adopt_id);
     bool resume = tp.adopt_resume;
     tp.adopt_id[0] = 0;                      // one shot, whatever the outcome

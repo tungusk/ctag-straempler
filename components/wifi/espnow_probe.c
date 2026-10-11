@@ -52,14 +52,22 @@ static void probe_task(void *arg)
 {
     (void)arg;
     probe_pkt_t p = {0};
+    TickType_t last = xTaskGetTickCount();
+    uint32_t acc = 0;                     // tick remainder carried between sends
     for (;;) {
         int hz = s_hz;
-        if (hz <= 0) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
+        if (hz <= 0) { vTaskDelay(pdMS_TO_TICKS(100)); last = xTaskGetTickCount(); acc = 0; continue; }
         p.seq++;
         p.tick = (uint32_t)xTaskGetTickCount();
         esp_now_send(BCAST, (const uint8_t *)&p, sizeof(p));
-        TickType_t tk = pdMS_TO_TICKS(1000 / hz);
-        vTaskDelay(tk < 1 ? 1 : tk);      // >= 1 tick: above 100 Hz it spun (#152)
+        // whole ticks per send, the remainder carried: the AVERAGE rate is hz
+        // (a floored 1000/hz ms sent everything from 51 to 99 Hz at 100). hz is
+        // capped at the tick rate, so every wait is >= 1 tick (#152).
+        acc += configTICK_RATE_HZ;
+        TickType_t tk = acc / (uint32_t)hz;
+        acc -= tk * (uint32_t)hz;
+        if (tk < 1) tk = 1;
+        vTaskDelayUntil(&last, tk);
     }
 }
 
