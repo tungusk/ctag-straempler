@@ -350,7 +350,7 @@ static void save_str(char *v, size_t n){
 }
 static int save_act(void){
     int r = looper_save_track(lp.sel);
-    s_save_msg = (r == 0) ? "SAVED" : (r == -3) ? "FAILED" : "EMPTY";
+    s_save_msg = (r == 0) ? "SAVED" : (r == -3) ? "FAILED" : (r == -4) ? "BUSY" : "EMPTY";
     return 0;
 }
 static void bounce_str(char *v, size_t n){
@@ -358,7 +358,7 @@ static void bounce_str(char *v, size_t n){
 }
 static int bounce_act(void){
     int r = looper_bounce();
-    s_bounce_msg = (r == 0) ? "BOUNCED" : (r == -2) ? "STOP REC" : "EMPTY";
+    s_bounce_msg = (r == 0) ? "BOUNCED" : (r == -2) ? "STOP REC" : (r == -4) ? "BUSY" : "EMPTY";
     if (r == 0) lp.sel = 0;   // the bounce lands on track 1 — focus it
     return 0;
 }

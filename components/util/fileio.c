@@ -132,6 +132,8 @@ static void sweepIncompleteFiles(){
     for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); i++) sweepDir(dirs[i]);
 }
 
+static void json_recover(const char *f);
+
 void checkSDStructure(){
     // check if directory structure exists, if not, create
     struct stat st = {0};
@@ -163,6 +165,10 @@ void checkSDStructure(){
     if (stat("/sdcard/usr/TRACKER", &st) == -1) mkdir("/sdcard/usr/TRACKER", 0777);
     if (stat("/sdcard/usr/KEYS", &st) == -1)    mkdir("/sdcard/usr/KEYS", 0777);
     if (stat("/sdcard/usr/TAPE", &st) == -1)    mkdir("/sdcard/usr/TAPE", 0777);
+
+    // a power cut between writeJSONFile's two renames leaves only the .JBK
+    json_recover("/sdcard/CONFIG.JSN");
+    json_recover("/sdcard/AUTOSAVE.JSN");
 
     // check if config file exists & has valid structure, else create/rewrite
     if (stat("/sdcard/CONFIG.JSN", &st) == -1 || validateConfig() == -1) {
@@ -246,6 +252,19 @@ static void json_sibling(const char *file, const char *ext, char *out, size_t n)
     const char *dot = strrchr(file, '.'), *sl = strrchr(file, '/');
     int stem = (dot && (!sl || dot > sl)) ? (int)(dot - file) : (int)strlen(file);
     snprintf(out, n, "%.*s%s", stem, file, ext);
+}
+
+// put a .JBK back when its live file is missing or empty (boot only, before
+// anything reads or rewrites the file)
+static void json_recover(const char *f)
+{
+    char bak[112];
+    struct stat st;
+    json_sibling(f, ".JBK", bak, sizeof(bak));
+    if (stat(bak, &st) != 0 || st.st_size <= 0) return;
+    if (stat(f, &st) == 0 && st.st_size > 0) return;   // live file fine; the old .JBK goes on the next write
+    remove(f);                                          // zero-length remnant
+    if (rename(bak, f) == 0) ESP_LOGW("SD", "restored %s from its backup", f);
 }
 
 int fileExists(const char *file){
@@ -409,8 +428,10 @@ int writeJSONFile(const char *fileName, const char* data){
         ESP_LOGE("FILEIO", "write of %s failed (card full?) — old file kept", fileName);
         return -1;
     }
-    remove(bak);
+    // the backup goes only when a live file replaces it: after a power cut
+    // between the two renames the .JBK is the only good copy
     bool had = stat(fileName, &st) == 0;
+    if (had) remove(bak);
     if (had && rename(fileName, bak) != 0) {
         remove(tmp);
         sd_lock_give();

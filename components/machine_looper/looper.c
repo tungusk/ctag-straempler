@@ -324,7 +324,7 @@ static void looper_process(int32_t out[MACHINE_BLOCK],
 // in the same stereo-packed int32 format the recording service writes (mono
 // duplicated L=R), so the samplers can load it and it survives reboot. Runs on
 // the UI task (explicit action); playback keeps reading the buffer read-only.
-int looper_save_track(int i)
+static int save_track_inner(int i)
 {
     if (i < 0 || i >= LP_TRACKS) return -1;
     lp_track_t *t = &lp.tr[i];
@@ -427,7 +427,7 @@ int looper_save_track(int i)
 // synced case). Pan is dropped — the destination is a mono track. Runs on the
 // UI task (explicit action). The audio task keeps playing the old mix until we
 // swap; sources are read-only here so concurrent playback is safe.
-int looper_bounce(void)
+static int bounce_inner(void)
 {
     // refuse while any track is capturing — its buf/len/state are in flux
     for (int i = 0; i < LP_TRACKS; i++)
@@ -503,6 +503,45 @@ int looper_bounce(void)
     ESP_LOGI("LOOPER", "bounced %d track(s) -> track 1 (%lu frames)",
              n_src, (unsigned long)bounce_len);
     return 0;
+}
+
+// one save OR bounce at a time: the web save runs on its own worker while the
+// panel's Save/Bounce run on the UI task, and both write busy_mask and read
+// (or, for the bounce, rewrite) track 1 — an overlap tore a saved WAV and
+// released the other party's hold. Busy -> -4, the caller says so.
+static portMUX_TYPE s_io_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool s_io_busy;
+
+static bool io_take(void)
+{
+    portENTER_CRITICAL(&s_io_mux);
+    bool ok = !s_io_busy;
+    if (ok) s_io_busy = true;
+    portEXIT_CRITICAL(&s_io_mux);
+    return ok;
+}
+
+static void io_give(void)
+{
+    portENTER_CRITICAL(&s_io_mux);
+    s_io_busy = false;
+    portEXIT_CRITICAL(&s_io_mux);
+}
+
+int looper_save_track(int i)
+{
+    if (!io_take()) return -4;
+    int r = save_track_inner(i);
+    io_give();
+    return r;
+}
+
+int looper_bounce(void)
+{
+    if (!io_take()) return -4;
+    int r = bounce_inner();
+    io_give();
+    return r;
 }
 
 // persist the machine settings (not the RAM loops) so the looper remembers

@@ -310,10 +310,23 @@ static void stream_task(void *pv)
                 esp_http_client_fetch_headers(cl);
                 hs = esp_http_client_get_status_code(cl);
             }
+            if (hs < 0) {
+                // -1 = no headers (timeout, server closed, failed reopen): a
+                // dropped connection, not a refusal — back off and reconnect
+                esp_http_client_close(cl);
+                esp_http_client_cleanup(cl);
+                if (s_stop || gen != s_gen) break;
+                if (++attempts > 8) { set_err("no response"); break; }
+                for (int i = 0; i < 100 && !s_stop && gen == s_gen; i++) vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
             if (hs != 0 && hs != 200) {
-                char m[24];
-                snprintf(m, sizeof(m), "HTTP %d", hs);
-                set_err(m);
+                // a superseded task must not paint its error over the new station
+                if (!s_stop && gen == s_gen) {
+                    char m[24];
+                    snprintf(m, sizeof(m), "HTTP %d", hs);
+                    set_err(m);
+                }
                 esp_http_client_close(cl);
                 esp_http_client_cleanup(cl);
                 break;
@@ -500,8 +513,10 @@ static cJSON *radio_preset_save(void)
 
 static void radio_preset_load(const cJSON *node)
 {
-    rd.sel = 0;
-    if (node) {
+    if (!node) { rd.sel = 0; return; }
+    {
+        // a body without "sel" (a web Apply of other keys, or of nothing)
+        // keeps the station that is playing
         cJSON *j = cJSON_GetObjectItemCaseSensitive(node, "sel");
         // against the stations actually loaded (radio_start ran first), not the
         // table size: a press played nothing on a stale index (#112)

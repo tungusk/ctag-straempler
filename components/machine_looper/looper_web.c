@@ -63,6 +63,11 @@ static esp_err_t looper_save_post_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save timed out");
         return ESP_FAIL;
     }
+    if (s_sv_rc == -4) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_sendstr(req, "busy: a save or bounce is running");
+        return ESP_OK;
+    }
     if (s_sv_rc != 0) {
         char why[96];
         snprintf(why, sizeof(why),

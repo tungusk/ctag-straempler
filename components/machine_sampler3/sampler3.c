@@ -539,8 +539,9 @@ static esp_err_t s3_start(void)
 static void s3_stop(void)
 {
     // the record arm and any take belong to this machine: a switch left the
-    // arm set (a gate on return still recorded) and a take running (#59)
-    if (recording_is_active()) recording_finish();
+    // arm set (a gate on return still recorded) and a take running (#59).
+    // A web /bounce is not ours: it records the output across the switch.
+    if (recording_is_active() && !audio_bounce_active()) recording_finish();
     for (int i = 0; i < S3_NVOICES; i++) recording_set_trig_func(i, TRIG_FUNC_VOICE);
     recording_cancel_prepared();
     // freeing under a live head/loop-cache rebuild corrupts the heap: leak instead
@@ -582,7 +583,7 @@ static inline bool s3_frame_ok(const s3_voice_t *v, uint32_t f, bool resident)
     if (v->loading) return false;
     if (f >= v->wpos) return false;
     if (f < v->ring_lo) return false;      // below the last seek: stale slots (#58)
-    if (resident) return v->ring_lo == v->head_frames;
+    if (resident) return true;             // [ring_lo, wpos) is at most one ring: never reused
     return (v->wpos - f) <= (S3_RING_FRAMES - S3_CHUNK_FRAMES);
 }
 

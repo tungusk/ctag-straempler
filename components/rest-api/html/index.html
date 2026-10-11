@@ -2768,8 +2768,18 @@ function rpApply(){
   });
   var full=d,body={},bs=rpBase||{};   // post only what changed, so device-side edits since load survive
   Object.keys(full).forEach(function(k){if(JSON.stringify(full[k])!==JSON.stringify(bs[k]))body[k]=full[k];});
+  if(!Object.keys(body).length){var m1=document.getElementById('rm');m1.className='msg ok';m1.textContent='Nothing changed';return;}   // an empty post would reset e.g. Radio's station
   if(body.mxs!==undefined||body.mxa!==undefined||body.mxm!==undefined){body.mxs=full.mxs;body.mxa=full.mxa;body.mxm=full.mxm;}
   if(bs.s3v!==undefined)body.s3v=full.s3v;   // Sampler ignores a body without s3v:2
+  [['mxs','cvv'],['llen','lq']].forEach(function(p){if(body[p[0]]!==undefined&&bs[p[1]]!==undefined)body[p[1]]=bs[p[1]];});   // DoubleDecker honours the matrix / llen units only with its version key in the same body
+  if(Array.isArray(bs.zones)){   // Keys: a flat zone-0 key alone makes the firmware reload (and clear) every zone, so send the zone set too
+    var zf=['smp','root','fn','lm','ls','le','lx'].filter(function(k){return body[k]!==undefined;});
+    if(zf.length){
+      var zs=JSON.parse(JSON.stringify(body.zones||bs.zones));
+      if(zs[0])zf.forEach(function(k){zs[0][k]=body[k];});   // flat keys describe zone 0
+      body.zones=zs;
+    }
+  }
   fetch('/remote/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(function(r){return r.json();}).then(function(res){
       var m=document.getElementById('rm');
