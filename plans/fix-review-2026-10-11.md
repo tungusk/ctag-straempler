@@ -145,3 +145,16 @@ G1-2 (no reachable caller) · G4-7 (`/files` doesn't use that path) · G5-6 (by 
 - Not reached without hands: Tape quiet save WITH a crop (code only), Looper BUSY (the saves never overlapped), Sampler short-sample seek (one-line fix, code only), Drums failed-layer retry (panel browser).
 - Test files left on the swapped card: FIX-TEST1, LOOP0002-0007, CUT_0106.
 
+
+## The eight, on the unit (10-11, evening; Arlo: "go")
+Scripts in that session's scratchpad (`t8_*.py`, not kept). All driven over REST /
+`/remote/event` / `/remote/cv` / `/screenshot`, audio on the Scarlett.
+1. Drums: pad 2 (CV2 trigger; pad 1's CV5 is a knob channel and didn't fire) ringing at -27 dBFS, a load onto it -> -88 dBFS floor, no 1.4 kHz tone above the floor's own (3/3). Failed-layer retry NOT tested.
+2. Slicer: uploaded a 300->3000 Hz chirp, 4 slices, reverse: every firing falls 516 -> ~300 Hz with zero upward steps (3/3). `.OT`: hand-built sidecars via `PUT /drop_ot` (OTA 3 slices, OTB 5): OTA 1/3 -> Grid pick 1/16 -> OTB 1/5 (its own .OT).
+3. Looper: INT 120 BPM, 1 bar synced via TR1 -> saved 352844 B = 88200.0 frames. Bounce with 4 TR1 pulses during it: BOUNCED, no reboot, track 1 same length.
+4. Tape: BASS16 -> Norm -> nothing at 5 s, CUT_0107 at 15 s; `/reboot` restores CUT_0107. Crop OUT 12.67/17.91 s + Fade -> quiet save CUT_0108 = whole take, no TLP_; leaving -> TLP_0000 (12.67 s), loaded on return. (Norm on already-normalised audio is a no-op: no edit, no save.)
+5. Deck: NOT measurable — cross-correlating the capture against the downloaded track gave no consistent position (repetitive loops + sync varispeed). Ear check stays with Arlo.
+6. FX: Tape FX1 = filter, then flanger; CV2 swept as a 2 s triangle into FX1A for 8 s: click events 2 in 4 s static vs 4 in 8 s sweep (same rate = the bass attacks); brightness ceiling 2.6 -> 4.6 kHz while sweeping; base `fic` 60 / `flgdp` 0 unchanged in params throughout.
+7. Radio: Groove Salad 30 min: playing throughout, 0 reconnects, 0 underruns, no reboot. (No hiccup happened, so the reconnect path itself wasn't exercised.)
+8. Granular pos/pitch/level, Drums pad atk/sto/lpm, Slicer fx/rv/rvmx: set, `/reboot`, all read back identical. Restored afterwards.
+Test files left on the card: CHIRP2, OTA(.OT), OTB(.OT), FIX-TEST1, LOOP0002-0009, CUT_0106-0108, TLP_0000.
