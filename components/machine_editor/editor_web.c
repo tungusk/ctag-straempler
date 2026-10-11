@@ -7,6 +7,7 @@
 #include <esp_http_server.h>
 #include "cJSON.h"
 #include "editor_priv.h"
+#include "urldec.h"
 
 static bool qparam(httpd_req_t *req, const char *key, char *out, size_t n)
 {
@@ -18,6 +19,7 @@ static bool qparam(httpd_req_t *req, const char *key, char *out, size_t n)
     if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK)
         ok = (httpd_query_key_value(q, key, out, n) == ESP_OK);
     free(q);
+    if (ok) urldec_inplace(out);                 // the page encodeURIComponent()s names
     return ok;
 }
 

@@ -23,6 +23,8 @@
 #include "sample_ram.h"
 #include "editor_priv.h"
 
+static char s_src_seen[ED_NAME_LEN];   // ed.src the view was last reset for (editor_ambient)
+
 static const color_t DIM    = {110, 110, 120};
 static const color_t OKCOL  = {40, 200, 90};
 static const color_t ERRCOL = {220, 60, 40};
@@ -340,6 +342,7 @@ static int editor_load_handler(int it_id, int event, void *ev_data)
     if (r == 1) {
         editor_audition(false);                 // the old file is about to close
         editor_load(sample_browser_selected());
+        strlcpy(s_src_seen, ed.src, sizeof(s_src_seen));   // the panel did ambient's job
         wave_sync();
         wave_edit_zoom_all(&s_wave);
         s_setup_return = ER_SOURCE;
@@ -379,6 +382,20 @@ extern const httpd_uri_t editor_web_uris[];
 static const char *const editor_main_items[] = { "Live", "Setup" };
 static const int editor_main_targets[] = { M_EDITOR_LIVE, M_EDITOR_SETUP };
 
+// UI task, every slow tick on any page: a source loaded behind the panel (the
+// web's POST /edit/load) gets what the panel's Load does — the old audition
+// stopped and the view zoomed out to the new file
+static void editor_ambient(void)
+{
+    if (strcmp(s_src_seen, ed.src) == 0) return;
+    bool first = !s_src_seen[0] && !ed.src[0];
+    strlcpy(s_src_seen, ed.src, sizeof(s_src_seen));
+    if (first) return;
+    editor_audition(false);
+    wave_sync();
+    wave_edit_zoom_all(&s_wave);
+}
+
 const machine_ui_t editor_menu_ui = {
     .main_items = editor_main_items,
     .main_targets = editor_main_targets,
@@ -389,4 +406,5 @@ const machine_ui_t editor_menu_ui = {
     .web_uris = editor_web_uris,
     .n_web_uris = 3,   // apply, state, load (editor_web.c)
     .setup = &ed_setup,
+    .ambient = editor_ambient,
 };

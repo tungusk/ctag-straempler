@@ -249,6 +249,8 @@ static void reader_task(void *pv)
             if (f) {
                 sl.len = sf.frames;
                 strlcpy(sl.sample, sl.pending, sizeof(sl.sample));
+                // a Grid/Transient pick belongs to the sample it was made on (#167)
+                if (sl.ot_off && strcmp(sl.ot_off_for, sl.sample) != 0) sl.ot_off = false;
                 scan_file(f, &sf, stage);
                 int otn = slicer_parse_ot(sl.sample, sl.len, sl.ot_pt, SL_OT_SLICES + 1);
                 sl.ot_n = otn > 0 ? otn : 0;
@@ -267,6 +269,7 @@ static void reader_task(void *pv)
             }
             fill_gen = sl.gen;         // any in-flight fill is stale now
             sl.ring_avail = 0;
+            sl.load_gen++;             // a load quicker than one UI tick still repaints
             sl.loading = false;
         }
 
@@ -710,7 +713,13 @@ static void slicer_preset_load(const cJSON *node)
         sl.fx_rvmix = (float)x / 100.0f;
         reverb_set_mix(&sl.fx_rv, sl.fx_rvmix);
     }
-    if ((j = cJSON_GetObjectItemCaseSensitive(node, "otoff")))   sl.ot_off = cJSON_IsTrue(j);
+    if ((j = cJSON_GetObjectItemCaseSensitive(node, "otoff"))) {
+        // "otoff" describes the preset's own sample (or the loaded one)
+        const cJSON *sj = cJSON_GetObjectItemCaseSensitive(node, "sample");
+        sl.ot_off = cJSON_IsTrue(j);
+        strlcpy(sl.ot_off_for, cJSON_IsString(sj) && sj->valuestring[0] ? sj->valuestring : sl.sample,
+                sizeof(sl.ot_off_for));
+    }
     cvmtx_load(&sl.mtx, node);
     cvmtx_rearm(&sl.mtx);          // knobs recapture against the loaded values
     // a web Apply posts the loaded sample back: reload only a CHANGED one, and
@@ -723,6 +732,12 @@ static void slicer_preset_load(const cJSON *node)
         if (sl.ot_off != was_otoff) sl.ot_active = sl.ot_present && !sl.ot_off;
         slicer_reslice();
     }
+}
+
+void slicer_set_ot_off(bool off)
+{
+    sl.ot_off = off;
+    strlcpy(sl.ot_off_for, sl.sample, sizeof(sl.ot_off_for));
 }
 
 extern const machine_ui_t slicer_menu_ui;

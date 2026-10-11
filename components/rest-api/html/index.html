@@ -2749,11 +2749,11 @@ function rpLoad(retry){
 
 function rpApply(){
   if(!rpData)return;
-  if(rpMach!==curMach){var m0=document.getElementById('rm');m0.className='msg er';m0.textContent='Machine changed \u2014 reloading, try again';rpLoad();return;}
+  if(rpMach&&rpMach!==curMach){var m0=document.getElementById('rm');m0.className='msg er';m0.textContent='Machine changed \u2014 reloading, try again';rpLoad();return;}
   var d=JSON.parse(JSON.stringify(rpData)),glob={},a=mxCollect();
   document.querySelectorAll('[data-ik]').forEach(function(s){   // input-map picks, as the rows now read
     var v=(a.picks[s.dataset.ik]!==undefined)?a.picks[s.dataset.ik]:+s.value;
-    if(s.dataset.ig)glob[s.dataset.ik]=v;                      // module-wide (the core clock) -> /settings
+    if(s.dataset.ig){if(v!==+s.defaultValue)glob[s.dataset.ik]=v;}   // module-wide (the core clock) -> /settings; only if changed since render, so a panel-side change survives
     else d[s.dataset.ik]=v;
   });
   if(Object.keys(glob).length)fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(glob)}).then(function(){clkLoad();}).catch(function(){});
@@ -2768,6 +2768,7 @@ function rpApply(){
   });
   var full=d,body={},bs=rpBase||{};   // post only what changed, so device-side edits since load survive
   Object.keys(full).forEach(function(k){if(JSON.stringify(full[k])!==JSON.stringify(bs[k]))body[k]=full[k];});
+  if(!Object.keys(body).length&&Object.keys(glob).length){var m2=document.getElementById('rm');m2.className='msg ok';m2.textContent='Applied';setTimeout(rpLoad,600);return;}   // glob-only change: already posted
   if(!Object.keys(body).length){var m1=document.getElementById('rm');m1.className='msg ok';m1.textContent='Nothing changed';return;}   // an empty post would reset e.g. Radio's station
   if(body.mxs!==undefined||body.mxa!==undefined||body.mxm!==undefined){body.mxs=full.mxs;body.mxa=full.mxa;body.mxm=full.mxm;}
   if(bs.s3v!==undefined)body.s3v=full.s3v;   // Sampler ignores a body without s3v:2
@@ -3861,7 +3862,7 @@ function pollStatus(){
   stBusy=true;
   fetch('/status').then(function(r){stBusy=false;return r.json();}).then(function(d){
     var pm=curMach;curMach=d.machine||'';
-    if(pm&&curMach!==pm)rpLoad();   // panel switched machine: reload its cards
+    if(curMach!==pm&&(pm||(rpData&&rpMach!==curMach)))rpLoad();   // panel switched machine: reload its cards
     if(curMach!==pm&&libFiles.length)renderFiles();   // the rows' load control follows the machine
     var cv=d.cv||[],h='';
     for(var i=0;i<cv.length;i++){

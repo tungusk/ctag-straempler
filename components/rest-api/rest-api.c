@@ -1548,6 +1548,22 @@ static esp_err_t drop_sample_put_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    // the upload IS the sample now: a usr/ WAV/AIF twin of the same id would
+    // sit orphaned behind it (a native RAW never reaches imp_publish's replace,
+    // and the Upload tab sends native RAW), so drop the twin here (G4-6)
+    {
+        static const char *const ext[] = { "WAV", "AIF", "AIFF" };
+        char tw[96];
+        sd_lock_take();
+        for (int k = 0; k < 3; k++) {
+            snprintf(tw, sizeof(tw), "/sdcard/usr/%s.%s", up_id, ext[k]);
+            struct stat tst;
+            if (stat(tw, &tst) == 0 && remove(tw) != 0)
+                ESP_LOGW(TAG, "drop_sample: could not remove twin %s (in use?)", tw);
+        }
+        sd_lock_give();
+    }
+
     // convert-on-import: the upload landed verbatim as <name>.RAW — kick the
     // background importer to sniff and convert it. NOT done inline: helix +
     // the resampler need a ~20 KB stack and seconds of runtime; the httpd

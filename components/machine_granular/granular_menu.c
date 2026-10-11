@@ -91,11 +91,24 @@ static void live_full_redraw(void){
     TFT_setFont(DEFAULT_FONT, NULL);
 }
 
+// what the waveform shows: a web load or preset swaps the sample behind the
+// page (the Live page is not re-entered for it), so the tick compares
+static uint32_t s_wave_sig;
+static uint32_t wave_sig(void){
+    uint32_t h = 2166136261u ^ gr.len ^ ((uint32_t)gr.peak_n << 20) ^ (gr.loading ? 1u << 31 : 0u);
+    for (const char *c = gr.sample; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+    return h;
+}
+
 static int gran_live_handler(int it_id, int event, void *ev_data){
     switch(event){
-        case EV_ENTERED_MENU: live_full_redraw(); break;
+        case EV_ENTERED_MENU: live_full_redraw(); s_wave_sig = wave_sig(); break;
         case EV_TIMER_REPEATING_SLOW:
         case EV_TIMER_REPEATING_FAST:
+            {
+                uint32_t sg = wave_sig();
+                if (sg != s_wave_sig){ s_wave_sig = sg; gran_draw_wave(); }
+            }
             gran_update_marker();
             gran_draw_info();
             break;

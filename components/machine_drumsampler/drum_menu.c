@@ -487,15 +487,49 @@ static void live_select(int dir){
     draw_filter_box();
 }
 
+// what a pad cell shows: layering, each layer's sample and whether its
+// waveform is ready. A web load (or a preset) changes it behind the page, and
+// the Live page is not re-entered for that (menu.c), so the tick compares.
+static uint32_t s_pad_sig[DR_PADS];
+static uint32_t pad_sig(int i){
+    const dr_pad_t *p = &dr.pad[i];
+    uint32_t h = 2166136261u ^ (p->layered ? 1u : 0u);
+    for (int l = 0; l < DR_LAYERS; l++){
+        const dr_layer_t *L = &p->ly[l];
+        for (const char *c = L->sample; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+        h = (h ^ (L->wf_valid ? 2u : 0u) ^ (L->len ? 4u : 0u)) * 16777619u;
+    }
+    return h;
+}
+static void pad_sig_snap(void){
+    for (int i = 0; i < DR_PADS; i++) s_pad_sig[i] = pad_sig(i);
+}
+
 static int drum_live_handler(int it_id, int event, void *ev_data){
     switch(event){
         case EV_ENTERED_MENU:
             if (dr.sel_pad >= DR_PADS) dr.sel_pad = 0;
             if (!dr.flt_box) dr.sel_filter = false;
             live_full_redraw();
+            pad_sig_snap();
             break;
         case EV_TIMER_REPEATING_FAST:
         case EV_TIMER_REPEATING_SLOW:
+            {
+                bool relayout = false;
+                for (int i = 0; i < DR_PADS; i++){
+                    uint32_t sg = pad_sig(i);
+                    if (sg == s_pad_sig[i]) continue;
+                    s_pad_sig[i] = sg;
+                    relayout = true;
+                }
+                if (relayout){                      // a layered flip moves halves: whole page
+                    if (!dr.pad[dr.sel_pad].layered) s_layer = 0;
+                    build_ring();
+                    live_full_redraw();
+                    break;
+                }
+            }
             for (int i = 0; i < DR_PADS; i++){
                 dr_pad_t *p = &dr.pad[i];
                 int nly = p->layered ? DR_LAYERS : 1;

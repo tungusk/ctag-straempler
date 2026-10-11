@@ -83,8 +83,20 @@ static void draw_note(void)
     s_last_note = cur_midi();
 }
 
+// what the header shows: engine, wave name, focus tint. A web load or preset
+// changes them behind the page (the Live page is not re-entered), so the
+// slow tick compares; draw_header records what it painted.
+static unsigned s_sig_hdr;
+static unsigned hdr_sig(void)
+{
+    unsigned h = 2166136261u ^ (unsigned)sy.engine ^ ((unsigned)slive_focus(0) << 8);
+    for (const char *c = sy.wave_name; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+    return h;
+}
+
 static void draw_header(void)
 {
+    s_sig_hdr = hdr_sig();
     int fh = TFT_getfontheight();
     _bg = TFT_BLACK; CLEAR_RECT(0, 0, _width - NOTE_FIELD_W, fh + 12);
     _fg = TFT_WHITE; TFT_print("Synth", 6, 4);
@@ -362,6 +374,8 @@ static unsigned osc_sig(void)
     unsigned r = (unsigned)sy.engine * 101u + (unsigned)(t * 1000.0f) * 37u
                + (s_live_sel == 0 ? (s_live_edit ? 2u : 1u) : 0u);   // focus box too
     if (sy.engine == ENG_FM) r += (unsigned)(sy.fm_ratio * 100.0f) * 53u;
+    if (sy.engine == ENG_WT)                     // a new wavetable redraws the preview
+        for (const char *c = sy.wave_name; *c; c++) r = (r ^ (uint8_t)*c) * 16777619u;
     return r;
 }
 
@@ -471,6 +485,7 @@ static int synth_live_handler(int it_id, int event, void *ev_data)
         case EV_TIMER_REPEATING_SLOW: {
             // each block redraws only when its own values change (no free-running meter)
             if (cur_midi() != s_last_note) draw_note();   // gate no longer recolors
+            if (hdr_sig() != s_sig_hdr) draw_header();
             unsigned os = osc_sig();
             if (os != s_sig_osc) { draw_osc(); s_sig_osc = os; }
             draw_dials_changed();                          // one dial per knob move, not four

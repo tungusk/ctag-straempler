@@ -62,6 +62,7 @@ typedef struct {
     // the ring for that generation and publishes ring_gen/ring_avail. The
     // voice touches the ring only when ring_gen matches its own generation.
     volatile uint32_t gen;
+    volatile uint32_t load_gen;              // bumped per finished load: the Live page repaints on it
     volatile int      gen_slice;
     volatile uint32_t ring_gen;
     volatile uint32_t ring_avail; // playback-order frames available (slice-rel)
@@ -110,6 +111,7 @@ typedef struct {
     volatile bool ot_present;
     volatile bool ot_active;
     bool     ot_off;              // the user chose Grid/Transient over this sample's .OT (persisted, #167)
+    char     ot_off_for[SAMPLE_ID_LEN]; // the sample ot_off was chosen for: another sample honours its own .OT
 
     // one-shot commands (engine consumes)
     volatile uint8_t cmd_fire;
@@ -126,6 +128,7 @@ extern sl_state_t sl;
 int slicer_load(const char *name);
 // request boundary recompute + head rebuild (ASYNC; brief mute while it runs)
 void slicer_reslice(void);
+void slicer_set_ot_off(bool off);   // ot_off for the loaded sample
 int slicer_list_samples(char out[][SAMPLE_ID_LEN], int max);
 
 // Octatrack .ot sidecar I/O (slicer_ot.c)

@@ -43,6 +43,7 @@ static const color_t CUR_COL = {40, 200, 90};    // playing slice
 
 static int s_last_cur = -1, s_last_sel = -1, s_last_slices = -1, s_last_peaks = -1;
 static bool s_last_loading = true;   // reader-load in progress at the last redraw
+static uint32_t s_load_gen;          // sl.load_gen at the last redraw
 // two-level encoder: level 1 picks an element (0=Bar 1=File 2=FX); pressing Bar
 // enters level 2 (s_in_bar) where turns hand-select slices and press fires.
 static int  s_elem = 0;
@@ -245,8 +246,11 @@ static int slicer_live_handler(int it_id, int event, void *ev_data){
             // redraw when the reader-load finishes (loading true->false) — the
             // definitive "peaks + slices ready" signal, even if the counts didn't
             // change — or if the grid/peak count changed
-            if (sl.loading != s_last_loading || sl.n_slices != s_last_slices || sl.peak_n != s_last_peaks)
+            if (sl.loading != s_last_loading || sl.n_slices != s_last_slices || sl.peak_n != s_last_peaks ||
+                sl.load_gen != s_load_gen) {
+                s_load_gen = sl.load_gen;
                 live_full_redraw();
+            }
             else if (sl.cur != s_last_cur || sl.sel != s_last_sel)
                 live_update_highlights();                           // just move highlights
             {   // live FX readout while the filter knobs / reverb settings move
@@ -314,7 +318,7 @@ static void cycle_target(int dir){
     else         { if(n == 0) n = 128; else if(n <= 8) n = 0; else n /= 2; }
     sl.slice_target = n;
     sl.ot_active = false;      // dialing a count = leaving OT mode
-    if (sl.ot_present) sl.ot_off = true;   // ...and that choice is saved
+    if (sl.ot_present) slicer_set_ot_off(true);   // ...and that choice is saved
     slicer_reslice();
 }
 
@@ -324,7 +328,7 @@ static void cycle_mode(int dir){
     int nmodes = sl.ot_present ? 3 : 2;
     m = (m + (dir > 0 ? 1 : nmodes - 1)) % nmodes;
     sl.ot_active = (m == 2);
-    if (sl.ot_present) sl.ot_off = (m != 2);
+    if (sl.ot_present) slicer_set_ot_off(m != 2);
     sl.transient_mode = (m == 1);
     slicer_reslice();
 }
@@ -463,7 +467,7 @@ static int slicer_sens_handler(int it_id, int event, void *ev_data){
             sl.transient_mode = true;
             sl.slice_target = 0;
             sl.ot_active = false;      // as the count row does: an .OT map outranks transient (review 8.3)
-            if (sl.ot_present) sl.ot_off = true;
+            if (sl.ot_present) slicer_set_ot_off(true);
             slicer_reslice();
             sens_full_redraw();
             break;
