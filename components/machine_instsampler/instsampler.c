@@ -107,6 +107,11 @@ static void uz_lock(void)
     xSemaphoreTake(s_uz_mx, portMAX_DELAY);
 }
 static void uz_unlock(void) { xSemaphoreGive(s_uz_mx); }
+// the zone list a preset load is still working through: a GET /remote/params
+// (or an autosave) mid-load listed only the zones loaded SO FAR, and a web
+// Apply then posted that short list back and dropped the rest (10-11 bench).
+// Under the same lock; preset_save reports this list while it is set.
+static cJSON *s_loading_zones;
 static void uz_clear(void)
 {
     uz_lock();
@@ -465,6 +470,10 @@ static void keys_stop(void)
     // allocate after a switch away mid-load (bench 09-30). The autosave already
     // ran before stop(); the next preset load rebuilds the list.
     uz_clear();
+    uz_lock();
+    cJSON_Delete(s_loading_zones);       // a stop mid-load: don't pin PSRAM either
+    s_loading_zones = NULL;
+    uz_unlock();
     for (int i = 0; i < IS_MAX_ZONES; i++) {
         inst.zone[i].buf = NULL;
         inst.zone[i].cap = 0;
@@ -702,7 +711,14 @@ static cJSON *keys_preset_save(void)
     // written for zone 0 so an older build — or a patch file read by one — still
     // loads something sensible instead of silence.
     cJSON *zs = cJSON_AddArrayToObject(o, "zones");
-    for (int i = 0; i < inst.nzones; i++) {
+    uz_lock();
+    bool mid_load = s_loading_zones != NULL;
+    if (mid_load) {
+        const cJSON *le = NULL;
+        cJSON_ArrayForEach(le, s_loading_zones) cJSON_AddItemToArray(zs, cJSON_Duplicate(le, 1));
+    }
+    uz_unlock();
+    for (int i = 0; !mid_load && i < inst.nzones; i++) {
         is_zone_t *zz = &inst.zone[i];
         if (!zz->frames) continue;
         cJSON *e = cJSON_CreateObject();
@@ -718,7 +734,7 @@ static cJSON *keys_preset_save(void)
     }
     const cJSON *ue = NULL;                    // zones named but not loaded (#164)
     uz_lock();
-    cJSON_ArrayForEach(ue, s_unloaded_zones) cJSON_AddItemToArray(zs, cJSON_Duplicate(ue, 1));
+    if (!mid_load) cJSON_ArrayForEach(ue, s_unloaded_zones) cJSON_AddItemToArray(zs, cJSON_Duplicate(ue, 1));
     uz_unlock();
     cJSON_AddStringToObject(o, "smp", z->sample);
     cJSON_AddNumberToObject(o, "root", z->root);
@@ -813,7 +829,13 @@ static void keys_preset_load(const cJSON *node)
         reverb_set_mode(&inst.rv, RV_OFF);
     if (cJSON_IsArray(zs) && cJSON_GetArraySize(zs) > 0) {
         used_zones = true;
-        if (!same) keys_clear_zones();
+        if (!same) {
+            keys_clear_zones();
+            uz_lock();                           // readers see the whole list meanwhile
+            cJSON_Delete(s_loading_zones);
+            s_loading_zones = cJSON_Duplicate(zs, 1);
+            uz_unlock();
+        }
         const cJSON *e = NULL;
         int zk = 0;
         cJSON_ArrayForEach(e, zs) {
@@ -843,6 +865,10 @@ static void keys_preset_load(const cJSON *node)
             if (zz->loop_start >= zz->loop_end) zz->loop_start = 0;
         }
         if (!same) { inst.edit_zone = 0; keys_build_peaks(); }   // peaks showed the LAST zone loaded (#69)
+        uz_lock();
+        cJSON_Delete(s_loading_zones);
+        s_loading_zones = NULL;
+        uz_unlock();
     }
     // load the sample FIRST (it resets loop points), then restore them
     else if ((j = cJSON_GetObjectItemCaseSensitive(node, "smp"))   && cJSON_IsString(j) && j->valuestring[0]) keys_load_zone(j->valuestring);
