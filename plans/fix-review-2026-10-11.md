@@ -135,3 +135,13 @@ G1-2 (no reachable caller) · G4-7 (`/files` doesn't use that path) · G5-6 (by 
 - `ec03130` design question answered: the quiet-pause save writes the WHOLE take and leaves a cropped take dirty, so leave/load still adopts the crop.
 - `bb8ffa7` tier 3: G4-4 (Drums/Granular/Synth/Slicer), G3-2, G2-4, G4-5 + G2-5, G4-6, G5-V3, G5-2.
 - Tier 4 not done.
+
+## Tier 4 + checks without hands (10-11, later)
+- `b20913d` tier 4 (G2-3, G2-6, G2-7, G2-8, G3-3, G3-5, G4-2, G4-3, G1-1, G3-4, G5-3/4/5/7) + the Looper short synced loop (fractional INT clock, `clock_core_pulse_frames`; hostsim 88200 frames exact, 55/55).
+- `6a72805` NEW, found driving the page: a Keys GET mid-zone-load listed only the zones loaded so far, and the next Apply posted the short list back and dropped zones. preset_save now reports the list being loaded.
+- Card swap (Arlo): the SD write timeouts were the OLD card — 0 sdmmc errors on the new one, lfn passes.
+- Bench on the new card: 1 fail, `tape lsel readback` — the bench's TR2 punch lands before the queued length change runs, so Tape (correctly) refuses it while recording. Bench timing, not a Tape fault: 5/5 direct sets right after entering Tape stick.
+- Checked on the unit: Radio `{}` keeps the station; Keys zone-0 edit keeps zones (REST and page); Tape `/tape/load` decodes `%XX` and says queued (page shows "queued for Tape"); Editor `/edit/load` decodes; Drums/Granular/Synth/Slicer Live pages repaint after a web load (screenshots); page: empty Apply posts nothing, first Apply after load is fine, DoubleDecker posts `lq`/`cvv` and the device takes llen and the matrix, a panel-side clock change survives an Apply, a rename box survives a machine switch, `-` kept in a rename; Tape quiet save: nothing at 5 s, CUT_ at 14 s; Looper web + panel save together: 6 clean equal-size files (no overlap forced).
+- Not reached without hands: Tape quiet save WITH a crop (code only), Looper BUSY (the saves never overlapped), Sampler short-sample seek (one-line fix, code only), Drums failed-layer retry (panel browser).
+- Test files left on the swapped card: FIX-TEST1, LOOP0002-0007, CUT_0106.
+
