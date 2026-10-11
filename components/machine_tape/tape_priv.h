@@ -150,6 +150,7 @@ typedef struct {
     uint32_t save_a, save_b;          // frames [a,b) the writer will emit
     bool     save_crop;              // true = an actively-cropped take (marked TCR_)
     bool     save_adopt;             // this save makes the file the take (see tape_spawn_save)
+    bool     save_keep_dirty;        // the quiet save of a cropped take: leave/load still owes the crop
     volatile bool save_ok;           // the last writer closed a whole file (false on fopen/alloc/short write)
     volatile uint32_t dirty_gen;     // bumped per punch-in (audio task)
     uint32_t save_gen;               // dirty_gen when the running save began

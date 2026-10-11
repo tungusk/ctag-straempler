@@ -875,7 +875,7 @@ static void save_task(void *pv)
     // next load, leaving Tape) saved it AGAIN as a new CUT_ file and repointed
     // tapelast (code review 11.5). Only for an ADOPTING save of intact content
     // that nothing has recorded into since the save began.
-    if (ok && tp.save_adopt && !tp.drop_spoiled && tp.dirty_gen == tp.save_gen)
+    if (ok && tp.save_adopt && !tp.save_keep_dirty && !tp.drop_spoiled && tp.dirty_gen == tp.save_gen)
         tp.take_dirty = false;
     tp.save_ok = ok;
     tp.save_busy = false;
@@ -889,7 +889,13 @@ static void save_task(void *pv)
 // only copies a region out to the card and must leave the take's own identity
 // (and its unsaved-ness) alone, or dropping a loop would silently repoint
 // tapelast at the excerpt and mark the still-unsaved full take clean.
+static int tape_spawn_save_ex(uint32_t a, uint32_t b, bool crop, bool adopt, bool keep_dirty);
 static int tape_spawn_save(uint32_t a, uint32_t b, bool crop, bool adopt)
+{
+    return tape_spawn_save_ex(a, b, crop, adopt, false);
+}
+
+static int tape_spawn_save_ex(uint32_t a, uint32_t b, bool crop, bool adopt, bool keep_dirty)
 {
     if (b <= a || tp.save_busy) return -1;
     // TLP_ = a saved LOOP (the Crop gesture), CUT_ = a whole take. Was TCR_ until
@@ -902,7 +908,7 @@ static int tape_spawn_save(uint32_t a, uint32_t b, bool crop, bool adopt)
     snprintf(tp.save_id, sizeof(tp.save_id), "%s%04d", pfx, idx % 10000);
     if (adopt) { snprintf(tp.restore_id, sizeof(tp.restore_id), "%s", tp.save_id); tp_persist_last(); }
     tp.save_a = a; tp.save_b = b; tp.save_crop = crop;
-    tp.save_adopt = adopt; tp.save_gen = tp.dirty_gen;
+    tp.save_adopt = adopt; tp.save_keep_dirty = keep_dirty; tp.save_gen = tp.dirty_gen;
     tp.drop_spoiled = false;          // arm the overwrite detector for THIS write
     tp.save_ok = false;
     tp.save_busy = true;
@@ -987,6 +993,9 @@ void tape_drop_adopt_kick(void)
 // left alone for TP_EDIT_QUIET_US is written out once (a CUT_ take, adopted, so
 // tapelast points at it). Before, edits reached the card only on leave or
 // load, and a power cut lost them; a burst of Norm/Rev/Fade makes ONE file.
+// Always the WHOLE take (Arlo 10-11): with a crop set, the take stays dirty,
+// so leaving or loading still writes and adopts the crop as before — the quiet
+// save is a safety net and never drops the material outside the crop.
 #define TP_EDIT_QUIET_US (10LL * 1000000)
 void tape_edit_save_tick(void)
 {
@@ -995,8 +1004,8 @@ void tape_edit_save_tick(void)
     if (esp_timer_get_time() - tp.edit_us < TP_EDIT_QUIET_US) return;
     tp.edit_pending = false;
     if (!tp.take_dirty || tp.len <= 1) return;
-    if (tape_spawn_save(tp.cropped ? tp.in_pt : 0, tp.cropped ? tp.out_pt : tp.len, tp.cropped, true) == 0)
-        ESP_LOGI(TAG, "edited take saved after a quiet pause");
+    if (tape_spawn_save_ex(0, tp.len, false, true, tp.cropped) == 0)
+        ESP_LOGI(TAG, "edited take saved after a quiet pause%s", tp.cropped ? " (whole; crop kept)" : "");
 }
 
 void tape_autosave_kick(void)
