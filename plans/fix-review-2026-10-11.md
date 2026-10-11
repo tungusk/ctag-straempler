@@ -129,3 +129,9 @@ G1-2 (no reachable caller) · G4-7 (`/files` doesn't use that path) · G5-6 (by 
 - G4-5: url-decode like fs_web.c/radio_web.c; tape_web_load_service copies into a local and clears the flag before tape_load.
 - G4-6: remove the usr/ WAV/AIF twin when the RAW upload closes OK (or 409).
 - Lock order display → config → SD and import-mutex-after-sd_lock: no counter-example (12 configSet* call sites not all checked).
+
+## Fixed (10-11, Arlo: "go", then "work straight through tier 3")
+- `3daf228` tiers 1-2: G2-2, G3-1, G5-1, G5-V1 (page + firmware), G5-V2, G4-1, G2-1, G2-9. Bench (audio): 0 fail, 11 known-kind notes.
+- `ec03130` design question answered: the quiet-pause save writes the WHOLE take and leaves a cropped take dirty, so leave/load still adopts the crop.
+- `bb8ffa7` tier 3: G4-4 (Drums/Granular/Synth/Slicer), G3-2, G2-4, G4-5 + G2-5, G4-6, G5-V3, G5-2.
+- Tier 4 not done.
