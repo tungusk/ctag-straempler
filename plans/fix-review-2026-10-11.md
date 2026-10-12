@@ -158,3 +158,12 @@ Scripts in that session's scratchpad (`t8_*.py`, not kept). All driven over REST
 7. Radio: Groove Salad 30 min: playing throughout, 0 reconnects, 0 underruns, no reboot. (No hiccup happened, so the reconnect path itself wasn't exercised.)
 8. Granular pos/pitch/level, Drums pad atk/sto/lpm, Slicer fx/rv/rvmx: set, `/reboot`, all read back identical. Restored afterwards.
 Test files left on the card: CHIRP2, OTA(.OT), OTB(.OT), FIX-TEST1, LOOP0002-0009, CUT_0106-0108, TLP_0000.
+
+## Second pass on the four left over (10-11, Arlo: "are you sure you can't test those?")
+- Drums failed-layer retry: pad 2 -> `RETRYME` (missing) keeps the name, cell grey; upload RETRYME; encoder: pad 2, press, ALL/, RETRYME (newest, already highlighted), press -> trigger: -33.8 dBFS, 440 Hz. PASS.
+- Deck: NOISEB = white noise + a kick every 0.5 s (30 s), sync OFF, BPM 120 set via `/remote/setup?i=5` (analysis fails on noise). Per-20 ms cross-correlation tracks the file position exactly. Old window 0.5-2.5 s, paused at 2.163 (phase 1.663); CV5 moved it to 22.0-24.0; resumed at 23.662 (phase 1.662). PASS.
+- FX: **the first FX test (item 6 above) proved nothing** — Tape's rack refuses FILTER slots (`no_filter`, Tape has its own tone filter) and the route was PRE, so no effect was on playback. Redone with the FLANGER, route POST: A = depth 20 + CV3 offset 0.25 vs B = depth 45: 2.2/2.9 dB spectral distance; B vs B again 1.75 dB (LFO phase); vs depth 5: 6.2 dB. Live 2 s triangle sweep: detector events are the take's own note attacks (same pattern with no FX at all). PASS.
+- Power cut: not done (no way to cut power); `/reboot` after the save closes is the same card state.
+- Restored: Deck TINYTOWN/sync on, Tape FX route pre, pad 2 808CLAP. New test files: RETRYME, NOISE30, NOISEB.
+- Note for later: posting a filter into a Tape FX slot is silently refused (by design) — the page could hide filter/band from Tape's slot list.
+
