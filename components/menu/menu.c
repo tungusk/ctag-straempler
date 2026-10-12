@@ -7,7 +7,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "menu.h"
+#include "ui_call.h"
 #include "tft.h"
 #include "freesound.h"
 #include "list.h"
@@ -608,6 +610,63 @@ static int settings_input_def_handler(int it_id, int event, void* event_data){
 static void autosave_now(void);
 static void menuMachineBindNow(void);
 
+// ---- ui_call_sync (ui_call.h) -------------------------------------------------
+// The request lives on the heap; whoever finishes LAST frees it: the caller
+// after a result, or the UI task when the caller already gave up (state 2).
+typedef struct {
+    void *(*fn)(void);
+    void (*late_free)(void *);
+    void *out;
+    SemaphoreHandle_t done;
+    int state;                 // 0 pending, 1 answered, 2 abandoned by the caller
+} ui_call_t;
+static portMUX_TYPE s_call_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void ui_call_free(ui_call_t *c)
+{
+    if (c->done) vSemaphoreDelete(c->done);
+    free(c);
+}
+
+void *ui_call_sync(void *(*fn)(void), void (*late_free)(void *), int timeout_ms, bool *ran)
+{
+    *ran = false;
+    if (!s_ev_queue || !fn) return NULL;
+    ui_call_t *c = calloc(1, sizeof(*c));
+    if (!c) return NULL;
+    c->fn = fn; c->late_free = late_free;
+    c->done = xSemaphoreCreateBinary();
+    if (!c->done) { free(c); return NULL; }
+    ui_ev_ts_t ev = { .event = EV_UI_CALL, .event_data = c };
+    if (xQueueSend(s_ev_queue, &ev, 0) != pdTRUE) { ui_call_free(c); return NULL; }
+    if (xSemaphoreTake(c->done, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        portENTER_CRITICAL(&s_call_mux);
+        bool answered = c->state == 1;
+        if (!answered) c->state = 2;          // the UI task frees it when it gets there
+        portEXIT_CRITICAL(&s_call_mux);
+        if (!answered) return NULL;
+    }
+    void *out = c->out;
+    ui_call_free(c);
+    *ran = true;
+    return out;
+}
+
+static void ui_call_run(ui_call_t *c)
+{
+    void *out = c->fn();
+    portENTER_CRITICAL(&s_call_mux);
+    bool abandoned = c->state == 2;
+    if (!abandoned) { c->out = out; c->state = 1; }
+    portEXIT_CRITICAL(&s_call_mux);
+    if (abandoned) {
+        if (out && c->late_free) c->late_free(out);
+        ui_call_free(c);
+        return;
+    }
+    xSemaphoreGive(c->done);
+}
+
 void menuProcessEvent(int ev, void * ev_data){
     // autosave runs here (UI event loop task) rather than in any menu handler
     if(ev == EV_AUTOSAVE){
@@ -625,6 +684,12 @@ void menuProcessEvent(int ev, void * ev_data){
     // STOPPED: bind, then drop it if it is input for its pages (below)
     bool stale = s_bind_pending;
     if(stale) menuMachineBindNow();
+    // a web handler's read of machine state: after any pending bind, so it
+    // sees the machine that is really active
+    if(ev == EV_UI_CALL){
+        if(ev_data) ui_call_run((ui_call_t*) ev_data);
+        return;
+    }
     // teleremote machine switch: runs here (UI task) so the autosave/activate/
     // rebind sequence is identical to a front-panel switch
     if(ev == EV_REMOTE_MACHINE){

@@ -472,7 +472,19 @@ def t_tape(mat, reps):
         time.sleep(0.8)
         got = params().get("lsel")
         if got != sel:
-            LOG.fail(test, "lsel readback %s, wanted %d" % (got, sel))
+            # the random delay above races the length change against the TR2
+            # punch on purpose; when the punch wins, Tape (correctly) refuses a
+            # length change while recording. Stop and re-send: only a setter
+            # that fails on a STOPPED tape is a fault (bench 10-11, swapped card)
+            post("/remote/trig?t=1&ms=200")      # stop the playback started above
+            time.sleep(0.8)
+            post("/remote/params", {"lsel": sel})
+            time.sleep(1.0)
+            got2 = params().get("lsel")
+            if got2 != sel:
+                LOG.fail(test, "lsel readback %s (then %s on a stopped tape), wanted %d" % (got, got2, sel))
+            else:
+                LOG.say("tape: lsel %d lost the race to the punch (refused while recording); re-sent stopped: ok" % sel)
         HEALTH.check("tape#%d" % (i + 1))
     REC.stop(test)
     if switch("Synth", test) == "Synth" and switch("Tape", test) == "Tape":

@@ -28,7 +28,8 @@ typedef enum{
     EV_MACHINE_BIND,
     EV_REMOTE_MACHINE,  // teleremote machine switch; event_data = strdup'd name
     EV_REMOTE_PRESET,   // teleremote settings apply; event_data = malloc'd JSON string
-    EV_REMOTE_SETUP     // web Setup-page mirror: event_data = malloc'd int[3] {row, dir, count}
+    EV_REMOTE_SETUP,    // web Setup-page mirror: event_data = malloc'd int[3] {row, dir, count}
+    EV_UI_CALL          // ui_call_sync: event_data = its request (menu.c owns the layout)
 } ui_ev_t;
 
 typedef struct{

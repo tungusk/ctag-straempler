@@ -23,6 +23,7 @@
 #include "esp_heap_caps.h"
 #include "audio.h"
 #include "menu_config.h"
+#include "ui_call.h"     // GET /remote/params reads machine state on the UI task
 #include "machine.h"
 #include "beatlisten.h"
 #include "clock.h"        // the core clock (/settings, /status)
@@ -1929,11 +1930,14 @@ static esp_err_t blisten_post_handler(httpd_req_t *req)
 
 // GET = the active machine's full settings (same JSON as its autosave state);
 // POST = apply edited settings via preset_load on the UI task + autosave
-static esp_err_t remote_params_get_handler(httpd_req_t *req)
+// the active machine's state + its input map, as GET /remote/params returns it.
+// Runs on the UI task through ui_call_sync (preset_save read machine state on
+// the httpd task while the UI task loaded or switched under it — the Keys
+// partial zone list was one case of the class); on httpd only as a fallback.
+static void *params_build(void)
 {
-    if (remote_gate(req) != ESP_OK) return ESP_OK;
     const machine_t *m = machine_active();
-    if (!m || !m->preset_save) { send_json(req, "{}"); return ESP_OK; }
+    if (!m || !m->preset_save) return NULL;
     cJSON *o = m->preset_save();
     if (o) {   // input map: fixed jobs + editable picks (see machine.h)
         machine_input_t in[MACHINE_INPUTS_MAX];
@@ -1956,6 +1960,17 @@ static esp_err_t remote_params_get_handler(httpd_req_t *req)
             cJSON_AddItemToArray(a, e);
         }
     }
+    return o;
+}
+
+static void params_free(void *p) { cJSON_Delete((cJSON *)p); }
+
+static esp_err_t remote_params_get_handler(httpd_req_t *req)
+{
+    if (remote_gate(req) != ESP_OK) return ESP_OK;
+    bool ran;
+    cJSON *o = ui_call_sync(params_build, params_free, 1500, &ran);
+    if (!ran) o = params_build();   // UI task busy (a long load): answer as before
     char *s = o ? cJSON_PrintUnformatted(o) : NULL;
     cJSON_Delete(o);
     if (s) { send_json(req, s); free(s); } else send_json(req, "{}");

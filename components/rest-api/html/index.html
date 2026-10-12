@@ -1938,7 +1938,8 @@ function fxCard(d){
   var h='<div class="card pnl" id="fxcard"><div class="row tight" style="align-items:center;margin-top:0"><b class="ph" style="flex:1;padding:0;margin:0">FX</b>'
        +'<button class="btn foldhide" style="flex:0 0 auto" onclick="rpApply()">Apply</button></div><div class="fxslots">';
   // fxnf: the machine has its own voice filter, so its FX slots don't offer Filter/Band (one filter at a time)
-  d.fxsl.forEach(function(k,i){h+='<label>FX'+(i+1)+' '+fxSel('fxsl.'+i,+k,FXK,'data-rp="fxsl.'+i+'" onchange="fxSlotPick()"',d.fxnf?[5,6]:null)+'</label>';});
+  // the device refuses 5/6 in a slot there (no_filter): a stale 5/6 shows as Off
+  d.fxsl.forEach(function(k,i){k=+k;if(d.fxnf&&(k===5||k===6))k=0;h+='<label>FX'+(i+1)+' '+fxSel('fxsl.'+i,k,FXK,'data-rp="fxsl.'+i+'" onchange="fxSlotPick()"',d.fxnf?[5,6]:null)+'</label>';});
   if(d.rv!==undefined)h+='<label>FX3 '+fxSel('rv',+d.rv,FXRV,'data-rp="rv"')+'</label>';
   if(d.rvmx!==undefined)h+='<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:150px">mix <input type="range" data-rp="rvmx" min="0" max="100" value="'+d.rvmx+'" oninput="fxv(this)" style="flex:1"><span class="fxv">'+fxFmt('rvmx',d.rvmx)+'</span></label>';
   h+='</div><div class="fxgs" id="fxgroups">'+fxGroups(d)+'</div></div>';
