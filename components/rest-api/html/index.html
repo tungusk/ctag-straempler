@@ -777,7 +777,7 @@ body.nosbar .sbar{display:none}
   <thead><tr><th>Name</th><th>Dur</th><th>By</th><th></th></tr></thead>
   <tbody id="fstb"></tbody>
   </table>
-  <label style="margin-top:14px">Or fetch a direct MP3 URL (44.1kHz only)</label>
+  <label style="margin-top:14px">Or fetch a direct MP3 URL (any sample rate)</label>
   <div class="row">
   <input id="furl" placeholder="https://example.com/loop.mp3" onkeydown="if(event.key==='Enter')fsFetch()">
   <button class="btn" style="flex:0 0 80px" onclick="fsFetch()">Fetch</button>
@@ -794,7 +794,7 @@ body.nosbar .sbar{display:none}
   </div>
   <label>Stations</label>
   <div class="row" id="rdstations" style="flex-wrap:wrap"></div>
-  <label style="margin-top:10px">Custom stream URL (MP3, 44.1kHz)</label>
+  <label style="margin-top:10px">Custom stream URL (MP3, any rate)</label>
   <div class="row"><input id="rdurl" placeholder="http://.../stream.mp3" onkeydown="if(event.key==='Enter')rdPlayUrl()"><button class="btn" style="flex:0 0 58px" onclick="rdPlayUrl()">Play</button><button class="btn" style="flex:0 0 58px" onclick="rdSaveStation()">Save</button></div>
   <div class="row" style="margin-top:4px"><input type="file" id="rdm3u" accept=".m3u,.m3u8,audio/x-mpegurl,audio/mpegurl" style="display:none" onchange="rdImportM3u(this.files)"><button class="btn" style="flex:0 0 auto" onclick="document.getElementById('rdm3u').click()">Import .m3u playlist&#8230;</button><span class="msg" id="rdm3umsg" style="flex:1;align-self:center"></span></div>
   <div class="row" style="margin-top:8px"><button class="btn del" style="flex:0 0 88px" onclick="rdStop()">Stop</button></div>

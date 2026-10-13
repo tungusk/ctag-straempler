@@ -20,8 +20,8 @@ static const char *TAG = "EDITOR";
 
 ed_state_t ed;
 const char *const ed_op_names[OP_N] = { "normalize", "reverse", "fade in", "fade out", "trim", "crop" };
-// FatFS here is 8.3 ONLY (LFN off) -> every id must be <=8 chars. So outputs are
-// short generated ids "<PFX>NNNN" (e.g. RV_0001), NOT <src>_<tag> which overflows.
+// outputs are short generated ids "<PFX>NNNN" (e.g. RV_0001). Born under the
+// 8.3 cap (LFN is on now, 31 chars); kept short so a burst of edits stays readable.
 static const char *const ED_PFX[OP_N] = { "NM_", "RV_", "FI_", "FO_", "TR_", "CR_" };
 
 static volatile bool s_running = false;

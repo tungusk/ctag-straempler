@@ -397,7 +397,7 @@ static void live_full_redraw(void){
     _fg = (color_t){90, 90, 90};
     TFT_setFont(DEF_SMALL_FONT, NULL);
     const char *hint = dr.sel_filter
-        ? "turn:select  press:filter on/off  knob6:sweep  knob7:res"
+        ? "turn:select  press:filter on/off  knob5:sweep  knob8:res"
         : "turn:select  press:load  hold:setup  knob6/7: level/decay";
     TFT_print((char*)hint, 6, _height - TFT_getfontheight() - 1);
     TFT_setFont(DEFAULT_FONT, NULL);
