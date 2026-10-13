@@ -188,6 +188,8 @@ httpd/readers depending on scheduler luck (the intermittent "REST dead while
 audio plays" family, and "arming mutes both tracks"). Use `vTaskDelay(1)`
 minimum in every task loop; grep single-digit `pdMS_TO_TICKS` in new code.
 
+**Machine state belongs to the UI task.** A web handler that READS machine state (preset_save, zone lists, names) goes through `ui_call_sync(fn, late_free, ms, &ran)` (`components/menu/include/ui_call.h`) — it runs `fn` on the UI task and falls back on a timeout; GET /remote/params is the model. A machine's background chores that must run on any page go in `machine_ui_t.ambient` (every SLOW tick); `main_event` only ticks on the hub page.
+
 **`audio_status_t` access** — always use `audio_get_status()` (portMUX spinlock protected). Never read `_audio_status` directly from outside `audio.c`.
 
 **Display corruption = memory corruption.** A years-old `sprintf("Single Shot")` into `char tmp[10]` (a 2-byte stack smash on every playmode redraw) masqueraded as an intermittent, firmware-dependent "white screen / stale-pixel" hardware fault for a long time — the blast radius shifted with each build's stack layout. Lesson: size string buffers generously and when the display corrupts, suspect a smash before the panel/ribbon/bus. `TFT_setclipwin` state and the `_fg/_bg/cfont` globals are shared — save/restore them around draws.
@@ -875,6 +877,8 @@ Sampler3 SHIPPED 2026-07-12.
 - **Offline backup**: `~/ctag-straempler-backups/` — dated `git bundle --all`
   (complete repo, `git clone`-able) + a copy of `bin/`. Refresh with
   `git bundle create ~/ctag-straempler-backups/ctag-straempler-$(date +%Y%m%d).bundle --all`.
+
+- **Bench without hands**: `tools/bench/review_bench.py --host 192.168.3.85 [--audio] [--serial /dev/cu.usbserial-3120]` (wait ~3 min after an OTA before `--serial`). Panel by REST: `/remote/event?ev=fwd|bwd|press|long|enter`, `/remote/setup?i=&dir=&n=` (value rows only, not ACTION rows), `/remote/cv?ch=&v=&ms=`, `/remote/trig?t=&ms=`, `/screenshot` (BMP). `tools/capture_docs.sh [host]` refreshes every docs screenshot, Setup pages included. A bench run leaves CUT_/REVIEW*/LFN takes on the card — clear them after.
 
 ## Repo / publishing
 
