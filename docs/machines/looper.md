@@ -1,6 +1,6 @@
 # Looper
 
-**4-track clock-synced RAM looper.** Record layered loops against a shared
+**4-track clock-synced RAM looper.** Record layered loops against the module
 clock, save any track to the pool, shape each track with a band-pass filter.
 
 ![Looper live](img/looper-live.png)
@@ -8,24 +8,38 @@ clock, save any track to the pool, shape each track with a band-pass filter.
 
 ## Features
 
-- Four independent tracks in RAM, loop length in **bars** against the clock
-  (Sync ON) or free-running.
-- **Save Trk** writes the selected track to `usr/LOOPS/` as WAV.
-- **Bounce** mixes all tracks down to track 1.
-- Per-track **BP filter**, level and pan (CV6/CV7 drive the selected track's
-  level/pan — the two full-range knobs on this unit).
-- Clock: any CV source or the beat listener; PPQ setting for clock multiples.
+- Four independent mono tracks in RAM, up to 8 s each. With Sync on and a
+  locked clock, recording starts on the next bar and stops after **Bars**
+  (1, 2, 4 or 8); the loop length is sample-exact to the clock. With Sync
+  off or no clock, a take runs until you punch out or the 8 s fill.
+- **Save Trk** writes the selected track to `usr/LOOPS/` as a `LOOPNNNN`
+  WAV.
+- **Bounce** mixes all tracks down to track 1 and clears tracks 2–4.
+- Only one save or bounce runs at a time; a second one shows BUSY.
+- Per-track **BP filter**, level and pan. All four CV Matrix destinations
+  drive the selected track.
 - Monitor toggle for hearing the input while overdubbing.
+- If memory is short at start, Looper runs with the tracks it could get;
+  a missing track will not record.
 
 ## Controls
 
 | Control | Function |
 |---|---|
-| TR1 | Clock input by default (maskable) |
-| Encoder turn | Select track / adjust |
-| Encoder press | Record / play toggle on the selected track |
+| TR1 | Selected track: record / action (same as encoder press) |
+| TR2 | Selected track: play / stop |
+| Encoder turn | Select track |
+| Encoder press | Selected track: arm/record, cancel, punch out, stop, re-record |
 | Encoder long | Live ↔ Setup |
-| CV6 / CV7 | Selected track level / pan |
+
+Each press steps the selected track on: empty → armed (or recording when
+unsynced) → playing → stopped → re-record. Pressing while recording punches
+out early.
+
+CV Matrix defaults: CV6 track level, CV7 track pan, CV1 cutoff and CV2
+resonance (the filter pair acts only while BP Filter is on). If TR1 or TR2
+is chosen as the clock source (web settings), that trigger stops acting as
+a button.
 
 ## Live page
 
@@ -34,4 +48,5 @@ Waveform-thumbnail lanes, one per track, with a state-colored playhead
 
 ## Setup
 
-Sync, Clock Src, Bars, Monitor, BP Filter, Clock PPQ, Save Trk, Bounce.
+Sync, Clock Src, Bars, Monitor, BP Filter, Clock PPQ, Save Trk, Bounce,
+CV Matrix. Clock Src and Clock PPQ edit the module-wide clock.

@@ -10,8 +10,8 @@ Active development is on the [`v09-machines`](../../tree/v09-machines) branch.
 
 **[docs/machines](docs/machines/README.md)** — one page per machine with live
 screenshots, feature breakdowns, and control tables, plus the
-[common concepts](docs/machines/common.md) (clock/grid system, sample pool,
-encoder grammar, web interface, broadcast/bounce).
+[common concepts](docs/machines/common.md) (the CV matrix, the module-wide
+clock, the sample pool, encoder grammar, the web page, broadcast/bounce).
 
 | Machine | One-liner |
 |---|---|
@@ -24,24 +24,25 @@ encoder grammar, web interface, broadcast/bounce).
 | [Deck](docs/machines/deck.md) | Tempo-syncing track player — PLL-locked varispeed, exact BPM analysis |
 | [DoubleDecker](docs/machines/dualdeck.md) | Two synced decks + crossfader + per-deck DJ filters |
 | [Tracker](docs/machines/tracker.md) | MOD/XM/IT module player (libxmp) with performance loop + scrub |
-| [Freesound](docs/machines/freesound.md) | freesound.org search / preview / import from the browser |
+| [Freesound](docs/machines/freesound.md) | freesound.org search / preview / download, from the panel or the web page |
 | [Radio](docs/machines/radio.md) | Internet radio (icecast MP3, any rate, live-resampled) |
 | [Synth](docs/machines/synth.md) | Mono VA/FM/wavetable voice — 1V/oct, ADSR, filter, LFO, patches |
 | [Keys](docs/machines/keys.md) | Tonal instrument sampler — pitched playback with sustain loop |
 | [Tape](docs/machines/tape.md) | Single-track tape recorder/editor — big-waveform crop UI, FX printed to tape |
-| [Editor](docs/machines/editor.md) | Web-driven batch file editor (normalize / reverse / fade / trim) |
+| [Editor](docs/machines/editor.md) | Sample editor on the panel or the web page (normalize / reverse / fade / trim), audition with TR1 |
 
 ## Web + network features
 
-The module serves its own web page: file manager, universal upload with
-convert-on-import (MP3 / any rate / any depth → native), a **teleremote**
-(live meters, CV fader console, soft triggers, encoder, machine switching,
-settings editor, live TFT **screen mirror**), and per-machine tabs
-(Radio, Editor, Freesound).
+The module serves its own web page, one page of cards: a **panel** card laid
+out like the module (live screen mirror, encoder, triggers, CV knobs and
+jacks), the active machine's settings, CV matrix and FX, the module-wide
+clock, a keyboard, and a file manager that can **load the selected sample
+straight into the active machine**. Upload converts on import (MP3 / any rate
+/ any depth → native). Sample names can be up to 31 characters.
 
-![The Remote tab: the panel with a live screen mirror, the CV matrix with knob entries, the core clock, and the machine selector](docs/remote-tab.jpg)
+![The panel card: a live screen mirror, the CV matrix with knob entries, the core clock, and the machine selector](docs/remote-tab.jpg)
 
-*The Remote tab, laid out like the panel: live screen mirror, encoder and
+*The panel card, laid out like the module: live screen mirror, encoder and
 trigger buttons, CV knobs and ring-meter jacks (drag to inject CV); beside
 it the CV MATRIX (panel knobs are "knob" entries you can re-aim), the
 module-wide CLOCK, and the machine selector.*
