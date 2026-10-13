@@ -11,3 +11,4 @@ components/rest-api/include/index.html.h-e
 # repo is public — do not ship an allow-rule for `gh release` to anyone who
 # clones the fork).
 .claude/settings.local.json
+tools/bench/review_out*/

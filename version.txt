@@ -1,1 +1,1 @@
-v0.10-beta4-20260912 (fourth public beta: every machine on the CV matrix, a SYSTEM card, and a web remote that reflows)
+v0.10-beta5-20261012 (fifth public beta: two code reviews fixed, 31-char names, Freesound and Editor on the panel, load to machine)
