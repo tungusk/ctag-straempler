@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include "bootscreen.h"
+#include "strampler_version.h"
 #include <string.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
@@ -257,10 +259,11 @@ void configDisplay(){
     //TFT_print("Freesound Sampler", CENTER, CENTER); 
     struct stat st = {0};
     if (stat("/sdcard/bootlogo.bmp", &st) != -1) {
-        //ESP_LOGE("Boot", "logo file %s", "/sdcard/bootlogo.bmp");
         TFT_bmp_image(CENTER, CENTER, 0, "/sdcard/bootlogo.bmp", NULL, 0);
-        vTaskDelay(3000 / portTICK_RATE_MS);
+    } else {
+        bootscreen_draw(STRAMPLER_FW_VERSION);         // no logo on the card (or no card)
     }
+    vTaskDelay(3000 / portTICK_RATE_MS);
     
 }
 
