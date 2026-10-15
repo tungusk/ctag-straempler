@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include "bootscreen.h"
+#include "storage.h"
+#include "esp_system.h"
+#include "esp_heap_caps.h"
 #include "strampler_version.h"
 #include <string.h>
 #include <stdlib.h>
@@ -184,6 +187,8 @@ static void ui_ev_loop(void* pvParams)
     vTaskDelete(NULL);
 }
 
+static int s_textboot;      // the verbose boot screen is up (no logo on the card)
+
 void configDisplay(){
     esp_err_t ret;
     // set up TFT
@@ -261,9 +266,23 @@ void configDisplay(){
     if (stat("/sdcard/bootlogo.bmp", &st) != -1) {
         TFT_bmp_image(CENTER, CENTER, 0, "/sdcard/bootlogo.bmp", NULL, 0);
     } else {
-        bootscreen_draw(STRAMPLER_FW_VERSION);         // no logo on the card (or no card)
+        // no logo on the card (or no card): the verbose boot screen
+        esp_chip_info_t ci; esp_chip_info(&ci);
+        char l0[44], l1[44], l2[48], l3[44], card[16], host[32];
+        snprintf(l0, sizeof l0, "esp32-wrover rev %d, %d cores, %d MHz",
+                 ci.revision, ci.cores, CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ);
+        snprintf(l1, sizeof l1, "psram %u KB, internal %u KB free",
+                 (unsigned)(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / 1024),
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+        if (sdStorageInfo(card, sizeof card)) snprintf(l2, sizeof l2, "card: %s, no bootlogo.bmp", card);
+        else                                  snprintf(l2, sizeof l2, "card: none");
+        if (!configGetStringSetting("hostname", host, sizeof host) || !host[0]) strcpy(host, "ctag-modular");
+        snprintf(l3, sizeof l3, "host: %s.local", host);
+        const char *lines[] = { l0, l1, l2, l3 };
+        bootscreen_draw(STRAMPLER_FW_VERSION, lines, 4);
+        s_textboot = 1;                                // initUI holds it until the ip is known
     }
-    vTaskDelay(3000 / portTICK_RATE_MS);
+    if (!s_textboot) vTaskDelay(3000 / portTICK_RATE_MS);
     
 }
 
@@ -354,6 +373,17 @@ void initUI(){
     clock_core_set_auto(configGetIntSetting("clk_auto", 0) != 0);
 
     initAudio();
+    if (s_textboot) {
+        // verbose boot: the screen stays until the network answers (initWifi
+        // waits up to 30 s, then falls back to the soft-AP), the ip goes on
+        // the last line, and a short hold lets it be read
+        initWifi();
+        char ip[24], line[40];
+        wifiGetIPString(ip, sizeof ip);
+        snprintf(line, sizeof line, "ip: %s", strcmp(ip, "no IP") ? ip : "none");
+        bootscreen_line(line);
+        vTaskDelay(2000 / portTICK_RATE_MS);
+    }
     initMenu(ui_ev_queue);
 
     //xTaskCreatePinnedToCore(ui_task, "ui_task", usStackDepth, params, 10, gpio_task, 1);
@@ -364,7 +394,7 @@ void initUI(){
     xTaskCreatePinnedToCore(timerRepeatSlow, "timerRepeatSlow", 2048, NULL, 10, NULL, 0);
     xTaskCreatePinnedToCore(timerRepeatFast, "timerRepeatFast", 2048, NULL, 10, NULL, 0);
     
-    initWifi();
+    if (!s_textboot) initWifi();
     xTaskCreate(otaValidateTask, "ota_validate", 3072, NULL, 3, NULL);   // commit or roll back this OTA image
     audio_broadcast_set_enabled(configGetIntSetting("broadcast", 0));   // OFF by default (frees 12 KB internal for the tracker); AFTER initWifi. Toggle in System→Settings / web.
     freesoundInit(ui_ev_queue);

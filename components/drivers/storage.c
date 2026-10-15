@@ -14,6 +14,17 @@
 #include "sd_lock.h"
 #include "cJSON.h"
 
+#include "driver/sdmmc_defs.h"
+static sdmmc_card_t *s_card;     // the mounted card, for the boot screen
+
+// "31.3 GB SD" into out; 0 and an empty string when no card mounted
+int sdStorageInfo(char *out, size_t len){
+    if (!s_card) { if (len) out[0] = 0; return 0; }
+    double gb = (double)s_card->csd.capacity * s_card->csd.sector_size / 1e9;
+    snprintf(out, len, "%.1f GB %s", gb, (s_card->ocr & SD_OCR_SDHC_CAP) ? "SDHC" : "SD");
+    return 1;
+}
+
 void mountSDStorage(){
     ESP_LOGI("SD", "Initializing SD card");
     sd_lock_init();   // global SD bus lock must exist before any SD access
@@ -35,6 +46,7 @@ void mountSDStorage(){
     
     sdmmc_card_t* card;
     esp_err_t ret = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &card);
+    s_card = (ret == ESP_OK) ? card : NULL;
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
