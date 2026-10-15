@@ -1,0 +1,20 @@
+{
+	"slots":	[{
+			"name":	"SILENCE",
+			"file":	"/SILENCE.RAW"
+		}, {
+			"name":	"SILENCE",
+			"file":	"/SILENCE.RAW"
+		}],
+	"settings":	{
+		"ssid":	"myssid",
+		"passwd":	"mypasswd",
+		"apikey":	"myapikey",
+		"tz_shift":	0,
+		"preset":	"",
+		"bank":	"",
+		"hostname":	"stramp",
+		"encres":	4,
+		"encdir":	1
+	}
+}

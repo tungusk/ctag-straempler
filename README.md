@@ -53,6 +53,8 @@ module-wide CLOCK, and the machine selector.*
   output to an icecast mountpoint.
 - **Bounce**: record any machine's output to a new pool take from the browser.
 - **OTA updates**: `tools/ota.sh` flashes over WiFi in ~14 s, with rollback.
+- **Starter card**: [`card/`](card/README.md) is what goes on a blank SD card
+  (`tools/make_card.sh` zips it); the firmware makes the folders itself.
 
 Build and hardware notes live in [CLAUDE.md](CLAUDE.md); flashable snapshots
 of every milestone are in [`bin/`](bin/).
