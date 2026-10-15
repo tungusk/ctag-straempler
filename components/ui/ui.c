@@ -187,7 +187,6 @@ static void ui_ev_loop(void* pvParams)
     vTaskDelete(NULL);
 }
 
-static int s_textboot;      // the verbose boot screen is up (no logo on the card)
 
 void configDisplay(){
     esp_err_t ret;
@@ -280,9 +279,8 @@ void configDisplay(){
         snprintf(l3, sizeof l3, "host: %s.local", host);
         const char *lines[] = { l0, l1, l2, l3 };
         bootscreen_draw(STRAMPLER_FW_VERSION, lines, 4);
-        s_textboot = 1;                                // initUI holds it until the ip is known
     }
-    if (!s_textboot) vTaskDelay(3000 / portTICK_RATE_MS);
+    vTaskDelay(3000 / portTICK_RATE_MS);
     
 }
 
@@ -373,17 +371,6 @@ void initUI(){
     clock_core_set_auto(configGetIntSetting("clk_auto", 0) != 0);
 
     initAudio();
-    if (s_textboot) {
-        // verbose boot: the screen stays until the network answers (initWifi
-        // waits up to 30 s, then falls back to the soft-AP), the ip goes on
-        // the last line, and a short hold lets it be read
-        initWifi();
-        char ip[24], line[40];
-        wifiGetIPString(ip, sizeof ip);
-        snprintf(line, sizeof line, "ip: %s", strcmp(ip, "no IP") ? ip : "none");
-        bootscreen_line(line);
-        vTaskDelay(2000 / portTICK_RATE_MS);
-    }
     initMenu(ui_ev_queue);
 
     //xTaskCreatePinnedToCore(ui_task, "ui_task", usStackDepth, params, 10, gpio_task, 1);
@@ -394,7 +381,7 @@ void initUI(){
     xTaskCreatePinnedToCore(timerRepeatSlow, "timerRepeatSlow", 2048, NULL, 10, NULL, 0);
     xTaskCreatePinnedToCore(timerRepeatFast, "timerRepeatFast", 2048, NULL, 10, NULL, 0);
     
-    if (!s_textboot) initWifi();
+    initWifi();
     xTaskCreate(otaValidateTask, "ota_validate", 3072, NULL, 3, NULL);   // commit or roll back this OTA image
     audio_broadcast_set_enabled(configGetIntSetting("broadcast", 0));   // OFF by default (frees 12 KB internal for the tracker); AFTER initWifi. Toggle in System→Settings / web.
     freesoundInit(ui_ev_queue);

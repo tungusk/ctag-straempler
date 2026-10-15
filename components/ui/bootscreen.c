@@ -11,8 +11,6 @@
 #define MARGIN 6
 #define ROW    12                                   // SMALL_FONT is 8x12, fixed
 
-static int s_y;                                     // the next log line
-
 void bootscreen_draw(const char *version, const char *const *lines, int n){
     TFT_fillScreen(TFT_BLACK);
     _bg = TFT_BLACK;
@@ -42,7 +40,6 @@ void bootscreen_draw(const char *version, const char *const *lines, int n){
     _fg = TFT_LIGHTGREY;
     for (int i = 0; i < n && y < _height - 3 * ROW; i++, y += ROW)
         TFT_print((char *)lines[i], x, y);
-    s_y = y;
 
     // the quip, with the cursor a verbose boot leaves blinking
     _fg = TFT_GREEN;
@@ -50,15 +47,4 @@ void bootscreen_draw(const char *version, const char *const *lines, int n){
     TFT_print("wrover, wanderer, nomad, vagabond,", x, y); y += ROW;
     TFT_print("call me what you will", x, y);
     TFT_fillRect(TFT_X + 2, y + 2, 7, ROW - 3, _fg);
-}
-
-// one more log line under the others, for what is only known later (the ip)
-void bootscreen_line(const char *text){
-    if (s_y >= _height - 3 * ROW) return;
-    TFT_setFont(SMALL_FONT, NULL);
-    _bg = TFT_BLACK;
-    _fg = TFT_LIGHTGREY;
-    font_transparent = 0;
-    TFT_print((char *)text, MARGIN, s_y);
-    s_y += ROW;
 }
