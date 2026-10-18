@@ -68,3 +68,13 @@ before the bump, Tracker EOF clamp -> refuse and `snap` frozen while the knob is
 not moving, Sampler3's `s3_cell_adopt` replaced by the helper. Bench first: a
 synthetic CV sweep with +/-5-count ripple at every bin edge, asserting the index
 never flips without a real move.
+
+## Status 10-18 evening: BUILT (`60a9bba`)
+
+`components/machine/include/quant.h` as proposed. Deck CV6/CV7, Tracker CV6 and
+Sampler3 are on it; DoubleDecker keeps its inline copy (it was the reference and
+its feel is checked). Benches in the hostsim repo: `deck_loop_test` (needs a
+card whose `usr/TRK120.JSN` carries `"bpm":120`) and `tracker_loop_test`. The
+old Deck code failed them exactly as described above (a 30-count nudge after
+growing the length: +4 beats, then −8 on the way back). Both GREEN now; flashed
+to .85 the same evening. Not yet played.
