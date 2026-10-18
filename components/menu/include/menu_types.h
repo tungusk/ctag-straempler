@@ -152,6 +152,7 @@ typedef enum{
     SID_APIKEY,
     SID_TIMEZONE,
     SID_REMOTE,
+    SID_WEBLOCK,       // web lock: the page needs the key (System Settings row)
     SID_LISTEN,        // beatlisten mode (System Settings row)
     SID_CLKOUT,        // beatlisten clock-out channel
     SID_BOUNCE,        // record the active machine's OUTPUT bus (press to toggle)

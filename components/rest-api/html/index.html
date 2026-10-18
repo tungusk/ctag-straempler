@@ -84,6 +84,12 @@ input[type=checkbox]{color-scheme:dark;accent-color:#2f5566;opacity:.8}
 progress{width:100%;height:6px;margin-top:6px;display:none}
 .msg{color:#bcbcbc;font-size:11px;margin-top:4px;min-height:16px}
 .msg:empty{display:none}   /* an empty status line must not reserve 20 px (it sat above BOUNCE) */
+#wl{position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:50;display:none;align-items:center;justify-content:center}
+#wl.on{display:flex}
+#wl .box{background:#000;border:1px solid #2c2c2c;border-radius:4px;padding:14px 16px;width:280px;font-family:"DejaVu Sans Mono",Menlo,monospace}
+#wl .box .ph{margin-bottom:10px}
+#wl input{margin-bottom:8px}
+#wl button{background:#1e1e1e;color:var(--acc);border:1px solid var(--acc);padding:4px 12px;font-family:monospace;font-size:12px;cursor:pointer;border-radius:2px}
 .ptag{background:#3a1010;border:1px solid #a33;color:#f88;border-radius:3px;padding:2px 8px;font-size:11px;letter-spacing:.05em}   /* polling paused: in the header so it is visible at any scroll */
 .ok{color:#4a4}
 .er{color:#a44}
@@ -1057,7 +1063,30 @@ body.nosbar .sbar{display:none}
   <span class="vl" id="disk"></span>
   <a class="vl" id="otdl" href="/slicer/ot" style="display:none;color:#7fd4ff" title="Download the current slices as an Octatrack .ot file">&#8681; .OT</a>
 </div>
+<div id="wl"><div class="box"><span class="ph">LOCKED</span>
+<div class="msg" style="margin:0 0 8px">This unit asks for its web key (System &gt; Settings &gt; Web Lock).</div>
+<input id="wlk" type="password" placeholder="key" autocomplete="off" onkeydown="if(event.key==='Enter')wlGo()">
+<button onclick="wlGo()">open</button></div></div>
 <script>
+
+// Web lock: every reply is watched; a 401 raises the key box once, the key
+// goes into the `sk` cookie (a year, this origin only) and the page reloads
+// with it. The device checks the cookie on every URI but `/`.
+(function(){
+  var f=window.fetch;
+  window.fetch=function(u,o){return f(u,o).then(function(r){if(r.status===401)wlAsk();return r;});};
+})();
+var wlUp=false;
+function wlAsk(){
+  if(wlUp)return;wlUp=true;
+  var d=document.getElementById('wl');if(d){d.className='on';var k=document.getElementById('wlk');if(k)k.focus();}
+}
+function wlGo(){
+  var k=(document.getElementById('wlk')||{}).value||'';
+  if(!k)return;
+  document.cookie='sk='+encodeURIComponent(k)+';max-age=31536000;path=/;SameSite=Strict';
+  location.reload();
+}
 
 function tab(n){
   for(var i=0;i<8;i++){
@@ -1612,10 +1641,10 @@ function saveSet(){
     if(m0){m0.className='msg er';m0.textContent='Settings not loaded \u2014 nothing saved';}
     return;
   }
-  // only the four text rows, and only those actually on screen. Remote /
+  // only the five text rows, and only those actually on screen. Remote /
   // Timezone / Listen / ClkOut are toggles that already wrote themselves, and
   // resending them here would fight that.
-  var o={},rows={ssid:'gsSsid',passwd:'gsPass',apikey:'gsKey',hostname:'gsHost'};
+  var o={},rows={ssid:'gsSsid',passwd:'gsPass',apikey:'gsKey',hostname:'gsHost',webkey:'gsWKey'};
   Object.keys(rows).forEach(function(k){var e=document.getElementById(rows[k]);if(e)o[k]=e.value;});
   var body=JSON.stringify(o);
   fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(function(r){
@@ -2490,6 +2519,7 @@ function glPost(u,body){
 }
 function glTz(dir){var v=(+(rpGlob.s.tz_shift||0))+dir;if(v<-12)v=-12;if(v>14)v=14;glPost('/settings',{tz:v});}
 function glRemote(){glPost('/settings',{remote:rpGlob.i.remote?0:1});}
+function glWebLock(){glPost('/settings',{weblock:rpGlob.s.weblock?0:1});}
 function glListen(){glPost('/blisten?mode='+(((+rpGlob.i.blisten||0)+1)%GL_LISTEN.length));}
 function glClkOut(){glPost('/blisten?out='+(((+rpGlob.i.blout||0)+1)%GL_CLKOUT.length));}
 function glBounce(){glPost(rpGlob.b.active?'/bounce/stop':'/bounce/start');}
@@ -2512,6 +2542,10 @@ function scrGlobal(g){
   h+=tftRow('rw','Api Key','','gsKey',5,{pw:true,ph:(s.apikey_set?'set \u2014 type to replace':'not set')});
   h+=tftRow('rng','Timezone',(tz>=0?'+':'')+tz,'glTz',2);
   h+=tftRow('tog','Remote',i.remote?'ON':'OFF','glRemote',1);
+  // web lock: the toggle persists + applies at once (as Remote); the key is a
+  // text row saved with the others, never sent back (webkey_set only)
+  h+=tftRow('tog','Web Lock',s.weblock?(s.webkey_set?'ON':'ON (no key)'):'OFF','glWebLock',1);
+  h+=tftRow('rw','Web Key','','gsWKey',5,{pw:true,mx:32,ph:(s.webkey_set?'set \u2014 type to replace':'not set \u2014 lock inactive')});
   h+=tftRow('tog','Listen',GL_LISTEN[+i.blisten||0]||'?','glListen',1);
   h+=tftRow('tog','ClkOut',GL_CLKOUT[+i.blout||0]||'?','glClkOut',1);
   h+=tftRow('tog','Bounce',g.b.active?'REC':'idle','glBounce',1);

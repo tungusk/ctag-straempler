@@ -400,6 +400,10 @@ void menuTFTPrintRemote(const char** items, const int* n_items, int *on){
     printSettingsValue(items, n_items, "Remote", *on ? "ON" : "OFF");
 }
 
+void menuTFTPrintWebLock(const char** items, const int* n_items, int *on){
+    printSettingsValue(items, n_items, "Web Lock", *on ? "ON" : "OFF");
+}
+
 void menuTFTPrintBroadcast(const char** items, const int* n_items, int *on){
     printSettingsValue(items, n_items, "Broadcast", *on ? "ON" : "OFF");
 }

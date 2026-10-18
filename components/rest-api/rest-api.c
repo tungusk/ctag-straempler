@@ -53,6 +53,71 @@ void rest_remote_enable(int on)
     ESP_LOGI(TAG, "teleremote %s", s_remote_on ? "enabled" : "disabled");
 }
 
+// ─── web lock ────────────────────────────────────────────────────────────────
+// A shared key for the whole web interface (Arlo, 09-13: "so unauthenticated
+// people can't just get the webpage like at a performance"). settings.weblock
+// (0/1) and settings.webkey in CONFIG.JSN; System→Settings→Web Lock and the
+// web Settings card toggle it, the key is set from the web card. Every URI
+// except the landing page goes through gated_handler(): with the lock on and
+// a key set, a request must carry the key as the `sk` cookie (the page sets
+// it after asking once) or an X-Key header (tools/ota.sh). Plain HTTP, so
+// the key crosses the LAN in the clear: this keeps a crowd out, not an
+// attacker. The panel toggle is the way back in if the key is forgotten.
+// An empty key means the lock is inactive even when toggled on.
+static int  s_weblock_on = 0;
+static char s_webkey[33];
+
+void rest_weblock_set(int on, const char *key)
+{
+    s_weblock_on = on ? 1 : 0;
+    if (key) snprintf(s_webkey, sizeof s_webkey, "%s", key);
+    ESP_LOGI(TAG, "web lock %s%s", s_weblock_on ? "on" : "off", s_webkey[0] ? "" : " (no key: inactive)");
+}
+
+int rest_weblock_active(void) { return s_weblock_on && s_webkey[0]; }
+
+// `sk=<key>` anywhere in the Cookie header, or X-Key: <key>
+static int auth_ok(httpd_req_t *req)
+{
+    if (!rest_weblock_active()) return 1;
+    char v[160];
+    if (httpd_req_get_hdr_value_str(req, "X-Key", v, sizeof v) == ESP_OK)
+        return strcmp(v, s_webkey) == 0;
+    if (httpd_req_get_hdr_value_str(req, "Cookie", v, sizeof v) != ESP_OK) return 0;
+    const char *p = v;
+    while ((p = strstr(p, "sk=")) != NULL) {
+        if (p == v || p[-1] == ' ' || p[-1] == ';') {
+            p += 3;
+            size_t n = strcspn(p, ";");
+            if (n == strlen(s_webkey) && strncmp(p, s_webkey, n) == 0) return 1;
+        } else p += 3;
+    }
+    return 0;
+}
+
+// every registered URI is a copy whose user_ctx is the real httpd_uri_t
+static esp_err_t gated_handler(httpd_req_t *req)
+{
+    const httpd_uri_t *u = (const httpd_uri_t *)req->user_ctx;
+    // websocket frames arrive with no headers; only the GET handshake is checked
+    int handshake_or_http = !u->is_websocket || req->method == HTTP_GET;
+    if (handshake_or_http && strcmp(u->uri, "/") != 0 && !auth_ok(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"error\":\"locked\"}");
+        return ESP_OK;
+    }
+    return u->handler(req);
+}
+
+static esp_err_t register_gated(httpd_uri_t *copy, const httpd_uri_t *orig)
+{
+    *copy = *orig;
+    copy->handler  = gated_handler;
+    copy->user_ctx = (void *)orig;
+    return httpd_register_uri_handler(server, copy);
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 static esp_err_t send_json(httpd_req_t *req, const char *json)
@@ -1082,6 +1147,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
                               strcmp(j->valuestring, "myapikey") != 0);
     else
         cJSON_AddBoolToObject(out, "apikey_set", false);
+    // web lock: the toggle and whether a key is stored, never the key (as apikey)
+    cJSON_AddNumberToObject(out, "weblock", s_weblock_on);
+    cJSON_AddBoolToObject(out, "webkey_set", s_webkey[0] != 0);
     if ((j = cJSON_GetObjectItem(settings, "hostname"))) cJSON_AddStringToObject(out, "hostname", j->valuestring);
     if ((j = cJSON_GetObjectItem(settings, "tz_shift"))) cJSON_AddNumberToObject(out, "tz_shift", j->valuedouble);
     if ((j = cJSON_GetObjectItem(settings, "txpwr")))   cJSON_AddNumberToObject(out, "txpwr", j->valuedouble);
@@ -1184,6 +1252,17 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     }
     // optional WiFi TX power cap in quarter-dBm (8..84) — antenna-less units
     // brown out on full-power TX bursts; applied live and persisted
+    // web lock toggle + key (blank key never overwrites, as passwd/apikey)
+    if ((j = cJSON_GetObjectItem(in, "weblock")) && cJSON_IsNumber(j)) {
+        cJSON_DeleteItemFromObjectCaseSensitive(settings, "weblock");
+        cJSON_AddNumberToObject(settings, "weblock", j->valueint ? 1 : 0);
+        rest_weblock_set(j->valueint, NULL);
+    }
+    if ((j = cJSON_GetObjectItem(in, "webkey")) && j->valuestring && j->valuestring[0] && strlen(j->valuestring) < sizeof s_webkey) {
+        cJSON_DeleteItemFromObjectCaseSensitive(settings, "webkey");
+        cJSON_AddStringToObject(settings, "webkey", j->valuestring);
+        rest_weblock_set(s_weblock_on, j->valuestring);
+    }
     if ((j = cJSON_GetObjectItem(in, "txpwr")) && cJSON_IsNumber(j) && j->valueint >= 8 && j->valueint <= 84) {
         if (cJSON_GetObjectItem(settings, "txpwr"))
             cJSON_ReplaceItemInObject(settings, "txpwr", cJSON_CreateNumber(j->valueint));
@@ -1660,7 +1739,7 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
 
     char buf[1024];
     snprintf(buf, sizeof(buf),
-             "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu,\"remote\":%d,"
+             "{\"ip\":\"%s\",\"free\":%llu,\"total\":%llu,\"remote\":%d,\"weblock\":%d,"
              "\"version\":\"%s\",\"blisten\":%d,\"blout\":%d,"
              "\"psram\":{\"free\":%u,\"big\":%u,\"total\":%u},"
              "\"iram\":{\"free\":%u,\"big\":%u},"
@@ -1669,7 +1748,7 @@ static esp_err_t sysinfo_get_handler(httpd_req_t *req)
              "\"tick\":%u,\"tickw\":%u,\"avg\":%u,\"n\":%u},"
              "\"time\":%ld,\"tz\":%d,\"machines\":[%s]}",
              ip, (unsigned long long)freeb, (unsigned long long)totb,
-             s_remote_on ? 1 : 0,
+             s_remote_on ? 1 : 0, rest_weblock_active() ? 1 : 0,
              STRAMPLER_FW_VERSION, beatlisten_get_mode(), beatlisten_get_out(),
              pfree, pbig, ptot, ifree, ibig,
              uptime_s, rr,
@@ -2068,6 +2147,7 @@ static esp_err_t remote_machine_handler(httpd_req_t *req)
 
 #define MAX_MACHINE_URIS 8
 static const httpd_uri_t *machine_uris[MAX_MACHINE_URIS];
+static httpd_uri_t machine_gated[MAX_MACHINE_URIS];   // the registered copies (web lock)
 static int n_machine_uris = 0;
 static const machine_t *web_machine = NULL;
 
@@ -2083,7 +2163,7 @@ static void machine_web_apply_now(void)
     if (!m || !m->ui || !m->ui->web_uris) return;
     const httpd_uri_t *u = (const httpd_uri_t *)m->ui->web_uris;
     for (int i = 0; i < m->ui->n_web_uris && n_machine_uris < MAX_MACHINE_URIS; i++)
-        if (httpd_register_uri_handler(server, &u[i]) == ESP_OK)
+        if (register_gated(&machine_gated[n_machine_uris], &u[i]) == ESP_OK)
             machine_uris[n_machine_uris++] = &u[i];
     if (n_machine_uris)
         ESP_LOGI(TAG, "%s: %d machine URIs registered", m->name, n_machine_uris);
@@ -2853,8 +2933,9 @@ static httpd_handle_t start_webserver(void)
         ESP_LOGE(TAG, "Failed to start server");
         return NULL;
     }
+    static httpd_uri_t gated[N_URIS];
     for (int i = 0; i < (int)N_URIS; i++)
-        httpd_register_uri_handler(server, &uris[i]);
+        register_gated(&gated[i], &uris[i]);
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_404_error_handler);
     machine_web_apply_now();          // machine activated before the server? apply now (nothing served yet)
     return server;
@@ -2870,6 +2951,10 @@ void startRestAPI(xQueueHandle queueui)
         cJSON *settings = cJSON_GetObjectItemCaseSensitive(cfg, "settings");
         cJSON *r = settings ? cJSON_GetObjectItemCaseSensitive(settings, "remote") : NULL;
         if (r && cJSON_IsNumber(r)) s_remote_on = r->valueint ? 1 : 0;
+        cJSON *wl = settings ? cJSON_GetObjectItemCaseSensitive(settings, "weblock") : NULL;
+        cJSON *wk = settings ? cJSON_GetObjectItemCaseSensitive(settings, "webkey")  : NULL;
+        rest_weblock_set(wl && cJSON_IsNumber(wl) ? wl->valueint : 0,
+                         wk && cJSON_IsString(wk) ? wk->valuestring : "");
         cJSON_Delete(cfg);
     }
     start_webserver();

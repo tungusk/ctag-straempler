@@ -49,8 +49,8 @@ static void autosave_kick(void);
 static xQueueHandle s_ev_queue = NULL;
 
 // core menu labels (machine-independent pages)
-static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "Listen", "ClkOut", "Bounce", "Broadcast", "Tuner", "IP"};
-static const int n_settings_menus = 11;
+static const char* settings_menus[] = {"SSID", "Password", "Api Key", "Timezone", "Remote", "Web Lock", "Listen", "ClkOut", "Bounce", "Broadcast", "Tuner", "IP"};
+static const int n_settings_menus = 12;
 
 static void incSettingsItem(int *tz, int index){
     if (index == SID_TIMEZONE) { if(*tz + 1 >= 12) *tz = 12; else (*tz)++; }
@@ -350,10 +350,10 @@ static int listen_cycle(int cur, int dir){
 }
 
 static int settings_def_handler(int it_id, int event, void* event_data){
-    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE, SID_LISTEN, SID_CLKOUT, SID_BOUNCE, SID_BROADCAST, SID_TUNER};
+    const int menu_items[] = {SID_WIFI_SSID, SID_WIFI_PASSWD, SID_APIKEY, SID_TIMEZONE, SID_REMOTE, SID_WEBLOCK, SID_LISTEN, SID_CLKOUT, SID_BOUNCE, SID_BROADCAST, SID_TUNER};
     const int items = sizeof(menu_items)/sizeof(int);
     static int menu_pos = 0, selected = 0;
-    static int remote_on = 1, broadcast_on = 0;
+    static int remote_on = 1, broadcast_on = 0, weblock_on = 0;
     static int listen_mode = 0, clkout_ch = 0;
     static cJSON *cfgData = NULL, *settings = NULL;
     switch(event){
@@ -382,9 +382,12 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 if(settings != NULL){
                     cJSON *r = cJSON_GetObjectItemCaseSensitive(settings, "remote");
                     if(r != NULL && cJSON_IsNumber(r)) remote_on = r->valueint ? 1 : 0;
+                    cJSON *w = cJSON_GetObjectItemCaseSensitive(settings, "weblock");
+                    weblock_on = (w != NULL && cJSON_IsNumber(w)) ? (w->valueint ? 1 : 0) : 0;
                 }
                 menuTFTPrintTimezone(settings_menus, &n_settings_menus, &tz_shift);
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
+                menuTFTPrintWebLock(settings_menus, &n_settings_menus, &weblock_on);
                 menuTFTPrintBroadcast(settings_menus, &n_settings_menus, &broadcast_on);
                 // live service values are the truth (boot-applied from settings)
                 listen_mode = beatlisten_get_mode();
@@ -404,6 +407,9 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             }else if(menu_items[menu_pos] == SID_REMOTE){
                 remote_on = !remote_on;
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
+            }else if(menu_items[menu_pos] == SID_WEBLOCK){
+                weblock_on = !weblock_on;
+                menuTFTPrintWebLock(settings_menus, &n_settings_menus, &weblock_on);
             }else if(menu_items[menu_pos] == SID_LISTEN){
                 listen_mode = listen_cycle(listen_mode, +1);
                 menuTFTPrintListen(settings_menus, &n_settings_menus, &listen_mode);
@@ -427,6 +433,9 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             }else if(menu_items[menu_pos] == SID_REMOTE){
                 remote_on = !remote_on;
                 menuTFTPrintRemote(settings_menus, &n_settings_menus, &remote_on);
+            }else if(menu_items[menu_pos] == SID_WEBLOCK){
+                weblock_on = !weblock_on;
+                menuTFTPrintWebLock(settings_menus, &n_settings_menus, &weblock_on);
             }else if(menu_items[menu_pos] == SID_LISTEN){
                 listen_mode = listen_cycle(listen_mode, -1);
                 menuTFTPrintListen(settings_menus, &n_settings_menus, &listen_mode);
@@ -450,7 +459,7 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             }
             if(menu_items[menu_pos] == SID_TUNER) return M_TUNER;   // press-to-open
             if(menu_items[menu_pos] != SID_TIMEZONE && menu_items[menu_pos] != SID_REMOTE &&
-               menu_items[menu_pos] != SID_LISTEN && menu_items[menu_pos] != SID_CLKOUT &&
+               menu_items[menu_pos] != SID_WEBLOCK && menu_items[menu_pos] != SID_LISTEN && menu_items[menu_pos] != SID_CLKOUT &&
                menu_items[menu_pos] != SID_BROADCAST && menu_items[menu_pos] != SID_TUNER){
                 _state_json = (void*) cfgData;
                 _state_data = (void*) &menu_pos;
@@ -467,6 +476,7 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 // Apply the live toggles, persist nothing.
                 ESP_LOGE("UI", "settings exit without a loaded config: not saving");
                 rest_remote_enable(remote_on);
+                rest_weblock_set(weblock_on, NULL);
                 audio_broadcast_set_enabled(broadcast_on);
                 beatlisten_set_mode(listen_mode);
                 beatlisten_set_out(clkout_ch);
@@ -485,6 +495,10 @@ static int settings_def_handler(int it_id, int event, void* event_data){
             cJSON_DeleteItemFromObjectCaseSensitive(settings, "remote");
             cJSON_AddNumberToObject(settings, "remote", remote_on);
             rest_remote_enable(remote_on);
+            //persist + apply the web lock (the key itself is set from the web card)
+            cJSON_DeleteItemFromObjectCaseSensitive(settings, "weblock");
+            cJSON_AddNumberToObject(settings, "weblock", weblock_on);
+            rest_weblock_set(weblock_on, NULL);
             //persist + apply the broadcast listener (off by default; frees internal RAM)
             cJSON_DeleteItemFromObjectCaseSensitive(settings, "broadcast");
             cJSON_AddNumberToObject(settings, "broadcast", broadcast_on);
@@ -504,7 +518,7 @@ static int settings_def_handler(int it_id, int event, void* event_data){
                 // setters, the machine choice (code review 4.2). Replace in place:
                 // the text-entry page finds ssid/passwd/apikey by POSITION.
                 static const char *const own[] = {"ssid", "passwd", "apikey", "tz_shift",
-                                                  "remote", "broadcast", "blisten", "blisten_out"};
+                                                  "remote", "weblock", "broadcast", "blisten", "blisten_out"};
                 config_lock();                   // read..write as one step (review #29)
                 cJSON *fresh = readJSONFileAsCJSON("/sdcard/CONFIG.JSN");
                 cJSON *fs = fresh ? cJSON_GetObjectItemCaseSensitive(fresh, "settings") : NULL;
