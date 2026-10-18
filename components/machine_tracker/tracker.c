@@ -15,6 +15,7 @@
 #include "cJSON.h"
 #include "machine.h"
 #include "cvsmooth.h"
+#include "quant.h"
 #include "audio.h"
 #include "sd_lock.h"
 #include "xmp.h"
@@ -331,7 +332,7 @@ static void render_task(void *pv)
     }
 
     bool     cv6_grabbed = false;   // CV6 has MOVED since engage: it owns the window
-    int      cv6_applied = -1;      // knob value the current start was computed AT
+    int      win_idx = -1;          // the start slot the knob last chose (quant.h), -1 = none
     uint32_t win_start = 0;         // the window start, in absolute steps — its OWN
                                     // position, so the LENGTH knob can never drag it
     int      loop_engage_ms = 0;    // module time captured when the loop engaged
@@ -373,7 +374,7 @@ static void render_task(void *pv)
                                 ? trk.order_step0[fi.pos] + (uint32_t)fi.row : 0;
                 cv6_engage = trk.loop_pos_cv;
                 cv6_grabbed = false;            // dead until the knob actually moves
-                cv6_applied = -1;
+                win_idx = -1;
                 win_start = loop_anchor_abs;
                 loop_prev_start = 0xFFFFFFFFu;
                 // seed the UI loop band at the engage position so it doesn't flash
@@ -441,9 +442,9 @@ static void render_task(void *pv)
                 // active"): while the clock drives us, a window that isn't a
                 // whole number of BEATS restarts off-phase and the servo spends
                 // the loop fighting it. 24 ticks = one beat at every speed, so
-                // rows-per-beat = 24/speed. Snap the LENGTH to whole beats and
-                // the start follows for free — it is always a multiple of the
-                // length (block math below). Free-running keeps raw row lengths.
+                // rows-per-beat = 24/speed. Snap the LENGTH to whole beats; the
+                // START has its own beat grid below, it is never derived from
+                // the length. Free-running keeps raw row lengths.
                 int rpb = 1;
                 if (trk.sync && clock_core()->clk.locked) {
                     rpb = 24 / spd;
@@ -459,32 +460,37 @@ static void render_task(void *pv)
                 // ~128 counts — so a full sweep crossed at most 32 blocks and most
                 // of a long module was unreachable.
                 //
-                // The start is its OWN position, snapped to whole BEATS — NOT to
-                // whole loop-lengths. Quantising it by the length made the length
-                // knob drag it: a longer window re-quantised the same position
-                // onto a coarser grid and the start walked backwards (Arlo:
-                // "changing the length moves the start point back again" — the
-                // identical bug the deck had). Growing a loop must keep the start
-                // and extend the END. So the start moves ONLY when CV6 moves.
+                // The start is its OWN position on a FIXED beat grid (quant.h:
+                // whole beats, <=128 slots across the song) — NOT whole
+                // loop-lengths. Quantising it by the length made the length knob
+                // drag it: a longer window re-quantised the same position onto a
+                // coarser grid and the start walked backwards (Arlo: "changing
+                // the length moves the start point back again" — the identical
+                // bug the deck had). Index-tracked with hysteresis, so the start
+                // moves ONLY when CV6 moves: the grid is taken at that moment and
+                // a later speed effect or clock lock/unlock re-snaps nothing.
+                // Until the knob is grabbed the engage anchor follows the grid,
+                // so a loop engaged free-running lands on the beat once locked.
                 uint32_t snap = 1;
                 if (trk.sync && clock_core()->clk.locked && rpb > 1) snap = (uint32_t)rpb;
                 if (!cv6_grabbed &&
                     (trk.loop_pos_cv - cv6_engage > 120 || cv6_engage - trk.loop_pos_cv > 120)) {
                     cv6_grabbed = true;              // the knob MOVED: it owns the window
-                    cv6_applied = -1;                // force a recompute this pass
+                    win_idx = -1;
                 }
-                if (cv6_grabbed &&
-                    (cv6_applied < 0 || trk.loop_pos_cv - cv6_applied > 40
-                                     || cv6_applied - trk.loop_pos_cv > 40)) {
-                    cv6_applied = trk.loop_pos_cv;
-                    uint64_t p = (uint64_t)trk.loop_pos_cv * total / 4096;
-                    win_start = (uint32_t)(p / snap) * snap;      // whole beats
-                }
-                if (!cv6_grabbed) win_start = (loop_anchor_abs / snap) * snap;
+                if (cv6_grabbed) {
+                    uint32_t step = quant_grid_step(total, snap, 128);
+                    uint32_t nwin = step ? total / step : 0;
+                    if (nwin) {
+                        int idx = quant_idx((float)trk.loop_pos_cv / 4095.0f, (int)nwin, win_idx,
+                                            quant_hyst12((int)nwin, 10, 40));
+                        if (idx != win_idx) { win_idx = idx; win_start = (uint32_t)idx * step; }
+                    }
+                } else win_start = (loop_anchor_abs / snap) * snap;
                 uint32_t lstart = win_start;
-                if (lstart + (uint32_t)len > total)                // ran off the end
-                    lstart = total > (uint32_t)len ? total - (uint32_t)len : 0;
-                lstart = (lstart / snap) * snap;
+                if (lstart + (uint32_t)len > total)                // ran off the end:
+                    len = total > lstart ? (int)(total - lstart) : 1;   // keep the start, give way at the tail
+                if (len < 1) len = 1;                              // (the old clamp pulled the start back)
                 uint32_t lend = lstart + (uint32_t)len;
                 if (lend > total) lend = total;
                 int lo, lr;

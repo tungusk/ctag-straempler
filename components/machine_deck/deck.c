@@ -15,6 +15,7 @@
 #include "sd_lock.h"
 #include "trig_gate.h"
 #include "cvsmooth.h"
+#include "quant.h"
 #include "sampfile.h"
 #include "deck_priv.h"
 #include "worker.h"
@@ -767,7 +768,7 @@ static cvmed_t s_m6, s_m7;                  // per-channel median-of-5
 static trig_gate_t s_tg1, s_tg2;            // TR1/TR2 gate state
 static trig_combo_t s_tc;                   // the both-trig RESYNC gesture
 static int s_mv6 = 0, s_mv7 = 0;    // 3-block confirm (stays host-side)
-static int s_c6_last = -1;                  // knob6 position the last move was made AT
+static int s_win_idx = -1;                  // the window slot the knob last chose (-1 = none yet)
 
 // Every file-static carrying state across process() calls is reset here: they
 // survive a machine SWITCH otherwise, and a gate held low while you switch away
@@ -781,7 +782,7 @@ static void dk_reset_statics(void)
     memset(&s_tg2, 0, sizeof(s_tg2));
     memset(&s_tc, 0, sizeof(s_tc));
     s_mv6 = s_mv7 = 0;
-    s_c6_last = -1;
+    s_win_idx = -1;
     s_loop_len_idx = 4;
     cvmtx_rearm(&dk.mtx);       // was s_cv6_ref/s_cv7_ref/s_pk6/s_pk7 = armed
 }
@@ -859,17 +860,13 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // so engaging a loop can't slam the length to wherever the knob sits.
         if (beat_tf_lp) {
             if (cvmtx_abs(&dk.mtx, DKM_LLEN, &kk)) {     // GRAB, was DK_PICKUP
-                int c7 = (int)(kk * 4095.0f);
-                int ni = c7 * DK_LOOP_STEPS / 4096;
-                if (ni < 0) ni = 0;
-                if (ni > DK_LOOP_STEPS - 1) ni = DK_LOOP_STEPS - 1;
+                // index with hysteresis (quant.h) FIRST, the min-quantum bump
+                // after: bumping first moved the bin edges the old deadband was
+                // measured against and left the rungs below minq unreachable
+                int ni = quant_idx(kk, DK_LOOP_STEPS, s_loop_len_idx, quant_hyst12(DK_LOOP_STEPS, 10, 40));
                 int minq = dk_min_q();
                 while (ni < DK_LOOP_STEPS - 1 && dk_loop_q[ni] < minq) ni++;
-                // hysteresis: only move when the knob is clear of the boundary,
-                // so ADC noise can't flap the length
-                int lo = ni * 4096 / DK_LOOP_STEPS, hi = (ni + 1) * 4096 / DK_LOOP_STEPS;
-                bool solid = (c7 > lo + 40) && (c7 < hi - 40);
-                if (ni != s_loop_len_idx && solid && ++s_mv7 >= 3) {
+                if (ni != s_loop_len_idx && ++s_mv7 >= 3) {
                     s_mv7 = 0;
                     uint32_t nl = dk_len_for(ni, beat_tf_lp);
                     uint32_t cs = dk_live_start();
@@ -890,36 +887,35 @@ static void deck_process(int32_t out[MACHINE_BLOCK],
         // sweep spans the track and the landing stays phase-true (a whole
         // number of windows from the grid = a whole number of clock pulses).
         // Grab-then-track, so engaging a loop can't fling the window.
-        // CV6 acts ONLY when the KNOB ITSELF moves (s_c6_last). Its mapping is
-        // absolute in WINDOWS, so re-evaluating it on a CV7 length change
-        // re-quantizes the same knob position onto a coarser grid and drags the
-        // start backwards (Arlo: "sometimes turning up cv7 expands the loop
-        // backwards by moving the start point back"). Growing a loop must keep
-        // the start where it is and extend the END — which is exactly what CV7
-        // does on its own, as long as CV6 stays out of it.
+        // The START sits on a FIXED beat grid that depends on the track alone
+        // (quant_grid_step: whole beats, <=128 slots), never on the loop
+        // length. The old mapping was in LENGTH-sized windows, so a CV7 change
+        // re-quantized the same knob position onto a coarser grid and dragged
+        // the start backwards (Arlo: "sometimes turning up cv7 expands the loop
+        // backwards by moving the start point back"); a "knob moved 24 counts"
+        // guard only hid it until the next nudge. Index-tracked with hysteresis
+        // (quant_idx), so a still knob fires zero remaps and growing a loop
+        // keeps the start and extends the END. Same shape as the DoubleDecker.
         {
-            int c6 = 0;
-            bool win_live = cvmtx_abs(&dk.mtx, DKM_LWIN, &kk);   // GRAB, was DK_PICKUP
-            if (win_live) c6 = (int)(kk * 4095.0f);
             uint32_t llen = dk_live_len();
-            int moved = (s_c6_last < 0) || (c6 - s_c6_last > 24) || (s_c6_last - c6 > 24);
-            if (win_live && llen && moved) {
+            if (cvmtx_abs(&dk.mtx, DKM_LWIN, &kk) && llen) {   // GRAB, was DK_PICKUP
                 uint32_t span = (dk.file_frames > dk.grid_offset)
                               ? dk.file_frames - dk.grid_offset : 0;
-                uint32_t nwin = span / llen;              // windows in the track
+                uint32_t step = quant_grid_step(span, beat_tf_lp, 128);
+                uint32_t nwin = step ? span / step : 0;
                 if (nwin) {
-                    uint32_t idx = (uint32_t)((uint64_t)c6 * nwin / 4096);
-                    if (idx >= nwin) idx = nwin - 1;
-                    uint32_t ns = dk.grid_offset + idx * llen;
-                    if (ns != dk_live_start() && ++s_mv6 >= 3) {
+                    int idx = quant_idx(kk, (int)nwin, s_win_idx, quant_hyst12((int)nwin, 10, 40));
+                    if (idx != s_win_idx && ++s_mv6 >= 3) {
                         s_mv6 = 0;
-                        s_c6_last = c6;                  // this knob position is spent
-                        if (ns + llen <= dk.file_frames) deck_loop_remap(ns, llen);
-                    } else if (ns == dk_live_start()) { s_mv6 = 0; s_c6_last = c6; }
+                        s_win_idx = idx;                 // the knob's slot, taken or refused
+                        uint32_t ns = dk.grid_offset + (uint32_t)idx * step;
+                        if (ns != dk_live_start() && ns + llen <= dk.file_frames)
+                            deck_loop_remap(ns, llen);   // past the end: refused, never shifted back
+                    } else if (idx == s_win_idx) s_mv6 = 0;
                 }
             }
         }
-    } else { s_c6_last = -1; }   // the re-arm is cvmtx_hold() above
+    } else { s_win_idx = -1; }   // the re-arm is cvmtx_hold() above
 
     int mode = dk.flt_mode;
     const float q = 0.9f;

@@ -13,6 +13,7 @@
 #include "cJSON.h"
 #include "sample_ram.h"  // shared dated browser walk (sample_list_recent)
 #include "cvsmooth.h"
+#include "quant.h"
 #include "machine.h"
 #include "audio.h"
 #include "recording.h"
@@ -587,18 +588,10 @@ static inline bool s3_frame_ok(const s3_voice_t *v, uint32_t f, bool resident)
     return (v->wpos - f) <= (S3_RING_FRAMES - S3_CHUNK_FRAMES);
 }
 
-// selector-cell adoption with hysteresis: unit-wide cells, a switch needs
-// the continuous position 15% past the boundary — residual CV wobble can't
-// flutter a quantized selection between neighbors
-static inline int s3_cell_adopt(float pos, int cur)
-{
-    int li = (int)pos;
-    if (li == cur) return cur;
-    if (li > cur + 1 || li < cur - 1) return li;   // a real jump: no debate
-    float frac = pos - (float)li;
-    if (li > cur ? (frac > 0.15f) : (frac < 0.85f)) return li;
-    return cur;
-}
+// selector-cell adoption with hysteresis: quant_cell (quant.h), 15% of a cell
+// past the boundary — residual CV wobble can't flutter a quantized selection
+// between neighbours. The shared helper is the Deck's and the Tracker's too.
+static inline int s3_cell_adopt(float pos, int cur) { return quant_cell(pos, cur, 0.15f); }
 
 
 // the median snapshot + ch1/2 floor rescale that s3_mod_read() did by hand is
